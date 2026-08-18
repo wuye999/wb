@@ -1,0 +1,20 @@
+# ==== 敏感与本地数据：data/ 默认全部忽略，只保留说明模板 ====
+# 原因：data/ 里含真实令牌（credentials.json、har/ 抓包）、商业数据（商品价格表、价格映射表）、
+#       以及各店铺快照/状态/日志——每个用户都不同，绝不能进 git（尤其公开仓库）。
+# data/* 的忽略项含：商品价格表.xlsx、价格映射表.xlsx、credentials.json、products/、state/、logs/、har/ 等。
+data/*
+!data/README.md
+
+# ==== 归档：旧脚本/旧文档里含历史 token 与旧 config，严禁提交 ====
+_archive/
+
+# ==== API 抓包与内部文档：含真实 X-Limit-Key / JWT / sid 前缀，不随公开仓库分发 ====
+api/
+
+# ==== 工作区元数据与记忆（作者内部笔记）====
+.workbuddy/
+
+# ==== 运行产物 ====
+__pycache__/
+*.pyc
+.DS_Store
