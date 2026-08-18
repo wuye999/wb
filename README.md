@@ -19,7 +19,8 @@
 本项目通过 **git 仓库统一维护与更新**。为让后续 `git pull` 更新不冲突，AI 必须遵守：
 
 - **禁止修改项目代码与文档文件**：`wb_ops/`、`wb.py`、`docs/`、`README.md`、`.gitignore`、`requirements.txt`、`data/README.md` 一律**只读**。
-- **只允许**：运行命令（`python wb.py ...`）、读写 `data/` 下你自己的数据、阅读文档与代码。
+- **写脚本 / 处理文件 → 一律放 `_scratch/` 目录**：AI 要写临时脚本、处理文件、生成中间产物或结果文件时，统一放在仓库根目录的 `_scratch/`（该目录已 gitignore，不进公开仓库，用完可自行清理）。**不要**把临时脚本写进 `wb_ops/`（核心库）、`data/`（数据区）、`docs/` 或仓库根目录。
+- **只允许**：运行命令（`python wb.py ...`）、读写 `data/` 下你自己的数据、在 `_scratch/` 里写临时脚本处理文件、阅读文档与代码。
 - 确需改代码时，请先征得作者同意，由作者改好后通过 `git pull` 下发，**不要在本地直接改代码**（否则会分叉、`git pull` 冲突）。
 
 ## 快速开始
@@ -50,4 +51,4 @@ python wb.py clean --target all --apply
 
 ## 目录
 
-- `wb_ops/` 核心库 ｜ `wb.py` 统一入口 ｜ `data/` 数据与凭证（本地专属，不进 git） ｜ `docs/` 文档 ｜ `api/`、`_archive/` 本地参考（含账号信息，不随公开仓库分发）
+- `wb_ops/` 核心库 ｜ `wb.py` 统一入口 ｜ `data/` 数据与凭证（本地专属，不进 git） ｜ `docs/` 文档 ｜ `_scratch/` AI 临时工作区 ｜ `api/`、`_archive/` 本地参考（含账号信息，不随公开仓库分发）

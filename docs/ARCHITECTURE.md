@@ -39,7 +39,8 @@
 │   └── logs/                 运行日志 + 结果 CSV
 ├── docs/                     ★ 文档（README/ARCHITECTURE/CLI/USAGE/CREDENTIALS）
 ├── api/                      BCS API 抓包/内部文档（含真实 token，本地参考，不随公开仓库分发）
-└── _archive/                 废弃脚本 + 一次性数据 + 旧文档（可回滚）
+├── _archive/                 废弃脚本 + 一次性数据 + 旧文档（可回滚）
+└── _scratch/                 ★ AI 临时工作区（写脚本/处理文件/中间产物；已 gitignore，不进公开仓库）
 ```
 
 ## 二、模块分层与依赖方向

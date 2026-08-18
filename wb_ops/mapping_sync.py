@@ -225,14 +225,6 @@ def merge(review_file=None):
             excluded = {vc: r for vc, r in excluded.items() if vc in alive}
     elif skip_prune and excluded:
         print(f"[排除清单清理] 已跳过（店铺数据缺失），{len(excluded)} 条排除记录暂保留")
-    if not excluded and os.path.exists(config.UNMAPPED_JSON):
-        n_mig = 0
-        for x in json.load(open(config.UNMAPPED_JSON, encoding="utf-8")):
-            if x.get("action") == "exclude":
-                excluded[x["vc"]] = "非货盘商品（人工排除，已从历史审核迁移固化）"
-                n_mig += 1
-        if n_mig:
-            print(f"[排除迁移] 旧映射表无已排除清单，从 {config.UNMAPPED_JSON} 迁移 {n_mig} 条排除记录（此后固化在映射表）")
 
     extra = []
     extra_unmapped = []

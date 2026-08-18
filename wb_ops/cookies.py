@@ -32,14 +32,22 @@ def extract_sessions(md_text):
     return sessions
 
 
-# 店铺 sid 前缀 → 凭证里的 shopName（5 店固定映射）
-SID_TO_SHOP = {
-    "bed80fed": "主号7",
-    "bf180223": "主号8",
-    "e5c25220": "副号2",
-    "45cec0cd": "副号3",
-    "1228831c": "副号4",
-}
+def build_sid_map(cfg):
+    """从 credentials.json 的 wb.shops 动态推导 {sid前缀8位: shopName}。
+
+    店铺的稳定标识（Z-Sid 前 8 位）已内嵌在每家店的 wb_seller_lk JWT 里，
+    从这里解码即可得到 sid→店铺名 映射，无需在代码里硬编码任何店铺。
+    """
+    sid_map = {}
+    for shop in (cfg.get("wb") or {}).get("shops") or []:
+        lk = shop.get("wb_seller_lk") or ""
+        try:
+            sid = (common.jwt_payload(lk).get("data") or {}).get("Z-Sid", "")
+        except Exception:
+            sid = ""
+        if sid:
+            sid_map[sid[:8]] = shop.get("shopName")
+    return sid_map
 
 
 def run(md_path):
@@ -59,12 +67,16 @@ def run(md_path):
     with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
 
+    sid_map = build_sid_map(cfg)
+    if not sid_map:
+        print("[警告] 无法从凭证推导店铺 sid 映射（wb_seller_lk 缺失/无效），请先确保 credentials.json 各店铺凭证完整")
+
     updated = []
     for s in sessions:
         sid = s["sid"][:8]
-        shop_name = SID_TO_SHOP.get(sid)
+        shop_name = sid_map.get(sid)
         if not shop_name:
-            print(f"  [跳过] 未识别的 sid={sid}...")
+            print(f"  [跳过] 未识别的 sid={sid}...（凭证中无匹配店铺）")
             continue
         shop = next((x for x in cfg.get("wb", {}).get("shops", []) if x["shopName"] == shop_name), None)
         if not shop:

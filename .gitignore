@@ -11,6 +11,10 @@ _archive/
 # ==== API 抓包与内部文档：含真实 X-Limit-Key / JWT / sid 前缀，不随公开仓库分发 ====
 api/
 
+# ==== AI 临时工作区（AI 写脚本/处理文件的草稿区；仅保留说明模板，其余不进公开仓库）====
+_scratch/*
+!_scratch/README.md
+
 # ==== 工作区元数据与记忆（作者内部笔记）====
 .workbuddy/
 

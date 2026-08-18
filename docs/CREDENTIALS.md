@@ -50,7 +50,7 @@
 | `wb-seller-lk` | 每店 | 店铺级 JWT（EdDSA），含 Z-Sid，**每店不同** |
 | `cookie` | 每店 | 整串，含 `cfidsw-wb`（Cloudflare，经 sec/api/fl 加密轮换，无法自刷新）、`x-supplier-id-external`（=Z-Sid） |
 
-- sid 前缀 → 店铺名的固定映射（`cookies-update` 靠它把抓包会话匹配到店铺；**作者账号的映射**）：主号7=bed80fed / 主号8=bf180223 / 副号2=e5c25220 / 副号3=45cec0cd / 副号4=1228831c。换账号需在 `wb_ops/cookies.py` 的 `SID_TO_SHOP` 里改成你自己的对应关系。
+- sid 前缀 → 店铺名的映射（`cookies-update` 靠它把抓包会话匹配到店铺）：**已自动从凭证动态推导**——每家店的 `wb_seller_lk` JWT 里内嵌了稳定标识 `Z-Sid`（前 8 位即 sid 前缀），`cookies.py` 的 `build_sid_map()` 会从 `credentials.json` 的每家店解码得到映射，**无需在代码里硬编码任何店铺**。换账号/换店铺后，只要 `credentials.json` 里的 `wb_seller_lk` 是你自己的店铺凭证，`cookies-update` 即可自动匹配，无需改代码。
 - 失效表现：`cfidsw-wb` 过期 → **403**。保鲜实测 ≥46 小时，建议每周刷新。
 
 ## 三、如何刷新
