@@ -16,9 +16,13 @@ import time
 from datetime import datetime
 
 from . import bcs
+from . import common
 from . import config
+from . import credentials
 from . import mapping
+from . import price_review
 from . import products
+from . import wb_api
 RED = "\033[91m"
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -217,6 +221,63 @@ def price_limit_violations(items):
     return bad
 
 
+def price_review_items(items):
+    """返回降价落在 (30%, 50%] 的商品（进入价格审查，需「应用新价格」）。
+    判断：0.5*cur < price <= 0.7*cur（cur=原价，price=新价）。"""
+    review = []
+    for it in items:
+        cur = it.get("cur_price")
+        if cur is None or it.get("price") is None:
+            continue
+        try:
+            cur = float(cur)
+        except (TypeError, ValueError):
+            continue
+        if cur <= 0:
+            continue
+        price = it["price"]
+        if cur * 0.5 < price <= cur * 0.7:
+            review.append(it)
+    return review
+
+
+def _auto_review_shop(sid, items):
+    """改价后自动审核：按 nmID 匹配「降价 30-49.9%」的商品，调隔离区审核接口应用新价格。
+    返回成功审核数。"""
+    review_items = price_review_items(items)
+    if not review_items:
+        return 0
+    shop = credentials.get().wb_shop(sid)
+    if not shop:
+        print(f"  [自动审核] 店铺 {sid} 无 WB 凭证，跳过")
+        return 0
+    try:
+        session = wb_api.make_session(shop)
+        quarantine = price_review.fetch_all_quarantine(session)
+        nm_to_id = {it.get("nmID"): it.get("id") for it in quarantine if it.get("nmID")}
+        ids = []
+        matched_nm = []
+        for it in review_items:
+            qid = nm_to_id.get(it.get("nmID"))
+            if qid:
+                ids.append(qid)
+                matched_nm.append(it["nmID"])
+        if not ids:
+            print(f"  [自动审核] 降价 30-49.9% 的 {len(review_items)} 个商品未在隔离区列表（可能尚未进入审查），跳过")
+            return 0
+        d = price_review.apply_prices(session, ids)
+        ok = not d.get("error")
+        print(f"  [自动审核] 应用新价格 {len(ids)} 个 nmID={matched_nm}"
+              + (" ✓成功" if ok else f" ✗失败:{d.get('errorText')}"))
+        return len(ids) if ok else 0
+    except common.CookieExpiredError as e:
+        print(f"  [自动审核] 店铺 {sid} cookie 失效，跳过: {e}")
+        return 0
+    except Exception as e:
+        print(f"  [自动审核] 店铺 {sid} 失败: {e}")
+        return 0
+
+
 def plan_stock(vcs, shops, state, amount):
     plans = []
     tracker = SkipTracker()
@@ -381,7 +442,7 @@ def _normalize_csv_encoding():
     print(f"  ⚠ ops_result.csv 非 UTF-8 编码（可能被 Excel 另存过），已备份 {RESULT_CSV}.bak 并转码为 UTF-8-SIG")
 
 
-def run_apply(plans, action):
+def run_apply(plans, action, auto_review=False):
     ok = fail = 0
     skipped_bad = 0
     zero_items = []
@@ -418,6 +479,8 @@ def run_apply(plans, action):
                     results.append([sid, it["nmID"], action, it["price"], msg, ts])
                 if i + PRICE_CHUNK < len(dl):
                     time.sleep(BATCH_SLEEP)
+            if auto_review:
+                _auto_review_shop(sid, ok_items)
         elif action == "stock":
             for wh in p["warehouses"]:
                 sis = wh["stockItems"]
@@ -588,7 +651,7 @@ def run(action, args):
         print("已取消，未执行任何操作")
         return
 
-    run_apply(plans, action)
+    run_apply(plans, action, auto_review=getattr(args, "auto_review", False))
 
 
 # 供 argparse 复用：给 price/stock/trash 三个子命令加筛选与通用参数
@@ -607,5 +670,7 @@ def add_ops_args(p, *, with_price=False, with_stock=False):
         p.add_argument("--discount", type=int, help="折扣 0-100（不传=不改）")
         p.add_argument("--club-discount", type=int, help="club折扣 0-100（不传=不改）")
         p.add_argument("--keep-price", action="store_true", help="价格保持当前值（只改折扣/俱乐部折扣）")
+        p.add_argument("--auto-review", action="store_true",
+                       help="改价后自动「应用新价格」（降价 30-49.9%% 进审查时，精确匹配刚改价商品）")
     if with_stock:
         p.add_argument("--amount", type=int, default=0, help="目标库存（默认 0）")

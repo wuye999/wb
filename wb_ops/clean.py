@@ -2,7 +2,7 @@
 """
 wb_ops 回收站 / 草稿箱商品清理（原 wb_clean_delete.py）
 
-回收站：BCS 拉 TRASH → WB deleteNMsByIDs 删除（≤50/批）→ 失败（有库存）只归零库存
+回收站：BCS 拉 TRASH → 有库存商品先归零 → WB deleteAllSize 一键清空
 草稿箱：BCS 拉 ERROR → WB deleteByNMUUID 按 UUID 删除
 鉴权：BCS（bcs.py）+ WB（wb_api.py 会话三件套）
 """
@@ -17,6 +17,7 @@ from . import common
 from . import wb_api
 WB_DELETE_NMS = "https://seller-content.wildberries.ru/ns/source/content-card/source/deleteNMsByIDs"
 WB_DELETE_UUID = "https://seller-content.wildberries.ru/ns/viewer/content-card/viewer/errorCard/deleteByNMUUID"
+WB_DELETE_ALL = "https://seller-content.wildberries.ru/ns/source/content-card/source/deleteAllSize"
 DEL_CHUNK = 50
 STOCK_CHUNK = 200
 
@@ -51,6 +52,12 @@ def delete_nms(session, nm_ids):
                 failed[nid] = d.get("errorText") or "未知原因"
         time.sleep(0.3)
     return deleted, failed
+
+
+def delete_all_size(session):
+    """一键清空回收站（无 body）。返回完整响应 dict（error/errorText/data）。
+    有库存商品删不掉时返回 HTTP 400 + error:true（StockCount>0），按正常返回处理不抛错。"""
+    return wb_api.request_post(session, WB_DELETE_ALL, None, allow_400_json=True)
 
 
 def set_stock_zero(shop_id, row_map, nm_ids):
@@ -122,40 +129,56 @@ def process_basket(shop, sid, wb_session, args, rows):
         return st
     st["total"] = len(trash)
     row_map = {r.get("nmId"): r for r in trash if r.get("nmId")}
-    nm_ids = list(row_map.keys())
+    # 识别有库存商品（有库存/在途的删不掉，先归零）
+    stocked = []
+    for r in trash:
+        nid = r.get("nmId")
+        if not nid:
+            continue
+        has_stock = any((stk.get("amount") or 0) > 0
+                        for sz in (r.get("sizeList") or [])
+                        for stk in (sz.get("stockList") or []))
+        if has_stock:
+            stocked.append(nid)
     if args.limit > 0:
-        nm_ids = nm_ids[: args.limit]
-    print(f"  [列表] 回收站 {len(trash)} 条，本次处理 {len(nm_ids)} 个")
+        stocked = stocked[: args.limit]
+    print(f"  [列表] 回收站 {len(trash)} 条，其中有库存 {len(stocked)} 个将先归零")
 
     if not args.apply:
         for r in trash:
-            if r.get("nmId") in nm_ids:
-                rows.append({"店铺": name, "ID": r.get("nmId"), "类型": "nmId",
-                             "vendorCode": r.get("vendorCode"), "结果": "DRY将删"})
-        print("  [dry-run] 未执行删除（共 %d 条将删）" % len(nm_ids))
+            rows.append({"店铺": name, "ID": r.get("nmId"), "类型": "nmId",
+                         "vendorCode": r.get("vendorCode"), "结果": "DRY将一键清空"})
+        print("  [dry-run] 未执行：将一键清空整个回收站（deleteAllSize，不可逆）")
         return st
 
-    deleted, failed = delete_nms(wb_session, nm_ids)
-    st["deleted"] = len(deleted)
-    st["failed"] = len(failed)
-    print(f"  [删除] 成功 {len(deleted)}，失败 {len(failed)}（有库存/未完成订单）")
-    for nid in deleted:
-        rows.append({"店铺": name, "ID": nid, "类型": "nmId",
-                     "vendorCode": row_map.get(nid, {}).get("vendorCode", ""), "结果": "已删除"})
-    for nid, reason in failed.items():
-        rows.append({"店铺": name, "ID": nid, "类型": "nmId",
-                     "vendorCode": row_map.get(nid, {}).get("vendorCode", ""),
-                     "结果": f"失败:{str(reason)[:40]}"})
-
-    if failed:
-        print(f"  [归零] 对 {len(failed)} 个删除失败商品设置库存 0 ...")
-        zero_res = set_stock_zero(sid, row_map, list(failed.keys()))
+    # apply：① 先归零有库存商品；② 一键清空
+    if stocked:
+        print(f"  [归零] 对 {len(stocked)} 个有库存商品设置库存 0 ...")
+        zero_res = set_stock_zero(sid, row_map, stocked)
         for nid, res in zero_res.items():
             st["zeroed"] += 1 if res == "已归零" else 0
-            for r in rows:
-                if r["ID"] == nid and r["结果"].startswith("失败"):
-                    r["结果"] += f" | {res}"
             print(f"    nmID={nid} -> {res}")
+    print(f"  [一键清空] deleteAllSize ...")
+    resp = delete_all_size(wb_session)
+    data = resp.get("data") or {}
+    cleared_nm = data.get("nmIDs") or []
+    stock_count = data.get("StockCount", 0)
+    st["deleted"] = len(cleared_nm)
+    for r in trash:
+        nid = r.get("nmId")
+        if nid in cleared_nm:
+            res = "已清空"
+        elif resp.get("error"):
+            res = "清空失败(有库存/在途)"
+        else:
+            res = "未清空"
+        rows.append({"店铺": name, "ID": nid, "类型": "nmId",
+                     "vendorCode": r.get("vendorCode"), "结果": res})
+    if resp.get("error"):
+        print(f"  [结果] 清空失败：{resp.get('errorText')}"
+              f"（已清空 {len(cleared_nm)} 个，仍有 {stock_count} 个有库存未清空）")
+    else:
+        print(f"  [结果] 已清空 {len(cleared_nm)} 个")
     return st
 
 

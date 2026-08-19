@@ -20,11 +20,15 @@
 │   ├── mapping.py             商品价格表解析 + 映射表构建（8-Sheet）
 │   ├── mapping_sync.py        多店 review / 增量 merge
 │   ├── mapping_check.py       映射表核查工作台（带图，可疑项标记）
+│   ├── mismatch_check.py      货不对板筛查工作台（看图勾选，导出 vc 下架）
 │   ├── workbench.py           HTML 工作台渲染（合并 4 处重复模板）
-│   ├── ops.py                 一键操作：改价 / 库存 / 下架（两段式 dry-run）
+│   ├── ops.py                 一键操作：改价 / 库存 / 下架（两段式 dry-run；改价可 --auto-review 自动应用新价格）
 │   ├── promo.py               促销报名
 │   ├── discount.py            折扣改价（>50%→50%）
-│   ├── clean.py               草稿箱 / 回收站清理
+│   ├── clean.py               草稿箱 / 回收站清理（回收站 deleteAllSize 一键清空）
+│   ├── price_review.py        价格审核「应用新价格」（WB 隔离区 quarantine/goods）
+│   ├── orders.py              订单查询（BCS ozonOrder：同步/进度/列表/状态计数）
+│   ├── questions.py           买家未处理提问查询 + 回复（WB questions/answer）
 │   ├── cookies.py             从抓包 md 刷新凭证
 │   ├── daily.py               每日任务启动器（morning/check）
 │   └── schedule.py            Windows 计划任务管理
@@ -49,8 +53,9 @@
 入口层   cli.py（子命令分发）
           │ 调用
           ▼
-业务层   mapping / mapping_sync / mapping_check / ops
+业务层   mapping / mapping_sync / mapping_check / mismatch_check / ops
          promo / discount / clean / cookies / daily / schedule
+         price_review / orders / questions
           │ 依赖
           ▼
 支撑层   bcs / wb_api / products / workbench / keywords

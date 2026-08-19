@@ -64,7 +64,21 @@ python wb.py merge 统一审核.json            # 增量合并 → 映射表
 ```
 - ✅ 成功：merge 打印 `合并完成`，映射表更新。
 
-## 5. 改价 / 设折扣 / 库存 / 下架（两段式）
+## 5. 货不对板筛查（看图找「上架商品图片与中文名不符」的）
+
+```bash
+python wb.py mismatch-check             # 生成货不对板筛查工作台
+# → 打开 data/workbench/货不对板筛查工作台.html
+#   顶部「中文名筛选」可多选只看某几个中文名（Ctrl/Cmd 点选，不选=全部）
+#   逐个商品看缩略图（点击弹高清大图）与俄文标题是否和中文名一致
+#   点击标题（或左侧复选框）勾选「货不对板」（勾选状态浏览器本地保存，刷新不丢）
+# → 点「导出勾选 vc」下载 货不对板vc.json，或「复制 vc」复制逗号分隔列表
+python wb.py trash --vc <vc列表> --apply --yes   # 清空库存并移至回收站
+```
+- ✅ 成功：工作台「共 N 条 · M 个中文名商品」；导出 vc 后 trash 打印 `成功 N · 失败 0`。
+- 📌 下架前先去 `--apply` 跑 dry-run 预览清单；`trash` 会自动先清库存再移回收站。
+
+## 6. 改价 / 设折扣 / 库存 / 下架（两段式）
 
 ```bash
 # 改价（默认 floor 双倍售价；--price 手动；--discount 带折扣）
@@ -85,7 +99,7 @@ python wb.py fetch && python wb.py merge
 - ✅ 成功：`结果: 成功 N · 失败 0`，明细在 `data/logs/ops_result.csv`。
 - 📌 每个命令先去 `--apply` 跑 dry-run 预览清单。
 
-## 6. 促销报名（每日 9:00 自动）
+## 7. 促销报名（每日 9:00 自动）
 
 ```bash
 python wb.py promo-apply              # 预览可报名活动
@@ -95,7 +109,7 @@ python wb.py promo-apply --shops 5272 --apply   # 只报主号7
 - ✅ 成功：`[汇总] 可报名 N | 成功 M`；幂等（重复报名返回"已存在跳过"）。
 - 明细：`data/logs/报名结果_*.csv`。
 
-## 7. 折扣检查（>50% → 50%）
+## 8. 折扣检查（>50% → 50%）
 
 ```bash
 python wb.py discount                # 预览 >50% 商品
@@ -105,16 +119,57 @@ python wb.py discount --threshold 47 --target 46 --apply   # 自定义
 - ✅ 成功：`[汇总] 共 N 条待改`；日志 `data/logs/折扣修改_*.csv`。
 - ⚠ 默认先同步 BCS 缓存（~50s），**不同步会漏查**（实测教训），勿用 `--no-sync`。
 
-## 8. 清理草稿箱 / 回收站
+## 9. 清理草稿箱 / 回收站
 
 ```bash
 python wb.py clean --target all            # 预览
 python wb.py clean --target all --apply    # 执行：先草稿箱，后回收站
 ```
-- 回收站规则：能删先删；删除失败（有未完成订单占库存）→ 只归零库存，不重删。
-- ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 失败 F | 已归零 Z`。
+- 回收站规则：**一键清空**（`deleteAllSize`）——先对回收站里有库存的商品归零，再一键清空整店回收站；草稿箱按 UUID 逐条删除。
+- ⚠ **`deleteAllSize` 对有库存商品会失败**（返回 `error:true` + `StockCount>0`，报 `content.api.errors.source.whileDeleting`），需等库存清零后再重试。
+- ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 已归零 Z`。
 
-## 9. 每日自动运行（仅当已主动创建计划任务）
+## 10. 价格审核（降价 30-49.9% 进审查的商品）
+
+```bash
+python wb.py price-review              # 预览隔离区待审商品
+python wb.py price-review --apply      # 应用新价格（审核通过）
+python wb.py price-review --shops 5272 --apply   # 只审主号7
+```
+- 背景：改价降价 **30–49.9%** 会进入 WB 价格审查（隔离区），**必须「应用新价格」才生效**；降价 **>50%** 会被 WB 直接拒绝。
+- ✅ 成功：`[汇总] 待审 N | 已应用新价格 M`；日志 `data/logs/价格审核_*.csv`。
+- 改价时自动审核：`python wb.py price --name 充电宝 --apply --yes --auto-review`（改价成功后自动匹配降价 30-49.9% 的商品并应用新价格，不误审历史遗留待审商品）。
+
+## 11. 订单查询
+
+```bash
+python wb.py orders                                   # 同步+查询今天订单
+python wb.py orders --begin 2026-08-17 --end 2026-08-20   # 指定日期区间
+python wb.py orders --days 7                          # 最近 7 天
+python wb.py orders --no-sync                         # 跳过同步，直接查缓存
+```
+- 流程：自动触发订单同步（`shopIds:[]`=全部店铺，异步任务约数秒）→ 轮询完成 → 查询订单列表 + 状态分类计数。
+- ✅ 成功：`[汇总] 订单 N 条`；日志 `data/logs/订单查询_*.csv`。
+- `--shops` 可限定同步范围与结果；`--page-size` 控制分页（默认 50）。
+
+## 12. 买家提问查询 + AI 一键回复
+
+```bash
+python wb.py questions                              # 查询未处理提问
+python wb.py questions --reply "回复内容" --question-id <id>   # 回复单条
+python wb.py questions --reply "回复内容" --reply-all --yes    # 回复全部（危险）
+```
+- ✅ 成功：`[汇总] 未处理提问 N`；日志 `data/logs/买家提问_*.csv`。
+
+**🤖 AI 一键查询新提问并回复的流程**（拿给 AI 就能照做）：
+1. `python wb.py questions` → 列出各店未处理提问（含提问ID、商品、买家问题、回复截止时间）。
+2. 逐条阅读买家问题（俄语），理解买家在问什么。
+3. 为每条生成俄语回复（礼貌、简洁、针对问题作答；不确定的不要乱答，涉及物流/售后的可引导联系客服）。
+4. 逐条回复：`python wb.py questions --reply "<俄语回复>" --question-id <提问ID>`（一条一条回，回完核对 `已回复`）。
+5. 复核：再跑一次 `python wb.py questions`，确认 `未处理提问 0`。
+- ⚠ 回复是**对买家公开发言**，务必措辞得当；批量自动回复建议先人工抽查 1-2 条再放开。
+
+## 13. 每日自动运行（仅当已主动创建计划任务）
 
 > ⚠ **默认不创建计划任务**。本节仅在你自己主动运行过 `wb.py schedule`（见第 1 节）之后才生效；未创建则一切手动执行。
 
@@ -127,7 +182,7 @@ python wb.py clean --target all --apply    # 执行：先草稿箱，后回收�
 - 手动触发（等价于计划任务）：`python wb.py daily morning` 或 `python wb.py daily check`。
 - 已建任务时手动触发：`schtasks /Run /TN WB_Daily_Morning`。
 
-## 10. 维护原则
+## 14. 维护原则
 
 - **只维护**：`data/商品价格表.xlsx`（映射表由 merge 自动更新）。
 - **不要手动改**：`data/价格映射表.xlsx`（永远用 merge 重建）。
@@ -135,7 +190,7 @@ python wb.py clean --target all --apply    # 执行：先草稿箱，后回收�
 - **fetch 必须完整**：某店拉取失败时 merge 会跳过「消失即移除」，先补拉再 merge。
 - **加列/改结构用 Excel**，避免 openpyxl 重存破坏商品价格表公式。
 
-## 11. AI 执行手册（拿给 AI 就能照做）
+## 15. AI 执行手册（拿给 AI 就能照做）
 
 > 若你是 AI 被要求操作本系统，按下面顺序执行，每步验证输出再继续：
 

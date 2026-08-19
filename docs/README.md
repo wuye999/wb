@@ -25,8 +25,8 @@
 | **credentials.json** | 统一凭证（BCS 三件套 + WB 各店 cookie） |
 
 **两大业务线**（现合并在一个入口 `wb.py` 下）：
-1. **商品映射 / 改价 / 库存 / 下架**（原「检查价格」）：`shops / fetch / mapping / mapping-check / review / merge / price / stock / trash`
-2. **促销报名 / 折扣改价 / 清理 / 每日自动化**（原「促销折扣」）：`promo-apply / discount / clean / cookies-update / daily / schedule`
+1. **商品映射 / 改价 / 库存 / 下架 / 价格审核 / 货不对板筛查**（原「检查价格」）：`shops / fetch / mapping / mapping-check / mismatch-check / review / merge / price / stock / trash / price-review`
+2. **促销报名 / 折扣改价 / 清理 / 订单 / 买家提问 / 每日自动化**（原「促销折扣」）：`promo-apply / discount / clean / orders / questions / cookies-update / daily / schedule`
 
 ## 文档索引（按需读）
 

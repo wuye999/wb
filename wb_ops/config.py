@@ -30,6 +30,7 @@ AUTO_ADD_JSON = os.path.join(STATE_DIR, "多店铺自动新增清单.json")
 OUT_MAPPING_HTML = os.path.join(WORKBENCH_DIR, "价格映射核对工作台.html")
 OUT_REVIEW_HTML = os.path.join(WORKBENCH_DIR, "多店铺待审核.html")
 OUT_MAPPING_CHECK_HTML = os.path.join(WORKBENCH_DIR, "映射表核查工作台.html")
+OUT_MISMATCH_HTML = os.path.join(WORKBENCH_DIR, "货不对板筛查工作台.html")
 
 # ops 执行明细 CSV（追加）
 RESULT_CSV = os.path.join(LOG_DIR, "ops_result.csv")

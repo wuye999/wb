@@ -19,9 +19,13 @@ from . import discount
 from . import mapping
 from . import mapping_check
 from . import mapping_sync
+from . import mismatch_check
 from . import ops
+from . import orders
+from . import price_review
 from . import products
 from . import promo
+from . import questions
 from . import schedule
 def build_parser():
     ap = argparse.ArgumentParser(prog="wb", description="Wildberries/BCS 卖家自动化统一入口")
@@ -41,6 +45,8 @@ def build_parser():
 
     p = sub.add_parser("mapping-check", help="映射表核查工作台（带图，核对匹配是否有误）")
     p.add_argument("--tol", type=int, default=5, help="价格偏差阈值（元，默认 5）")
+
+    sub.add_parser("mismatch-check", help="货不对板筛查工作台（看图勾选，导出 vc 下架）")
 
     sub.add_parser("review", help="多店铺待审核工作台")
 
@@ -80,6 +86,26 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条")
     p.add_argument("--no-sync", action="store_true", help="跳过列表前同步")
 
+    p = sub.add_parser("price-review", help="价格审核：查看并应用新价格（降价 30-49.9%% 进审查的商品）")
+    p.add_argument("--apply", action="store_true", help="真正应用新价格（默认 dry-run）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--limit", type=int, default=0, help="每店最多审核 N 个（0=全部）")
+
+    p = sub.add_parser("orders", help="订单查询（自动同步 + 查询指定日期区间）")
+    p.add_argument("--begin", default="", help="开始日期 YYYY-MM-DD")
+    p.add_argument("--end", default="", help="结束日期 YYYY-MM-DD")
+    p.add_argument("--days", type=int, default=0, help="查询最近 N 天（--begin/--end 未指定时，默认 1 天）")
+    p.add_argument("--no-sync", action="store_true", help="跳过订单同步，直接查缓存")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部）")
+    p.add_argument("--page-size", type=int, default=50, help="分页每页条数")
+
+    p = sub.add_parser("questions", help="买家未处理提问查询与回复")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--reply", default="", help="回复内容（配合 --question-id 或 --reply-all）")
+    p.add_argument("--question-id", default="", help="回复指定提问 ID")
+    p.add_argument("--reply-all", action="store_true", help="回复本店全部未处理提问（需 --yes）")
+    p.add_argument("--yes", action="store_true", help="确认回复全部（公开发言）")
+
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
     p.add_argument("md_file", help="含 fetch 块的 md 文件")
 
@@ -115,6 +141,9 @@ def dispatch(args):
     if cmd == "mapping-check":
         mapping_check.run(tol=args.tol)
         return 0
+    if cmd == "mismatch-check":
+        mismatch_check.run()
+        return 0
     if cmd == "review":
         mapping_sync.run_review()
         return 0
@@ -130,6 +159,12 @@ def dispatch(args):
         return discount.run(args)
     if cmd == "clean":
         return clean.run(args)
+    if cmd == "price-review":
+        return price_review.run(args)
+    if cmd == "orders":
+        return orders.run(args)
+    if cmd == "questions":
+        return questions.run(args)
     if cmd == "cookies-update":
         return cookies.run(args.md_file)
     if cmd == "daily":

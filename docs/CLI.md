@@ -22,6 +22,7 @@
 | `mapping` | `--legacy`（仅主店候选） | 统一核对工作台（5 店并集一页两区） | `data/workbench/价格映射核对工作台.html` |
 | `mapping-import` | `<核对结果.json>` | 导入核对 → 生成映射表（旧格式单店初建） | `data/价格映射表.xlsx` |
 | `mapping-check` | `--tol N`（默认 5） | 映射表核查工作台（带图，可疑项标记） | `data/workbench/映射表核查工作台.html` |
+| `mismatch-check` | 无 | 货不对板筛查工作台（看图勾选，导出 vc 下架） | `data/workbench/货不对板筛查工作台.html` |
 | `review` | 无 | 其余 4 店新商品待审核（前缀命中自动补录） | `data/workbench/多店铺待审核.html` |
 | `merge` | `[审核.json]`（可选） | 增量合并（继承+追加+消失即移除）→ 重建映射表 | `data/价格映射表.xlsx` |
 
@@ -29,7 +30,7 @@
 
 | 子命令 | 用途 | 操作参数 |
 |---|---|---|
-| `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` |
+| `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` / `--auto-review` |
 | `stock` | 改库存 | `--amount N`（默认 0） |
 | `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
 
@@ -42,7 +43,10 @@
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
 | `discount` | 折扣改价（各店 >阈值→目标，默认 >50%→50%） | `--apply` / `--threshold` / `--target` / `--shops` / `--no-sync` / `--sync` |
-| `clean` | 清草稿箱/回收站（删除+失败归零） | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--no-sync` |
+| `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`） | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--no-sync` |
+| `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（降价 30-49.9% 进审查） | `--apply` / `--shops` / `--limit` |
+| `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
+| `questions` | 买家未处理提问查询 + 回复 | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
 | `daily` | 每日任务 | `morning\|check`（+ 透传参数） |
 | `schedule` | 创建/删除 Windows 计划任务（⚠ 默认不创建，仅按需执行） | `--remove` |
@@ -60,6 +64,7 @@ python wb.py review                        # 待审核工作台
 python wb.py merge                         # 增量合并（无新审核）
 python wb.py merge 统一审核.json            # 合并本次审核
 python wb.py mapping-check --tol 3         # 核查工作台
+python wb.py mismatch-check                 # 货不对板筛查工作台（看图勾选 → 导出 vc → trash --vc）
 
 # 改价/折扣/库存/下架（dry-run 默认，加 --apply 执行）
 python wb.py price --name 充电宝 --apply --yes
@@ -68,13 +73,20 @@ python wb.py price --vc BCS-XXX-123 --discount 30 --keep-price --apply --yes
 python wb.py stock --prefix CYQX --amount 0 --apply --yes
 python wb.py trash --vc BCS-XXX-123 --shops 5272 --apply --yes
 
-# 促销/折扣/清理
+# 促销/折扣/清理/价格审核/订单/提问
 python wb.py promo-apply                   # 预览可报名活动
 python wb.py promo-apply --apply           # 执行报名
 python wb.py discount                      # 预览 >50% 商品
 python wb.py discount --apply              # 执行 >50%→50%
 python wb.py clean --target all            # 预览
-python wb.py clean --target all --apply    # 执行（先草稿后回收站）
+python wb.py clean --target all --apply    # 执行（先草稿后回收站；回收站先归零再一键清空）
+python wb.py price-review                  # 预览隔离区待审商品
+python wb.py price-review --apply          # 应用新价格
+python wb.py orders                        # 同步+查询今天订单
+python wb.py orders --begin 2026-08-17 --end 2026-08-20   # 指定日期区间
+python wb.py orders --no-sync --days 3     # 跳过同步查缓存
+python wb.py questions                     # 查询未处理提问
+python wb.py questions --reply "..." --question-id <id>    # 回复单条
 
 # 运维
 python wb.py cookies-update data/har/副号234_cookies.md

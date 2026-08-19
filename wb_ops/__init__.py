@@ -8,6 +8,7 @@ wb_ops —— Wildberries/BCS 卖家自动化库（统一入口）
   入口层   cli.py            统一 CLI（子命令聚合）
   业务层   mapping / mapping_sync / mapping_check / ops
            promo / discount / clean / cookies / daily / schedule
+           price_review / orders / questions
   支撑层   bcs / wb_api / products / workbench / keywords
            common / credentials / config
 
@@ -17,5 +18,6 @@ wb_ops —— Wildberries/BCS 卖家自动化库（统一入口）
 
 __version__ = "2.0.0"
 __all__ = ["config", "credentials", "common", "bcs", "wb_api", "keywords",
-           "products", "mapping", "mapping_sync", "mapping_check", "workbench",
-           "ops", "promo", "discount", "clean", "cookies", "daily", "schedule", "cli"]
+           "products", "mapping", "mapping_sync", "mapping_check", "mismatch_check", "workbench",
+           "ops", "promo", "discount", "clean", "cookies", "daily", "schedule",
+           "price_review", "orders", "questions", "cli"]
