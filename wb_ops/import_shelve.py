@@ -226,9 +226,8 @@ def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info):
 
 # ---------------- 主流程 ----------------
 def run(args):
-    # 前置校验：快照须新鲜（缺失/超 24h → 先 fetch），保证差集判断可信
-    if not replicate.check_snapshots_fresh(args):
-        return 1
+    # 前置自动同步：直接刷新全部店铺快照，保证差集判断基于最新数据
+    replicate.ensure_snapshots(args)
     foreign, bad_vcs = load_foreign(args.xlsx)
     plans, all_shop_ids, have_cnt, rec_skip = diff_foreign(foreign)
 

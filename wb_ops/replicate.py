@@ -337,50 +337,20 @@ def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_in
 
 
 # ---------------- 主流程 ----------------
-SNAPSHOT_MAX_AGE_HOURS = 24  # 快照时效上限：超龄说明覆盖判断可能失真（BCS 缓存/WB 回填都会滞后）
-
-
-def check_snapshots_fresh(args):
-    """前置校验：任一店铺快照缺失或超过 24h → 提示先 fetch 再操作（--fresh-skip 可跳过）。
-    返回 False = 应中止（快照过旧，覆盖/差集判断不可信）。"""
-    from . import mapping  # 延迟 import（mapping → bcs 联网懒加载）
-    shops_meta = []
-    try:
-        meta = json.load(open(config.STATUS_JSON, encoding="utf-8"))
-        shops_meta = meta.get("shops", []) or []
-    except Exception:
-        pass
-    stale = []  # [(店id, 状态描述)]
-    for s in shops_meta or []:
-        sid = s.get("id")
-        p = config.shop_json_path(sid)
-        if not os.path.exists(p):
-            stale.append((sid, "快照缺失"))
-            continue
-        try:
-            fetched = json.load(open(p, encoding="utf-8")).get("fetchedAt", "")
-            age_h = (datetime.now() - datetime.strptime(fetched, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
-            if age_h > SNAPSHOT_MAX_AGE_HOURS:
-                stale.append((sid, f"快照已 {age_h:.0f} 小时未更新（{fetched}）"))
-        except Exception:
-            stale.append((sid, "快照读取失败"))
-    if not stale:
-        return True
-    print("⚠ [快照过旧] 以下店铺数据缺失或超过 24 小时，覆盖判断可能失真（漏判/误判缺失店）：")
-    for sid, why in stale:
-        print(f"    店{sid}: {why}")
-    if getattr(args, "fresh_skip", False):
-        print("  （--fresh-skip 已指定，继续执行）")
-        return True
-    print("  请先运行：python wb.py fetch   （同步+拉取全部店铺，约 2 分钟）")
-    print("  确认要用旧快照继续，加 --fresh-skip。")
-    return False
+def ensure_snapshots(args):
+    """前置自动同步：启动时先刷新全部店铺快照（WB→BCS 并发同步 + 逐店拉取，约 2 分钟），
+    保证覆盖/差集判断基于最新数据（不做时效校验，直接同步最新）。
+    --no-sync 可跳过（用本地快照，判断可能滞后）。"""
+    if getattr(args, "no_sync", False):
+        print("[前置同步] --no-sync 已指定，跳过同步，直接使用本地快照（覆盖判断可能滞后）")
+        return
+    print("[前置同步] 刷新全部店铺快照（WB→BCS 同步 + 拉取，约 2 分钟）...")
+    products.fetch_all()
 
 
 def run(args):
     from . import mapping  # 延迟 import（mapping → bcs 联网懒加载）
-    if not check_snapshots_fresh(args):
-        return 1
+    ensure_snapshots(args)
     shops_data, _ = products.load_all_shops()
     vc_shops, vc_rows, all_shop_ids = build_coverage(shops_data)
     sid_main = mapping.shop_id()

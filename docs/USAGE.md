@@ -103,15 +103,15 @@ python wb.py fetch && python wb.py merge
 
 场景：某商品只在 1-4 家店在架，其余店没有 → 自动把它上架到缺失的店铺（vendorCode 与源店一致、价格=源店现价、库存 999、直上）。
 
-> ⚠ **前置必做**：先 `python wb.py fetch` 同步+拉取全部店铺（保证覆盖判断准）。命令自带快照时效校验：任一店铺快照缺失或超过 24 小时会**拒绝执行**并提示先 fetch；确认要用旧数据才加 `--fresh-skip` 强制继续。
+> ⚠ **自动同步**：命令启动时会**自动先同步+拉取全部店铺**（WB→BCS，约 2 分钟），保证覆盖判断基于最新数据，无需手动 fetch。加 `--no-sync` 可跳过（用本地快照，覆盖判断可能滞后，不推荐）。
 
 ```bash
-python wb.py fetch                        # ① 先刷新 5 店快照（必须）
-python wb.py replicate                    # ② 预览全部部分覆盖商品（vc/中文名/源店/价格/目标店）
+python wb.py replicate                    # 自动同步后预览全部部分覆盖商品（vc/中文名/源店/价格/目标店）
 python wb.py replicate --prefix ZLTH --apply   # 按前缀码批量补齐
 python wb.py replicate --name 冲牙器 --apply    # 按映射表中文名补齐
 python wb.py replicate --vc BCS-XXX-123 --apply # 单个 vc（目标店自动=缺失店）
 python wb.py replicate --shops 5273 --apply     # 只补指定店
+python wb.py replicate --no-sync          # 跳过自动同步（用本地快照，不推荐）
 ```
 - ✅ 成功判据：**目标店能查到该 vendorCode 即成功**；上架后价格/库存显示 None 属正常（WB 平台审核/回填延迟，等 1 小时甚至更久再核对数值）。
 - 📌 防重复四层（快照覆盖 → 本地记录 → 实时查重 → BCS 服务端幂等），重复执行安全，已存在的店自动跳过。
@@ -123,14 +123,14 @@ python wb.py replicate --shops 5273 --apply     # 只补指定店
 
 场景：拿到他人（同项目格式）映射表 → 按 **WB原始nmId**（vendorCode 末段数字，两代格式 `BCS-{随机4位}-{nm}` / `BCS-{前缀码}-{nm}` 通吃）比对，他人有、我方 5 店全无的商品上架到我的店铺。
 
-> ⚠ **前置必做**：先 `python wb.py fetch` 同步+拉取全部店铺（保证差集判断准，漏判会重复上架他人已有的商品）。命令自带快照时效校验：任一店铺快照缺失或超过 24 小时会**拒绝执行**并提示先 fetch；确认要用旧数据才加 `--fresh-skip` 强制继续。
+> ⚠ **自动同步**：命令启动时会**自动先同步+拉取全部店铺**（WB→BCS，约 2 分钟），保证差集判断基于最新数据（漏判会重复上架他人已有的商品），无需手动 fetch。加 `--no-sync` 可跳过（不推荐）。
 
 ```bash
-python wb.py fetch                                # ① 先刷新我方快照（必须）
-python wb.py import-shelve 他人映射表.xlsx         # ② 预览差集清单（含前缀来源标注）
+python wb.py import-shelve 他人映射表.xlsx         # 自动同步后预览差集清单（含前缀来源标注）
 python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
 python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply   # 上架到指定店
 python wb.py import-shelve 他人映射表.xlsx --apply              # 全量上架到全部店
+python wb.py import-shelve 他人映射表.xlsx --no-sync            # 跳过自动同步（不推荐）
 ```
 - ✅ 成功判据：同 6b——目标店查到新 vendorCode 即成功（数值回填延迟同上）。
 - 📌 **新 vendorCode 规则**：他人表中文名**精确命中**我商品价格表前缀码 → `BCS-{我的前缀}-{nmId}`（预览清单标注"我方"）；未命中 → 沿用他人 vc（标注"他人"）。
