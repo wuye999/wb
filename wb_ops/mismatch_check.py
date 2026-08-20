@@ -247,11 +247,18 @@ applyFilter();
     return len(rows), len(groups)
 
 
-def run():
+def run(cn=None):
     print(f"读取映射表 {config.MAPPING_XLSX} ...")
     rows = load_mapping_rows()
     if not rows:
         raise RuntimeError("映射表为空，请先 wb.py merge")
+    if cn:
+        hit = [r for r in rows if r["cn"] and str(r["cn"]) == cn]
+        print(f"  按中文名过滤: 「{cn}」 → {len(hit)} 条")
+        if not hit:
+            print("  （无匹配，改用全量渲染）")
+        else:
+            rows = hit
     total, groups = render_html(rows)
     print(f"\n已生成: {config.OUT_MISMATCH_HTML}")
     print(f"  共 {total} 条 · {groups} 个中文名商品")

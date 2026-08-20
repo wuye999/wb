@@ -102,6 +102,7 @@
 8. **5 店串行执行**（勿并行，实测并行触发限速慢 5 倍）；批量 ≤300/批、间隔 0.15-0.6s。
 9. **下架两阶段**：先清库存为 0，再移回收站；清库存失败仍下架但显式报告。
 10. **vendorCode 中段 4 字母**命中商品价格表前缀码 → 免人工审核自动补录。
+11. **改折扣同样触发价格审核**（实测 2026-08-20）：WB 按「新价相对原价降幅」判定，改价**或改折扣**降幅落入 30–49.9% → 进隔离区（quarantine），**必须 `price-review --apply`「应用新价格」才生效**；>50% 直接被拒。因此**每次 `promo-apply` / `discount --apply` 之后必跑一次 `price-review`**（dry-run 预览 → 有货再 `--apply`）。
 
 ## 六、数据流全链路时序
 
@@ -118,8 +119,9 @@ wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原�
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）
 wb.py discount       ⑧ 先同步 → 查 >50% → 改为 50%
+wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
 wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）
-wb.py daily          ⑩ morning=报名+改价 / check=只改价（可手动跑，或仅在主动运行 wb.py schedule 后由计划任务 9:00/11/15/19 点触发；默认不建计划任务）
+wb.py daily          ⑩ morning=报名+改价（含价格审核）/ check=只改价（含价格审核）（可手动跑，或仅在主动运行 wb.py schedule 后由计划任务 9:00/11/15/19 点触发；默认不建计划任务）
 ```
 
 ## 七、映射表 8 Sheet 结构

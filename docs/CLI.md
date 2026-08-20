@@ -44,9 +44,9 @@
 | 子命令 | 用途 | 关键参数 |
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
-| `discount` | 折扣改价（各店 >阈值→目标，默认 >50%→50%） | `--apply` / `--threshold` / `--target` / `--shops` / `--no-sync` / `--sync` |
+| `discount` | 折扣改价（各店 >阈值→目标，默认 >50%→50%；**改折扣同样触发价格审核，之后必跑 `price-review`**） | `--apply` / `--threshold` / `--target` / `--shops` / `--no-sync` / `--sync` |
 | `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`） | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--no-sync` |
-| `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（降价 30-49.9% 进审查） | `--apply` / `--shops` / `--limit` |
+| `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复 | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
@@ -91,10 +91,10 @@ python wb.py promo-apply                   # 预览可报名活动
 python wb.py promo-apply --apply           # 执行报名
 python wb.py discount                      # 预览 >50% 商品
 python wb.py discount --apply              # 执行 >50%→50%
+python wb.py price-review                  # ⚠ 报名/改折扣后必跑：预览隔离区待审商品
+python wb.py price-review --apply          # ⚠ 应用新价格（改折扣也会触发审核，不应用则新折扣不生效）
 python wb.py clean --target all            # 预览
 python wb.py clean --target all --apply    # 执行（先草稿后回收站；回收站先归零再一键清空）
-python wb.py price-review                  # 预览隔离区待审商品
-python wb.py price-review --apply          # 应用新价格
 python wb.py orders                        # 同步+查询今天订单
 python wb.py orders --begin 2026-08-17 --end 2026-08-20   # 指定日期区间
 python wb.py orders --no-sync --days 3     # 跳过同步查缓存

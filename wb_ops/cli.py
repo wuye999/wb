@@ -28,6 +28,7 @@ from . import products
 from . import promo
 from . import questions
 from . import replicate
+from . import remote_wh
 from . import schedule
 def build_parser():
     ap = argparse.ArgumentParser(prog="wb", description="Wildberries/BCS 卖家自动化统一入口")
@@ -48,7 +49,8 @@ def build_parser():
     p = sub.add_parser("mapping-check", help="映射表核查工作台（带图，核对匹配是否有误）")
     p.add_argument("--tol", type=int, default=5, help="价格偏差阈值（元，默认 5）")
 
-    sub.add_parser("mismatch-check", help="货不对板筛查工作台（看图勾选，导出 vc 下架）")
+    p = sub.add_parser("mismatch-check", help="货不对板筛查工作台（看图勾选，导出 vc 下架）")
+    p.add_argument("--cn", default="", help="只渲染指定中文名（精确匹配，如『牙膏-紫色』）")
 
     sub.add_parser("review", help="多店铺待审核工作台")
 
@@ -139,6 +141,8 @@ def build_parser():
     p = sub.add_parser("schedule", help="创建/删除 Windows 计划任务")
     p.add_argument("--remove", action="store_true", help="删除全部任务")
 
+    remote_wh.build_parser(sub)
+
     return ap
 
 
@@ -165,7 +169,7 @@ def dispatch(args):
         mapping_check.run(tol=args.tol)
         return 0
     if cmd == "mismatch-check":
-        mismatch_check.run()
+        mismatch_check.run(cn=args.cn)
         return 0
     if cmd == "review":
         mapping_sync.run_review()
@@ -198,6 +202,8 @@ def dispatch(args):
         return daily.run(args.mode, args.extra)
     if cmd == "schedule":
         return schedule.run(args)
+    if cmd == "remote-wh":
+        return remote_wh.run(args)
     return 0
 
 

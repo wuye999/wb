@@ -36,6 +36,7 @@ python wb.py merge                      # 增量合并映射表
 python wb.py price --name 充电宝 --apply --yes
 python wb.py discount --apply           # >50% → 50%
 python wb.py promo-apply --apply        # 促销报名
+python wb.py price-review --apply       # ⚠ 报名/改折扣后必跑：应用新价格（改折扣也会触发价格审核）
 python wb.py clean --target all --apply
 python wb.py replicate                  # 跨店复制上架（部分覆盖→补齐缺失店铺）
 python wb.py import-shelve 他人表.xlsx  # 他人映射表导入上架（他人有我方无）

@@ -148,6 +148,7 @@ python wb.py promo-apply --shops 5272 --apply   # 只报主号7
 ```
 - ✅ 成功：`[汇总] 可报名 N | 成功 M`；幂等（重复报名返回"已存在跳过"）。
 - 明细：`data/logs/报名结果_*.csv`。
+- ⚠ **报名后必跑价格审核**：参加活动会同步改折扣，改折扣降幅落 30-49.9% 的商品进 WB 隔离区（见第 10 节）→ 报名后执行 `python wb.py price-review`（dry-run 预览 → `--apply`），确保折扣生效。
 
 ## 8. 折扣检查（>50% → 50%）
 
@@ -158,6 +159,7 @@ python wb.py discount --threshold 47 --target 46 --apply   # 自定义
 ```
 - ✅ 成功：`[汇总] 共 N 条待改`；日志 `data/logs/折扣修改_*.csv`。
 - ⚠ 默认先同步 BCS 缓存（~50s），**不同步会漏查**（实测教训），勿用 `--no-sync`。
+- ⚠ **改折扣也会触发价格审核**：`discount --apply` 之后**必跑 `python wb.py price-review`**（先 dry-run 预览、有货再 `--apply`）——降幅落 30-49.9% 区间的商品会进 WB 隔离区，不「应用新价格」则新价不生效（详见第 10 节）。
 
 ## 9. 清理草稿箱 / 回收站
 
@@ -169,16 +171,19 @@ python wb.py clean --target all --apply    # 执行：先草稿箱，后回收�
 - ⚠ **`deleteAllSize` 对有库存商品会失败**（返回 `error:true` + `StockCount>0`，报 `content.api.errors.source.whileDeleting`），需等库存清零后再重试。
 - ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 已归零 Z`。
 
-## 10. 价格审核（降价 30-49.9% 进审查的商品）
+## 10. 价格审核（降价 / 改折扣 30-49.9% 进审查的商品）
+
+> ⚠ **触发源不止改价，改折扣（discount）同样触发**（实测 2026-08-20）：WB 价格审查按「**新价相对原价降幅**」判定，折扣降幅落入 30–49.9% 区间的商品也会进隔离区，必须「应用新价格」才生效。
 
 ```bash
 python wb.py price-review              # 预览隔离区待审商品
 python wb.py price-review --apply      # 应用新价格（审核通过）
 python wb.py price-review --shops 5272 --apply   # 只审主号7
 ```
-- 背景：改价降价 **30–49.9%** 会进入 WB 价格审查（隔离区），**必须「应用新价格」才生效**；降价 **>50%** 会被 WB 直接拒绝。
+- 背景：改价**或改折扣**使新价较原价下降 **30–49.9%** 会进入 WB 价格审查（隔离区），**必须「应用新价格」才生效**；降价 **>50%** 会被 WB 直接拒绝。
 - ✅ 成功：`[汇总] 待审 N | 已应用新价格 M`；日志 `data/logs/价格审核_*.csv`。
 - 改价时自动审核：`python wb.py price --name 充电宝 --apply --yes --auto-review`（改价成功后自动匹配降价 30-49.9% 的商品并应用新价格，不误审历史遗留待审商品）。
+- ⚠ **日常必备动作**：每次 `promo-apply`（报名）或 `discount --apply`（改折扣）**之后，必跑一次 `price-review`**（先 dry-run 预览、有货再 `--apply`），否则本次降折扣触发的隔离区商品价格不生效。
 
 ## 11. 订单查询
 
@@ -215,8 +220,10 @@ python wb.py questions --reply "回复内容" --reply-all --yes    # 回复全�
 
 | 时间 | 自动动作 |
 |---|---|
-| 09:00 | `wb.py daily morning` = 报名 + 改价 |
-| 11/15/19 点 | `wb.py daily check` = 只改价 |
+| 09:00 | `wb.py daily morning` = 报名 + 改价（含价格审核） |
+| 11/15/19 点 | `wb.py daily check` = 只改价（含价格审核） |
+
+> ⚠ **价格审核是改折扣后的必备环节**：无论计划任务还是手动跑 `daily morning/check`，`discount --apply` 之后都应补跑一次 `python wb.py price-review --apply`（隔离区商品不「应用新价格」则新折扣不生效，见第 10 节）。
 
 - 查看结果：`data/logs/daily_YYYYMMDD.log`（主日志）+ 各 CSV 明细。
 - 手动触发（等价于计划任务）：`python wb.py daily morning` 或 `python wb.py daily check`。
