@@ -45,7 +45,6 @@ DETAIL_INTERVAL = 1.2      # detail 请求间隔（秒）
 CARD_INTERVAL = 0.5        # card.json 请求间隔（秒）
 DETAIL_FAIL_ABORT = 3      # 连续 N 个 vc detail 失败 → 中止（防反爬雪崩）
 DEFAULT_STOCK = 999        # 上架默认库存（对齐批量上架脚本 A6 设计）
-RE_MOSCOW = re.compile(r"莫斯科|москва", re.I)
 RE_REGION = re.compile(r"подольск|электросталь|хоругвино|колчанино|восток|север|юг", re.I)
 
 
@@ -100,29 +99,19 @@ KNOWN_WAREHOUSES = {5272: 1947728, 5273: 1947984, 5276: 1948249, 5280: 1948377, 
 
 
 def main_warehouse(sid, shops_data=None):
-    """店铺主仓库：快照 stockList 众数 → fetch_warehouses 莫斯科/地区匹配 → KNOWN_WAREHOUSES 兜底。失败返回 None。"""
+    """店铺主仓库：默认仓库（莫斯科，config.DEFAULT_WAREHOUSE_NAME）→ 俄罗斯地区仓 → KNOWN_WAREHOUSES 兜底。
+    成都仓库（国内仓，name="成都仓库"）不参与选择。失败返回 None。"""
     if sid in _warehouse_cache:
         return _warehouse_cache[sid]
-    wh_id = None
-    if shops_data:
-        counter = {}
-        for r in shops_data.get(sid, []):
-            for s in (r.get("sizeList") or []):
-                for st in (s.get("stockList") or []):
-                    if st.get("warehouseId"):
-                        counter[st["warehouseId"]] = counter.get(st["warehouseId"], 0) + 1
-        if counter:
-            wh_id = max(counter.items(), key=lambda kv: kv[1])[0]
+    # 1. 默认仓库（莫斯科）
+    wh_id = bcs.default_warehouse_id(sid)
+    # 2. 俄罗斯其他地区仓兜底（莫斯科之外，如 подольск 等）
     if wh_id is None:
         whs = bcs.fetch_warehouses(sid)
-        if whs:
-            wh_id = next((w["id"] for w in whs if RE_MOSCOW.search(w.get("name") or "")), None)
-            if wh_id is None:
-                wh_id = next((w["id"] for w in whs if RE_REGION.search(w.get("name") or "")), None)
-            if wh_id is None:
-                wh_id = whs[0].get("id")
+        wh_id = next((w["id"] for w in whs if RE_REGION.search(w.get("name") or "")), None)
+    # 3. 硬编码兜底（仓库 API 空返回时）
     if wh_id is None:
-        wh_id = KNOWN_WAREHOUSES.get(sid)  # 仓库 API 空返回 + 快照回填延迟时的最后兜底
+        wh_id = KNOWN_WAREHOUSES.get(sid)
     _warehouse_cache[sid] = wh_id
     return wh_id
 

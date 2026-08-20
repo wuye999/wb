@@ -285,6 +285,10 @@ def plan_stock(vcs, shops, state, amount):
         rows = load_shop_rows(sid)
         if rows is None:
             continue
+        default_wh = bcs.default_warehouse_id(sid)
+        if default_wh is None:
+            print(f"  [警告] 店{sid} 未找到默认仓库「{config.DEFAULT_WAREHOUSE_NAME}」，该店库存操作跳过")
+            continue
         items = []
         for vc in vcs:
             r = rows.get(vc)
@@ -303,27 +307,13 @@ def plan_stock(vcs, shops, state, amount):
                     tracker.add(sid, vc, "规格缺少 chrtId")
                     continue
                 stocks = s.get("stockList") or []
-                cur_amt = sum((st.get("amount") or 0) for st in stocks) if stocks else 0
-                if not stocks:
-                    whs = _shop_warehouses(sid)
-                    if not whs:
-                        print(f"  [跳过] 店{sid} {vc} 规格 chrtId={chrt} 无仓库记录且店铺无仓库列表，无法设库存")
-                        tracker.add(sid, vc, f"无仓库记录且店铺无仓库列表(chrtId={chrt})")
-                        continue
-                    wh = whs[0]["warehouseId"]
-                    items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
-                                  "chrtId": chrt, "warehouseId": wh, "amount": amount,
-                                  "orig_zero": (cur_amt == 0), "cur_amt": cur_amt, "wh_fallback": True})
-                    continue
-                for st in stocks:
-                    wh = st.get("warehouseId")
-                    if wh is not None:
-                        items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
-                                      "chrtId": chrt, "warehouseId": wh, "amount": amount,
-                                      "orig_zero": (cur_amt == 0), "cur_amt": cur_amt})
-                    else:
-                        print(f"  [跳过] 店{sid} {vc} 规格 chrtId={chrt} 仓库记录缺少 warehouseId，无法设库存")
-                        tracker.add(sid, vc, f"仓库记录缺少 warehouseId(chrtId={chrt})")
+                # 只操作默认仓库（莫斯科）；成都等其他仓库一律跳过
+                moscow = [st for st in stocks if st.get("warehouseId") == default_wh]
+                cur_amt = sum((st.get("amount") or 0) for st in moscow)
+                items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
+                              "chrtId": chrt, "warehouseId": default_wh, "amount": amount,
+                              "orig_zero": (cur_amt == 0), "cur_amt": cur_amt,
+                              "wh_fallback": not moscow})
         if items:
             plans.append({"shopId": sid, "items": items,
                           "warehouses": _group_warehouses(items)})
@@ -347,6 +337,9 @@ def plan_trash(vcs, shops, state):
         rows = load_shop_rows(sid)
         if rows is None:
             continue
+        default_wh = bcs.default_warehouse_id(sid)
+        if default_wh is None:
+            print(f"  [警告] 店{sid} 未找到默认仓库「{config.DEFAULT_WAREHOUSE_NAME}」，下架前将不清库存（仍会移回收站）")
         items = []
         for vc in vcs:
             r = rows.get(vc)
@@ -360,21 +353,13 @@ def plan_trash(vcs, shops, state):
                 continue
             specs = []
             sl = r.get("sizeList") or []
-            if sl:
+            if sl and default_wh:
                 for s in sl:
                     chrt = s.get("chrtId")
                     if not chrt:
                         continue
-                    stocks = s.get("stockList") or []
-                    if stocks:
-                        for st in stocks:
-                            wh = st.get("warehouseId")
-                            if wh is not None:
-                                specs.append((chrt, wh))
-                    else:
-                        whs = _shop_warehouses(sid)
-                        if whs:
-                            specs.append((chrt, whs[0]["warehouseId"]))
+                    # 只清默认仓库（莫斯科）库存；成都等其他仓库不动
+                    specs.append((chrt, default_wh))
             if not specs:
                 print(f"  [提示] 店{sid} {vc} 无库存规格（sizeList 空或仓库缺失），下架前无法清库存")
             items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),

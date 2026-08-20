@@ -51,3 +51,9 @@ VC_PREFIX_RE = r"^BCS-([A-Z]{4})-\d+$"
 # 改折扣默认阈值/目标（>50% → 50%）
 DISCOUNT_THRESHOLD_DEF = 50
 DISCOUNT_TARGET_DEF = 50
+
+# 默认操作仓库（改库存/下架清库存/回收站归零/上架等所有仓库操作默认只操作它）。
+# 按仓库 name 匹配（BCS 仓库列表 /system/wbWarehouses/list 的 name 字段）。
+# 成都仓库（国内仓，name="成都仓库"）默认不操作，需单独用 `wb.py remote-wh` 命令处理。
+DEFAULT_WAREHOUSE_NAME = "莫斯科"
+

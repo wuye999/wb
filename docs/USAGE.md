@@ -93,6 +93,7 @@ python wb.py stock --name 冲牙器 --amount 999 --apply --yes
 # 下架（不可逆，自动先清库存）
 python wb.py trash --name 某商品 --apply --yes
 
+# ⚠ 仓库默认莫斯科：库存/下架清库存默认只操作「莫斯科仓库」，成都仓库不操作（成都用 wb.py remote-wh 单独处理）
 # ⚠ 写后必做：改价/库存写 WB 侧，需再同步才在 BCS 可见
 python wb.py fetch && python wb.py merge
 ```
@@ -236,6 +237,7 @@ python wb.py questions --reply "回复内容" --reply-all --yes    # 回复全�
 - **审核文件用完即弃**：合并后归档。
 - **fetch 必须完整**：某店拉取失败时 merge 会跳过「消失即移除」，先补拉再 merge。
 - **加列/改结构用 Excel**，避免 openpyxl 重存破坏商品价格表公式。
+- **仓库默认莫斯科**：改库存/下架清库存/回收站归零/上架默认只操作「莫斯科仓库」，**成都仓库默认不操作**（成都用 `wb.py remote-wh` 单独处理）；切换默认仓库改 `config.py` 的 `DEFAULT_WAREHOUSE_NAME`。
 
 ## 15. AI 执行手册（拿给 AI 就能照做）
 

@@ -62,7 +62,13 @@ def delete_all_size(session):
 
 def set_stock_zero(shop_id, row_map, nm_ids):
     results = {}
-    groups = {}
+    # 归零一律用默认仓库（莫斯科）；成都仓库不操作
+    default_wh = bcs.default_warehouse_id(shop_id)
+    if default_wh is None:
+        for nid in nm_ids:
+            results[nid] = "err:无默认仓库"
+        return results
+    groups = {default_wh: []}
     for nid in nm_ids:
         row = row_map.get(nid)
         if not row:
@@ -73,24 +79,10 @@ def set_stock_zero(shop_id, row_map, nm_ids):
             results[nid] = "err:无sizeList"
             continue
         chrt = sl[0].get("chrtId")
-        stock = sl[0].get("stockList") or []
-        wh = stock[0].get("warehouseId") if stock else None
         if not chrt:
             results[nid] = "err:无chrtId"
             continue
-        if not wh:
-            wh = "FIRST"
-        groups.setdefault(wh, []).append((nid, chrt))
-
-    if "FIRST" in groups:
-        try:
-            whs = bcs.http_get_json(f"{bcs.base_url()}/system/wbWarehouses/list?shopId={shop_id}")
-            first_wh = (whs.get("data") or whs.get("rows") or [{}])[0].get("id")
-            if first_wh:
-                groups[first_wh] = groups.pop("FIRST")
-        except Exception:
-            for nid, _ in groups.pop("FIRST"):
-                results[nid] = "err:无warehouseId"
+        groups[default_wh].append((nid, chrt))
 
     for wh_id, items in groups.items():
         for i in range(0, len(items), STOCK_CHUNK):

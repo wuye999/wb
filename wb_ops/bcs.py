@@ -115,6 +115,15 @@ def fetch_warehouses(shop_id):
     return d.get("data") or d.get("rows") or []
 
 
+def default_warehouse_id(shop_id):
+    """默认操作仓库 ID（按 config.DEFAULT_WAREHOUSE_NAME 匹配仓库 name）。
+    找不到返回 None。成都仓库（name="成都仓库"）默认不会被选中，需用 remote-wh 单独处理。"""
+    for w in fetch_warehouses(shop_id):
+        if config.DEFAULT_WAREHOUSE_NAME in (w.get("name") or ""):
+            return w.get("id")
+    return None
+
+
 def remove_to_trash(shop_id, nm_ids):
     """移至回收站（不可逆）；nm_ids 为 BCS 内部 nmId 列表"""
     return http_post_json(f"{base_url()}/shopKeeper/clean/removeToTrash",
