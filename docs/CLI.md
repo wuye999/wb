@@ -33,8 +33,8 @@
 | `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` / `--auto-review` |
 | `stock` | 改库存 | `--amount N`（默认 0） |
 | `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
-| `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺（vendorCode 与源店一致、价格=源店现价、直上） | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--interval S` |
-| `import-shelve` | 他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺；新 vc 我方前缀优先（中文名命中商品价格表前缀码），价格 = floor(双倍售价) | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--interval S` |
+| `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺（vendorCode 与源店一致、价格=源店现价、直上）；**前置：快照 <24h（过旧拒绝执行，先 fetch）** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--fresh-skip` / `--interval S` |
+| `import-shelve` | 他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺；新 vc 我方前缀优先（中文名命中商品价格表前缀码），价格 = floor(双倍售价)；**前置：快照 <24h（过旧拒绝执行，先 fetch）** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--fresh-skip` / `--interval S` |
 
 筛选参数（互斥，不传 = 全部）：`--sku` / `--name` / `--prefix` / `--vc` / `--all`
 通用参数：`--shops 5272,5280`（限店铺） / `--apply`（执行） / `--yes`（跳过不可逆确认）

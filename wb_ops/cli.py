@@ -72,6 +72,7 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
+    p.add_argument("--fresh-skip", action="store_true", help="跳过快照时效校验（默认要求快照 <24h，过旧提示先 fetch）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
 
     p = sub.add_parser("import-shelve", help="他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺")
@@ -81,6 +82,7 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个商品（0=不限）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
+    p.add_argument("--fresh-skip", action="store_true", help="跳过快照时效校验（默认要求快照 <24h，过旧提示先 fetch）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
 
     p = sub.add_parser("promo-apply", help="促销报名（cookie 会话，applyAll）")

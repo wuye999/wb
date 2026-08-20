@@ -103,9 +103,11 @@ python wb.py fetch && python wb.py merge
 
 场景：某商品只在 1-4 家店在架，其余店没有 → 自动把它上架到缺失的店铺（vendorCode 与源店一致、价格=源店现价、库存 999、直上）。
 
+> ⚠ **前置必做**：先 `python wb.py fetch` 同步+拉取全部店铺（保证覆盖判断准）。命令自带快照时效校验：任一店铺快照缺失或超过 24 小时会**拒绝执行**并提示先 fetch；确认要用旧数据才加 `--fresh-skip` 强制继续。
+
 ```bash
-python wb.py fetch                        # 先刷新 5 店快照（保证覆盖判断准）
-python wb.py replicate                    # 预览全部部分覆盖商品（vc/中文名/源店/价格/目标店）
+python wb.py fetch                        # ① 先刷新 5 店快照（必须）
+python wb.py replicate                    # ② 预览全部部分覆盖商品（vc/中文名/源店/价格/目标店）
 python wb.py replicate --prefix ZLTH --apply   # 按前缀码批量补齐
 python wb.py replicate --name 冲牙器 --apply    # 按映射表中文名补齐
 python wb.py replicate --vc BCS-XXX-123 --apply # 单个 vc（目标店自动=缺失店）
@@ -121,9 +123,11 @@ python wb.py replicate --shops 5273 --apply     # 只补指定店
 
 场景：拿到他人（同项目格式）映射表 → 按 **WB原始nmId**（vendorCode 末段数字，两代格式 `BCS-{随机4位}-{nm}` / `BCS-{前缀码}-{nm}` 通吃）比对，他人有、我方 5 店全无的商品上架到我的店铺。
 
+> ⚠ **前置必做**：先 `python wb.py fetch` 同步+拉取全部店铺（保证差集判断准，漏判会重复上架他人已有的商品）。命令自带快照时效校验：任一店铺快照缺失或超过 24 小时会**拒绝执行**并提示先 fetch；确认要用旧数据才加 `--fresh-skip` 强制继续。
+
 ```bash
-python wb.py fetch                                # 先刷新我方快照（保证差集判断准）
-python wb.py import-shelve 他人映射表.xlsx         # 预览差集清单（含前缀来源标注）
+python wb.py fetch                                # ① 先刷新我方快照（必须）
+python wb.py import-shelve 他人映射表.xlsx         # ② 预览差集清单（含前缀来源标注）
 python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
 python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply   # 上架到指定店
 python wb.py import-shelve 他人映射表.xlsx --apply              # 全量上架到全部店
