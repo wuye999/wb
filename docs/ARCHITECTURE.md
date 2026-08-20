@@ -23,6 +23,7 @@
 │   ├── mismatch_check.py      货不对板筛查工作台（看图勾选，导出 vc 下架）
 │   ├── workbench.py           HTML 工作台渲染（合并 4 处重复模板）
 │   ├── ops.py                 一键操作：改价 / 库存 / 下架（两段式 dry-run；改价可 --auto-review 自动应用新价格）
+│   ├── replicate.py           跨店复制上架：部分覆盖 vc → 缺失店铺（vendorCode 与源店一致；WB detail 经 BCS 代理 + card.json CDN）
 │   ├── promo.py               促销报名
 │   ├── discount.py            折扣改价（>50%→50%）
 │   ├── clean.py               草稿箱 / 回收站清理（回收站 deleteAllSize 一键清空）
@@ -110,6 +111,7 @@ wb.py mapping        ② 5 店并集按 vc 去重 → 四分类（已知跳过/�
 wb.py merge [审核]   ④ 增量合并 → 继承旧归属 + 追加审核 + 前缀补录 + 消失即移除 → 重建 8-Sheet 映射表
 wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv
 wb.py fetch + merge  ⑥ 写后验证（改价/库存写 WB 侧，需再同步才在 BCS 可见；下架立即可见）
+wb.py replicate      ⑥b 快照覆盖判断（vc×5店）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 自动 fetch 复核覆盖率
 
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）

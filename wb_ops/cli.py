@@ -26,6 +26,7 @@ from . import price_review
 from . import products
 from . import promo
 from . import questions
+from . import replicate
 from . import schedule
 def build_parser():
     ap = argparse.ArgumentParser(prog="wb", description="Wildberries/BCS 卖家自动化统一入口")
@@ -61,6 +62,16 @@ def build_parser():
 
     p = sub.add_parser("trash", help="下架（移回收站，不可逆）")
     ops.add_ops_args(p)
+
+    p = sub.add_parser("replicate", help="跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）")
+    p.add_argument("--vc", default="", help="指定 vendorCode（逗号分隔）")
+    p.add_argument("--prefix", default="", help="前缀码筛选（4 位大写）")
+    p.add_argument("--name", default="", help="映射表中文名包含匹配")
+    p.add_argument("--shops", default="", help="限定目标店铺 id 逗号分隔（默认全部缺失店）")
+    p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
+    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+    p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
+    p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
 
     p = sub.add_parser("promo-apply", help="促销报名（cookie 会话，applyAll）")
     p.add_argument("--apply", action="store_true", help="真正报名（默认 dry-run 预览）")
@@ -153,6 +164,8 @@ def dispatch(args):
     if cmd in ("price", "stock", "trash"):
         ops.run(cmd, args)
         return 0
+    if cmd == "replicate":
+        return replicate.run(args)
     if cmd == "promo-apply":
         return promo.run(args)
     if cmd == "discount":
