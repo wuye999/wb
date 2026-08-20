@@ -16,6 +16,7 @@ from . import config
 from . import cookies
 from . import daily
 from . import discount
+from . import import_shelve
 from . import mapping
 from . import mapping_check
 from . import mapping_sync
@@ -69,6 +70,15 @@ def build_parser():
     p.add_argument("--name", default="", help="映射表中文名包含匹配")
     p.add_argument("--shops", default="", help="限定目标店铺 id 逗号分隔（默认全部缺失店）")
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
+    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+    p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
+    p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
+
+    p = sub.add_parser("import-shelve", help="他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺")
+    p.add_argument("xlsx", help="他人映射表 xlsx 路径（同项目「映射总表」格式）")
+    p.add_argument("--cn", default="", help="他人表中文名包含过滤")
+    p.add_argument("--shops", default="", help="限定目标店铺 id 逗号分隔（默认全部店铺）")
+    p.add_argument("--limit", type=int, default=0, help="最多处理 N 个商品（0=不限）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
@@ -166,6 +176,8 @@ def dispatch(args):
         return 0
     if cmd == "replicate":
         return replicate.run(args)
+    if cmd == "import-shelve":
+        return import_shelve.run(args)
     if cmd == "promo-apply":
         return promo.run(args)
     if cmd == "discount":

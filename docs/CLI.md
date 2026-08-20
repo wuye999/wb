@@ -34,6 +34,7 @@
 | `stock` | 改库存 | `--amount N`（默认 0） |
 | `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
 | `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺（vendorCode 与源店一致、价格=源店现价、直上） | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--interval S` |
+| `import-shelve` | 他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺；新 vc 我方前缀优先（中文名命中商品价格表前缀码），价格 = floor(双倍售价) | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--interval S` |
 
 筛选参数（互斥，不传 = 全部）：`--sku` / `--name` / `--prefix` / `--vc` / `--all`
 通用参数：`--shops 5272,5280`（限店铺） / `--apply`（执行） / `--yes`（跳过不可逆确认）
@@ -80,6 +81,11 @@ python wb.py replicate --prefix ZLTH --apply # 指定前缀码批量补齐
 python wb.py replicate --vc BCS-XXX-123 --apply   # 单个 vc 补齐（目标店自动=缺失店）
 python wb.py replicate --shops 5273 --apply  # 只补指定店
 
+# 他人映射表导入上架（他人有我方无，按 WB原始nmId 匹配；新 vc 我方前缀优先、价格=floor(双倍售价)）
+python wb.py import-shelve 他人映射表.xlsx          # 预览差集清单（含前缀来源标注）
+python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
+python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply  # 上架到指定店
+
 # 促销/折扣/清理/价格审核/订单/提问
 python wb.py promo-apply                   # 预览可报名活动
 python wb.py promo-apply --apply           # 执行报名
@@ -118,6 +124,7 @@ python wb.py schedule --remove             # 【按需】删除全部任务
 6. **所有跳过显式提示**：`[跳过] 店X vc → 原因` + `[跳过汇总]`，杜绝隐式操作。
 7. **replicate 防重复（四层）**：快照覆盖判断（vc 已在店 → 不进候选）→ 本地提交记录 `data/state/复制上架记录.json`（BCS 缓存滞后窗口内拦截，实测同步前 API 查不到刚提交的商品）→ 执行时 `vendorCodeMulti(filter=ALL)` 实时查重（同步后拦截）→ BCS 服务端 vendorCode 幂等（兜底）。上架后商品库存/价格以 BCS→WB 异步生效为准，明细 CSV 在 `data/logs/复制上架_*.csv`。
 8. **replicate 成功判据 = vendorCode 出现**：上架后价格/库存等字段显示 None 属正常（WB 平台审核/回填延迟，短则数分钟、长则 1 小时+），**只要目标店能查到该 vendorCode 即上架成功**；核对价格库存数值需等 1 小时后再查。另：**多目标店当前必须逐店提交**——这是 BCS 平台 bug（2026-08-20 前后）：一次请求带多店返回 200 但静默不生效（4 店对照实验证实）。BCS 后续修正后可恢复多店一次提交提效，恢复前先小批量验证 vendorCode 确实创建。
+9. **import-shelve 说明**：查重按 WB原始nmId（vc 末段数字，两代格式通吃）；新 vc 我方前缀优先（他人表中文名**精确命中**我商品价格表前缀码 → `BCS-{我的前缀}-{nmId}`，未命中沿用他人 vc）；防重复三层 = 我方快照 nm 集合 + 本地记录（`复制上架记录.json`，**nm 为键**）+ 执行时按新 vc 实时查重（新 vc 与他人不同时 BCS 服务端幂等失效，本地记录是必要防线）。仓库解析三层兜底：快照众数 → 仓库 API → `replicate.KNOWN_WAREHOUSES` 实测表。明细 CSV 在 `data/logs/导入上架_*.csv`。
 
 ## 六、Python 库调用（import 方式）
 

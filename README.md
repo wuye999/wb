@@ -38,6 +38,7 @@ python wb.py discount --apply           # >50% → 50%
 python wb.py promo-apply --apply        # 促销报名
 python wb.py clean --target all --apply
 python wb.py replicate                  # 跨店复制上架（部分覆盖→补齐缺失店铺）
+python wb.py import-shelve 他人表.xlsx  # 他人映射表导入上架（他人有我方无）
 python wb.py price-review --apply       # 价格审核：应用新价格
 python wb.py orders                     # 订单查询（同步+查询今天）
 python wb.py questions                  # 买家未处理提问查询

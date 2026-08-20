@@ -99,6 +99,42 @@ python wb.py fetch && python wb.py merge
 - ✅ 成功：`结果: 成功 N · 失败 0`，明细在 `data/logs/ops_result.csv`。
 - 📌 每个命令先去 `--apply` 跑 dry-run 预览清单。
 
+## 6b. 跨店复制上架（replicate）——补齐只覆盖部分店铺的商品
+
+场景：某商品只在 1-4 家店在架，其余店没有 → 自动把它上架到缺失的店铺（vendorCode 与源店一致、价格=源店现价、库存 999、直上）。
+
+```bash
+python wb.py fetch                        # 先刷新 5 店快照（保证覆盖判断准）
+python wb.py replicate                    # 预览全部部分覆盖商品（vc/中文名/源店/价格/目标店）
+python wb.py replicate --prefix ZLTH --apply   # 按前缀码批量补齐
+python wb.py replicate --name 冲牙器 --apply    # 按映射表中文名补齐
+python wb.py replicate --vc BCS-XXX-123 --apply # 单个 vc（目标店自动=缺失店）
+python wb.py replicate --shops 5273 --apply     # 只补指定店
+```
+- ✅ 成功判据：**目标店能查到该 vendorCode 即成功**；上架后价格/库存显示 None 属正常（WB 平台审核/回填延迟，等 1 小时甚至更久再核对数值）。
+- 📌 防重复四层（快照覆盖 → 本地记录 → 实时查重 → BCS 服务端幂等），重复执行安全，已存在的店自动跳过。
+- 📌 多目标店自动逐店提交（BCS 平台 bug：多店一次提交返回 200 但静默不生效）。
+- 明细：`data/logs/复制上架_*.csv`；本地提交记录 `data/state/复制上架记录.json`。
+- 📌 上架后跑 `python wb.py fetch && python wb.py merge`，新店商品自动进映射表（vc 已知，店铺覆盖矩阵自动更新）。
+
+## 6c. 他人映射表导入上架（import-shelve）——别人有、我没有的商品上架到我的店
+
+场景：拿到他人（同项目格式）映射表 → 按 **WB原始nmId**（vendorCode 末段数字，两代格式 `BCS-{随机4位}-{nm}` / `BCS-{前缀码}-{nm}` 通吃）比对，他人有、我方 5 店全无的商品上架到我的店铺。
+
+```bash
+python wb.py fetch                                # 先刷新我方快照（保证差集判断准）
+python wb.py import-shelve 他人映射表.xlsx         # 预览差集清单（含前缀来源标注）
+python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
+python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply   # 上架到指定店
+python wb.py import-shelve 他人映射表.xlsx --apply              # 全量上架到全部店
+```
+- ✅ 成功判据：同 6b——目标店查到新 vendorCode 即成功（数值回填延迟同上）。
+- 📌 **新 vendorCode 规则**：他人表中文名**精确命中**我商品价格表前缀码 → `BCS-{我的前缀}-{nmId}`（预览清单标注"我方"）；未命中 → 沿用他人 vc（标注"他人"）。
+- 📌 **价格** = `floor(他人表双倍售价)`（我方标准定价规则）；双倍售价缺失的商品 dry-run 显示 `?`、执行时跳过。
+- 📌 防重复三层（我方快照 nm 集合 → 本地记录（nm 为键）→ 按新 vc 实时查重），重复执行安全。
+- 明细：`data/logs/导入上架_*.csv`。
+- ⚠ 他人表须为同项目生成的映射表格式（含「映射总表」Sheet）；中文名命中我价格表 → 上架后 merge 可前缀自动归属，未命中的沿用他人 vc（后续按普通新商品走核对流程）。
+
 ## 7. 促销报名（每日 9:00 自动）
 
 ```bash

@@ -95,10 +95,12 @@ def pick_source(vc, vc_rows, sid_main):
 
 # ---------------- 目标仓库 ----------------
 _warehouse_cache = {}
+# 最后兜底：当前账号 5 店实测主仓库（2026-08-20；快照与仓库 API 均失效时使用，换账号需更新）
+KNOWN_WAREHOUSES = {5272: 1947728, 5273: 1947984, 5276: 1948249, 5280: 1948377, 5281: 1948455}
 
 
 def main_warehouse(sid, shops_data=None):
-    """店铺主仓库：快照 stockList 众数 → fetch_warehouses 莫斯科/地区匹配 → 第一个。失败返回 None。"""
+    """店铺主仓库：快照 stockList 众数 → fetch_warehouses 莫斯科/地区匹配 → KNOWN_WAREHOUSES 兜底。失败返回 None。"""
     if sid in _warehouse_cache:
         return _warehouse_cache[sid]
     wh_id = None
@@ -113,14 +115,14 @@ def main_warehouse(sid, shops_data=None):
             wh_id = max(counter.items(), key=lambda kv: kv[1])[0]
     if wh_id is None:
         whs = bcs.fetch_warehouses(sid)
-        if not whs:
-            _warehouse_cache[sid] = None
-            return None
-        wh_id = next((w["id"] for w in whs if RE_MOSCOW.search(w.get("name") or "")), None)
-        if wh_id is None:
-            wh_id = next((w["id"] for w in whs if RE_REGION.search(w.get("name") or "")), None)
-        if wh_id is None:
-            wh_id = whs[0].get("id")
+        if whs:
+            wh_id = next((w["id"] for w in whs if RE_MOSCOW.search(w.get("name") or "")), None)
+            if wh_id is None:
+                wh_id = next((w["id"] for w in whs if RE_REGION.search(w.get("name") or "")), None)
+            if wh_id is None:
+                wh_id = whs[0].get("id")
+    if wh_id is None:
+        wh_id = KNOWN_WAREHOUSES.get(sid)  # 仓库 API 空返回 + 快照回填延迟时的最后兜底
     _warehouse_cache[sid] = wh_id
     return wh_id
 
