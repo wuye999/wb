@@ -29,6 +29,7 @@ from . import products
 from . import promo
 from . import questions
 from . import questions_watch
+from . import ai_reply_test
 from . import replicate
 from . import remote_wh
 from . import schedule
@@ -149,6 +150,9 @@ def build_parser():
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
     p.add_argument("--once", action="store_true", help="只跑一轮就退出（测试用）")
 
+    p = sub.add_parser("ai-test", help="离线用 data/ai_test_qa.json 对照测试 AI 客服回复（不联网）")
+    p.add_argument("--qa", default=config.AI_TEST_QA, help="测试数据集 json（默认 data/ai_test_qa.json）")
+
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
     p.add_argument("md_file", help="含 fetch 块的 md 文件")
 
@@ -218,6 +222,8 @@ def dispatch(args):
         return questions.run(args)
     if cmd == "questions-watch":
         return questions_watch.run(args)
+    if cmd == "ai-test":
+        return ai_reply_test.run(args)
     if cmd == "cookies-update":
         return cookies.run(args.md_file)
     if cmd == "daily":
