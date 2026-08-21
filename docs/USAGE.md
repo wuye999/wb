@@ -113,7 +113,9 @@ python wb.py replicate --name 冲牙器 --apply    # 按映射表中文名补齐
 python wb.py replicate --vc BCS-XXX-123 --apply # 单个 vc（目标店自动=缺失店）
 python wb.py replicate --shops 5273 --apply     # 只补指定店
 python wb.py replicate --no-sync          # 跳过自动同步（用本地快照，不推荐）
+python wb.py replicate --cn-stock "感应灯:0,充电线:100" --apply   # 指定中文名上架库存
 ```
+- 📌 **上架库存**：默认 999；`--cn-stock "中文名:库存,..."` 可指定任意中文名的上架库存（如无货商品传 `--cn-stock "感应灯:0,运动包:0"`）。
 - ✅ 成功判据：**目标店能查到该 vendorCode 即成功**；上架后价格/库存显示 None 属正常（WB 平台审核/回填延迟，等 1 小时甚至更久再核对数值）。
 - 📌 防重复四层（快照覆盖 → 本地记录 → 实时查重 → BCS 服务端幂等），重复执行安全，已存在的店自动跳过。
 - 📌 多目标店自动逐店提交（BCS 平台 bug：多店一次提交返回 200 但静默不生效）。
@@ -132,7 +134,9 @@ python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表�
 python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply   # 上架到指定店
 python wb.py import-shelve 他人映射表.xlsx --apply              # 全量上架到全部店
 python wb.py import-shelve 他人映射表.xlsx --no-sync            # 跳过自动同步（不推荐）
+python wb.py import-shelve 他人映射表.xlsx --cn-stock "充电线:100" --apply   # 指定中文名上架库存
 ```
+- 📌 **上架库存**：默认 999；`--cn-stock "中文名:库存,..."` 可指定任意中文名的上架库存（如无货商品传 `--cn-stock "感应灯:0,运动包:0"`）。
 - ✅ 成功判据：同 6b——目标店查到新 vendorCode 即成功（数值回填延迟同上）。
 - 📌 **新 vendorCode 规则**：他人表中文名**精确命中**我商品价格表前缀码 → `BCS-{我的前缀}-{nmId}`（预览清单标注"我方"）；未命中 → 沿用他人 vc（标注"他人"）。
 - 📌 **价格** = `floor(他人表双倍售价)`（我方标准定价规则）；双倍售价缺失的商品 dry-run 显示 `?`、执行时跳过。

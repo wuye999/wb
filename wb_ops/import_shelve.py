@@ -42,6 +42,8 @@ COL_W = "尺寸宽(cm)"
 COL_H = "尺寸高(cm)"
 COL_WT = "毛重(kg)"
 
+# 上架库存按中文名决定：复用 replicate.stock_for（--cn-stock 指定，未指定默认 999）
+
 
 def nm_of(vc):
     """vc → WB原始nmId（末段纯数字才有效，否则 None）"""
@@ -132,9 +134,10 @@ def diff_foreign(foreign):
 
 
 # ---------------- 上架请求体 ----------------
-def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info):
+def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info, overrides=None):
     """构造 /system/wbCollection/wb/new 请求体（单目标店）。返回 (payload, err)。
-    数据源：他人表列 → WB detail / card.json 兜底；价格 = floor(双倍售价)；sizes 只取第 1 条。"""
+    数据源：他人表列 → WB detail / card.json 兜底；价格 = floor(双倍售价)；sizes 只取第 1 条。
+    overrides：中文名→库存覆盖（--cn-stock）。"""
     nm_id = int(item["nm"])
     # 价格：floor(双倍售价)
     if item["dp"] is None or float(item["dp"]) <= 0:
@@ -182,7 +185,8 @@ def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info):
     parent_id = detail.get("subjectParentId") or ((card_info or {}).get("data") or {}).get("subject_root_id") or 0
     parent_name = (card_info or {}).get("subj_root_name") or ""
 
-    shop_arr = [{"id": sid, "warehouseId": warehouse_id, "warehouseQuantity": replicate.DEFAULT_STOCK}]
+    shop_arr = [{"id": sid, "warehouseId": warehouse_id,
+                 "warehouseQuantity": replicate.stock_for(item["cn"], overrides)}]
     payload = {
         "shop": json.dumps(shop_arr, ensure_ascii=False, separators=(",", ":")),
         "offerDIY": "",
@@ -226,6 +230,7 @@ def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info):
 
 # ---------------- 主流程 ----------------
 def run(args):
+    overrides = replicate.parse_cn_stock(getattr(args, "cn_stock", "") or "")
     # 前置自动同步：直接刷新全部店铺快照，保证差集判断基于最新数据
     replicate.ensure_snapshots(args)
     foreign, bad_vcs = load_foreign(args.xlsx)
@@ -248,15 +253,16 @@ def run(args):
     print(f"目标店铺: {target_shops}")
 
     # dry-run 清单
-    print("\n" + "=" * 110)
-    print(f"{'nmId':<13}{'中文名':<16}{'双倍售价→店铺价':<16}{'新vendorCode(前缀来源)':<32}{'他人vc':<26}目标店")
-    print("-" * 110)
+    print("\n" + "=" * 120)
+    print(f"{'nmId':<13}{'中文名':<16}{'双倍售价→店铺价':<16}{'库存':<6}{'新vendorCode(前缀来源)':<32}{'他人vc':<26}目标店")
+    print("-" * 120)
     for item, new_vc, prefix_from in plans:
         dp = item["dp"]
         shop_price = math.floor(float(dp)) if dp is not None and float(dp) > 0 else "?"
+        stk = replicate.stock_for(item["cn"], overrides)
         print(f"{item['nm']:<13}{(item['cn'] or '-'):<16}{f'{dp}→{shop_price}' if dp else '?':<16}"
-              f"{new_vc + '(' + prefix_from + ')':<32}{item['vc']:<26}{','.join(map(str, target_shops))}")
-    print("=" * 110)
+              f"{stk:<6}{new_vc + '(' + prefix_from + ')':<32}{item['vc']:<26}{','.join(map(str, target_shops))}")
+    print("=" * 120)
 
     if not plans:
         print("无可执行任务")
@@ -285,7 +291,7 @@ def run(args):
     os.makedirs(config.LOG_DIR, exist_ok=True)
     csv_file = open(csv_path, "w", newline="", encoding="utf-8-sig")
     writer = csv.writer(csv_file)
-    writer.writerow(["时间", "nmId", "中文名", "新vendorCode", "前缀来源", "他人vc", "目标店", "店铺价", "结果", "原因"])
+    writer.writerow(["时间", "nmId", "中文名", "新vendorCode", "前缀来源", "他人vc", "目标店", "店铺价", "库存", "结果", "原因"])
 
     ok = skip = fail = 0
     detail_fail_streak = 0
@@ -296,10 +302,11 @@ def run(args):
         nm, cn = item["nm"], item["cn"] or "-"
         dp = item["dp"]
         shop_price = math.floor(float(dp)) if dp is not None and float(dp) > 0 else "?"
+        stk = replicate.stock_for(item["cn"], overrides)
         now = datetime.now().strftime("%H:%M:%S")
         if aborted:
             writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],
-                             ",".join(map(str, target_shops)), shop_price, "中止", "连续 detail 失败触发中止"])
+                             ",".join(map(str, target_shops)), shop_price, stk, "中止", "连续 detail 失败触发中止"])
             skip += 1
             continue
 
@@ -318,7 +325,7 @@ def run(args):
         if not valid:
             print(f"  {tag} [跳过] nm={nm} 目标店均已存在或无仓库")
             writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],
-                             ",".join(map(str, target_shops)), shop_price, "跳过", "已存在或无仓库"])
+                             ",".join(map(str, target_shops)), shop_price, stk, "跳过", "已存在或无仓库"])
             skip += 1
             continue
 
@@ -332,7 +339,7 @@ def run(args):
             detail_fail_streak += 1
             print(f"  {tag} [失败] nm={nm} WB detail 获取失败（连续 {detail_fail_streak}）")
             writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],
-                             ",".join(map(str, valid)), shop_price, "失败", "WB detail 获取失败"])
+                             ",".join(map(str, valid)), shop_price, stk, "失败", "WB detail 获取失败"])
             fail += 1
             if detail_fail_streak >= replicate.DETAIL_FAIL_ABORT:
                 print("  [中止] 连续多个商品 detail 失败，疑似反爬限流，停止后续执行（已成功不回滚）")
@@ -346,35 +353,36 @@ def run(args):
         if card_info is None:
             print(f"  {tag} [失败] nm={nm} card.json 获取失败")
             writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],
-                             ",".join(map(str, valid)), shop_price, "失败", "card.json 获取失败"])
+                             ",".join(map(str, valid)), shop_price, stk, "失败", "card.json 获取失败"])
             fail += 1
             continue
 
         # 4) 构造 + 逐店提交（BCS 多店 bug：必须每店单独请求）
         for sid in valid:
-            payload, err = build_import_payload(item, new_vc, sid, warehouses[sid], detail, card_info)
+            payload, err = build_import_payload(item, new_vc, sid, warehouses[sid], detail, card_info, overrides)
             if payload is None:
                 fail += 1
                 print(f"  {tag} [失败] nm={nm} 店{sid}: {err}")
-                writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, "失败", err])
+                writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "失败", err])
                 continue
             try:
                 resp = bcs.http_post_json(f"{bcs.base_url()}/system/wbCollection/wb/new", payload)
                 if resp.get("code") == 200:
                     ok += 1
-                    print(f"  {tag} [成功] {new_vc} → 店{sid}（¥{shop_price}，{prefix_from}前缀）")
-                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, "成功", ""])
+                    stk_tag = "（0库存）" if stk == 0 else ""
+                    print(f"  {tag} [成功] {new_vc} → 店{sid}（¥{shop_price}，{prefix_from}前缀{stk_tag}）")
+                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "成功", ""])
                     records.setdefault(nm, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     replicate._save_records(records)
                 else:
                     fail += 1
                     msg = resp.get("msg") or f"code={resp.get('code')}"
                     print(f"  {tag} [失败] nm={nm} 店{sid}: {msg}")
-                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, "失败", msg])
+                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "失败", msg])
             except Exception as e:
                 fail += 1
                 print(f"  {tag} [失败] nm={nm} 店{sid}: {e}")
-                writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, "失败", str(e)])
+                writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "失败", str(e)])
             time.sleep(args.interval)
         if i < len(plans):
             time.sleep(args.interval)

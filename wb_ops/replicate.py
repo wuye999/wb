@@ -48,6 +48,30 @@ DEFAULT_STOCK = 999        # 上架默认库存（对齐批量上架脚本 A6 �
 RE_REGION = re.compile(r"подольск|электросталь|хоругвино|колчанино|восток|север|юг", re.I)
 
 
+def parse_cn_stock(s):
+    """解析 `--cn-stock` 参数："中文名:库存,中文名:库存" → {中文名: 库存}。空/非法项忽略。"""
+    out = {}
+    for part in (s or "").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        cn, v = part.split(":", 1)
+        cn = cn.strip()
+        try:
+            out[cn] = int(str(v).strip())
+        except ValueError:
+            print(f"  [警告] --cn-stock 非法库存值，已忽略：{part}")
+    return out
+
+
+def stock_for(cn, overrides=None):
+    """上架库存：overrides（--cn-stock 指定）优先 → 默认 999"""
+    overrides = overrides or {}
+    if cn in overrides:
+        return overrides[cn]
+    return DEFAULT_STOCK
+
+
 def _basket_base(nm_id):
     """nmId → basket CDN 基础路径（vol/part/图片与 card.json 都基于它）"""
     n = int(nm_id)
@@ -230,9 +254,10 @@ def vc_exists_in_shop(vc, sid, records=None):
 
 
 # ---------------- 上架请求体构造 ----------------
-def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_info):
+def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_info, cn="-", overrides=None):
     """构造 /system/wbCollection/wb/new 请求体。返回 (payload, err)。
-    vendorCode 与源店完全一致；价格=源店现价；直上/不合并/不带品牌。"""
+    vendorCode 与源店完全一致；价格=源店现价；直上/不合并/不带品牌。
+    cn/overrides：用于按中文名决定上架库存（stock_for）。"""
     nm_id = int(vc.rsplit("-", 1)[-1])
     sl = src_row.get("sizeList") or []
     price = sl[0].get("price") if sl else None
@@ -282,7 +307,7 @@ def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_in
     parent_id = detail.get("subjectParentId") or ((card_info or {}).get("data") or {}).get("subject_root_id") or 0
     parent_name = (card_info or {}).get("subj_root_name") or ""
 
-    shop_arr = [{"id": sid, "warehouseId": warehouses[sid], "warehouseQuantity": DEFAULT_STOCK}
+    shop_arr = [{"id": sid, "warehouseId": warehouses[sid], "warehouseQuantity": stock_for(cn, overrides)}
                 for sid in target_sids]
     payload = {
         "shop": json.dumps(shop_arr, ensure_ascii=False, separators=(",", ":")),
@@ -339,6 +364,7 @@ def ensure_snapshots(args):
 
 def run(args):
     from . import mapping  # 延迟 import（mapping → bcs 联网懒加载）
+    overrides = parse_cn_stock(getattr(args, "cn_stock", "") or "")
     ensure_snapshots(args)
     shops_data, _ = products.load_all_shops()
     vc_shops, vc_rows, all_shop_ids = build_coverage(shops_data)
@@ -490,7 +516,7 @@ def run(args):
         #   （4 店对照实验：一次提交全部未创建；逐店提交立即生效）。后续 BCS 修正后可恢复
         #   多店一次提交（提效），恢复前先用小批量多店提交验证 vendorCode 确实创建。
         for sid in targets:
-            payload, err = build_payload(vc, src_sid, src_row, [sid], warehouses, detail, card_info)
+            payload, err = build_payload(vc, src_sid, src_row, [sid], warehouses, detail, card_info, cn, overrides)
             if payload is None:
                 fail += 1
                 print(f"  {tag} [失败] {vc} 店{sid}: {err}")

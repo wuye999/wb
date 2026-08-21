@@ -34,8 +34,8 @@
 | `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` / `--auto-review` |
 | `stock` | 改库存 | `--amount N`（默认 0） |
 | `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
-| `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺（vendorCode 与源店一致、价格=源店现价、直上）；**启动自动先同步全部店铺（约 2 分钟）** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--no-sync` / `--interval S` |
-| `import-shelve` | 他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺；新 vc 我方前缀优先（中文名命中商品价格表前缀码），价格 = floor(双倍售价)；**启动自动先同步全部店铺（约 2 分钟）** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--no-sync` / `--interval S` |
+| `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺（vendorCode 与源店一致、价格=源店现价、直上）；**启动自动先同步全部店铺（约 2 分钟）** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--no-sync` / `--interval S` / `--cn-stock "中文名:库存,..."` |
+| `import-shelve` | 他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺；新 vc 我方前缀优先（中文名命中商品价格表前缀码），价格 = floor(双倍售价)；**启动自动先同步全部店铺（约 2 分钟）** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--no-verify` / `--no-sync` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 
 筛选参数（互斥，不传 = 全部）：`--sku` / `--name` / `--prefix` / `--vc` / `--all`
 通用参数：`--shops 5272,5280`（限店铺） / `--apply`（执行） / `--yes`（跳过不可逆确认）
@@ -82,11 +82,13 @@ python wb.py replicate                       # 预览全部部分覆盖商品（
 python wb.py replicate --prefix ZLTH --apply # 指定前缀码批量补齐
 python wb.py replicate --vc BCS-XXX-123 --apply   # 单个 vc 补齐（目标店自动=缺失店）
 python wb.py replicate --shops 5273 --apply  # 只补指定店
+python wb.py replicate --cn-stock "感应灯:0,运动包:0" --apply  # 指定中文名上架库存（未指定用默认 999）
 
 # 他人映射表导入上架（他人有我方无，按 WB原始nmId 匹配；新 vc 我方前缀优先、价格=floor(双倍售价)）
 python wb.py import-shelve 他人映射表.xlsx          # 预览差集清单（含前缀来源标注）
 python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
 python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply  # 上架到指定店
+python wb.py import-shelve 他人映射表.xlsx --cn-stock "充电线:100" --apply  # 指定中文名上架库存
 
 # 促销/折扣/清理/价格审核/订单/提问
 python wb.py promo-apply                   # 预览可报名活动

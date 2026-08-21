@@ -77,6 +77,7 @@ def build_parser():
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
     p.add_argument("--no-sync", action="store_true", help="跳过启动时自动同步（默认自动 fetch 全部店铺，约 2 分钟）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
+    p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
 
     p = sub.add_parser("import-shelve", help="他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺")
     p.add_argument("xlsx", help="他人映射表 xlsx 路径（同项目「映射总表」格式）")
@@ -87,6 +88,7 @@ def build_parser():
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
     p.add_argument("--no-sync", action="store_true", help="跳过启动时自动同步（默认自动 fetch 全部店铺，约 2 分钟）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
+    p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
 
     p = sub.add_parser("promo-apply", help="促销报名（cookie 会话，applyAll）")
     p.add_argument("--apply", action="store_true", help="真正报名（默认 dry-run 预览）")
