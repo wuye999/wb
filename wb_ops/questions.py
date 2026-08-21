@@ -14,6 +14,8 @@ import time
 from . import config
 from . import credentials
 from . import common
+from . import mapping
+from . import replicate
 from . import wb_api
 
 QUESTIONS = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-ext-seller-portal/api/v2/questions"
@@ -46,7 +48,7 @@ def reply(session, question_id, text):
                           json={"answerText": text, "questionId": question_id})
 
 
-def process_shop(shop, root_version, args, rows):
+def process_shop(shop, root_version, args, rows, cn_map):
     st = {"unanswered": 0, "replied": 0, "failed": 0}
     s = wb_api.make_session(shop, root_version)
     name = shop.get("shopName", shop.get("shopId"))
@@ -58,22 +60,44 @@ def process_shop(shop, root_version, args, rows):
         return st
     print(f"  [列表] {len(questions)} 条未处理提问")
 
+    no_detail = getattr(args, "no_detail", False)
     for q in questions:
         qinfo = q.get("questionInfo") or {}
         pinfo = q.get("productInfo") or {}
         rtime = q.get("responseTime") or {}
+        vc = pinfo.get("supplierArticle") or ""
+        nm_id = pinfo.get("wbArticle")
+        cn = cn_map.get(vc, {}).get("cn", "") if vc else ""
+        # 关联商品信息：映射表中文名 + card.json（描述/特征）+ WB detail（品牌/颜色/价格）
+        title = pinfo.get("name", "")
+        brand = colors = price = description = options = ""
+        if not no_detail and nm_id:
+            info = replicate.fetch_product_info(nm_id)
+            if info.get("title"):
+                title = info["title"]
+            brand = info.get("brand", "")
+            colors = info.get("colors", "")
+            price = info.get("price", "")
+            description = info.get("description", "")
+            options = info.get("options", "")
+            time.sleep(0.3)
         rows.append({
             "店铺": name, "shopId": shop["shopId"],
             "提问ID": q.get("id"),
-            "商品": pinfo.get("name", ""),
-            "供应商编码": pinfo.get("supplierArticle", ""),
+            "中文名": cn,
+            "商品标题": title,
+            "品牌": brand,
+            "颜色": colors,
+            "价格": price,
+            "商品描述": description,
+            "商品特征": options,
+            "供应商编码": vc,
             "买家问题": qinfo.get("text", ""),
             "提问人": qinfo.get("userName", ""),
             "回复截止": rtime.get("deadlineDate", ""),
             "结果": "",
         })
-        print(f"    id={q.get('id')} [{pinfo.get('name', '')}] "
-              f"{qinfo.get('userName', '')}: {qinfo.get('text', '')[:60]}")
+        print(f"    id={q.get('id')} 【{cn}】[{title[:40]}] {qinfo.get('userName', '')}: {qinfo.get('text', '')[:50]}")
 
     if args.reply:
         target_ids = []
@@ -130,11 +154,17 @@ def run(args):
     mode = "  [回复模式]" if args.reply else ""
     print(f"店铺 {len(shops)} 个: {shop_names}{mode}")
 
+    cn_map = {}
+    try:
+        cn_map = mapping.load_mapping_state()[0]
+    except Exception:
+        pass
+
     rows = []
     totals = {"unanswered": 0, "replied": 0, "failed": 0}
     for shop in shops:
         try:
-            st = process_shop(shop, root_version, args, rows)
+            st = process_shop(shop, root_version, args, rows, cn_map)
             for k in totals:
                 totals[k] += st[k]
         except common.CookieExpiredError as e:
@@ -149,7 +179,8 @@ def run(args):
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(config.LOG_DIR, f"买家提问_{ts}.csv")
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=["店铺", "shopId", "提问ID", "商品", "供应商编码",
+            w = csv.DictWriter(f, fieldnames=["店铺", "shopId", "提问ID", "中文名", "商品标题",
+                                              "品牌", "颜色", "价格", "商品描述", "商品特征", "供应商编码",
                                               "买家问题", "提问人", "回复截止", "结果"])
             w.writeheader()
             w.writerows(rows)

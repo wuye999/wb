@@ -28,6 +28,7 @@ from . import price_review
 from . import products
 from . import promo
 from . import questions
+from . import questions_watch
 from . import replicate
 from . import remote_wh
 from . import schedule
@@ -140,6 +141,13 @@ def build_parser():
     p.add_argument("--question-id", default="", help="回复指定提问 ID")
     p.add_argument("--reply-all", action="store_true", help="回复本店全部未处理提问（需 --yes）")
     p.add_argument("--yes", action="store_true", help="确认回复全部（公开发言）")
+    p.add_argument("--no-detail", action="store_true", help="跳过 WB 商品详情拉取（只显示本地中文名，速度快）")
+
+    p = sub.add_parser("questions-watch", help="买家提问实时监听（后台 AI 模式：常驻轮询+DeepSeek 自动回复）")
+    p.add_argument("--interval", type=int, default=0, help="轮询间隔秒（默认 90，或 credentials 的 ai.watch_interval）")
+    p.add_argument("--apply", action="store_true", help="真正提交回复（默认 dry-run 只打草稿）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--once", action="store_true", help="只跑一轮就退出（测试用）")
 
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
     p.add_argument("md_file", help="含 fetch 块的 md 文件")
@@ -208,6 +216,8 @@ def dispatch(args):
         return orders.run(args)
     if cmd == "questions":
         return questions.run(args)
+    if cmd == "questions-watch":
+        return questions_watch.run(args)
     if cmd == "cookies-update":
         return cookies.run(args.md_file)
     if cmd == "daily":

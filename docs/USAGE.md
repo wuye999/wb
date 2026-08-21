@@ -217,22 +217,32 @@ python wb.py orders --no-sync                         # 跳过同步，直接查
 - ✅ 成功：`[汇总] 订单 N 条`；日志 `data/logs/订单查询_*.csv`。
 - `--shops` 可限定同步范围与结果；`--page-size` 控制分页（默认 50）。
 
-## 12. 买家提问查询 + AI 一键回复
+## 12. 买家提问查询 + AI 回复（前台 / 后台两种模式，二选一）
 
+### 查询（两种模式的基础，自动关联商品信息）
 ```bash
-python wb.py questions                              # 查询未处理提问
-python wb.py questions --reply "回复内容" --question-id <id>   # 回复单条
-python wb.py questions --reply "回复内容" --reply-all --yes    # 回复全部（危险）
+python wb.py questions                    # 查询未处理提问（自动带中文名/标题/品牌/颜色/价格/描述/特征）
+python wb.py questions --no-detail        # 跳过商品详情拉取（只中文名，快）
+python wb.py questions --reply "..." --question-id <id>   # 回复单条
 ```
 - ✅ 成功：`[汇总] 未处理提问 N`；日志 `data/logs/买家提问_*.csv`。
 
-**🤖 AI 一键查询新提问并回复的流程**（拿给 AI 就能照做）：
-1. `python wb.py questions` → 列出各店未处理提问（含提问ID、商品、买家问题、回复截止时间）。
-2. 逐条阅读买家问题（俄语），理解买家在问什么。
-3. 为每条生成俄语回复（礼貌、简洁、针对问题作答；不确定的不要乱答，涉及物流/售后的可引导联系客服）。
-4. 逐条回复：`python wb.py questions --reply "<俄语回复>" --question-id <提问ID>`（一条一条回，回完核对 `已回复`）。
-5. 复核：再跑一次 `python wb.py questions`，确认 `未处理提问 0`。
-- ⚠ 回复是**对买家公开发言**，务必措辞得当；批量自动回复建议先人工抽查 1-2 条再放开。
+### 模式 A：前台 AI（WorkBuddy 自动化，每小时）
+- WorkBuddy 定时自动化每小时触发：查提问 → 读商品信息 → AI 编写俄语回复 → 调 `questions --reply` 提交。
+- 质量高（AI 理解上下文、可看商品信息），但每小时一次。
+
+### 模式 B：后台 AI（常驻脚本 + LLM，1-2 分钟实时）
+```bash
+python wb.py questions-watch --once               # 跑一轮 dry-run 打草稿（先测试）
+python wb.py questions-watch --apply --interval 90  # 常驻监听（LLM 自动回复）
+```
+- 需先在 `data/credentials.json` 配置 `ai` 字段（`base_url` / `model` / `api_key`，默认 DeepSeek；换商汤日日新等 OpenAI 兼容服务只需改这三个，见 CREDENTIALS.md）。
+- 无人值守、实时；记录已回复 id 防重复，日志 `data/logs/questions_watch_*.log`、明细 CSV。
+- ⚠ **二选一运行**：前台模式启用自动化（每小时）；后台模式跑 questions-watch（停自动化）。
+
+### AI 回复安全（必读）
+- 回复是**对买家公开发言**，务必措辞得当；内置提示词要求「基于商品信息作答、不编造、不确定的物流/售后引导联系客服」。
+- 后台模式建议先 `--once`（dry-run 打草稿）人工抽查 1-2 条，确认话术 OK 再 `--apply` 常驻。
 
 ## 13. 每日自动运行（仅当已主动创建计划任务）
 

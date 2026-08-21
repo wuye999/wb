@@ -21,6 +21,12 @@
         "cookie": "_wbauid=...; x-supplier-id-external=...; cfidsw-wb=..." }
       // ... 每家店一项（作者环境共 5 店：5272/5273/5276/5280/5281；换成你自己的店铺）
     ]
+  },
+  "ai": {
+    "base_url": "https://api.deepseek.com/chat/completions",
+    "model": "deepseek-chat",
+    "api_key": "<OpenAI 兼容 LLM 的 API Key，用于后台模式买家提问自动回复>",
+    "watch_interval": 90
   }
 }
 ```
@@ -29,6 +35,19 @@
 
 - 由 `wb_ops/credentials.py` 统一加载，提供 `bcs_headers()`、`wb_shop(sid)`、`wb_shop_ids()` 等访问器。
 - `wb.py cookies-update` 会自动写回本文件的 `wb.shops`。
+
+### AI 回复服务（ai 字段，OpenAI 兼容）
+
+`ai` 字段接入任意 **OpenAI 兼容** 的 LLM，只需改 `base_url` + `model` + `api_key`：
+
+| 服务 | base_url | model |
+|---|---|---|
+| DeepSeek（默认） | `https://api.deepseek.com/chat/completions` | `deepseek-chat` |
+| 商汤日日新 SenseNova | `https://token.sensenova.cn/v1/chat/completions` | `sensenova-6.8-flash-lite`（或 `deepseek-v4-flash`） |
+| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-4o-mini` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | `qwen-plus` |
+
+> 商汤日日新公测期免费（每 5 小时 1500 次），注册 platform.sensenova.cn → 控制台 → API Keys 创建 `sk-` 开头密钥即可。
 
 ## 二、两套鉴权体系
 

@@ -168,6 +168,36 @@ def fetch_card_json(nm_id):
         return None
 
 
+def fetch_product_info(nm_id):
+    """整合商品信息：card.json（标题+描述+特征参数）+ WB detail（品牌+价格+颜色）。
+    返回 dict {title, brand, colors, price, description, options}；拉不到的字段为空。
+    描述/特征截断，避免 token 过载。"""
+    info = {"title": "", "brand": "", "colors": "", "price": "", "description": "", "options": ""}
+    card = fetch_card_json(nm_id)
+    detail = fetch_wb_detail(nm_id)
+    if card:
+        info["title"] = card.get("imt_name") or ""
+        desc = (card.get("description") or "").strip()
+        info["description"] = desc[:400] + ("…" if len(desc) > 400 else "")
+        opts_str = "；".join(
+            f"{o.get('name')}: {o.get('value')}" for o in (card.get("options") or [])
+            if o.get("name") and o.get("value"))
+        info["options"] = opts_str[:600] + ("…" if len(opts_str) > 600 else "")
+    if detail:
+        if not info["title"]:
+            info["title"] = detail.get("name") or ""
+        info["brand"] = detail.get("brand") or ""
+        colors = "、".join(c.get("name", "") for c in (detail.get("colors") or []) if c.get("name"))
+        if colors:
+            info["colors"] = colors
+        sizes = detail.get("sizes") or []
+        if sizes:
+            pr = sizes[0].get("price") or {}
+            if pr.get("product"):
+                info["price"] = f"{pr['product'] / 100:.0f}₽"
+    return info
+
+
 def parse_package_info(card_info):
     """card.json grouped_options「Габариты」组 → {'length','width','height','weight'}（仅取包装项）"""
     result = {"length": None, "width": None, "height": None, "weight": None}

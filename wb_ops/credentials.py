@@ -32,6 +32,7 @@ class Credentials:
         self.shops = [s for s in self.wb.get("shops", [])
                       if s.get("authorizev3") and s.get("wb_seller_lk") and s.get("cookie")]
         self.root_version = self.wb.get("root_version", DEFAULT_ROOT_VERSION)
+        self.ai = self.data.get("ai") or {}
 
     # ---- BCS 云端 API 凭证 ----
     @property
@@ -67,6 +68,26 @@ class Credentials:
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
         }
+
+    # ---- AI 回复（OpenAI 兼容 LLM：DeepSeek / 商汤日日新 SenseNova / 通义 等） ----
+    @property
+    def ai_key(self):
+        return self.ai.get("api_key") or self.ai.get("deepseek_key") or ""
+
+    @property
+    def ai_base_url(self):
+        return self.ai.get("base_url") or "https://api.deepseek.com/chat/completions"
+
+    @property
+    def ai_model(self):
+        return self.ai.get("model") or "deepseek-chat"
+
+    @property
+    def ai_watch_interval(self):
+        try:
+            return int(self.ai.get("watch_interval") or 90)
+        except (TypeError, ValueError):
+            return 90
 
     # ---- WB 卖家后台 cookie 三件套 ----
     def wb_shops(self):
