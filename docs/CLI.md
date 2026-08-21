@@ -8,8 +8,8 @@
 
 - **退出码**：`0` 正常（含 dry-run / 违规跳过）｜`1` 参数/环境错误｜`130` 中断。
 - **dry-run 默认**：所有写操作（改价/库存/下架/报名/折扣/清理）不加 `--apply` 只打印清单，不调写接口。
-- **不可逆确认**：`trash`、`stock --amount 0` 执行时需 `--yes`（或交互输入 y）。
-- **写后验证**：改价/库存写 WB 侧，需再 `fetch`（带同步）才在 BCS 可见；下架/回收站立即可见。
+- **不可逆确认**：`trash`、`stock --amount 0`、`banned --apply`（移回收站）执行时需 `--yes`（或交互输入 y）。
+- **写后验证**：改价/库存写 WB 侧，需再 `fetch`（带同步）才在 BCS 可见；下架/回收站立即可见；`banned --apply` 自动复核 WB count（bannedCard 前后对比 + 重查列表）。
 - **仓库默认莫斯科**：改库存 / 下架清库存 / 回收站归零 / 上架等所有仓库操作**默认只操作「莫斯科仓库」**（`config.DEFAULT_WAREHOUSE_NAME`，按仓库 name 匹配），**成都仓库默认不操作**。成都仓库（国内仓）需单独用 `wb.py remote-wh` 命令处理；切换默认仓库改 `config.py` 的 `DEFAULT_WAREHOUSE_NAME`。
 
 ## 二、子命令全表
@@ -45,6 +45,7 @@
 | 子命令 | 用途 | 关键参数 |
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
+| `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
 | `discount` | 折扣改价（各店 >阈值→目标，默认 >50%→50%；**改折扣同样触发价格审核，之后必跑 `price-review`**） | `--apply` / `--threshold` / `--target` / `--shops` / `--no-sync` / `--sync` |
 | `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`） | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--no-sync` |
 | `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
@@ -94,6 +95,9 @@ python wb.py discount                      # 预览 >50% 商品
 python wb.py discount --apply              # 执行 >50%→50%
 python wb.py price-review                  # ⚠ 报名/改折扣后必跑：预览隔离区待审商品
 python wb.py price-review --apply          # ⚠ 应用新价格（改折扣也会触发审核，不应用则新折扣不生效）
+python wb.py banned                        # 预览各店被阻止商品（WB 标记 banned）
+python wb.py banned --apply --yes          # 执行：被阻止商品移到回收站（自动复核）
+python wb.py banned --shops 5272 --apply --yes   # 只处理指定店
 python wb.py clean --target all            # 预览
 python wb.py clean --target all --apply    # 执行（先草稿后回收站；回收站先归零再一键清空）
 python wb.py orders                        # 同步+查询今天订单
@@ -159,4 +163,5 @@ ops.run_apply(plans, 'price')                    # 执行（也可在 CLI 里 --
 | 改价查出 0 个但 WB 有高折扣 | BCS 缓存未同步 | 确认未加 `--no-sync`，重跑 |
 | 返回 200 但价格没变 | 触发价格下限 | ops 已拦截；确认是否手动提交过 |
 | 删除失败"有库存" | 订单未完成 | 脚本已自动归零，订单完成后重跑 |
+| `banned --apply` 部分失败 | 商品有库存/在途 | 先归零库存（`wb.py stock`）后重跑 `banned` |
 | 报名"已存在跳过" | 活动已参加 | 正常幂等行为 |

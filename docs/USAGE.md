@@ -172,6 +172,21 @@ python wb.py clean --target all --apply    # 执行：先草稿箱，后回收�
 - ⚠ **`deleteAllSize` 对有库存商品会失败**（返回 `error:true` + `StockCount>0`，报 `content.api.errors.source.whileDeleting`），需等库存清零后再重试。
 - ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 已归零 Z`。
 
+## 9b. 查询并删除被阻止的商品（banned）
+
+> WB 会把违规/有问题的商品标记为「被阻止」（banned，卡片 flaws 含"被阻止"，后台「商品状态」页可查）。本功能查询这些商品并一键移到回收站（可恢复）。
+
+```bash
+python wb.py banned                        # 预览各店被阻止商品（vc/中文名/阻止原因）
+python wb.py banned --apply --yes          # 执行：全部移到回收站 + 自动复核
+python wb.py banned --shops 5272           # 只看主号7
+python wb.py banned --limit 10 --apply --yes   # 每店最多处理 10 个
+```
+- ✅ 成功：`[验证] bannedCard N → M`（前后对比）+ `已提交 N 个，仍留在被阻止列表 0 个`。
+- 📌 **移到回收站后可恢复**：误删可在 WB 后台「回收站」手动恢复；被阻止商品若有库存/在途可能移失败（打印失败原因），先归零库存（`wb.py stock`）再重跑。
+- ⚠ 纯 WB 接口（cookie 会话），无需 BCS 同步；自动复核也是 WB 侧 count + 列表，不触发 fetch。
+- 明细：`data/logs/被阻止商品_*.csv`（含店铺/ID/vendorCode/中文名/标题/阻止原因/结果）。
+
 ## 10. 价格审核（降价 / 改折扣 30-49.9% 进审查的商品）
 
 > ⚠ **触发源不止改价，改折扣（discount）同样触发**（实测 2026-08-20）：WB 价格审查按「**新价相对原价降幅**」判定，折扣降幅落入 30–49.9% 区间的商品也会进隔离区，必须「应用新价格」才生效。

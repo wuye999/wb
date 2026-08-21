@@ -27,6 +27,7 @@
 │   ├── import_shelve.py       他人映射表导入上架：按 WB原始nmId 差集 → 我方前缀优先生成新 vc 上架（复用 replicate 的 WB 数据获取/仓库/记录）
 │   ├── promo.py               促销报名
 │   ├── discount.py            折扣改价（>50%→50%）
+│   ├── banned.py              查询并删除被阻止的商品（WB banned：tableListImprovable 查询 / moveNmsToTrash 移回收站 / count 复核）
 │   ├── clean.py               草稿箱 / 回收站清理（回收站 deleteAllSize 一键清空）
 │   ├── price_review.py        价格审核「应用新价格」（WB 隔离区 quarantine/goods）
 │   ├── orders.py              订单查询（BCS ozonOrder：同步/进度/列表/状态计数）
@@ -56,7 +57,7 @@
           │ 调用
           ▼
 业务层   mapping / mapping_sync / mapping_check / mismatch_check / ops
-         promo / discount / clean / cookies / daily / schedule
+         promo / discount / banned / clean / cookies / daily / schedule
          price_review / orders / questions
           │ 依赖
           ▼
@@ -121,6 +122,7 @@ wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 
 wb.py discount       ⑧ 先同步 → 查 >50% → 改为 50%
 wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
 wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）
+wb.py banned         ⑨b 查询被阻止商品（tableListImprovable 分页）→ dry-run → --apply moveNmsToTrash 移回收站 → count/列表自动复核
 wb.py daily          ⑩ morning=报名+改价（含价格审核）/ check=只改价（含价格审核）（可手动跑，或仅在主动运行 wb.py schedule 后由计划任务 9:00/11/15/19 点触发；默认不建计划任务）
 ```
 

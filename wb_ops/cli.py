@@ -11,6 +11,7 @@ import sys
 from . import common
 
 from . import bcs
+from . import banned
 from . import clean
 from . import config
 from . import cookies
@@ -103,6 +104,13 @@ def build_parser():
     p.add_argument("--no-sync", action="store_true", help="跳过同步（缓存滞后会漏查！）")
     p.add_argument("--sync", action="store_true", help="提交后同步复核")
 
+    p = sub.add_parser("banned", help="查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）")
+    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
+    p.add_argument("--yes", action="store_true", help="跳过不可逆确认（移到回收站）")
+    p.add_argument("--no-verify", action="store_true", help="跳过执行后验证")
+
     p = sub.add_parser("clean", help="清理草稿箱/回收站")
     p.add_argument("--target", required=True, choices=["basket", "draft", "all"],
                    help="basket=回收站 / draft=草稿箱 / all=先草稿后回收站")
@@ -188,6 +196,8 @@ def dispatch(args):
         return promo.run(args)
     if cmd == "discount":
         return discount.run(args)
+    if cmd == "banned":
+        return banned.run(args)
     if cmd == "clean":
         return clean.run(args)
     if cmd == "price-review":
