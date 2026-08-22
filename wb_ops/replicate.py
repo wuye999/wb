@@ -141,7 +141,7 @@ def main_warehouse(sid, shops_data=None):
 
 
 # ---------------- WB 数据获取 ----------------
-def fetch_wb_detail(nm_id):
+def _fetch_wb_detail_bcs(nm_id):
     """WB detail（BCS 代理，带 BCS 凭证）→ product 对象；失败返回 None。"""
     from urllib.parse import quote
     wb_url = DETAIL_URL_TPL.format(nm=nm_id)
@@ -156,6 +156,12 @@ def fetch_wb_detail(nm_id):
         return None
 
 
+def fetch_wb_detail(nm_id):
+    """WB detail（BCS 代理）→ product 对象；失败返回 None。
+    （synthetic 拼装通道由 run() 直接调用 build_synthetic_detail）"""
+    return _fetch_wb_detail_bcs(nm_id)
+
+
 def fetch_card_json(nm_id):
     """basket CDN card.json → dict；失败返回 None。"""
     url = f"{_basket_base(nm_id)}/info/ru/card.json"
@@ -168,13 +174,87 @@ def fetch_card_json(nm_id):
         return None
 
 
-def fetch_product_info(nm_id):
-    """整合商品信息：card.json（标题+描述+特征参数）+ WB detail（品牌+价格+颜色）。
+def build_synthetic_detail(meta, card_info, nm_id):
+    """用 BCS 商品数据 + card.json 拼装伪 detail product（替代 WB detail）。
+
+    背景：BCS 代理 detail 持续超时；而 BCS 列表行 / 他人映射表行 + card.json
+    （CDN 直连）已覆盖 wbDetail 所需字段的绝大部分。
+    已实验验证（2026-08-22）：拼装上架 BCS-YSGK-1317303667 → 店5281 成功建卡，
+    商品信息（标题/图片11/尺寸/价格）与源店一致，同步后 vendorCode 可查。
+    meta：BCS list 行（replicate 场景，键 title/sizeList/dimensionsWeightBrutto）
+    或他人表 item（import-shelve 场景，键 title_ru/weight，subjectId 由 card.json 兜底）。
+    返回伪 detail product dict；sizes 仅非空占位（build_payload 会重写）。"""
+    ci = card_info or {}
+    data = ci.get("data") or {}
+    sizes = []
+    for s in (meta.get("sizeList") or []):
+        orig = s.get("techSizeName")
+        try:
+            orig = int(float(orig)) if orig not in (None, "") else 0
+        except (TypeError, ValueError):
+            orig = 0
+        sizes.append({"origName": orig, "name": str(s.get("techSizeName") or ""),
+                      "price": s.get("price"), "vendorCode": meta.get("vendorCode")})
+    if not sizes:  # 占位（build_payload/build_import_payload 会重写为正确格式）
+        sizes = [{"origName": 0, "name": "", "price": None, "vendorCode": meta.get("vendorCode")}]
+    return {
+        "id": int(nm_id),
+        "root": ci.get("imt_id") or meta.get("imtId") or 0,
+        "brand": meta.get("brand") or "",
+        "brandId": 0,
+        "colors": ci.get("colors") or [],
+        "subjectId": meta.get("subjectId") or data.get("subject_id"),
+        "subjectParentId": data.get("subject_root_id") or 0,
+        "name": meta.get("title") or meta.get("title_ru") or ci.get("imt_name") or "",
+        "pics": (ci.get("media") or {}).get("photo_count") or 0,
+        "weight": meta.get("dimensionsWeightBrutto") or meta.get("weight") or 0,
+        "sizes": sizes,
+    }
+
+
+_own_map_cache = None
+
+
+def _own_map():
+    """价格映射表状态（懒加载缓存）：{vc: {cn, dp, shop_price}}。失败 → {}。"""
+    global _own_map_cache
+    if _own_map_cache is None:
+        try:
+            from . import mapping
+            _own_map_cache = mapping.load_mapping_state()[0]
+        except Exception:
+            _own_map_cache = {}
+    return _own_map_cache
+
+
+def _card_color_names(card):
+    """从 card.json 提取颜色名（兼容 colors 为 dict 列表 / ID 列表 + nm_colors_names 兜底）。
+    card.json 通常只有颜色 ID（nm_colors_names 常为 null），拿不到名字时返回空串。"""
+    colors = card.get("colors") or []
+    nm_names = card.get("nm_colors_names")
+    if isinstance(nm_names, str):
+        nm_names = [nm_names]
+    names = []
+    for i, item in enumerate(colors):
+        if isinstance(item, dict):
+            n = item.get("name")
+        elif isinstance(nm_names, list) and i < len(nm_names):
+            n = nm_names[i]
+        else:
+            n = None
+        if n:
+            names.append(n)
+    return "、".join(names)
+
+
+def fetch_product_info(nm_id, vc="", own=None):
+    """整合商品信息：card.json（标题+描述+特征+颜色）+ 价格映射表行（店铺价CNY）。
     返回 dict {title, brand, colors, price, description, options}；拉不到的字段为空。
-    描述/特征截断，避免 token 过载。"""
+    描述/特征截断，避免 token 过载。
+    ★ 不再依赖 WB detail（BCS 代理超时易失败）：brand 无来源留空；价格=价格映射表店铺价(CNY)。
+    own: 价格映射表状态 {vc: {cn,dp,shop_price}}（None 时内部懒加载）。"""
     info = {"title": "", "brand": "", "colors": "", "price": "", "description": "", "options": ""}
     card = fetch_card_json(nm_id)
-    detail = fetch_wb_detail(nm_id)
     if card:
         info["title"] = card.get("imt_name") or ""
         desc = (card.get("description") or "").strip()
@@ -183,18 +263,21 @@ def fetch_product_info(nm_id):
             f"{o.get('name')}: {o.get('value')}" for o in (card.get("options") or [])
             if o.get("name") and o.get("value"))
         info["options"] = opts_str[:600] + ("…" if len(opts_str) > 600 else "")
-    if detail:
-        if not info["title"]:
-            info["title"] = detail.get("name") or ""
-        info["brand"] = detail.get("brand") or ""
-        colors = "、".join(c.get("name", "") for c in (detail.get("colors") or []) if c.get("name"))
-        if colors:
-            info["colors"] = colors
-        sizes = detail.get("sizes") or []
-        if sizes:
-            pr = sizes[0].get("price") or {}
-            if pr.get("product"):
-                info["price"] = f"{pr['product'] / 100:.0f}₽"
+        info["colors"] = _card_color_names(card)
+    # 价格：价格映射表店铺价(CNY，原价) 减去折扣% = 实际售价；无折扣列时按原价
+    row = (own if own is not None else _own_map()).get(vc or "")
+    if row:
+        price_v = None
+        sp = row.get("shop_price")
+        if sp not in (None, ""):
+            price_v = float(sp)
+        elif row.get("dp") is not None:
+            price_v = float(row["dp"])
+        if price_v is not None:
+            disc = common.to_int(row.get("discount")) if row.get("discount") not in (None, "") else 0
+            if disc:
+                price_v = price_v * (100 - disc) / 100  # WB 折扣=减价%，现价=原价×(1-disc/100)
+            info["price"] = f"{price_v:.0f} CNY"
     return info
 
 
@@ -514,27 +597,41 @@ def run(args):
             skip += 1
             continue
 
-        # 2) WB detail（BCS 代理）
+        # 2) WB detail：按 --detail-source 选通道
+        #    synthetic=BCS 列表 + card.json 拼装（不依赖 WB detail）
+        #    auto=BCS 代理，失败后拼装兜底；bcs=仅 BCS 代理
         nm_id = vc.rsplit("-", 1)[-1]
-        detail = fetch_wb_detail(nm_id)
-        time.sleep(DETAIL_INTERVAL)
-        if detail is None:  # 失败重试 1 次
+        ds = getattr(args, "detail_source", "auto")
+        card_info = None
+        if ds == "synthetic":
+            card_info = fetch_card_json(nm_id)
+            time.sleep(CARD_INTERVAL)
+            detail = build_synthetic_detail(src_row, card_info, nm_id) if card_info else None
+        else:
             detail = fetch_wb_detail(nm_id)
             time.sleep(DETAIL_INTERVAL)
+            if detail is None and ds == "auto":  # auto 兜底：BCS 拼装
+                card_info = fetch_card_json(nm_id)
+                time.sleep(CARD_INTERVAL)
+                if card_info is not None:
+                    detail = build_synthetic_detail(src_row, card_info, nm_id)
         if detail is None:
-            detail_fail_streak += 1
-            print(f"  {tag} [失败] {vc} WB detail 获取失败（连续 {detail_fail_streak}）")
+            # ★ synthetic 模式失败=该商品 card.json 缺失（个体坏数据），非反爬限流，不累计中止计数
+            if ds != "synthetic":
+                detail_fail_streak += 1
+                if detail_fail_streak >= DETAIL_FAIL_ABORT:
+                    print("  [中止] 连续多个商品 detail 失败，疑似反爬限流，停止后续执行（已成功不回滚）")
+                    aborted = True
+            print(f"  {tag} [失败] {vc} WB detail 获取失败")
             writer.writerow([now, vc, cn, src_sid, ",".join(map(str, targets)), price, "失败", "WB detail 获取失败"])
             fail += 1
-            if detail_fail_streak >= DETAIL_FAIL_ABORT:
-                print("  [中止] 连续多个商品 detail 失败，疑似反爬限流，停止后续执行（已成功不回滚）")
-                aborted = True
             continue
         detail_fail_streak = 0
 
-        # 3) card.json（CDN 直连）
-        card_info = fetch_card_json(nm_id)
-        time.sleep(CARD_INTERVAL)
+        # 3) card.json（CDN 直连；synthetic/auto 兜底已取则跳过）
+        if card_info is None:
+            card_info = fetch_card_json(nm_id)
+            time.sleep(CARD_INTERVAL)
         if card_info is None:
             print(f"  {tag} [失败] {vc} card.json 获取失败")
             writer.writerow([now, vc, cn, src_sid, ",".join(map(str, targets)), price, "失败", "card.json 获取失败"])

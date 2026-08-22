@@ -68,11 +68,11 @@ def process_shop(shop, root_version, args, rows, cn_map):
         vc = pinfo.get("supplierArticle") or ""
         nm_id = pinfo.get("wbArticle")
         cn = cn_map.get(vc, {}).get("cn", "") if vc else ""
-        # 关联商品信息：映射表中文名 + card.json（描述/特征）+ WB detail（品牌/颜色/价格）
+        # 关联商品信息：映射表中文名 + card.json（描述/特征/颜色）+ 价格映射表（店铺价CNY）
         title = pinfo.get("name", "")
         brand = colors = price = description = options = ""
         if not no_detail and nm_id:
-            info = replicate.fetch_product_info(nm_id)
+            info = replicate.fetch_product_info(nm_id, vc=vc, own=cn_map)
             if info.get("title"):
                 title = info["title"]
             brand = info.get("brand", "")

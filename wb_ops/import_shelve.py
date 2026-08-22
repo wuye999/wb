@@ -277,10 +277,10 @@ def run(args):
     foreign, bad_vcs = load_foreign(args.xlsx)
     plans, all_shop_ids, have_cnt, rec_skip = diff_foreign(foreign)
 
-    # --cn 过滤（他人表中文名包含匹配）/ --shops 限定目标店 / --limit
+    # --cn 过滤（他人表中文名包含匹配，逗号分隔多个）/ --shops 限定目标店 / --limit
     if getattr(args, "cn", ""):
-        kw = args.cn
-        plans = [p for p in plans if kw in (p[0]["cn"] or "")]
+        kws = [k.strip() for k in args.cn.split(",") if k.strip()]
+        plans = [p for p in plans if any(kw in (p[0]["cn"] or "") for kw in kws)]
     allow_shops = ([int(x) for x in args.shops.split(",") if x.strip()]
                    if getattr(args, "shops", "") else None)
     target_shops = allow_shops or all_shop_ids
@@ -370,27 +370,40 @@ def run(args):
             skip += 1
             continue
 
-        # 2) WB detail（BCS 代理，失败重试 1 次）
-        detail = replicate.fetch_wb_detail(nm)
-        time.sleep(replicate.DETAIL_INTERVAL)
-        if detail is None:
+        # 2) WB detail：按 --detail-source 选通道
+        #    synthetic=他人表行 + card.json 拼装（不依赖 WB detail）；auto=BCS 代理→拼装兜底
+        ds = getattr(args, "detail_source", "auto")
+        card_info = None
+        if ds == "synthetic":
+            card_info = replicate.fetch_card_json(nm)
+            time.sleep(replicate.CARD_INTERVAL)
+            detail = replicate.build_synthetic_detail(item, card_info, nm) if card_info else None
+        else:
             detail = replicate.fetch_wb_detail(nm)
             time.sleep(replicate.DETAIL_INTERVAL)
+            if detail is None and ds == "auto":  # auto 兜底：BCS 拼装
+                card_info = replicate.fetch_card_json(nm)
+                time.sleep(replicate.CARD_INTERVAL)
+                if card_info is not None:
+                    detail = replicate.build_synthetic_detail(item, card_info, nm)
         if detail is None:
-            detail_fail_streak += 1
-            print(f"  {tag} [失败] nm={nm} WB detail 获取失败（连续 {detail_fail_streak}）")
+            # ★ synthetic 模式失败=该商品 card.json 缺失（个体坏数据），非反爬限流，不累计中止计数
+            if ds != "synthetic":
+                detail_fail_streak += 1
+                if detail_fail_streak >= replicate.DETAIL_FAIL_ABORT:
+                    print("  [中止] 连续多个商品 detail 失败，疑似反爬限流，停止后续执行（已成功不回滚）")
+                    aborted = True
+            print(f"  {tag} [失败] nm={nm} WB detail 获取失败")
             writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],
                              ",".join(map(str, valid)), shop_price, stk, "失败", "WB detail 获取失败"])
             fail += 1
-            if detail_fail_streak >= replicate.DETAIL_FAIL_ABORT:
-                print("  [中止] 连续多个商品 detail 失败，疑似反爬限流，停止后续执行（已成功不回滚）")
-                aborted = True
             continue
         detail_fail_streak = 0
 
-        # 3) card.json（CDN）
-        card_info = replicate.fetch_card_json(nm)
-        time.sleep(replicate.CARD_INTERVAL)
+        # 3) card.json（CDN；synthetic/auto 兜底已取则跳过）
+        if card_info is None:
+            card_info = replicate.fetch_card_json(nm)
+            time.sleep(replicate.CARD_INTERVAL)
         if card_info is None:
             print(f"  {tag} [失败] nm={nm} card.json 获取失败")
             writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],

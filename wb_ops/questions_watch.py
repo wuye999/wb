@@ -60,11 +60,11 @@ def save_shown(s):
 
 
 def product_info_str(vc, nm_id, cn_map):
-    """构造商品信息字符串（供查看/后台 AI 参考）：中文名 + card.json 描述/特征 + detail 品牌/价格/颜色。"""
+    """构造商品信息字符串（供查看/后台 AI 参考）：中文名 + card.json 描述/特征/颜色 + 价格映射表店铺价(CNY)。"""
     cn = cn_map.get(vc, {}).get("cn", "") if vc else ""
     parts = [f"中文名：{cn}"] if cn else []
     if nm_id:
-        info = replicate.fetch_product_info(nm_id)
+        info = replicate.fetch_product_info(nm_id, vc=vc, own=cn_map)
         if info.get("title"):
             parts.append(f"标题：{info['title']}")
         if info.get("brand"):
