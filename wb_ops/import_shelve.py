@@ -51,6 +51,39 @@ def nm_of(vc):
     return tail if tail.isdigit() else None
 
 
+# ---------------- 包装数据：商品价格表兜底 ----------------
+_pkg_cache = None
+
+
+def boss_pkg_map():
+    """商品价格表「尺寸」列 → {中文名: (L, W, H, weight)}（格式 `长*宽*高/毛重`，容错空格）。
+    兜底来源：他人表缺毛重/尺寸时，按中文名取我方商品价格表同名的包装数据。"""
+    global _pkg_cache
+    if _pkg_cache is not None:
+        return _pkg_cache
+    import re as _re
+    from . import mapping
+    out = {}
+    try:
+        wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
+        ws = wb["Sheet1"]
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            cn = str(r[2] or "").strip()
+            dim = str(r[4] or "").strip() if len(r) > 4 else ""
+            if not cn or not dim:
+                continue
+            m = _re.match(r"^([\d.]+)\s*\*\s*([\d.]+)\s*\*\s*([\d.]+)\s*/\s*([\d.]+)$", dim)
+            if not m:
+                continue
+            out[cn] = (float(m.group(1)), float(m.group(2)),
+                       float(m.group(3)), float(m.group(4)))
+        wb.close()
+    except Exception:
+        pass
+    _pkg_cache = out
+    return out
+
+
 # ---------------- 他人表解析 ----------------
 def load_foreign(xlsx_path):
     """解析他人映射表「映射总表」Sheet → (items, bad_vcs)
@@ -166,12 +199,20 @@ def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info, ove
     images = ";".join(replicate.generate_image_urls(nm_id, ((card_info or {}).get("media") or {}).get("photo_count")))
     main_image = item["img"] or images.split(";")[0]
 
-    # 包装尺寸/重量：他人表列 → card.json 包装组兜底 → 仍缺失败（不造假）
+    # 包装尺寸/重量：他人表列 → card.json 包装组兜底 → 商品价格表同名中文名兜底 → 仍缺失败
     pkg = replicate.parse_package_info(card_info)
     length = item["L"] or pkg["length"]
     width = item["W"] or pkg["width"]
     height = item["H"] or pkg["height"]
     weight = item["weight"] or pkg["weight"]
+    if not (length and width and height and weight):
+        bp = boss_pkg_map().get(item["cn"] or "")
+        if bp:
+            bl, bw, bh, bwgt = bp
+            length = length or bl
+            width = width or bw
+            height = height or bh
+            weight = weight or bwgt
     if not length or not width or not height or not weight:
         return None, f"包装数据缺失（L={length} W={width} H={height} 重={weight}）"
 
