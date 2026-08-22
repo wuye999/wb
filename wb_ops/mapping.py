@@ -30,13 +30,15 @@ def shop_id():
 
 
 IMG_COL = 9  # 主图链接列（做超链接）
+NMID_COL = 16  # WB商品码列（做超链接）
 
 
 def detail_headers():
-    """映射总表 13 列 + 店铺覆盖列"""
+    """映射总表 16 列（13 主数据 + 创建时间/更新时间/WB商品码） + 店铺覆盖列"""
     return [
         '产品中文名', 'vendorCode', '双倍售价', f'店铺{shop_id()}价格(CNY)', '折扣%', 'club折扣%',
         '库存', '俄文标题', '主图链接', '尺寸长(cm)', '尺寸宽(cm)', '尺寸高(cm)', '毛重(kg)',
+        '创建时间', '更新时间', 'WB商品码',
     ]
 
 
@@ -235,7 +237,9 @@ def load_shops_union():
             price = sl[0].get("price")
             u = union.setdefault(vc, {"vc": vc, "title": r.get("title") or "", "img": r.get("repImg") or "",
                                       "per_shop": {}, "shops": [], "price": None})
-            u["per_shop"][sid] = {"price": price, "stock": stock_summary(r)}
+            u["per_shop"][sid] = {"price": price, "stock": stock_summary(r),
+                                  "nmId": r.get("nmId"), "createAt": r.get("createAt"),
+                                  "updateAt": r.get("updateAt")}
             if sid not in u["shops"]:
                 u["shops"].append(sid)
             if u["price"] is None or sid == sid_main:
@@ -363,16 +367,17 @@ def auto_match(result_list, bcs):
 
 # ---------------- 映射表行 / 8-Sheet 构建 ----------------
 def row_for(item, vc, c, match, status):
-    """生成一行映射数据（13 列）。item 的售价键兼容 doublePrice（核对JSON）与 dp（补充条目）"""
+    """生成一行映射数据（16 列）。item 的售价键兼容 doublePrice（核对JSON）与 dp（补充条目）"""
     dp = item.get("doublePrice", item.get("dp"))
     if c is None:
-        return [item.get("cn"), vc, dp, "", "", "", "", "", "", "", "", "", ""]
+        return [item.get("cn"), vc, dp, "", "", "", "", "", "", "", "", "", "", "", "", ""]
     return [
         item.get("cn"), vc, dp, c["price"],
         c.get("discount"), c.get("clubDiscount"), c.get("_stock") or stock_summary(c),
         c.get("title"), c.get("repImg") or "",
         c.get("dimensionsLength"), c.get("dimensionsWidth"), c.get("dimensionsHeight"),
         c.get("dimensionsWeightBrutto"),
+        c.get("createAt"), c.get("updateAt"), c.get("nmId"),
     ]
 
 
@@ -385,7 +390,8 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     sid_main = shop_id()
     for c in bcs:
         shop_coverage.setdefault(c["vc"], {})[sid_main] = {
-            "price": c["price"], "stock": stock_summary(c)}
+            "price": c["price"], "stock": stock_summary(c),
+            "nmId": c.get("nmId"), "createAt": c.get("createAt"), "updateAt": c.get("updateAt")}
     picked = set()
     for item in result_list:
         picked.update(item.get("vendorCodes") or [])
@@ -403,6 +409,14 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
         for vc in item.get("vendorCodes") or []:
             vc_cn.setdefault(vc, item.get("cn") or "")
 
+    def rep(c, key, cov):
+        """主店优先、其他店兜底的代表值（c 自带优先，否则从 cov 按主店→首店回退）"""
+        v = c.get(key) if c is not None else None
+        if v is None and cov:
+            d = cov.get(sid_main) or next(iter(cov.values()))
+            v = d.get(key)
+        return v
+
     def enrich(vc, c):
         cov = shop_coverage.get(vc, {})
         if c is None:
@@ -413,7 +427,9 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
                 d0 = next(iter(cov.values()))
             return {"vc": vc, "title": d0.get("title") or "", "price": d0.get("price"),
                     "repImg": d0.get("img") or "", "img": d0.get("img") or "",
-                    "_stock": d0.get("stock") or ""}
+                    "_stock": d0.get("stock") or "",
+                    "nmId": rep(None, "nmId", cov), "createAt": rep(None, "createAt", cov),
+                    "updateAt": rep(None, "updateAt", cov)}
         c = dict(c)
         for sid, d in cov.items():
             if sid == sid_main:
@@ -422,6 +438,9 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
                 c["price"] = d["price"]
             if not stock_summary(c) and d.get("stock"):
                 c["_stock"] = d["stock"]
+        for k in ("nmId", "createAt", "updateAt"):
+            if c.get(k) is None:
+                c[k] = rep(c, k, cov)
         return c
 
     headers = detail_headers()
@@ -443,6 +462,9 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
             ws1.append(row_for(item, vc, c, match, status) + [cov])
             if c:
                 ws1.cell(ws1.max_row, IMG_COL).hyperlink = c.get("repImg") or ""
+                if c.get("nmId"):
+                    ws1.cell(ws1.max_row, NMID_COL).hyperlink = \
+                        f"https://www.wildberries.ru/catalog/{c['nmId']}/detail.aspx?targetUrl=GP"
     for item in extra_entries:
         status = "已补录售价" if item.get("dp") is not None else "待补填售价"
         for vc in item.get("vendorCodes") or []:
@@ -451,8 +473,11 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
             ws1.append(row_for(item, vc, c, "补充条目(价格带识别)", status) + [cov])
             if c:
                 ws1.cell(ws1.max_row, IMG_COL).hyperlink = c.get("repImg") or ""
+                if c.get("nmId"):
+                    ws1.cell(ws1.max_row, NMID_COL).hyperlink = \
+                        f"https://www.wildberries.ru/catalog/{c['nmId']}/detail.aspx?targetUrl=GP"
     ws1.freeze_panes = "A2"
-    SIMPLE_WIDTHS = [26, 28, 10, 14, 8, 12, 12, 55, 45, 10, 10, 10, 10, 18]
+    SIMPLE_WIDTHS = [26, 28, 10, 14, 8, 12, 12, 55, 45, 10, 10, 10, 10, 18, 18, 14, 18]
     for i, w in enumerate(SIMPLE_WIDTHS, 1):
         ws1.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 

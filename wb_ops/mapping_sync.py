@@ -175,7 +175,9 @@ def build_shop_coverage():
             if not vc:
                 continue
             cov.setdefault(vc, {})[sid] = {"price": mapping.price_of(r), "stock": mapping.stock_summary(r),
-                                           "title": r.get("title") or "", "img": r.get("repImg") or ""}
+                                           "title": r.get("title") or "", "img": r.get("repImg") or "",
+                                           "nmId": r.get("nmId"), "createAt": r.get("createAt"),
+                                           "updateAt": r.get("updateAt")}
     return cov, shops_meta
 
 
