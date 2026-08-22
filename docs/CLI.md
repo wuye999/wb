@@ -51,7 +51,7 @@
 | `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
-| `questions-watch` | 买家提问实时监听（后台 AI：常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--apply` / `--shops` / `--once` |
+| `questions-watch` | 买家提问实时监听（双模式：**front=前台AI** 打印提问/商品信息到控制台与日志、前台手动回复；**back=后台AI** 常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
 | `daily` | 每日任务 | `morning\|check`（+ 透传参数） |
 | `schedule` | 创建/删除 Windows 计划任务（⚠ 默认不创建，仅按需执行） | `--remove` |
@@ -109,8 +109,9 @@ python wb.py orders --no-sync --days 3     # 跳过同步查缓存
 python wb.py questions                     # 查询未处理提问（带中文名/标题/品牌/颜色/价格/描述/特征）
 python wb.py questions --no-detail         # 跳过商品详情拉取（只中文名，快）
 python wb.py questions --reply "..." --question-id <id>    # 回复单条
-python wb.py questions-watch --once        # 后台监听跑一轮（dry-run 打草稿）
-python wb.py questions-watch --apply --interval 90   # 后台监听常驻（LLM 自动回复，需配 ai.api_key）
+python wb.py questions-watch                # 前台AI：常驻监听，新提问打印到控制台与 data/logs/questions_front_*.log，前台手动回复（默认）
+python wb.py questions-watch --once         # 前台AI跑一轮（展示，不提交）
+python wb.py questions-watch --mode back --apply --interval 90   # 后台AI：常驻轮询 + LLM 自动提交（需配 ai.api_key）
 
 # 运维
 python wb.py cookies-update data/har/副号234_cookies.md

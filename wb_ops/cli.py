@@ -80,10 +80,13 @@ def build_parser():
     p.add_argument("--no-sync", action="store_true", help="跳过启动时自动同步（默认自动 fetch 全部店铺，约 2 分钟）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
+    p.add_argument("--detail-source", default="synthetic",
+                   choices=["auto", "bcs", "synthetic"],
+                   help="WB detail 来源：synthetic=BCS列表+card.json拼装（默认，已实验验证）；bcs=仅BCS代理；auto=BCS代理→拼装兜底")
 
     p = sub.add_parser("import-shelve", help="他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺")
     p.add_argument("xlsx", help="他人映射表 xlsx 路径（同项目「映射总表」格式）")
-    p.add_argument("--cn", default="", help="他人表中文名包含过滤")
+    p.add_argument("--cn", default="", help="他人表中文名包含过滤（逗号分隔多个）")
     p.add_argument("--shops", default="", help="限定目标店铺 id 逗号分隔（默认全部店铺）")
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个商品（0=不限）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
@@ -91,6 +94,9 @@ def build_parser():
     p.add_argument("--no-sync", action="store_true", help="跳过启动时自动同步（默认自动 fetch 全部店铺，约 2 分钟）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
+    p.add_argument("--detail-source", default="synthetic",
+                   choices=["auto", "bcs", "synthetic"],
+                   help="WB detail 来源：synthetic=BCS列表+card.json拼装（默认，已实验验证）；bcs=仅BCS代理；auto=BCS代理→拼装兜底")
 
     p = sub.add_parser("promo-apply", help="促销报名（cookie 会话，applyAll）")
     p.add_argument("--apply", action="store_true", help="真正报名（默认 dry-run 预览）")
@@ -144,9 +150,11 @@ def build_parser():
     p.add_argument("--yes", action="store_true", help="确认回复全部（公开发言）")
     p.add_argument("--no-detail", action="store_true", help="跳过 WB 商品详情拉取（只显示本地中文名，速度快）")
 
-    p = sub.add_parser("questions-watch", help="买家提问实时监听（后台 AI 模式：常驻轮询+DeepSeek 自动回复）")
+    p = sub.add_parser("questions-watch", help="买家提问实时监听（front=前台AI打印提问/商品信息+手动回复，back=后台AI LLM 自动回复）")
     p.add_argument("--interval", type=int, default=0, help="轮询间隔秒（默认 90，或 credentials 的 ai.watch_interval）")
-    p.add_argument("--apply", action="store_true", help="真正提交回复（默认 dry-run 只打草稿）")
+    p.add_argument("--mode", choices=["front", "back"], default="front",
+                   help="front=前台AI（打印提问/商品信息到控制台和日志，前台手动回复，不自动提交）；back=后台AI（LLM 自动生成并提交）")
+    p.add_argument("--apply", action="store_true", help="等价 --mode back（后台AI自动提交，需配 ai.api_key）")
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
     p.add_argument("--once", action="store_true", help="只跑一轮就退出（测试用）")
 
