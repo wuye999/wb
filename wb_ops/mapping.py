@@ -124,8 +124,9 @@ def apply_latest_dp(result_list):
 
 def load_mapping_state():
     """读现有映射表 xlsx → 增量状态（归属关系 + 已排除清单）。
-    返回 (state, excluded)：state={vc:{cn,dp,shop_price,discount}}；excluded={vc:原因}。映射表不存在 → 空。
-    shop_price = 「店铺{id}价格(CNY)」列（任一店铺价列，取第一个）；discount = 「折扣%」列。无列时 None。"""
+    返回 (state, excluded)：state={vc:{cn,dp,shop_price,discount,nmId}}；excluded={vc:原因}。映射表不存在 → 空。
+    shop_price = 「店铺{id}价格(CNY)」列（任一店铺价列，取第一个）；discount = 「折扣%」列；
+    nmId = 「WB商品码」列（默认店 nmId，作上架可靠标识；缺列时为 None）。无列时 None。"""
     state, excluded = {}, {}
     if not os.path.exists(config.MAPPING_XLSX):
         print(f"⚠ [警告] 映射表不存在：{config.MAPPING_XLSX}，将按空状态处理（merge 会重建，历史归属/排除将丢失）")
@@ -140,12 +141,14 @@ def load_mapping_state():
             i_sp = next((i for i, h in enumerate(headers)
                          if re.match(r"^店铺\d+价格\(CNY\)$", h)), None)
             i_disc = headers.index("折扣%") if "折扣%" in headers else None
+            i_nm = headers.index("WB商品码") if "WB商品码" in headers else None
             for r in ws.iter_rows(min_row=2, values_only=True):
                 vc = r[i_vc]
                 if vc:
                     state[vc] = {"cn": r[i_cn] or "", "dp": r[i_dp] if i_dp is not None else None,
                                  "shop_price": r[i_sp] if i_sp is not None else None,
-                                 "discount": r[i_disc] if i_disc is not None else None}
+                                 "discount": r[i_disc] if i_disc is not None else None,
+                                 "nmId": (r[i_nm] if i_nm is not None else None)}
     if "已排除清单" in wb.sheetnames:
         ws2 = wb["已排除清单"]
         for r in ws2.iter_rows(min_row=2, values_only=True):

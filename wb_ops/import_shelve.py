@@ -41,6 +41,7 @@ COL_L = "尺寸长(cm)"
 COL_W = "尺寸宽(cm)"
 COL_H = "尺寸高(cm)"
 COL_WT = "毛重(kg)"
+COL_NM = "WB商品码"  # 他人店铺可靠 nmId（新格式）；旧格式表无此列
 
 # 上架库存按中文名决定：复用 replicate.stock_for（--cn-stock 指定，未指定默认 999）
 
@@ -87,7 +88,9 @@ def boss_pkg_map():
 # ---------------- 他人表解析 ----------------
 def load_foreign(xlsx_path):
     """解析他人映射表「映射总表」Sheet → (items, bad_vcs)
-    items: [{cn, vc, nm, dp, title_ru, img, L, W, H, weight}]，同 nm 去重（优先双倍售价非空行）
+    items: [{cn, vc, k, nm, dp, title_ru, img, L, W, H, weight}]，同 k 去重（优先双倍售价非空行）
+      k：= vc 末段(WB原始nmId)，跨账号稳定匹配键（差集/去重/新 vc 尾段）
+      nm：= 他人表「WB商品码」列(他人店铺 nmId)，可靠拉取标识；旧格式表无此列 → 为 None（上架时跳过）
     bad_vcs: 末段非数字的 vc（格式异常，跳过）"""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if "映射总表" not in wb.sheetnames:
@@ -102,22 +105,27 @@ def load_foreign(xlsx_path):
     i_cn, i_vc, i_dp = idx(COL_CN), idx(COL_VC), idx(COL_DP)
     i_title, i_img = idx(COL_TITLE), idx(COL_IMG)
     i_l, i_w, i_h, i_wt = idx(COL_L), idx(COL_W), idx(COL_H), idx(COL_WT)
+    i_nm = idx(COL_NM)
     if i_vc is None or i_cn is None:
         wb.close()
         raise RuntimeError(f"表头缺少 {COL_VC}/{COL_CN} 列，无法解析")
+    if i_nm is None:
+        print(f"[提醒] 他人表缺少「{COL_NM}」列（旧格式），无法取可靠 nmId → 将全部跳过上架，请他人用新格式导出")
 
-    by_nm, bad_vcs = {}, []
+    by_k, bad_vcs = {}, []
     for r in ws.iter_rows(min_row=2, values_only=True):
         vc = str(r[i_vc] or "").strip()
         cn = str(r[i_cn] or "").strip() if i_cn is not None else ""
         if not vc:
             continue
-        nm = nm_of(vc)
-        if nm is None:
+        k = nm_of(vc)
+        if k is None:
             bad_vcs.append(vc)
             continue
+        raw_nm = r[i_nm] if i_nm is not None else None
+        nm = str(raw_nm).strip() if raw_nm not in (None, "") else None
         item = {
-            "cn": cn, "vc": vc, "nm": nm,
+            "cn": cn, "vc": vc, "k": k, "nm": nm,
             "dp": r[i_dp] if i_dp is not None else None,
             "title_ru": str(r[i_title] or "").strip() if i_title is not None else "",
             "img": str(r[i_img] or "").strip() if i_img is not None else "",
@@ -126,11 +134,11 @@ def load_foreign(xlsx_path):
             "H": r[i_h] if i_h is not None else None,
             "weight": r[i_wt] if i_wt is not None else None,
         }
-        old = by_nm.get(nm)
+        old = by_k.get(k)
         if old is None or (old["dp"] is None and item["dp"] is not None):
-            by_nm[nm] = item  # 同 nm 多行：优先保留双倍售价非空者
+            by_k[k] = item  # 同 k 多行：优先保留双倍售价非空者
     wb.close()
-    return list(by_nm.values()), bad_vcs
+    return list(by_k.values()), bad_vcs
 
 
 # ---------------- 差集与新 vc ----------------
@@ -150,16 +158,16 @@ def diff_foreign(foreign):
 
     records = replicate._load_records()
     plans, have_cnt, rec_skip = [], 0, 0
-    for item in sorted(foreign, key=lambda x: x["nm"]):
-        if item["nm"] in my_nms:
+    for item in sorted(foreign, key=lambda x: x["k"]):
+        if item["k"] in my_nms:
             have_cnt += 1
             continue
-        if item["nm"] in records:  # 本地记录（nm 键）已提交过
+        if item["k"] in records:  # 本地记录（键=k，跨账号稳定）已提交过
             rec_skip += 1
             continue
         prefix = cn2prefix.get(item["cn"])
         if prefix:
-            new_vc, prefix_from = f"BCS-{prefix}-{item['nm']}", "我方"
+            new_vc, prefix_from = f"BCS-{prefix}-{item['k']}", "我方"
         else:
             new_vc, prefix_from = item["vc"], "他人"
         plans.append((item, new_vc, prefix_from))
@@ -290,20 +298,27 @@ def run(args):
     print(f"他人表：{len(foreign)} 个唯一商品（格式异常跳过 {len(bad_vcs)} 个 vc）")
     if bad_vcs:
         print("  [格式异常] " + ", ".join(bad_vcs[:10]) + ("..." if len(bad_vcs) > 10 else ""))
-    print(f"我方已有 {have_cnt} | 本地记录已提交 {rec_skip} | 待上架候选 {len(plans)} 个")
+    no_nm = [p for p in plans if not p[0].get("nm")]
+    print(f"我方已有 {have_cnt} | 本地记录已提交 {rec_skip} | 待上架候选 {len(plans)} 个"
+          f"（其中 {len(no_nm)} 个无WB商品码将跳过）")
     print(f"目标店铺: {target_shops}")
+    if no_nm:
+        print("[无WB商品码跳过] "
+              + ", ".join(f"{p[0]['k']}({p[0]['cn'] or '-'})" for p in no_nm[:10])
+              + ("..." if len(no_nm) > 10 else ""))
 
     # dry-run 清单
-    print("\n" + "=" * 120)
-    print(f"{'nmId':<13}{'中文名':<16}{'双倍售价→店铺价':<16}{'库存':<6}{'新vendorCode(前缀来源)':<32}{'他人vc':<26}目标店")
-    print("-" * 120)
+    print("\n" + "=" * 126)
+    print(f"{'vc末段nmId':<13}{'中文名':<16}{'双倍售价→店铺价':<16}{'库存':<6}{'新vendorCode(前缀来源)':<32}{'他人vc':<26}目标店")
+    print("-" * 126)
     for item, new_vc, prefix_from in plans:
         dp = item["dp"]
         shop_price = math.floor(float(dp)) if dp is not None and float(dp) > 0 else "?"
         stk = replicate.stock_for(item["cn"], overrides)
-        print(f"{item['nm']:<13}{(item['cn'] or '-'):<16}{f'{dp}→{shop_price}' if dp else '?':<16}"
-              f"{stk:<6}{new_vc + '(' + prefix_from + ')':<32}{item['vc']:<26}{','.join(map(str, target_shops))}")
-    print("=" * 120)
+        flag = "  [跳过-无WB商品码]" if not item.get("nm") else ""
+        print(f"{item['k']:<13}{(item['cn'] or '-'):<16}{f'{dp}→{shop_price}' if dp else '?':<16}"
+              f"{stk:<6}{new_vc + '(' + prefix_from + ')':<32}{item['vc']:<26}{','.join(map(str, target_shops))}{flag}")
+    print("=" * 126)
 
     if not plans:
         print("无可执行任务")
@@ -340,32 +355,40 @@ def run(args):
     t0 = time.time()
     for i, (item, new_vc, prefix_from) in enumerate(plans, 1):
         tag = f"[{i}/{len(plans)}]"
-        nm, cn = item["nm"], item["cn"] or "-"
+        k, cn = item["k"], item["cn"] or "-"
+        nm = item.get("nm")  # 可靠 WB商品码（他人店铺 nmId）
         dp = item["dp"]
         shop_price = math.floor(float(dp)) if dp is not None and float(dp) > 0 else "?"
         stk = replicate.stock_for(item["cn"], overrides)
         now = datetime.now().strftime("%H:%M:%S")
+        # 0) 可靠 WB商品码缺失则跳过，避免抓取过期 WB原始nmId 误上架
+        if not nm:
+            print(f"  {tag} [跳过] nm={k} 他人表无WB商品码，避免误上架")
+            writer.writerow([now, k, cn, new_vc, prefix_from, item["vc"],
+                             ",".join(map(str, target_shops)), shop_price, stk, "跳过", "他人表无WB商品码（避免误上架）"])
+            skip += 1
+            continue
         if aborted:
-            writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],
+            writer.writerow([now, k, cn, new_vc, prefix_from, item["vc"],
                              ",".join(map(str, target_shops)), shop_price, stk, "中止", "连续 detail 失败触发中止"])
             skip += 1
             continue
 
-        # 1) 查重：本地记录（nm 键）+ 实时 API（按新 vc）→ 得本次可提交店
+        # 1) 查重：本地记录（键=k，跨账号稳定）+ 实时 API（按新 vc）→ 得本次可提交店
         valid = []
         for sid in target_shops:
             if sid not in warehouses:
                 continue
-            if str(sid) in (records.get(nm) or {}):
-                print(f"  {tag} [跳过] 店{sid} 本地记录已提交 nm={nm}")
+            if str(sid) in (records.get(k) or {}):
+                print(f"  {tag} [跳过] 店{sid} 本地记录已提交 nm={k}")
                 continue
             if replicate.vc_exists_in_shop(new_vc, sid):
                 print(f"  {tag} [跳过] 店{sid} 已存在 {new_vc}")
                 continue
             valid.append(sid)
         if not valid:
-            print(f"  {tag} [跳过] nm={nm} 目标店均已存在或无仓库")
-            writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"],
+            print(f"  {tag} [跳过] nm={k} 目标店均已存在或无仓库")
+            writer.writerow([now, k, cn, new_vc, prefix_from, item["vc"],
                              ",".join(map(str, target_shops)), shop_price, stk, "跳过", "已存在或无仓库"])
             skip += 1
             continue
@@ -426,7 +449,7 @@ def run(args):
                     stk_tag = "（0库存）" if stk == 0 else ""
                     print(f"  {tag} [成功] {new_vc} → 店{sid}（¥{shop_price}，{prefix_from}前缀{stk_tag}）")
                     writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "成功", ""])
-                    records.setdefault(nm, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    records.setdefault(k, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     replicate._save_records(records)
                 else:
                     fail += 1

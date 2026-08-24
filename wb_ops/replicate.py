@@ -367,11 +367,12 @@ def vc_exists_in_shop(vc, sid, records=None):
 
 
 # ---------------- 上架请求体构造 ----------------
-def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_info, cn="-", overrides=None):
+def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_info, nm_id, cn="-", overrides=None):
     """构造 /system/wbCollection/wb/new 请求体。返回 (payload, err)。
     vendorCode 与源店完全一致；价格=源店现价；直上/不合并/不带品牌。
+    nm_id：可靠 WB商品码（映射表主店 nmId），用作请求体 nmId/sourceSku 及图片兜底基准。
     cn/overrides：用于按中文名决定上架库存（stock_for）。"""
-    nm_id = int(vc.rsplit("-", 1)[-1])
+    nm_id = int(nm_id)
     sl = src_row.get("sizeList") or []
     price = sl[0].get("price") if sl else None
     if price is None:
@@ -483,11 +484,12 @@ def run(args):
     vc_shops, vc_rows, all_shop_ids = build_coverage(shops_data)
     sid_main = mapping.shop_id()
 
-    # 中文名（映射表有则显示）
-    cn_map = {}
+    # 中文名 + 可靠 WB商品码（映射表）显示/使用
+    cn_map, own_nm = {}, {}
     try:
         state, _ = mapping.load_mapping_state()
         cn_map = {vc: v.get("cn") or "" for vc, v in state.items()}
+        own_nm = {vc: v.get("nmId") or "" for vc, v in state.items()}
     except Exception:
         pass
 
@@ -524,21 +526,27 @@ def run(args):
 
     no_source = [p for p in partial if p[1] is None]
     plans = [p for p in partial if p[1] is not None]
+    no_nm = [p for p in plans if not own_nm.get(p[0])]
 
     print(f"店铺: {all_shop_ids}（主店 {sid_main}）")
-    print(f"候选 {len(partial)} 个 vc（部分覆盖），其中 {len(no_source)} 个全店无价格（不可上架），{len(plans)} 个可执行")
+    print(f"候选 {len(partial)} 个 vc（部分覆盖），其中 {len(no_source)} 个全店无价格（不可上架），"
+          f"{len(no_nm)} 个映射表无WB商品码（跳过避免误上架），{len(plans) - len(no_nm)} 个可执行")
     if no_source:
         print("[无可用源清单] " + ", ".join(p[0] for p in no_source[:20]) + ("..." if len(no_source) > 20 else ""))
+    if no_nm:
+        print("[无WB商品码跳过] " + ", ".join(p[0] for p in no_nm[:20]) + ("..." if len(no_nm) > 20 else ""))
 
     # dry-run 清单
-    print("\n" + "=" * 80)
-    print(f"{'vendorCode':<28} {'中文名':<12} {'源店':<6} {'价格':<8} 目标店")
-    print("-" * 80)
+    print("\n" + "=" * 84)
+    print(f"{'vendorCode':<28} {'中文名':<12} {'源店':<6} {'价格':<8} {'可靠nmId':<11} 目标店")
+    print("-" * 84)
     for vc, src_sid, src_row, missing in plans:
         price = (src_row.get("sizeList") or [{}])[0].get("price")
         cn = cn_map.get(vc) or "-"
-        print(f"{vc:<28} {cn:<12} {src_sid:<6} {price:<8} {','.join(str(s) for s in missing)}")
-    print("=" * 80)
+        rel_nm = own_nm.get(vc) or ""
+        flag = "  [跳过-无WB商品码]" if not rel_nm else ""
+        print(f"{vc:<28} {cn:<12} {src_sid:<6} {price:<8} {rel_nm:<11} {','.join(str(s) for s in missing)}{flag}")
+    print("=" * 84)
 
     if not plans:
         print("无可执行任务")
@@ -577,6 +585,13 @@ def run(args):
         cn = cn_map.get(vc) or "-"
         price = (src_row.get("sizeList") or [{}])[0].get("price")
         now = datetime.now().strftime("%H:%M:%S")
+        # 0) 可靠 WB商品码（映射表主店 nmId）：缺失则跳过，避免拉取过期的 WB原始nmId 误上架
+        nm_id = own_nm.get(vc) or ""
+        if not nm_id:
+            print(f"  {tag} [跳过] {vc} 映射表无WB商品码，避免误上架")
+            writer.writerow([now, vc, cn, src_sid, ",".join(map(str, missing)), price, "跳过", "映射表无WB商品码（避免误上架）"])
+            skip += 1
+            continue
         if aborted:
             writer.writerow([now, vc, cn, src_sid, ",".join(map(str, missing)), price, "中止", "连续 detail 失败触发中止"])
             skip += 1
@@ -600,7 +615,6 @@ def run(args):
         # 2) WB detail：按 --detail-source 选通道
         #    synthetic=BCS 列表 + card.json 拼装（不依赖 WB detail）
         #    auto=BCS 代理，失败后拼装兜底；bcs=仅 BCS 代理
-        nm_id = vc.rsplit("-", 1)[-1]
         ds = getattr(args, "detail_source", "auto")
         card_info = None
         if ds == "synthetic":
@@ -643,7 +657,7 @@ def run(args):
         #   （4 店对照实验：一次提交全部未创建；逐店提交立即生效）。后续 BCS 修正后可恢复
         #   多店一次提交（提效），恢复前先用小批量多店提交验证 vendorCode 确实创建。
         for sid in targets:
-            payload, err = build_payload(vc, src_sid, src_row, [sid], warehouses, detail, card_info, cn, overrides)
+            payload, err = build_payload(vc, src_sid, src_row, [sid], warehouses, detail, card_info, nm_id, cn, overrides)
             if payload is None:
                 fail += 1
                 print(f"  {tag} [失败] {vc} 店{sid}: {err}")
