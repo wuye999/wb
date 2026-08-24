@@ -18,8 +18,11 @@ from . import wb_api
 WB_DELETE_NMS = "https://seller-content.wildberries.ru/ns/source/content-card/source/deleteNMsByIDs"
 WB_DELETE_UUID = "https://seller-content.wildberries.ru/ns/viewer/content-card/viewer/errorCard/deleteByNMUUID"
 WB_DELETE_ALL = "https://seller-content.wildberries.ru/ns/source/content-card/source/deleteAllSize"
+WB_ERROR_LIST = "https://seller-content.wildberries.ru/ns/viewer/content-card/viewer/errorsTableListV5"
 DEL_CHUNK = 50
 STOCK_CHUNK = 200
+ERROR_PAGE = 200      # errorsTableListV5 每页条数（游标可续，抓包用 20，取较大值降请求次数）
+ERROR_MAX_PAGES = 50  # 游标分页上限保护
 
 
 def _stock_url():
@@ -102,12 +105,40 @@ def set_stock_zero(shop_id, row_map, nm_ids):
     return results
 
 
-# ---------- 草稿箱：删除 ----------
+# ---------- 草稿箱：查询 + 删除 ----------
+def fetch_error_cards(session):
+    """WB 草稿箱错误卡片列表（errorsTableListV5，游标分页）。返回 list（每条含 vendorCodes/nmUUIDs/updateAt）。
+    ★ 权威列表来源：WB 原生接口提供真实 nmUUIDs，替代 BCS ERROR 快照（后者常缺/错 uuid，导致删除落空）。"""
+    cursor = {"n": ERROR_PAGE}
+    cards = []
+    for _ in range(ERROR_MAX_PAGES):
+        body = {"sort": {"searchValue": "", "sortColumn": "updateAt", "ascending": False},
+                "cursor": cursor}
+        d = wb_api.request_post(session, WB_ERROR_LIST, body, allow_400_json=True)
+        data = d.get("data") or {}
+        cards.extend(data.get("items") or [])
+        cur = data.get("cursor") or {}
+        if not cur.get("next"):
+            break
+        cursor = {"n": ERROR_PAGE, "updatedAt": cur.get("updatedAt"),
+                  "batchUID": cur.get("batchUID")}
+        time.sleep(0.3)
+    return cards
+
+
 def delete_nm_uuids(session, uuids):
-    d = wb_api.request_post(session, WB_DELETE_UUID, {"nmUUIDs": uuids}, allow_400_json=True)
-    if d.get("error"):
-        return 0, [(u, d.get("errorText") or "删除失败") for u in uuids]
-    return len(uuids), []
+    """按 nmUUID 批量删除草稿（分块调用 deleteByNMUUID）。返回 (ok_n, fails)。
+    fails: [(uuid, reason)]。成功则以响应 error==false 判定。"""
+    ok_n, fails = 0, []
+    for i in range(0, len(uuids), DEL_CHUNK):
+        chunk = uuids[i:i + DEL_CHUNK]
+        d = wb_api.request_post(session, WB_DELETE_UUID, {"nmUUIDs": chunk}, allow_400_json=True)
+        if d.get("error"):
+            fails.extend((u, d.get("errorText") or "删除失败") for u in chunk)
+        else:
+            ok_n += len(chunk)
+        time.sleep(0.3)
+    return ok_n, fails
 
 
 # ---------- 主流程 ----------
@@ -178,28 +209,31 @@ def process_draft(shop, sid, wb_session, args, rows):
     name = shop["shopName"]
     st = {"total": 0, "deleted": 0, "failed": 0, "zeroed": 0}
     print(f"\n=== 店铺 {name}({sid}) 草稿箱 ===")
-    err = bcs.fetch_shop_products(sid, "ERROR")
-    if not err:
+    cards = fetch_error_cards(wb_session)
+    # 摊平：vendorCodes[i] ↔ nmUUIDs[i] 依序配对，vcs 索引对不齐则填空
+    entries, seen_uuid = [], set()
+    for c in cards:
+        vcs = c.get("vendorCodes") or []
+        us = c.get("nmUUIDs") or []
+        for i, u in enumerate(us):
+            if not u or u in seen_uuid:
+                continue
+            seen_uuid.add(u)
+            vc = vcs[i] if i < len(vcs) else ""
+            entries.append({"vc": vc or "", "uuid": u, "updateAt": c.get("updateAt") or ""})
+    if not entries:
         print("  草稿箱为空")
         return st
-    st["total"] = len(err)
-    uuid_rows = [r for r in err if r.get("nmUuid")]
-    missing = [r for r in err if not r.get("nmUuid")]
-    if missing:
-        print(f"  [警告] {len(missing)} 条无 nmUuid（跳过，需补抓 WB errorCard 列表接口）")
-        for r in missing:
-            rows.append({"店铺": name, "ID": r.get("vendorCode"), "类型": "无UUID",
-                         "vendorCode": r.get("vendorCode"), "结果": "跳过:无nmUuid"})
-    uuids = [r["nmUuid"] for r in uuid_rows]
+    st["total"] = len(entries)
     if args.limit > 0:
-        uuids = uuids[: args.limit]
-    print(f"  [列表] 草稿箱 {len(err)} 条，本次处理 {len(uuids)} 个")
+        entries = entries[: args.limit]
+    uuids = [e["uuid"] for e in entries]
+    print(f"  [列表] 草稿箱 {len(cards)} 条卡片，本次处理 {len(uuids)} 个")
 
     if not args.apply:
-        for r in uuid_rows:
-            if r.get("nmUuid") in uuids:
-                rows.append({"店铺": name, "ID": r["nmUuid"], "类型": "nmUuid",
-                             "vendorCode": r.get("vendorCode"), "结果": "DRY将删"})
+        for e in entries:
+            rows.append({"店铺": name, "ID": e["uuid"], "类型": "nmUuid",
+                         "vendorCode": e["vc"], "结果": "DRY将删"})
         print("  [dry-run] 未执行删除（共 %d 条将删）" % len(uuids))
         return st
 
@@ -207,16 +241,11 @@ def process_draft(shop, sid, wb_session, args, rows):
     st["deleted"] = ok_n
     st["failed"] = len(fails)
     print(f"  [删除] 成功 {ok_n}，失败 {len(fails)}")
-    uuid_set = set(uuids)
-    for r in uuid_rows:
-        if r.get("nmUuid") not in uuid_set:
-            continue
-        res = "已删除"
-        for u, reason in fails:
-            if u == r["nmUuid"]:
-                res = f"失败:{str(reason)[:40]}"
-        rows.append({"店铺": name, "ID": r["nmUuid"], "类型": "nmUuid",
-                     "vendorCode": r.get("vendorCode"), "结果": res})
+    fail_reason = {u: str(cd) for u, cd in fails}
+    for e in entries:
+        res = "已删除" if e["uuid"] not in fail_reason else f"失败:{fail_reason[e['uuid']][:40]}"
+        rows.append({"店铺": name, "ID": e["uuid"], "类型": "nmUuid",
+                     "vendorCode": e["vc"], "结果": res})
     return st
 
 
@@ -227,25 +256,32 @@ def run(args):
     if not wb_shops:
         print("[错误] credentials.json 没有已填 cookie 的店铺")
         return 1
-    bcs_shops = {s["id"]: s["name"] for s in bcs.fetch_shop_list()}
-    pairs = [(s, s["shopId"]) for s in wb_shops if s["shopId"] in bcs_shops]
-    if args.shops:
-        want = {int(x) for x in args.shops.split(",") if x.strip()}
-        pairs = [p for p in pairs if p[1] in want]
+    targets = ["draft", "basket"] if args.target == "all" else [args.target]
+    mode_names = {"draft": "草稿箱", "basket": "回收站"}
+    wants = {int(x) for x in args.shops.split(",") if x.strip()} if args.shops else None
+
+    # 店铺配对：纯 draft 走 WB 原生列表（无需 BCS 枚举/同步，BCS 凭证失效也能跑）；
+    # 含 basket 时仍需 BCS（回收站 deleteAllSize 依赖 BCS TRASH）。
+    if targets == ["draft"]:
+        pairs = [(s, s.get("shopId")) for s in wb_shops if s.get("shopId")]
+        if wants:
+            pairs = [p for p in pairs if p[1] in wants]
+    else:
+        bcs_shops = {s["id"]: s["name"] for s in bcs.fetch_shop_list()}
+        pairs = [(s, s["shopId"]) for s in wb_shops if s["shopId"] in bcs_shops]
+        if wants:
+            pairs = [p for p in pairs if p[1] in wants]
+        if not args.no_sync and args.apply:
+            print("\n[同步] 刷新 BCS 缓存（约 40s）...")
+            bcs.sync_shops_parallel([p[1] for p in pairs])
     if not pairs:
         print("[错误] 没有匹配的店铺（检查 --shops 或 credentials.json）")
         return 1
     root_version = cred.root_version
     pair_names = [f"{s['shopName']}({s['shopId']})" for s, _ in pairs]
-    targets = ["draft", "basket"] if args.target == "all" else [args.target]
-    mode_names = {"draft": "草稿箱", "basket": "回收站"}
     print(f"店铺 {len(pairs)} 个: {pair_names}"
           f" | 目标: {' → '.join(mode_names[t] for t in targets)}"
           f"{'' if args.apply else '  [dry-run]'}")
-
-    if not args.no_sync and args.apply:
-        print("\n[同步] 刷新 BCS 缓存（约 40s）...")
-        bcs.sync_shops_parallel([p[1] for p in pairs])
 
     for tgt in targets:
         mode = mode_names[tgt]
