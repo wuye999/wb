@@ -241,7 +241,6 @@ GROUPS_PLACEHOLDER
   <img id="lb-img" src="" alt="">
   <div id="lb-title"></div>
 </div>
-<textarea id="out" style="display:none"></textarea>
 <script>
 const ISSUES = ISSUES_JSON;
 const ROWS = ROWS_JSON;
@@ -317,14 +316,31 @@ function exportPicked(){
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   alert('已下载 货不对板vc.json（' + rows.length + ' 条）');
 }
+function fallbackCopy(text, done, fail){
+  // 兜底：临时可见 textarea（display:none 元素无法形成选区 → 复制为空）
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '-9999px';
+  ta.style.left = '0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch(e){ ok = false; }
+  document.body.removeChild(ta);
+  ok ? done() : fail();
+}
 function copyVcs(){
   const vcs = pickedRows().map(r => r.vc);
   if (!vcs.length){ alert('未勾选任何商品'); return; }
   const text = vcs.join(',');
-  document.getElementById('out').value = text;
-  document.getElementById('out').select();
-  try { document.execCommand('copy'); } catch(e){}
-  alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 wb.py trash --vc）');
+  const done = () => alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 wb.py trash --vc）');
+  const fail = () => alert('复制失败：请用「导出勾选 vc (JSON)」下载后再手动复制');
+  if (navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done, fail));
+    return;
+  }
+  fallbackCopy(text, done, fail);
 }
 function clearPicked(){
   document.querySelectorAll('.badpick:checked').forEach(c => c.checked = false);

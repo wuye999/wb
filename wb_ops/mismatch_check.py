@@ -70,7 +70,7 @@ body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f0f2f5;color:
 .bar b{color:#c0392b}button{padding:6px 14px;cursor:pointer;border-radius:6px;border:1px solid #c0392b;background:#c0392b;color:#fff}
 button.ghost{background:#fff;color:#c0392b}
 input[type=search]{padding:6px 10px;border:1px solid #ccc;border-radius:6px;min-width:220px}
-select[multiple]{padding:4px;border:1px solid #ccc;border-radius:6px;min-width:180px;max-height:120px}
+select[multiple]{padding:4px;border:1px solid #ccc;border-radius:6px;min-width:300px;min-height:180px;max-height:60vh}
 .wrap{padding:16px}
 .stats{color:#7f8c8d;font-size:13px}
 .grp{background:#fff;border:1px solid #ddd;border-radius:8px;margin:12px 0;padding:10px 14px}
@@ -104,7 +104,7 @@ select[multiple]{padding:4px;border:1px solid #ccc;border-radius:6px;min-width:1
 <div class="bar">
   <b>货不对板筛查工作台</b>
   <span class="stats">共 <b id="total"></b> 条 · <b id="groups"></b> 个中文名商品 · 已勾选 <b id="picked" style="color:#c0392b"></b> 条</span>
-  <label>中文名筛选 <select multiple id="cnSelect" onchange="applyFilter()">CN_OPTIONS</select></label>
+  <label>中文名筛选 <select multiple size="12" id="cnSelect" onchange="applyFilter()">CN_OPTIONS</select></label>
   <input type="search" id="q" placeholder="搜索 vc / 中文名 / 俄文标题…" oninput="applyFilter()">
   <button id="btnPicked" class="ghost" onclick="togglePicked()">只看已勾选</button>
   <button class="ghost" onclick="exportPicked()">导出勾选 vc (JSON)</button>
@@ -124,7 +124,6 @@ GROUPS_PLACEHOLDER
   <img id="lb-img" src="" alt="">
   <div id="lb-title"></div>
 </div>
-<textarea id="out" style="display:none"></textarea>
 <script>
 const ROWS = ROWS_JSON;
 document.getElementById('total').textContent = TOTAL;
@@ -204,14 +203,31 @@ function exportPicked(){
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   alert('已下载 货不对板vc.json（' + rows.length + ' 条）');
 }
+function fallbackCopy(text, done, fail){
+  // 兜底：临时可见 textarea（display:none 元素无法形成选区 → 复制为空）
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '-9999px';
+  ta.style.left = '0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch(e){ ok = false; }
+  document.body.removeChild(ta);
+  ok ? done() : fail();
+}
 function copyVcs(){
   const vcs = pickedRows().map(r => r.vc);
   if (!vcs.length){ alert('未勾选任何商品'); return; }
   const text = vcs.join(',');
-  document.getElementById('out').value = text;
-  document.getElementById('out').select();
-  try { document.execCommand('copy'); } catch(e){}
-  alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 wb.py trash --vc）');
+  const done = () => alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 wb.py trash --vc）');
+  const fail = () => alert('复制失败：请用「导出勾选 vc (JSON)」下载后再手动复制');
+  if (navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done, fail));
+    return;
+  }
+  fallbackCopy(text, done, fail);
 }
 function clearPicked(){
   document.querySelectorAll('.badpick:checked').forEach(c => c.checked = false);
