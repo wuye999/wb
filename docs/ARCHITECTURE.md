@@ -120,7 +120,8 @@ wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原�
 
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）
-wb.py discount       ⑧ 先同步 → 查 >50% → 改为 50%
+wb.py discount-scan  ⑧ WB 原生快速（模式1）：list/goods/filter 按折扣从高到低找 >阈值 → nm/upload/task 改 → 同接口回验；不碰 BCS
+wb.py discount       ⑧a BCS 全量（模式2，慢）：先同步 → 查（全量用 --threshold -1）→ 批量改 → 同步复核
 wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
 wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）
 wb.py banned         ⑨b 查询被阻止商品（tableListImprovable 分页）→ dry-run → --apply moveNmsToTrash 移回收站 → count/列表自动复核

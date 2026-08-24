@@ -17,6 +17,7 @@ from . import config
 from . import cookies
 from . import daily
 from . import discount
+from . import discount_scan
 from . import import_shelve
 from . import mapping
 from . import mapping_check
@@ -113,6 +114,13 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
     p.add_argument("--no-sync", action="store_true", help="跳过同步（缓存滞后会漏查！）")
     p.add_argument("--sync", action="store_true", help="提交后同步复核")
+
+    p = sub.add_parser("discount-scan", help="折扣快速改价（WB 原生，>阈值→目标，不做 BCS 同步）")
+    p.add_argument("--apply", action="store_true", help="真正提交（默认 dry-run）")
+    p.add_argument("--threshold", type=int, default=config.DISCOUNT_THRESHOLD_DEF, help="阈值（处理 > 该值）")
+    p.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
 
     p = sub.add_parser("banned", help="查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
@@ -218,6 +226,8 @@ def dispatch(args):
         return promo.run(args)
     if cmd == "discount":
         return discount.run(args)
+    if cmd == "discount-scan":
+        return discount_scan.run(args)
     if cmd == "banned":
         return banned.run(args)
     if cmd == "clean":

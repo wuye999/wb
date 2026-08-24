@@ -46,7 +46,8 @@
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
 | `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
-| `discount` | 折扣改价（各店 >阈值→目标，默认 >50%→50%；**改折扣同样触发价格审核，之后必跑 `price-review`**） | `--apply` / `--threshold` / `--target` / `--shops` / `--no-sync` / `--sync` |
+| `discount` | 折扣改价**全量**（BCS 同步，慢）：各店 >阈值→目标；**所有商品→50% 用 `--threshold -1`**；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--target` / `--shops` / `--no-sync` / `--sync` |
+| `discount-scan` | 折扣改价**快速**（WB 原生，**不做 BCS 同步**）：列表按折扣从高到低找 >阈值 → `nm/upload/task` 改 → 同接口回验；逐店逐商品（同 vc 各店折扣不同） | `--apply` / `--threshold`(默认50) / `--target`(默认50) / `--shops` / `--limit` |
 | `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`） | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--no-sync` |
 | `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
