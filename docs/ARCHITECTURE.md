@@ -112,10 +112,11 @@ wb.py fetch          ① 并发同步 5 店（WB→BCS ~50s）→ 逐店拉 BASE
 wb.py mapping        ② 5 店并集按 vc 去重 → 四分类（已知跳过/前缀自动/候选池/未归属）→ 统一核对工作台
    （人工）          ③ 打开 workbench HTML 勾选归属/排除 → 导出 统一审核.json
 wb.py merge [审核]   ④ 增量合并 → 继承旧归属 + 追加审核 + 前缀补录 + 消失即移除 → 重建 8-Sheet 映射表
-wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv
+wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 自动 fetch + merge（改价/库存/下架提交后自动增量合并映射表）
 wb.py fetch + merge  ⑥ 写后验证（改价/库存写 WB 侧，需再同步才在 BCS 可见；下架立即可见）
-wb.py replicate      ⑥b 快照覆盖判断（vc×5店）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 自动 fetch 复核覆盖率
-wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原始nmId 与我方快照差集 → 我方前缀优先生成新 vc → 逐店上架 → 自动 fetch 复核
+wb.py replicate      ⑥b 快照覆盖判断（vc×5店）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 自动 fetch 复核覆盖率 → 写后自动 merge（上架后映射表自动补录/同步覆盖）
+wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原始nmId 与我方快照差集 → 我方前缀优先生成新 vc → 逐店上架 → 自动 fetch 复核 → 写后自动 merge
+（★ 改价/库存/下架/上架/清理 `--apply` 后均自动增量 merge 映射表；下架/清理会「消失即移除」对应商品）
 
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）

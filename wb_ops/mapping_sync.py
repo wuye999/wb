@@ -308,3 +308,14 @@ def run_review():
 
 def run_merge(review_file=None):
     merge(review_file)
+
+
+def post_write_merge(fetch=True):
+    """写后验证后自动增量合并映射表。fetch=True 时先全店同步拉取（拿最新快照）。
+    merge 会做「消失即移除」：下架/清理后对应商品将从映射表移除。失败不中断主命令。"""
+    try:
+        if fetch:
+            products.fetch_all()
+        merge(None)  # 增量合并，映射表=唯一状态源
+    except Exception as e:
+        print(f"[自动merge] 失败：{e}（映射表未更新，可稍后手动 wb.py merge）")

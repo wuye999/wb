@@ -703,4 +703,7 @@ def run(args):
             print(f"[验证] 各店在架 vc 数：{per_shop}")
         except Exception as e:
             print(f"[验证] 失败：{e}（可稍后手动 wb.py fetch 复核）")
+        # 写后验证已 fetch 最新快照 → 顺带增量合并映射表（上架后自动补录/同步覆盖）
+        from . import mapping_sync
+        mapping_sync.post_write_merge(fetch=False)
     return 0

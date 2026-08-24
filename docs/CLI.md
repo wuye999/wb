@@ -9,7 +9,7 @@
 - **退出码**：`0` 正常（含 dry-run / 违规跳过）｜`1` 参数/环境错误｜`130` 中断。
 - **dry-run 默认**：所有写操作（改价/库存/下架/报名/折扣/清理）不加 `--apply` 只打印清单，不调写接口。
 - **不可逆确认**：`trash`、`stock --amount 0`、`banned --apply`（移回收站）执行时需 `--yes`（或交互输入 y）。
-- **写后验证**：改价/库存写 WB 侧，需再 `fetch`（带同步）才在 BCS 可见；下架/回收站立即可见；`banned --apply` 自动复核 WB count（bannedCard 前后对比 + 重查列表）。
+- **写后验证**：改价/库存写 WB 侧，需再 `fetch`（带同步）才在 BCS 可见；下架/回收站立即可见；`banned --apply` 自动复核 WB count（bannedCard 前后对比 + 重查列表）。**写后验证/提交后自动增量合并映射表**（改价 price、库存 stock、下架 trash、上架 replicate/import-shelve、清理 clean 的 `--apply` 后自动 `merge`；下架/清理会把对应商品从映射表移除，即消失即移除）。
 - **仓库默认莫斯科**：改库存 / 下架清库存 / 回收站归零 / 上架等所有仓库操作**默认只操作「莫斯科仓库」**（`config.DEFAULT_WAREHOUSE_NAME`，按仓库 name 匹配），**成都仓库默认不操作**。成都仓库（国内仓）需单独用 `wb.py remote-wh` 命令处理；切换默认仓库改 `config.py` 的 `DEFAULT_WAREHOUSE_NAME`。
 
 ## 二、子命令全表

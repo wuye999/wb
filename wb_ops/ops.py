@@ -637,6 +637,10 @@ def run(action, args):
         return
 
     run_apply(plans, action, auto_review=getattr(args, "auto_review", False))
+    # 改价/库存/下架 --apply 提交后：同步最新数据并增量合并映射表（下架商品消失→移除；改价→映射表价格同步）
+    if action in ("price", "stock", "trash"):
+        from . import mapping_sync
+        mapping_sync.post_write_merge()
 
 
 # 供 argparse 复用：给 price/stock/trash 三个子命令加筛选与通用参数

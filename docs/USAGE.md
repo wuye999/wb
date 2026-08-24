@@ -176,6 +176,8 @@ python wb.py clean --target all --apply    # 执行：先草稿箱，后回收�
 - ⚠ **`deleteAllSize` 对有库存商品会失败**（返回 `error:true` + `StockCount>0`，报 `content.api.errors.source.whileDeleting`），需等库存清零后再重试。
 - ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 已归零 Z`。
 
+> 📌 **写后自动合并**：`--apply` 执行完清理后会**自动**全店同步（fetch）+ 增量合并映射表（`wb.py merge`），本次清理掉的商品会从映射表移除（消失即移除）。如需保留某商品在映射表中，请先在映射表将其标记为「已排除清清单」再清理。
+
 ## 9b. 查询并删除被阻止的商品（banned）
 
 > WB 会把违规/有问题的商品标记为「被阻止」（banned，卡片 flaws 含"被阻止"，后台「商品状态」页可查）。本功能查询这些商品并一键移到回收站（可恢复）。

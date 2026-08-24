@@ -314,6 +314,10 @@ def run(args):
                 w.writerows(rows)
             print(f"[日志] {path}")
 
-    if not args.apply:
+    if args.apply:
+        # 清理后同步最新数据并增量合并映射表（已删/已清商品从映射表移除）
+        from . import mapping_sync
+        mapping_sync.post_write_merge()
+    else:
         print("\n（dry-run 未执行任何删除；确认清单后加 --apply 执行）")
     return 0
