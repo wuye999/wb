@@ -67,7 +67,9 @@ python wb.py merge 统一审核.json            # 增量合并 → 映射表
 ## 5. 货不对板筛查（看图找「上架商品图片与中文名不符」的）
 
 ```bash
-python wb.py mismatch-check             # 生成货不对板筛查工作台
+python wb.py mismatch-check             # 生成货不对板筛查工作台（全量，可按创建/上架时间筛选）
+python wb.py mismatch-check --days 2    # 只生成昨天+今天上架(创建)的商品（--days 1=仅今天）
+python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25   # 指定时间段
 # → 打开 data/workbench/货不对板筛查工作台.html
 #   顶部「中文名筛选」可多选只看某几个中文名（Ctrl/Cmd 点选，不选=全部）
 #   逐个商品看缩略图（点击弹高清大图）与俄文标题是否和中文名一致
@@ -75,7 +77,8 @@ python wb.py mismatch-check             # 生成货不对板筛查工作台
 # → 点「导出勾选 vc」下载 货不对板vc.json，或「复制 vc」复制逗号分隔列表
 python wb.py trash --vc <vc列表> --apply --yes   # 清空库存并移至回收站
 ```
-- ✅ 成功：工作台「共 N 条 · M 个中文名商品」；导出 vc 后 trash 打印 `成功 N · 失败 0`。
+- ✅ 成功：工作台「共 N 条 · M 个中文名商品」；用 `--begin/--end/--days` 时会打印 `[时间段] 创建时间 X ~ Y → N 条`；无创建时间的商品在时间筛选时被过滤并提示「过滤了 N 行无创建时间」。
+- 📌 时间段依据映射表「映射总表」的**创建时间**（上架/建立时间，来自 BCS 快照经 merge 入库）；若映射表很久未 merge，该列可能缺失/滞后，提示重新 `fetch + merge`。
 - 📌 下架前先去 `--apply` 跑 dry-run 预览清单；`trash` 会自动先清库存再移回收站。
 
 ## 6. 改价 / 设折扣 / 库存 / 下架（两段式）

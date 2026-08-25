@@ -23,7 +23,7 @@
 | `mapping` | `--legacy`（仅主店候选） | 统一核对工作台（5 店并集一页两区） | `data/workbench/价格映射核对工作台.html` |
 | `mapping-import` | `<核对结果.json>` | 导入核对 → 生成映射表（旧格式单店初建） | `data/价格映射表.xlsx` |
 | `mapping-check` | `--tol N`（默认 5） | 映射表核查工作台（带图，可疑项标记） | `data/workbench/映射表核查工作台.html` |
-| `mismatch-check` | 无 | 货不对板筛查工作台（看图勾选，导出 vc 下架） | `data/workbench/货不对板筛查工作台.html` |
+| `mismatch-check` | `--cn` / `--begin` / `--end` / `--days` | 货不对板筛查工作台（看图勾选，导出 vc 下架）；`--begin`/`--end`/`--days` 按映射表创建时间（上架/建立时间）时间段筛选，如只审昨天上架用 `--days 1` | `data/workbench/货不对板筛查工作台.html` |
 | `review` | 无 | 其余 4 店新商品待审核（前缀命中自动补录） | `data/workbench/多店铺待审核.html` |
 | `merge` | `[审核.json]`（可选） | 增量合并（继承+追加+消失即移除）→ 重建映射表 | `data/价格映射表.xlsx` |
 
@@ -71,6 +71,8 @@ python wb.py merge                         # 增量合并（无新审核）
 python wb.py merge 统一审核.json            # 合并本次审核
 python wb.py mapping-check --tol 3         # 核查工作台
 python wb.py mismatch-check                 # 货不对板筛查工作台（看图勾选 → 导出 vc → trash --vc）
+python wb.py mismatch-check --days 2        # 只审最近 2 天（昨天+今天）上架/创建的商品（--days 1=仅今天）
+python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25  # 指定时间段（按映射表创建时间）
 
 # 改价/折扣/库存/下架（dry-run 默认，加 --apply 执行；默认不自动同步/不写后验证，完成后仅打印提示；加 --sync 自动「同步在架商品并合并映射表」）
 python wb.py price --name 充电宝 --apply --yes

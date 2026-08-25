@@ -54,6 +54,7 @@ def load_mapping_rows():
                 "d_h": r[idx["尺寸高(cm)"]] if "尺寸高(cm)" in idx else None,
                 "weight": r[idx["毛重(kg)"]] if "毛重(kg)" in idx else None,
                 "shops": r[idx["店铺覆盖"]] if "店铺覆盖" in idx else "",
+                "create_at": r[idx["创建时间"]] if "创建时间" in idx else None,
             })
     wb.close()
     return rows

@@ -55,6 +55,9 @@ def build_parser():
 
     p = sub.add_parser("mismatch-check", help="货不对板筛查工作台（看图勾选，导出 vc 下架）")
     p.add_argument("--cn", default="", help="只渲染指定中文名（精确匹配，如『牙膏-紫色』）")
+    p.add_argument("--begin", default="", help="开始日期 YYYY-MM-DD（按映射表创建时间/上架时间筛选）")
+    p.add_argument("--end", default="", help="结束日期 YYYY-MM-DD（缺省=今天）")
+    p.add_argument("--days", type=int, default=0, help="最近 N 天（含今天；与 --begin/--end 冲突时以具体日期为准）")
 
     sub.add_parser("review", help="多店铺待审核工作台")
 
@@ -211,7 +214,7 @@ def dispatch(args):
         mapping_check.run(tol=args.tol)
         return 0
     if cmd == "mismatch-check":
-        mismatch_check.run(cn=args.cn)
+        mismatch_check.run(cn=args.cn, begin=args.begin, end=args.end, days=args.days)
         return 0
     if cmd == "review":
         mapping_sync.run_review()

@@ -9,8 +9,10 @@ wb_ops 货不对板筛查工作台（人工看图筛选「上架商品图片与�
 - 顶部可多选筛选中文名（单/多/全部）+ 搜索；
 - 导出勾选的 vendorCode（JSON / 复制逗号分隔），用 wb.py trash --vc ... 下架。
 """
+import datetime
 import json
 import os
+import re
 from collections import defaultdict
 from html import escape
 
@@ -263,11 +265,89 @@ applyFilter();
     return len(rows), len(groups)
 
 
-def run(cn=None):
+def _to_date(v):
+    """把映射表「创建时间」字段解析为 datetime.date；解析不出返回 None。
+    兼容：datetime / date、字符串（YYYY-MM-DD 或带 HH:MM:SS / T 分隔 / 斜杠）、Excel 数字 serial、秒/毫秒时间戳。"""
+    if v is None:
+        return None
+    if isinstance(v, datetime.datetime):
+        return v.date()
+    if isinstance(v, datetime.date):
+        return v
+    if isinstance(v, (int, float)):
+        try:
+            if v > 1e10:  # 毫秒时间戳
+                return datetime.datetime.fromtimestamp(v / 1000).date()
+            if v > 1e8:   # 秒级时间戳
+                return datetime.datetime.fromtimestamp(v).date()
+        except (OverflowError, OSError, ValueError):
+            pass
+        try:  # Excel 串行日期（1899-12-30 起）
+            return datetime.date(1899, 12, 30) + datetime.timedelta(days=int(v))
+        except (OverflowError, ValueError):
+            return None
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+                    "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+            try:
+                return datetime.datetime.strptime(s[:19], fmt).date()
+            except (ValueError, TypeError):
+                continue
+        m = re.match(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+        if m:
+            try:
+                return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+def _resolve_window(begin, end, days):
+    """归一为 (start_date, end_date)，含边界。begin/end 为 'YYYY-MM-DD' 字符串。
+    days N → end=今天, start=今天-(N-1)；给了 begin 优先 begin；end 缺省=今天；start 缺省=今天。"""
+    today = datetime.date.today()
+    start = None
+    if begin:
+        try:
+            start = datetime.datetime.strptime(begin.strip(), "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            start = None
+    if start is None and days:
+        start = today - datetime.timedelta(days=max(0, days - 1))
+    if start is None:
+        start = today
+    end_date = today
+    if end:
+        try:
+            end_date = datetime.datetime.strptime(end.strip(), "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            pass
+    return start, end_date
+
+
+def run(cn=None, begin="", end="", days=0):
     print(f"读取映射表 {config.MAPPING_XLSX} ...")
     rows = load_mapping_rows()
     if not rows:
         raise RuntimeError("映射表为空，请先 wb.py merge")
+    if begin or end or days:
+        win = _resolve_window(begin, end, days)
+        kept, dropped = [], 0
+        for r in rows:
+            d = _to_date(r.get("create_at"))
+            if d is None:
+                dropped += 1  # 无创建时间 → 排除并提示
+                continue
+            if not (win[0] <= d <= win[1]):
+                continue
+            kept.append(r)
+        if dropped:
+            print(f"  [提示] 时间筛选生效：过滤了 {dropped} 行无创建时间")
+        rows = kept
+        print(f"  [时间段] 创建时间 {win[0]} ~ {win[1]} → {len(rows)} 条")
     if cn:
         hit = [r for r in rows if r["cn"] and str(r["cn"]) == cn]
         print(f"  按中文名过滤: 「{cn}」 → {len(hit)} 条")

@@ -20,7 +20,7 @@
 │   ├── mapping.py             商品价格表解析 + 映射表构建（8-Sheet）
 │   ├── mapping_sync.py        多店 review / 增量 merge
 │   ├── mapping_check.py       映射表核查工作台（带图，可疑项标记）
-│   ├── mismatch_check.py      货不对板筛查工作台（看图勾选，导出 vc 下架）
+│   ├── mismatch_check.py      货不对板筛查工作台（看图勾选，导出 vc 下架；支持按映射表创建时间时间段筛选 --begin/--end/--days）
 │   ├── workbench.py           HTML 工作台渲染（合并 4 处重复模板）
 │   ├── ops.py                 一键操作：改价 / 库存 / 下架（两段式 dry-run；改价可 --auto-review 自动应用新价格）
 │   ├── replicate.py           跨店复制上架：部分覆盖 vc → 缺失店铺（vendorCode 与源店一致；WB detail 经 BCS 代理 + card.json CDN）
