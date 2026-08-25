@@ -63,6 +63,7 @@
    python wb.py promo-apply                 # 促销报名 dry-run
    python wb.py clean --target all          # 清理草稿/回收站 dry-run
    ```
+   > ⚠ 写操作（改价/折扣/库存/下架/清理/上架）**默认不自动 BCS 同步、不自动写后验证、不自动合并映射表**，执行完成仅打印提示；需要同步在架商品并合并映射表时加 **`--sync`**（或单独 `wb.py fetch && wb.py merge`），因 WB/BCS 异步回填，当场验证不一定准确。
 4. **任何异常**：先看 `data/logs/`，别重复盲跑；遇到 401/403 去读 [CREDENTIALS.md](CREDENTIALS.md)。
 
 > 完整命令参考与成功/失败判据见 [CLI.md](CLI.md) 和 [USAGE.md](USAGE.md)。

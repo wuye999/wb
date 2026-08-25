@@ -95,7 +95,7 @@
 
 1. **半价口径**：商品价格表「双倍售价」= 最低售价 ×2（D 列公式）；店铺整数价 = `floor(双倍售价)`。
 2. **折扣规则**：所有 `discount > 50%` → 改为 `50%`（`wb.py discount`）。
-3. **先同步再查询**：BCS productList 是缓存，改价/报名/删除前后必须先触发同步（~40-50s/店），否则漏查/误判。
+3. **先同步再查询**：BCS productList 是缓存，改价/报名/删除前后应先触发同步（~40-50s/店）否则漏查/误判。**默认不自动同步**：写操作（改价/库存/下架/折扣/清理/上架）默认**不自动同步、不写后验证、不自动 merge**，命令执行完成仅打印提示（因 WB/BCS 异步回填，当场验证不一定准确）；需同步在架并合并映射表时，给写命令加 `--sync`（命令内自动 fetch+merge）或显式 `wb.py fetch`。`fetch`/`orders` 属显式同步/查询工具，仍默认同步。
 4. **增量 merge 唯一状态源**：映射表 xlsx = 状态；审核文件是一次性输入用完即弃；继承旧归属 + 追加审核 + 消失即移除（缺店保护）。
 5. **价格下限**：目标价 ≤ 原价÷2 时 WB 静默拒绝（返回 200 不生效）→ ops 自动剔除。
 6. **0 值商品是正常数据**（WB 延迟/受限）：照常修改并显式报告，复查仍 0 不反复操作。
@@ -112,16 +112,16 @@ wb.py fetch          ① 并发同步 5 店（WB→BCS ~50s）→ 逐店拉 BASE
 wb.py mapping        ② 5 店并集按 vc 去重 → 四分类（已知跳过/前缀自动/候选池/未归属）→ 统一核对工作台
    （人工）          ③ 打开 workbench HTML 勾选归属/排除 → 导出 统一审核.json
 wb.py merge [审核]   ④ 增量合并 → 继承旧归属 + 追加审核 + 前缀补录 + 消失即移除 → 重建 8-Sheet 映射表
-wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 自动 fetch + merge（改价/库存/下架提交后自动增量合并映射表）
+wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 默认不自动同步/合并（仅提示），加 --sync 自动 fetch + merge（改价/库存/下架提交后自动增量合并映射表）
 wb.py fetch + merge  ⑥ 写后验证（改价/库存写 WB 侧，需再同步才在 BCS 可见；下架立即可见）
-wb.py replicate      ⑥b 快照覆盖判断（vc×5店）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 自动 fetch 复核覆盖率 → 写后自动 merge（上架后映射表自动补录/同步覆盖）
-wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原始nmId 与我方快照差集 → 我方前缀优先生成新 vc → 逐店上架 → 自动 fetch 复核 → 写后自动 merge
-（★ 改价/库存/下架/上架/清理 `--apply` 后均自动增量 merge 映射表；下架/清理会「消失即移除」对应商品）
+wb.py replicate      ⑥b 快照覆盖判断（vc×5店，默认不自动同步、用本地快照）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 加 --sync 才自动 fetch 复核覆盖率 + 写后 merge（上架后映射表自动补录/同步覆盖；否则仅打印提示）
+wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原始nmId 与我方快照差集（默认不自动同步、用本地快照）→ 我方前缀优先生成新 vc → 逐店上架 → 加 --sync 才自动 fetch 复核 + 写后 merge；否则仅打印提示
+（★ 改价/库存/下架/上架/清理写操作默认不自动同步/不写后验证/不自动 merge，完成后仅打印提示；加 `--sync` 才自动 fetch + 增量 merge 映射表；下架/清理的 merge 会「消失即移除」对应商品）
 
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）
 wb.py discount-scan  ⑧ WB 原生快速（模式1）：list/goods/filter 按折扣从高到低找 >阈值 → nm/upload/task 改 → 同接口回验；不碰 BCS
-wb.py discount       ⑧a BCS 全量（模式2，慢）：先同步 → 查（全量用 --threshold -1）→ 批量改 → 同步复核
+wb.py discount       ⑧a BCS 全量（模式2，慢）：默认不自动同步 → 查（全量用 --threshold -1）→ 批量改 → 仅提示；加 --sync 才前置同步 + 提交后同步复核
 wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
 wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）
 wb.py banned         ⑨b 查询被阻止商品（tableListImprovable 分页）→ dry-run → --apply moveNmsToTrash 移回收站 → count/列表自动复核

@@ -310,6 +310,13 @@ def run_merge(review_file=None):
     merge(review_file)
 
 
+def print_write_hint():
+    """写操作未加 --sync 时打印的提示：告知用户当前未做写后验证/同步/合并，以及如何补做。"""
+    print("\n[提示] 本次未做写后验证。因 WB/BCS 存在异步回填与延迟，当场验证不一定准确。")
+    print("       如需同步在架商品并合并到映射表，请运行：python wb.py fetch && python wb.py merge")
+    print("       （或在原写命令后加 --sync，命令内自动完成同步+合并）")
+
+
 def post_write_merge(fetch=True):
     """写后验证后自动增量合并映射表。fetch=True 时先全店同步拉取（拿最新快照）。
     merge 会做「消失即移除」：下架/清理后对应商品将从映射表移除。失败不中断主命令。"""

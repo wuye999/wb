@@ -637,10 +637,14 @@ def run(action, args):
         return
 
     run_apply(plans, action, auto_review=getattr(args, "auto_review", False))
-    # 改价/库存/下架 --apply 提交后：同步最新数据并增量合并映射表（下架商品消失→移除；改价→映射表价格同步）
+    # 改价/库存/下架 --apply 提交后：默认不自动同步/写后验证/合并（WB/BCS 异步回填，当场验证不准）。
+    # 只有加 --sync 才同步在架商品并增量合并映射表；否则仅打印提示。
     if action in ("price", "stock", "trash"):
         from . import mapping_sync
-        mapping_sync.post_write_merge()
+        if getattr(args, "sync", False):
+            mapping_sync.post_write_merge()  # fetch=True：全店同步+拉取+merge
+        else:
+            mapping_sync.print_write_hint()
 
 
 # 供 argparse 复用：给 price/stock/trash 三个子命令加筛选与通用参数
@@ -654,6 +658,8 @@ def add_ops_args(p, *, with_price=False, with_stock=False):
     p.add_argument("--shops", help="限定店铺ID（逗号分隔，默认全部已 fetch 店铺）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--yes", action="store_true", help="跳过不可逆操作确认")
+    p.add_argument("--sync", action="store_true",
+                   help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
     if with_price:
         p.add_argument("--price", type=int, help="目标价（默认 floor(商品价格表双倍售价)）")
         p.add_argument("--discount", type=int, help="折扣 0-100（不传=不改）")

@@ -94,7 +94,8 @@ python wb.py stock --name 冲牙器 --amount 999 --apply --yes
 python wb.py trash --name 某商品 --apply --yes
 
 # ⚠ 仓库默认莫斯科：库存/下架清库存默认只操作「莫斯科仓库」，成都仓库不操作（成都用 wb.py remote-wh 单独处理）
-# ⚠ 写后必做：改价/库存写 WB 侧，需再同步才在 BCS 可见
+# ⚠ 默认不自动同步/不写后验证：改价/库存写 WB 侧后需再同步才在 BCS 可见；执行完成会打印提示。
+#    加 --sync 让命令内自动完成「同步在架商品并合并映射表」，或稍后单独：
 python wb.py fetch && python wb.py merge
 ```
 - ✅ 成功：`结果: 成功 N · 失败 0`，明细在 `data/logs/ops_result.csv`。
@@ -104,15 +105,14 @@ python wb.py fetch && python wb.py merge
 
 场景：某商品只在 1-4 家店在架，其余店没有 → 自动把它上架到缺失的店铺（vendorCode 与源店一致、价格=源店现价、库存 999、直上）。
 
-> ⚠ **自动同步**：命令启动时会**自动先同步+拉取全部店铺**（WB→BCS，约 2 分钟），保证覆盖判断基于最新数据，无需手动 fetch。加 `--no-sync` 可跳过（用本地快照，覆盖判断可能滞后，不推荐）。
+> ⚠ **默认不自动同步**：命令启动时**不会**自动同步/拉取店铺，默认用本地快照判断覆盖（可能滞后）。加 **`--sync`** 才会先同步+拉取全部店铺（WB→BCS，约 2 分钟），保证覆盖判断基于最新数据；**需最新务必加 `--sync`**。
 
 ```bash
-python wb.py replicate                    # 自动同步后预览全部部分覆盖商品（vc/中文名/源店/价格/目标店）
-python wb.py replicate --prefix ZLTH --apply   # 按前缀码批量补齐
+python wb.py replicate                    # 预览全部部分覆盖商品（vc/中文名/源店/价格/目标店；不自动同步）
+python wb.py replicate --prefix ZLTH --apply --sync   # 按前缀码批量补齐（先同步最新快照）
 python wb.py replicate --name 冲牙器 --apply    # 按映射表中文名补齐
 python wb.py replicate --vc BCS-XXX-123 --apply # 单个 vc（目标店自动=缺失店）
 python wb.py replicate --shops 5273 --apply     # 只补指定店
-python wb.py replicate --no-sync          # 跳过自动同步（用本地快照，不推荐）
 python wb.py replicate --cn-stock "感应灯:0,充电线:100" --apply   # 指定中文名上架库存
 ```
 - 📌 **上架库存**：默认 999；`--cn-stock "中文名:库存,..."` 可指定任意中文名的上架库存（如无货商品传 `--cn-stock "感应灯:0,运动包:0"`）。
@@ -126,14 +126,13 @@ python wb.py replicate --cn-stock "感应灯:0,充电线:100" --apply   # 指定
 
 场景：拿到他人（同项目格式）映射表 → 按 **WB原始nmId**（vendorCode 末段数字，两代格式 `BCS-{随机4位}-{nm}` / `BCS-{前缀码}-{nm}` 通吃）比对，他人有、我方 5 店全无的商品上架到我的店铺。
 
-> ⚠ **自动同步**：命令启动时会**自动先同步+拉取全部店铺**（WB→BCS，约 2 分钟），保证差集判断基于最新数据（漏判会重复上架他人已有的商品），无需手动 fetch。加 `--no-sync` 可跳过（不推荐）。
+> ⚠ **默认不自动同步**：命令启动时**不会**自动同步/拉取店铺，默认用本地快照判断差集（可能滞后）。加 **`--sync`** 才会先同步+拉取全部店铺（WB→BCS，约 2 分钟），保证差集判断基于最新数据（漏判会重复上架他人已有的商品）；**需最新务必加 `--sync`**。
 
 ```bash
-python wb.py import-shelve 他人映射表.xlsx         # 自动同步后预览差集清单（含前缀来源标注）
+python wb.py import-shelve 他人映射表.xlsx         # 预览差集清单（含前缀来源标注；不自动同步）
 python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
-python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply   # 上架到指定店
-python wb.py import-shelve 他人映射表.xlsx --apply              # 全量上架到全部店
-python wb.py import-shelve 他人映射表.xlsx --no-sync            # 跳过自动同步（不推荐）
+python wb.py import-shelve 他人映射表.xlsx --shops 5273 --apply --sync   # 上架到指定店（先同步最新快照）
+python wb.py import-shelve 他人映射表.xlsx --apply --sync              # 全量上架到全部店（先同步）
 python wb.py import-shelve 他人映射表.xlsx --cn-stock "充电线:100" --apply   # 指定中文名上架库存
 ```
 - 📌 **上架库存**：默认 999；`--cn-stock "中文名:库存,..."` 可指定任意中文名的上架库存（如无货商品传 `--cn-stock "感应灯:0,运动包:0"`）。
@@ -171,6 +170,7 @@ python wb.py discount-scan --threshold 47 --target 46 --apply   # 自定义
 ```bash
 python wb.py discount --threshold -1 --apply --sync   # 全部在架商品 → 50%（含 0 折扣）
 ```
+> ⚠ **阈值与目标相等的坑**：若把 `--threshold` 设为目标值（如 `--threshold 10 --target 10`），当前折扣已 ≤10% 的商品会被忽略、**不会上调到 10%**（命令会显示"执行成功"但只改了高折扣商品）。只要想"把所有商品统一到目标折扣"，就用 `--threshold -1`。
 - ✅ 成功：`[汇总] 共 N 条待改`；日志 `data/logs/折扣快速改_*.csv` / `折扣修改_*.csv`。
 - ⚠ **改折扣也会触发价格审核**：`discount-scan/discount --apply` 之后**必跑 `python wb.py price-review`**（先 dry-run 预览、有货再 `--apply`）——降幅落 30-49.9% 区间的商品会进 WB 隔离区，不「应用新价格」则新价不生效（详见第 10 节）。
 
@@ -184,7 +184,7 @@ python wb.py clean --target all --apply    # 执行：先草稿箱，后回收�
 - ⚠ **`deleteAllSize` 对有库存商品会失败**（返回 `error:true` + `StockCount>0`，报 `content.api.errors.source.whileDeleting`），需等库存清零后再重试。
 - ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 已归零 Z`。
 
-> 📌 **写后自动合并**：`--apply` 执行完清理后会**自动**全店同步（fetch）+ 增量合并映射表（`wb.py merge`），本次清理掉的商品会从映射表移除（消失即移除）。如需保留某商品在映射表中，请先在映射表将其标记为「已排除清清单」再清理。
+> 📌 **写后合并（默认不自动）**：`--apply` 执行完清理**默认不自动同步/不合并**，只打印提示。加 **`--sync`** 才会自动全店同步（fetch）+ 增量合并映射表（`wb.py merge`），本次清理掉的商品会从映射表移除（消失即移除）。如需保留某商品在映射表中，请先在映射表将其标记为「已排除清清单」再清理。
 
 ## 9b. 查询并删除被阻止的商品（banned）
 

@@ -466,11 +466,11 @@ def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_in
 
 # ---------------- 主流程 ----------------
 def ensure_snapshots(args):
-    """前置自动同步：启动时先刷新全部店铺快照（WB→BCS 并发同步 + 逐店拉取，约 2 分钟），
-    保证覆盖/差集判断基于最新数据（不做时效校验，直接同步最新）。
-    --no-sync 可跳过（用本地快照，判断可能滞后）。"""
-    if getattr(args, "no_sync", False):
-        print("[前置同步] --no-sync 已指定，跳过同步，直接使用本地快照（覆盖判断可能滞后）")
+    """前置同步：启动时刷新全部店铺快照（WB→BCS 并发同步 + 逐店拉取，约 2 分钟）。
+    默认**不**自动同步，直接使用本地快照（覆盖/差集判断可能滞后）；
+    加 --sync 才先刷新全部店铺，保证判断基于最新数据。"""
+    if not getattr(args, "sync", False):
+        print("[前置同步] 未加 --sync，跳过同步，使用本地快照（覆盖/差集判断可能滞后；需最新请加 --sync）")
         return
     print("[前置同步] 刷新全部店铺快照（WB→BCS 同步 + 拉取，约 2 分钟）...")
     products.fetch_all()
@@ -689,8 +689,8 @@ def run(args):
     print(f"\n[汇总] 计划 {len(plans)} | 成功 {ok} | 跳过 {skip} | 失败 {fail}（{time.time() - t0:.0f}s）")
     print(f"明细：{csv_path}")
 
-    # ---- 写后验证：fetch 同步复核覆盖率 ----
-    if ok > 0 and not args.no_verify:
+    # ---- 写后验证：仅加 --sync 时 fetch 同步复核覆盖率（否则只打印提示，不自动做）----
+    if ok > 0 and getattr(args, "sync", False) and not args.no_verify:
         print("\n[写后验证] 触发全店同步 + 拉取（~1.5 分钟）...")
         try:
             products.fetch_all()
@@ -706,4 +706,7 @@ def run(args):
         # 写后验证已 fetch 最新快照 → 顺带增量合并映射表（上架后自动补录/同步覆盖）
         from . import mapping_sync
         mapping_sync.post_write_merge(fetch=False)
+    elif ok > 0:
+        from . import mapping_sync
+        mapping_sync.print_write_hint()
     return 0

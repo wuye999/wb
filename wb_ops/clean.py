@@ -271,7 +271,7 @@ def run(args):
         pairs = [(s, s["shopId"]) for s in wb_shops if s["shopId"] in bcs_shops]
         if wants:
             pairs = [p for p in pairs if p[1] in wants]
-        if not args.no_sync and args.apply:
+        if args.sync and args.apply:
             print("\n[同步] 刷新 BCS 缓存（约 40s）...")
             bcs.sync_shops_parallel([p[1] for p in pairs])
     if not pairs:
@@ -315,9 +315,12 @@ def run(args):
             print(f"[日志] {path}")
 
     if args.apply:
-        # 清理后同步最新数据并增量合并映射表（已删/已清商品从映射表移除）
+        # 清理后同步最新数据并增量合并映射表（已删/已清商品从映射表移除）——仅加 --sync 时自动执行
         from . import mapping_sync
-        mapping_sync.post_write_merge()
+        if args.sync:
+            mapping_sync.post_write_merge()
+        else:
+            mapping_sync.print_write_hint()
     else:
         print("\n（dry-run 未执行任何删除；确认清单后加 --apply 执行）")
     return 0

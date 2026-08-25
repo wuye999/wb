@@ -99,7 +99,7 @@ def run(args):
         print("[错误] 没有可处理的店铺")
         return 1
 
-    if not args.no_sync:
+    if args.sync:
         print("\n[同步] 刷新 BCS 缓存（约 50s）...")
         bcs.sync_shops_parallel([s["id"] for s in shops])
 
@@ -161,4 +161,8 @@ def run(args):
     print(f"\n[汇总] 共 {total} 条待改 | 日志: {csv_path}")
     if not args.apply:
         print("（dry-run 模式未提交任何修改；确认无误后加 --apply 执行）")
+        return 0
+    if not args.sync:
+        from . import mapping_sync
+        mapping_sync.print_write_hint()
     return 0

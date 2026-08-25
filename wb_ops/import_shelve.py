@@ -468,8 +468,8 @@ def run(args):
     print(f"\n[汇总] 计划 {len(plans)} | 成功 {ok} | 跳过 {skip} | 失败 {fail}（{time.time() - t0:.0f}s）")
     print(f"明细：{csv_path}")
 
-    # ---- 写后验证 ----
-    if ok > 0 and not args.no_verify:
+    # ---- 写后验证：仅加 --sync 时 fetch 同步复核（否则只打印提示，不自动做）----
+    if ok > 0 and getattr(args, "sync", False) and not args.no_verify:
         print("\n[写后验证] 触发全店同步 + 拉取（~1.5 分钟）...")
         try:
             products.fetch_all()
@@ -482,4 +482,7 @@ def run(args):
         # 写后验证已 fetch 最新快照 → 顺带增量合并映射表（上架后自动补录/同步覆盖）
         from . import mapping_sync
         mapping_sync.post_write_merge(fetch=False)
+    elif ok > 0:
+        from . import mapping_sync
+        mapping_sync.print_write_hint()
     return 0

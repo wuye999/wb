@@ -78,7 +78,8 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
-    p.add_argument("--no-sync", action="store_true", help="跳过启动时自动同步（默认自动 fetch 全部店铺，约 2 分钟）")
+    p.add_argument("--sync", action="store_true",
+                   help="启动前同步全部店铺 + 上架后复核并合并映射表（默认不自动同步/不写后验证，仅打印提示；用本地快照判断可能滞后，需最新务必加 --sync）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
     p.add_argument("--detail-source", default="synthetic",
@@ -92,7 +93,8 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个商品（0=不限）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
-    p.add_argument("--no-sync", action="store_true", help="跳过启动时自动同步（默认自动 fetch 全部店铺，约 2 分钟）")
+    p.add_argument("--sync", action="store_true",
+                   help="启动前同步全部店铺 + 上架后复核并合并映射表（默认不自动同步/不写后验证，仅打印提示；用本地快照判断可能滞后，需最新务必加 --sync）")
     p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
     p.add_argument("--detail-source", default="synthetic",
@@ -106,14 +108,14 @@ def build_parser():
     p.add_argument("--days-back", type=int, default=90, help="查询起始=N天前")
     p.add_argument("--sleep", type=float, default=1.0, help="活动间请求间隔秒")
 
-    p = sub.add_parser("discount", help="折扣改价（各店 >阈值 → 目标折扣）")
+    p = sub.add_parser("discount", help="折扣改价：各店 >阈值→目标（全量统一用 --threshold -1 --target N）")
     p.add_argument("--apply", action="store_true", help="真正提交（默认 dry-run）")
-    p.add_argument("--threshold", type=int, default=config.DISCOUNT_THRESHOLD_DEF, help="阈值（处理 > 该值）")
-    p.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣")
+    p.add_argument("--threshold", type=int, default=config.DISCOUNT_THRESHOLD_DEF, help="阈值：只处理折扣>该值的商品；要把所有在架商品（含0折扣）统一设为目标值，务必用 --threshold -1（负数）")
+    p.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣；注意若 --threshold >= --target，折扣已≤目标值的商品不会被处理（不会上调到目标）")
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
     p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
-    p.add_argument("--no-sync", action="store_true", help="跳过同步（缓存滞后会漏查！）")
-    p.add_argument("--sync", action="store_true", help="提交后同步复核")
+    p.add_argument("--sync", action="store_true",
+                   help="执行前同步 BCS 缓存 + 提交后同步复核（默认不自动同步/不写后验证，仅打印提示）")
 
     p = sub.add_parser("discount-scan", help="折扣快速改价（WB 原生，>阈值→目标，不做 BCS 同步）")
     p.add_argument("--apply", action="store_true", help="真正提交（默认 dry-run）")
@@ -135,7 +137,8 @@ def build_parser():
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
     p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条")
-    p.add_argument("--no-sync", action="store_true", help="跳过列表前同步")
+    p.add_argument("--sync", action="store_true",
+                   help="清理前同步 + 清理后自动合并映射表（默认不自动同步/不写后验证，仅打印提示）")
 
     p = sub.add_parser("price-review", help="价格审核：查看并应用新价格（降价 30-49.9%% 进审查的商品）")
     p.add_argument("--apply", action="store_true", help="真正应用新价格（默认 dry-run）")
