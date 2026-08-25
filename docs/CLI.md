@@ -47,7 +47,7 @@
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
 | `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
 | `discount` | 折扣改价**全量**（BCS，慢）：各店 >阈值→目标；**所有商品→50% 用 `--threshold -1`**；**默认不自动同步**，加 `--sync` 才前置同步 + 提交后同步复核；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--target` / `--shops` / `--sync` |
-| `discount-scan` | 折扣改价**快速**（WB 原生，**不做 BCS 同步**）：列表按折扣从高到低找 >阈值 → `nm/upload/task` 改 → 同接口回验；逐店逐商品（同 vc 各店折扣不同） | `--apply` / `--threshold`(默认50) / `--target`(默认50) / `--shops` / `--limit` |
+| `discount-scan` | 折扣改价**快速**（**混合引擎**）：WB 实时列表按折扣从高到低找 >阈值 → 快照可定位价的商品用 **BCS 批量改**（一次≤300，提速），快照缺失/无价的商品自动改走 **WB 单条**并提示（不做 BCS 全量同步）→ 同接口回验；逐店逐商品（同 vc 各店折扣不同） | `--apply` / `--threshold`(默认50) / `--target`(默认50) / `--shops` / `--limit` |
 | `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
 | `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
@@ -100,6 +100,8 @@ python wb.py promo-apply --apply           # 执行报名
 python wb.py discount                      # 预览 >50% 商品
 python wb.py discount --apply              # 执行 >50%→50%（默认不自动同步/不写后验证，完成后仅提示）
 python wb.py discount --threshold -1 --target 10 --apply --sync   # 把所有在架商品折扣统一为 10%（含 0 折扣；阈值取负可选中全部商品；--sync 前置同步+提交后复核）
+python wb.py discount-scan                  # ⚡ 快速改折扣（混合引擎，默认 >50%→50%）：预览（BCS批量/WB回退分类）
+python wb.py discount-scan --apply          # ⚡ 执行：快照可定位价→BCS批量，缺失/无价→WB单条+提示
 python wb.py price-review                  # ⚠ 报名/改折扣后必跑：预览隔离区待审商品
 python wb.py price-review --apply          # ⚠ 应用新价格（改折扣也会触发审核，不应用则新折扣不生效）
 python wb.py banned                        # 预览各店被阻止商品（WB 标记 banned）

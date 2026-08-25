@@ -158,13 +158,14 @@ python wb.py promo-apply --shops 5272 --apply   # 只报主号7
 
 打折有两种改法，按场景选用：
 
-**模式1 — 快速：仅把高于阈值的折扣改到目标（推荐日常用）**，走 WB 原生接口、**不做 BCS 同步**：
+**模式1 — 快速：仅把高于阈值的折扣改到目标（推荐日常用）**，混合引擎、**不做 BCS 全量同步**：
 ```bash
-python wb.py discount-scan                 # 预览 >50% 商品（WB 原生列表，从高到低，快）
+python wb.py discount-scan                 # 预览 >50% 商品（WB 实时列表，从高到低，快）
 python wb.py discount-scan --apply         # 执行
 python wb.py discount-scan --threshold 47 --target 46 --apply   # 自定义
 ```
-> 按店铺逐商品处理（同 vendorCode 各店折扣可能不同）。列表→`nm/upload/task` 改→同接口回验。每店通常个位数，速度远快于模式2。
+> 流程：WB 实时列表找 >阈值 → 本地快照能定位到价格的商品用 **BCS 批量改**（一次 ≤300，商品多时提速明显）→ 快照**缺失/无价**的商品自动改走 **WB 单条** `nm/upload/task`，并提示「该商品在本地快照/映射表中不存在或无价格，改用 WB 接口」→ 同一 WB 列表接口回验。按店铺逐商品处理（同 vendorCode 各店折扣不同），速度远快于模式2。
+> ⚠ 该命令不触发 BCS 同步，列表始终来自 WB 实时接口；BCS 批量需依赖**本地快照**提供当前价——若本地快照很久未更新，可先 `python wb.py fetch --no-sync` 刷新快照价格。
 
 **模式2 — 全量：所有商品（含 0 折扣）都改为目标折扣（不常用）**，走 BCS 全量同步（慢）：
 ```bash

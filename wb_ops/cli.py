@@ -117,7 +117,8 @@ def build_parser():
     p.add_argument("--sync", action="store_true",
                    help="执行前同步 BCS 缓存 + 提交后同步复核（默认不自动同步/不写后验证，仅打印提示）")
 
-    p = sub.add_parser("discount-scan", help="折扣快速改价（WB 原生，>阈值→目标，不做 BCS 同步）")
+    p = sub.add_parser("discount-scan",
+                       help="折扣快速改价（混合引擎：WB 实时列表 + BCS 批量改 >阈值→目标，快照缺失/无价的商品自动改走 WB 单条并提示）")
     p.add_argument("--apply", action="store_true", help="真正提交（默认 dry-run）")
     p.add_argument("--threshold", type=int, default=config.DISCOUNT_THRESHOLD_DEF, help="阈值（处理 > 该值）")
     p.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣")
