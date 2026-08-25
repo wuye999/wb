@@ -46,8 +46,9 @@ def shop_json_path(shop_id):
 # 主店（映射表主数据源）：None = 取店铺列表第一个（bcs.fetch_shop_list 顺序）；也可显式指定某个店铺 ID
 MAIN_SHOP = None
 
-# vendorCode 标准格式：BCS-{4位前缀}-{WB原始nmId}（中段=商品前缀，商品价格表「vendorCode前缀码」列登记）
-VC_PREFIX_RE = r"^BCS-([A-Z]{4})-\d+$"
+# vendorCode 标准格式：BCS-{4位前缀}-{WB原始nmId}（中段=商品前缀，商品价格表「vendorCode前缀码」列登记）。
+# 兼容他人表 `ozon-card-` 尾段：BCS-{前缀}-ozon-card-{WB原始nmId}（WB商品码不变，前缀提取取 group(1)，两格式通吃）。
+VC_PREFIX_RE = r"^BCS-([A-Z]{4})-(?:ozon-card-)?\d+$"
 
 # 改折扣默认阈值/目标（>50% → 50%）
 DISCOUNT_THRESHOLD_DEF = 50

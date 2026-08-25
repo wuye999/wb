@@ -52,6 +52,15 @@ def nm_of(vc):
     return tail if tail.isdigit() else None
 
 
+OZON_BADGE = "ozon-card"
+
+
+def vc_ozon_badge(vc):
+    """他人 vc 若为 BCS-{前缀}-ozon-card-{WB原始nmId} 格式 → 返回 'ozon-card'；否则 None。
+    用于 import-shelve 生成新 vc 时保留 ozon-card- 尾段（与 nm_of 提取的 WB商品码 k 相互独立）。"""
+    return OZON_BADGE if f"-{OZON_BADGE}-" in str(vc or "") else None
+
+
 # ---------------- 包装数据：商品价格表兜底 ----------------
 _pkg_cache = None
 
@@ -167,7 +176,9 @@ def diff_foreign(foreign):
             continue
         prefix = cn2prefix.get(item["cn"])
         if prefix:
-            new_vc, prefix_from = f"BCS-{prefix}-{item['k']}", "我方"
+            badge = vc_ozon_badge(item["vc"])
+            tail = f"{badge}-{item['k']}" if badge else item["k"]
+            new_vc, prefix_from = f"BCS-{prefix}-{tail}", "我方"
         else:
             new_vc, prefix_from = item["vc"], "他人"
         plans.append((item, new_vc, prefix_from))

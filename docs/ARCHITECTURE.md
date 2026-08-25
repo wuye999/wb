@@ -24,7 +24,7 @@
 │   ├── workbench.py           HTML 工作台渲染（合并 4 处重复模板）
 │   ├── ops.py                 一键操作：改价 / 库存 / 下架（两段式 dry-run；改价可 --auto-review 自动应用新价格）
 │   ├── replicate.py           跨店复制上架：部分覆盖 vc → 缺失店铺（vendorCode 与源店一致；WB detail 经 BCS 代理 + card.json CDN）
-│   ├── import_shelve.py       他人映射表导入上架：按 WB原始nmId 差集 → 我方前缀优先生成新 vc 上架（复用 replicate 的 WB 数据获取/仓库/记录）
+│   ├── import_shelve.py       他人映射表导入上架：按 WB原始nmId 差集 → 我方前缀优先生成新 vc 上架（复用 replicate 的 WB 数据获取/仓库/记录；支持他人 `BCS-{前缀}-ozon-card-{WB商品码}` 格式并保留 `ozon-card-` 尾段）
 │   ├── promo.py               促销报名
 │   ├── discount.py            折扣改价（>50%→50%）
 │   ├── banned.py              查询并删除被阻止的商品（WB banned：tableListImprovable 查询 / moveNmsToTrash 移回收站 / count 复核）
