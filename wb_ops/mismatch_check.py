@@ -73,6 +73,8 @@ body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f0f2f5;color:
 button.ghost{background:#fff;color:#c0392b}
 input[type=search]{padding:6px 10px;border:1px solid #ccc;border-radius:6px;min-width:220px}
 select[multiple]{padding:4px;border:1px solid #ccc;border-radius:6px;min-width:300px;min-height:180px;max-height:60vh}
+.cnfilter{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cnfilter .cn-summary{color:#7f8c8d;font-size:12px}
 .wrap{padding:16px}
 .stats{color:#7f8c8d;font-size:13px}
 .grp{background:#fff;border:1px solid #ddd;border-radius:8px;margin:12px 0;padding:10px 14px}
@@ -106,7 +108,13 @@ select[multiple]{padding:4px;border:1px solid #ccc;border-radius:6px;min-width:3
 <div class="bar">
   <b>货不对板筛查工作台</b>
   <span class="stats">共 <b id="total"></b> 条 · <b id="groups"></b> 个中文名商品 · 已勾选 <b id="picked" style="color:#c0392b"></b> 条</span>
-  <label>中文名筛选 <select multiple size="12" id="cnSelect" onchange="applyFilter()">CN_OPTIONS</select></label>
+  <div class="cnfilter" id="cnWrap">
+    <button id="cnToggle" class="ghost" onclick="toggleCn()" title="展开/收起中文名多选下拉">中文名筛选 ▸</button>
+    <span id="cnSummary" class="cn-summary">全部</span>
+    <div id="cnPanel" style="display:none">
+      <select multiple size="12" id="cnSelect" onchange="applyFilter();syncCnSummary()">CN_OPTIONS</select>
+    </div>
+  </div>
   <input type="search" id="q" placeholder="搜索 vc / 中文名 / 俄文标题…" oninput="applyFilter()">
   <button id="btnPicked" class="ghost" onclick="togglePicked()">只看已勾选</button>
   <button class="ghost" onclick="exportPicked()">导出勾选 vc (JSON)</button>
@@ -181,6 +189,18 @@ function applyFilter(){
     });
     g.style.display = (visible && okCn) ? '' : 'none';
   });
+}
+function cnSummaryText(){
+  const n = document.getElementById('cnSelect').selectedOptions.length;
+  return n ? '已选 ' + n + ' 个中文名' : '全部';
+}
+function syncCnSummary(){ document.getElementById('cnSummary').textContent = cnSummaryText(); }
+function toggleCn(){
+  const p = document.getElementById('cnPanel');
+  const t = document.getElementById('cnToggle');
+  const showing = p.style.display !== 'none';
+  p.style.display = showing ? 'none' : 'block';
+  t.textContent = showing ? '中文名筛选 ▸' : '中文名筛选 ▾';
 }
 function togglePicked(){
   onlyPicked = !onlyPicked;
