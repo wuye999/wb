@@ -97,9 +97,9 @@ python wb.py stock --name 冲牙器 --amount 999 --apply --yes
 python wb.py trash --name 某商品 --apply --yes
 
 # ⚠ 仓库默认莫斯科：库存/下架清库存默认只操作「莫斯科仓库」，成都仓库不操作（成都用 wb.py remote-wh 单独处理）
-# ⚠ 默认不自动同步/不写后验证：改价/库存写 WB 侧后需再同步才在 BCS 可见；执行完成会打印提示。
-#    加 --sync 让命令内自动完成「同步在架商品并合并映射表」，或稍后单独：
-python wb.py fetch && python wb.py merge
+# ⚠ 同步与写后验证（默认关闭）：改价/库存/下架/折扣/清理/上架默认【不同步、不写后验证、不自动合并映射表】，执行完成仅打印提示。
+#    日常无需同步；只有确实需要 BCS 缓存立刻反映最新结果时才加 --sync，或在需要时单独执行 fetch+merge
+python wb.py fetch && python wb.py merge   # 仅当你需要同步在架商品并重建映射表时才跑（非每次写操作）
 ```
 - ✅ 成功：`结果: 成功 N · 失败 0`，明细在 `data/logs/ops_result.csv`。
 - 📌 每个命令先去 `--apply` 跑 dry-run 预览清单。
@@ -123,7 +123,7 @@ python wb.py replicate --cn-stock "感应灯:0,充电线:100" --apply   # 指定
 - 📌 防重复四层（快照覆盖 → 本地记录 → 实时查重 → BCS 服务端幂等），重复执行安全，已存在的店自动跳过。
 - 📌 多目标店一次请求提交（BCS 已恢复多店一次提交：一个 vc 一次请求同时上架到全部目标店，提速；直接信任 code==200 即整批成功）。
 - 明细：`data/logs/复制上架_*.csv`；本地提交记录 `data/state/复制上架记录.json`。
-- 📌 上架后跑 `python wb.py fetch && python wb.py merge`，新店商品自动进映射表（vc 已知，店铺覆盖矩阵自动更新）。
+- 📌 上架后通常无需立刻同步；只有需要让新店商品立刻进映射表时才 `fetch && merge`（或用 `--sync`），否则下批 ops 会按本地快照/映射表走。
 
 ## 6c. 他人映射表导入上架（import-shelve）——别人有、我没有的商品上架到我的店
 

@@ -63,7 +63,8 @@
    python wb.py promo-apply                 # 促销报名 dry-run
    python wb.py clean --target all          # 清理草稿/回收站 dry-run
    ```
-   > ⚠ 写操作（改价/折扣/库存/下架/清理/上架）**默认不自动 BCS 同步、不自动写后验证、不自动合并映射表**，执行完成仅打印提示；需要同步在架商品并合并映射表时加 **`--sync`**（或单独 `wb.py fetch && wb.py merge`），因 WB/BCS 异步回填，当场验证不一定准确。
+   > ⚠ **同步与写后验证（默认关闭）**：写操作（改价 price/库存 stock/下架 trash/折扣 discount/清理 clean/上架 replicate、import-shelve）默认**不做 BCS 同步、不做写后验证、不自动合并映射表**，执行完成仅在控制台打印一行提示。日常高频写操作**无需同步**；只有当你确实需要 BCS 缓存立刻反映最新结果（如刚上架想立刻看店铺覆盖、查漏补缺）时才显式加 **`--sync`**，或单独执行 `wb.py fetch`（同步+拉快照）与 `wb.py merge`（合并映射表）。
+   > 例外：`banned`（WB 快通道自动复核，`--no-verify` 关闭）与 `discount-scan`（同接口回验）内置轻量复核，非慢的 BCS 全量同步，默认保留。
 4. **任何异常**：先看 `data/logs/`，别重复盲跑；遇到 401/403 去读 [CREDENTIALS.md](CREDENTIALS.md)。
 
 > 完整命令参考与成功/失败判据见 [CLI.md](CLI.md) 和 [USAGE.md](USAGE.md)。

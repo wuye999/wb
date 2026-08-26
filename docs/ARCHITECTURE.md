@@ -114,7 +114,7 @@ wb.py mapping        ② 5 店并集按 vc 去重 → 四分类（已知跳过/�
    （人工）          ③ 打开 workbench HTML 勾选归属/排除 → 导出 统一审核.json
 wb.py merge [审核]   ④ 增量合并 → 继承旧归属 + 追加审核 + 前缀补录 + 消失即移除 → 重建 8-Sheet 映射表
 wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 默认不自动同步/合并（仅提示），加 --sync 自动 fetch + merge（改价/库存/下架提交后自动增量合并映射表）
-wb.py fetch + merge  ⑥ 写后验证（改价/库存写 WB 侧，需再同步才在 BCS 可见；下架立即可见）
+wb.py fetch + merge  ⑥ 写后验证（可选步骤，仅当需要 BCS 缓存反映最新结果时才执行；改价/库存写 WB 侧需再同步才在 BCS 可见，下架立即可见；默认写操作不要求做）
 wb.py replicate      ⑥b 快照覆盖判断（vc×5店，默认不自动同步、用本地快照）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 加 --sync 才自动 fetch 复核覆盖率 + 写后 merge（上架后映射表自动补录/同步覆盖；否则仅打印提示）
 wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原始nmId 与我方快照差集（默认不自动同步、用本地快照）→ 我方前缀优先生成新 vc → 一次请求多店上架（BCS 已恢复多店一次提交）→ 加 --sync 才自动 fetch 复核 + 写后 merge；否则仅打印提示
 （★ 改价/库存/下架/上架/清理写操作默认不自动同步/不写后验证/不自动 merge，完成后仅打印提示；加 `--sync` 才自动 fetch + 增量 merge 映射表；下架/清理的 merge 会「消失即移除」对应商品）

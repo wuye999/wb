@@ -9,7 +9,7 @@
 - **退出码**：`0` 正常（含 dry-run / 违规跳过）｜`1` 参数/环境错误｜`130` 中断。
 - **dry-run 默认**：所有写操作（改价/库存/下架/报名/折扣/清理）不加 `--apply` 只打印清单，不调写接口。
 - **不可逆确认**：`trash`、`stock --amount 0`、`banned --apply`（移回收站）执行时需 `--yes`（或交互输入 y）。
-- **写后验证（默认不自动）**：改价/库存写 WB 侧，需再 `fetch`（带同步）才在 BCS 可见；下架/回收站立即可见；`banned --apply` 自动复核 WB count（bannedCard 前后对比 + 重查列表）。**所有写操作（改价 price、库存 stock、下架 trash、折扣 discount、清理 clean、上架 replicate/import-shelve）默认不自动 BCS 同步 / 不写后验证 / 不自动 merge**（因 WB/BCS 异步回填，当场验证不一定准确，避免反复「修改→同步→核查」）。命令执行完成后**仅打印提示**，告知可运行 `python wb.py fetch && python wb.py merge` 补做，或在原命令后加 **`--sync`** 让命令内自动完成「同步在架商品并合并映射表（fetch+merge）」（下架/清理会「消失即移除」对应商品）。`banned` 的 WB 原生复核除外（不做 BCS 同步、不耗时，仍默认自动复核）。`fetch`/`orders` 本身是显式同步/查询工具，保持默认同步 + `--no-sync`，不受本次改动影响。
+- **写后验证（默认不自动）**：改价/库存写 WB 侧，需再 `fetch`（带同步）才在 BCS 可见；下架/回收站立即可见；`banned --apply` 自动复核 WB count（bannedCard 前后对比 + 重查列表）。**所有写操作（改价 price、库存 stock、下架 trash、折扣 discount、清理 clean、上架 replicate/import-shelve）默认不自动 BCS 同步 / 不写后验证 / 不自动 merge**（因 WB/BCS 异步回填，当场验证不一定准确，避免反复「修改→同步→核查」）。命令执行完成后**仅打印提示**。**日常写操作无需频繁同步**——只有当你确实需要 BCS 缓存立刻反映最新结果时才加 **`--sync`**（命令内自动 fetch+merge；下架/清理会「消失即移除」对应商品），或单独运行 `python wb.py fetch && python wb.py merge` 补做。例外（保留默认）：`banned` 的 WB 原生复核（不做慢的 BCS 同步、快且不耗时）与 `discount-scan` 的同接口回验，均非 BCS 全量同步。`fetch`/`orders` 本身是显式同步/查询工具，保持默认同步 + `--no-sync`，不受本次改动影响。
 - **仓库默认莫斯科**：改库存 / 下架清库存 / 回收站归零 / 上架等所有仓库操作**默认只操作「莫斯科仓库」**（`config.DEFAULT_WAREHOUSE_NAME`，按仓库 name 匹配），**成都仓库默认不操作**。成都仓库（国内仓）需单独用 `wb.py remote-wh` 命令处理；切换默认仓库改 `config.py` 的 `DEFAULT_WAREHOUSE_NAME`。
 
 ## 二、子命令全表
