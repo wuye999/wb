@@ -431,7 +431,9 @@ def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_in
         "status": "1",
         "collectionType": "0",
         "shopDatas": [{
-            "nmId": nm_id,
+            # ★ v1.2.2（2026-08-26）：shopDatas[].nmId 提交前必须置空 null——新版后端按 nmId 判「是否已有卡」，
+            #   带值会被当「更新已有卡」处理导致上架失败；WB 原始 nmId 由下方 sourceSku 保留，不影响查重/匹配。
+            "nmId": None,
             "wbDetail": json.dumps(wb_detail, ensure_ascii=False, separators=(",", ":")),
             "name": src_row.get("title") or "",
             "subjectId": subject_id,
