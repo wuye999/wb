@@ -143,7 +143,7 @@ def sync_shop(shop_id, filter_type="ALL"):
     return task_id
 
 
-def wait_sync_done(task_id, shop_id=None, timeout=240, interval=2.5, quiet=False):
+def wait_sync_done(task_id, shop_id=None, timeout=600, interval=2.5, quiet=False):
     """轮询同步进度直到完成（data.status==1）。超时抛错。"""
     start = time.time()
     while time.time() - start < timeout:
@@ -158,7 +158,7 @@ def wait_sync_done(task_id, shop_id=None, timeout=240, interval=2.5, quiet=False
     raise TimeoutError(f"同步超时 task={task_id}")
 
 
-def sync_shops_parallel(shop_ids, timeout=240, interval=2.5, max_workers=5):
+def sync_shops_parallel(shop_ids, timeout=600, interval=2.5, max_workers=5):
     """并发同步多个店铺（同时触发 + 并发轮询进度），全部完成后返回。
     返回 {shop_id: task_id}；单店同步失败打印警告降级（不中断其他店）。"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
