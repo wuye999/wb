@@ -186,10 +186,10 @@ def diff_foreign(foreign):
 
 
 # ---------------- 上架请求体 ----------------
-def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info, overrides=None):
-    """构造 /system/wbCollection/wb/new 请求体（单目标店）。返回 (payload, err)。
+def build_import_payload(item, new_vc, target_sids, warehouses, detail, card_info, overrides=None):
+    """构造 /system/wbCollection/wb/new 请求体（多目标店一次请求）。返回 (payload, err)。
     数据源：他人表列 → WB detail / card.json 兜底；价格 = floor(双倍售价)；sizes 只取第 1 条。
-    overrides：中文名→库存覆盖（--cn-stock）。"""
+    warehouses：{sid: warehouseId}，覆盖全部 target_sids；overrides：中文名→库存覆盖（--cn-stock）。"""
     nm_id = int(item["nm"])
     # 价格：floor(双倍售价)
     if item["dp"] is None or float(item["dp"]) <= 0:
@@ -245,8 +245,8 @@ def build_import_payload(item, new_vc, sid, warehouse_id, detail, card_info, ove
     parent_id = detail.get("subjectParentId") or ((card_info or {}).get("data") or {}).get("subject_root_id") or 0
     parent_name = (card_info or {}).get("subj_root_name") or ""
 
-    shop_arr = [{"id": sid, "warehouseId": warehouse_id,
-                 "warehouseQuantity": replicate.stock_for(item["cn"], overrides)}]
+    shop_arr = [{"id": sid, "warehouseId": warehouses[sid],
+                 "warehouseQuantity": replicate.stock_for(item["cn"], overrides)} for sid in target_sids]
     payload = {
         "shop": json.dumps(shop_arr, ensure_ascii=False, separators=(",", ":")),
         "offerDIY": "",
@@ -445,33 +445,33 @@ def run(args):
             fail += 1
             continue
 
-        # 4) 构造 + 逐店提交（BCS 多店 bug：必须每店单独请求）
-        for sid in valid:
-            payload, err = build_import_payload(item, new_vc, sid, warehouses[sid], detail, card_info, overrides)
-            if payload is None:
-                fail += 1
-                print(f"  {tag} [失败] nm={nm} 店{sid}: {err}")
-                writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "失败", err])
-                continue
+        # 4) 构造 + 一次提交全部目标店（BCS 已恢复多店一次提交：shop 数组带全部目标店，提速）
+        valid_str = ",".join(map(str, valid))
+        payload, err = build_import_payload(item, new_vc, valid, warehouses, detail, card_info, overrides)
+        if payload is None:
+            fail += 1
+            print(f"  {tag} [失败] nm={nm} 店{valid_str}: {err}")
+            writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], valid_str, shop_price, stk, "失败", err])
+        else:
             try:
                 resp = bcs.http_post_json(f"{bcs.base_url()}/system/wbCollection/wb/new", payload)
                 if resp.get("code") == 200:
                     ok += 1
                     stk_tag = "（0库存）" if stk == 0 else ""
-                    print(f"  {tag} [成功] {new_vc} → 店{sid}（¥{shop_price}，{prefix_from}前缀{stk_tag}）")
-                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "成功", ""])
-                    records.setdefault(k, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"  {tag} [成功] {new_vc} → 店{valid_str}（¥{shop_price}，{prefix_from}前缀{stk_tag}）")
+                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], valid_str, shop_price, stk, "成功", ""])
+                    for sid in valid:
+                        records.setdefault(k, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     replicate._save_records(records)
                 else:
                     fail += 1
                     msg = resp.get("msg") or f"code={resp.get('code')}"
-                    print(f"  {tag} [失败] nm={nm} 店{sid}: {msg}")
-                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "失败", msg])
+                    print(f"  {tag} [失败] nm={nm} 店{valid_str}: {msg}")
+                    writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], valid_str, shop_price, stk, "失败", msg])
             except Exception as e:
                 fail += 1
-                print(f"  {tag} [失败] nm={nm} 店{sid}: {e}")
-                writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], str(sid), shop_price, stk, "失败", str(e)])
-            time.sleep(args.interval)
+                print(f"  {tag} [失败] nm={nm} 店{valid_str}: {e}")
+                writer.writerow([now, nm, cn, new_vc, prefix_from, item["vc"], valid_str, shop_price, stk, "失败", str(e)])
         if i < len(plans):
             time.sleep(args.interval)
 

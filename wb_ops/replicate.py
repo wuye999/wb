@@ -652,36 +652,35 @@ def run(args):
             fail += 1
             continue
 
-        # 4) 构造 + 逐店提交
-        # ★ BCS 平台 bug（2026-08-20 前后）：shop 数组带多店一次提交返回 200 但静默不生效
-        #   （4 店对照实验：一次提交全部未创建；逐店提交立即生效）。后续 BCS 修正后可恢复
-        #   多店一次提交（提效），恢复前先用小批量多店提交验证 vendorCode 确实创建。
-        for sid in targets:
-            payload, err = build_payload(vc, src_sid, src_row, [sid], warehouses, detail, card_info, nm_id, cn, overrides)
-            if payload is None:
-                fail += 1
-                print(f"  {tag} [失败] {vc} 店{sid}: {err}")
-                writer.writerow([now, vc, cn, src_sid, str(sid), price, "失败", err])
-                continue
+        # 4) 构造 + 一次提交全部目标店
+        # ★ BCS 已恢复多店一次提交：shop 数组带全部目标店（原 2026-08-20 多店静默失效 bug 已修复），
+        #   一个 vc 一次请求同时上架到全部目标店，提速。按用户确认：直接信任 code==200 即整批成功，不做逐店回验。
+        targets_str = ",".join(map(str, targets))
+        payload, err = build_payload(vc, src_sid, src_row, targets, warehouses, detail, card_info, nm_id, cn, overrides)
+        if payload is None:
+            fail += 1
+            print(f"  {tag} [失败] {vc} 店{targets_str}: {err}")
+            writer.writerow([now, vc, cn, src_sid, targets_str, price, "失败", err])
+        else:
             try:
                 resp = bcs.http_post_json(f"{bcs.base_url()}/system/wbCollection/wb/new", payload)
                 if resp.get("code") == 200:
                     ok += 1
-                    print(f"  {tag} [成功] {vc} → 店{sid}（¥{price}）")
-                    writer.writerow([now, vc, cn, src_sid, str(sid), price, "成功", ""])
-                    # 本地记录：防缓存滞后窗口内重复提交
-                    records.setdefault(vc, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"  {tag} [成功] {vc} → 店{targets_str}（¥{price}）")
+                    writer.writerow([now, vc, cn, src_sid, targets_str, price, "成功", ""])
+                    # 本地记录：防缓存滞后窗口内重复提交（一次提交覆盖全部目标店）
+                    for sid in targets:
+                        records.setdefault(vc, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     _save_records(records)
                 else:
                     fail += 1
                     msg = resp.get("msg") or f"code={resp.get('code')}"
-                    print(f"  {tag} [失败] {vc} 店{sid}: {msg}")
-                    writer.writerow([now, vc, cn, src_sid, str(sid), price, "失败", msg])
+                    print(f"  {tag} [失败] {vc} 店{targets_str}: {msg}")
+                    writer.writerow([now, vc, cn, src_sid, targets_str, price, "失败", msg])
             except Exception as e:
                 fail += 1
-                print(f"  {tag} [失败] {vc} 店{sid}: {e}")
-                writer.writerow([now, vc, cn, src_sid, str(sid), price, "失败", str(e)])
-            time.sleep(args.interval)
+                print(f"  {tag} [失败] {vc} 店{targets_str}: {e}")
+                writer.writerow([now, vc, cn, src_sid, targets_str, price, "失败", str(e)])
         if i < len(plans):
             time.sleep(args.interval)
 
