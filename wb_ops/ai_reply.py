@@ -57,7 +57,7 @@ def generate_reply(question, product_info, cfg):
                 "temperature": 0.6,
                 "max_tokens": max_tokens,
             },
-            timeout=180,
+            timeout=300,
         )
         if resp.status_code != 200:
             return None

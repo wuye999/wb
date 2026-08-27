@@ -89,6 +89,13 @@ class Credentials:
         except (TypeError, ValueError):
             return 90
 
+    @property
+    def ai_max_tokens(self):
+        try:
+            return int(self.ai.get("max_tokens") or 2000)
+        except (TypeError, ValueError):
+            return 2000
+
     # ---- WB 卖家后台 cookie 三件套 ----
     def wb_shops(self):
         return self.shops

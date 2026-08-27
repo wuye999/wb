@@ -217,7 +217,8 @@ def run(args):
         return 0
 
     # 后台AI模式（原全自动）
-    cfg = {"base_url": cred.ai_base_url, "model": cred.ai_model, "api_key": cred.ai_key}
+    cfg = {"base_url": cred.ai_base_url, "model": cred.ai_model, "api_key": cred.ai_key,
+           "max_tokens": cred.ai_max_tokens}
     if args.apply and not cfg["api_key"]:
         print("[错误] 后台模式 --apply 需要配置 LLM API key（credentials.json 的 ai.api_key）")
         return 1
