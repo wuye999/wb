@@ -124,7 +124,7 @@ wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 
 wb.py discount-scan  ⑧ WB 实时（模式1，混合引擎）：list/goods/filter 按折扣从高到低找 >阈值 → 本地快照可定位价的商品经 BCS shopKeeper/price/batch 批量改（一次≤300）→ 快照缺失/无价回退 WB nm/upload/task 单条 + 提示 → 同一列表回验；不触发 BCS 全量同步
 wb.py discount       ⑧a BCS 全量（模式2，慢）：默认不自动同步 → 查（全量用 --threshold -1）→ 批量改 → 仅提示；加 --sync 才前置同步 + 提交后同步复核
 wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
-wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）
+wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）；回收站统计以 countByFilter(TRASH) 实时计数为准（list(TRASH) 为列表缓存可能滞后）
 wb.py banned         ⑨b 查询被阻止商品（tableListImprovable 分页）→ dry-run → --apply moveNmsToTrash 移回收站 → count/列表自动复核
 wb.py daily          ⑩ morning=报名+改价（含价格审核）/ check=只改价（含价格审核）（可手动跑，或仅在主动运行 wb.py schedule 后由计划任务 9:00/11/15/19 点触发；默认不建计划任务）
 ```

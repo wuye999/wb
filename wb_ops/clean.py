@@ -146,11 +146,15 @@ def process_basket(shop, sid, wb_session, args, rows):
     name = shop["shopName"]
     st = {"total": 0, "deleted": 0, "failed": 0, "zeroed": 0}
     print(f"\n=== 店铺 {name}({sid}) 回收站 ===")
+    # ★ 数量权威用实时计数器 countByFilter（BCS 后台同源）；list(TRASH) 为列表缓存，可能滞后
+    count = bcs.count_by_filter(sid).get("TRASH", 0)
     trash = bcs.fetch_shop_products(sid, "TRASH")
-    if not trash:
+    if len(trash) != count:
+        print(f"  [提示] list缓存 {len(trash)} 条 与 实时计数 {count} 条不一致（以实时计数 countByFilter 为准）")
+    if count == 0 and not trash:
         print("  回收站为空")
         return st
-    st["total"] = len(trash)
+    st["total"] = count
     row_map = {r.get("nmId"): r for r in trash if r.get("nmId")}
     # 识别有库存商品（有库存/在途的删不掉，先归零）
     stocked = []
@@ -165,7 +169,7 @@ def process_basket(shop, sid, wb_session, args, rows):
             stocked.append(nid)
     if args.limit > 0:
         stocked = stocked[: args.limit]
-    print(f"  [列表] 回收站 {len(trash)} 条，其中有库存 {len(stocked)} 个将先归零")
+    print(f"  [列表] 回收站 {count} 条（实时计数），其中有库存 {len(stocked)} 个将先归零")
 
     if not args.apply:
         for r in trash:
@@ -202,6 +206,9 @@ def process_basket(shop, sid, wb_session, args, rows):
               f"（已清空 {len(cleared_nm)} 个，仍有 {stock_count} 个有库存未清空）")
     else:
         print(f"  [结果] 已清空 {len(cleared_nm)} 个")
+    # 复核：清空前 count → 清空后实时计数（>0 为平台被拒删残留：有库存/在途/成都仓，订单完成后再清）
+    after = bcs.count_by_filter(sid).get("TRASH", 0)
+    print(f"  [复核] 实时计数 {count} → {after}（>0 为平台被拒删残留，非命令失败）")
     return st
 
 

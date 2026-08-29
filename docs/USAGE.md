@@ -185,7 +185,9 @@ python wb.py clean --target all            # 预览
 python wb.py clean --target all --apply    # 执行：先草稿箱，后回收站
 ```
 - 回收站规则：**一键清空**（`deleteAllSize`）——先对回收站里有库存的商品归零，再一键清空整店回收站；草稿箱按 UUID 逐条删除。
+- 📌 **回收站数量判据以 `countByFilter(TRASH)` 实时计数为准**（工具打印 `回收站 N 条（实时计数）`；`list(TRASH)` 是列表缓存，可能滞后于实时，两值不一致会打印提示）。清理**不强制 `--sync`**。
 - ⚠ **`deleteAllSize` 对有库存商品会失败**（返回 `error:true` + `StockCount>0`，报 `content.api.errors.source.whileDeleting`），需等库存清零后再重试。
+- 📌 一键清空后工具会复核实时计数 `before → after`；`after` 仍>0 为平台被拒删残留（有库存/在途/成都仓库存），订单完成后再清，**非命令失败**。
 - ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 已归零 Z`。
 
 > 📌 **写后合并（默认不自动）**：`--apply` 执行完清理**默认不自动同步/不合并**，只打印提示。加 **`--sync`** 才会自动全店同步（fetch）+ 增量合并映射表（`wb.py merge`），本次清理掉的商品会从映射表移除（消失即移除）。如需保留某商品在映射表中，请先在映射表将其标记为「已排除清清单」再清理。

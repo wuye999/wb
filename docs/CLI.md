@@ -48,7 +48,7 @@
 | `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
 | `discount` | 折扣改价**全量**（BCS，慢）：各店 >阈值→目标；**所有商品→50% 用 `--threshold -1`**；**默认不自动同步**，加 `--sync` 才前置同步 + 提交后同步复核；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--target` / `--shops` / `--sync` |
 | `discount-scan` | 折扣改价**快速**（**混合引擎**）：WB 实时列表按折扣从高到低找 >阈值 → 快照可定位价的商品用 **BCS 批量改**（一次≤300，提速），快照缺失/无价的商品自动改走 **WB 单条**并提示（不做 BCS 全量同步）→ 同接口回验；逐店逐商品（同 vc 各店折扣不同） | `--apply` / `--threshold`(默认50) / `--target`(默认50) / `--shops` / `--limit` |
-| `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
+| `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**回收站数量以 `countByFilter(TRASH)` 实时计数为准**（`list(TRASH)` 为列表缓存可能滞后，不一致会提示）；一键清空后实时计数仍>0 为平台被拒删残留（有库存/在途/成都仓，订单完成后再清，非命令失败）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
 | `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
