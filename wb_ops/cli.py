@@ -17,6 +17,7 @@ from . import config
 from . import cookies
 from . import daily
 from . import dimension
+from . import dims_check
 from . import discount
 from . import discount_scan
 from . import import_shelve
@@ -127,9 +128,19 @@ def build_parser():
     p.add_argument("--name", default="", help="商品价格表产品中文名包含")
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部已 fetch 店铺）")
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
+    p.add_argument("--dims", default="",
+                   help="自定义尺寸/毛重：'长*宽*高/毛重'（如 8*14*26/0.3），统一设给当前选定的 vc；提供则不再依赖价格表尺寸（未提供回退价格表）。使用 --dims 时必须配合 --vc/--name/--prefix 圈定")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
     p.add_argument("--sync", action="store_true",
                    help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
+
+    p = sub.add_parser("dims-check",
+                       help="查询 WB 尺寸偏差待验证商品列表（只读，不改数据）；按映射表中文名筛选，供 dimension 单独测试尺寸")
+    p.add_argument("--name", default="", help="映射表中文名包含筛选（如 视黄醇面霜）")
+    p.add_argument("--type", choices=["dims", "weight", "all"], default="dims",
+                   help="dims=尺寸偏差 / weight=重量偏差 / all=两者合并去重")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部 WB 店铺）")
+    p.add_argument("--limit", type=int, default=0, help="每店最多返回 N 条（0=全部）")
 
     p = sub.add_parser("discount-scan",
                        help="折扣快速改价（混合引擎：WB 实时列表 + BCS 批量改 >阈值→目标，快照缺失/无价的商品自动改走 WB 单条并提示）")
@@ -246,6 +257,8 @@ def dispatch(args):
         return discount.run(args)
     if cmd == "dimension":
         return dimension.run(args)
+    if cmd == "dims-check":
+        return dims_check.run(args)
     if cmd == "discount-scan":
         return discount_scan.run(args)
     if cmd == "banned":

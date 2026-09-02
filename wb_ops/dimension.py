@@ -2,15 +2,16 @@
 """
 wb_ops 批量修改尺寸（dimension）
 
-按商品价格表「尺寸」列（长*宽*高/毛重）统一修改各店商品尺寸：
-- 数据源：商品价格表尺寸 → 映射表 state(vc→中文名) → 各店快照 nmId。
-- 接口：POST {base}/shopKeeper/dimension/batch，尺寸/毛重数值原样透传价格表值（长宽高 cm、毛重 kg，可为小数）。
+按商品价格表「尺寸」列（长*宽*高/毛重）统一修改各店商品尺寸；也可用 --dims 自定义尺寸/毛重：
+- 数据源：商品价格表尺寸 → 映射表 state(vc→中文名) → 各店快照 nmId；或 --dims 直接指定（统一值，配 --vc/--name/--prefix 圈定）。
+- 接口：POST {base}/shopKeeper/dimension/batch，尺寸/毛重数值原样透传（长宽高 cm、毛重 kg，可为小数）。
 
-用法：wb.py dimension [--vc|--prefix|--name] [--shops] [--limit] [--apply] [--sync]
+用法：wb.py dimension [--vc|--prefix|--name] [--shops] [--limit] [--dims '长*宽*高/毛重'] [--apply] [--sync]
 安全：默认 dry-run；--apply 执行；--sync 执行后同步并合并映射表（默认仅打印提示）。
 """
 import csv
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -30,6 +31,20 @@ RESET = "\033[0m"
 CHUNK = 300
 SHOP_SLEEP = 0.6
 BATCH_SLEEP = 0.15
+
+_DIM_RE = re.compile(r"^([\d.]+)\s*\*\s*([\d.]+)\s*\*\s*([\d.]+)\s*/\s*([\d.]+)$")
+
+
+def _parse_dims(s):
+    """解析 --dims：'长*宽*高/毛重' → (L,W,H,wt)；空串返回 None；非法格式报错退出。"""
+    if not s or not s.strip():
+        return None
+    m = _DIM_RE.match(s.strip())
+    if not m:
+        print(f"[错误] --dims 格式非法：'{s}'，应为 '长*宽*高/毛重'（例 8*14*26/0.3）")
+        sys.exit(1)
+    return (float(m.group(1)), float(m.group(2)),
+            float(m.group(3)), float(m.group(4)))
 
 
 def _resolve_filters(args, state, boss):
@@ -62,8 +77,8 @@ def _resolve_filters(args, state, boss):
     return sorted(state.keys())
 
 
-def build_plans(vcs, shops, state, pkg):
-    """逐店组装改尺寸计划 + 跳过统计。"""
+def build_plans(vcs, shops, state, pkg, dims=None):
+    """逐店组装改尺寸计划 + 跳过统计。dims=(L,W,H,wt) 时优先用它，不再查价格表。"""
     plans = []
     tracker = ops.SkipTracker()
     for sid in shops:
@@ -81,14 +96,19 @@ def build_plans(vcs, shops, state, pkg):
                 tracker.add(sid, vc, "nmId 为空")
                 continue
             cn = state.get(vc, {}).get("cn", "")
-            p = pkg.get(cn)
-            if not p:
-                tracker.add(sid, vc, f"中文名「{cn or '-'}」无商品价格表尺寸")
-                continue
-            L, W, H, wt = p
+            if dims is not None:
+                L, W, H, wt = dims
+                src = "自定义"
+            else:
+                p = pkg.get(cn)
+                if not p:
+                    tracker.add(sid, vc, f"中文名「{cn or '-'}」无商品价格表尺寸")
+                    continue
+                L, W, H, wt = p
+                src = "价格表"
             items.append({"vc": vc, "cn": cn, "nmId": nm_id,
                           "length": L, "width": W, "height": H,
-                          "weightBrutto": wt})
+                          "weightBrutto": wt, "src": src})
         if items:
             plans.append({"shopId": sid, "items": items})
     if tracker.count:
@@ -103,7 +123,7 @@ def dry_run(plans):
         print(f"\n店{p['shopId']}（{len(p['items'])} 个商品）:")
         for it in p["items"]:
             print(f"  {it['vc']} | {it['cn']} | nmId={it['nmId']} | "
-                  f"目标 {it['length']}*{it['width']}*{it['height']}cm / {it['weightBrutto']}kg")
+                  f"{it['src']} {it['length']}*{it['width']}*{it['height']}cm / {it['weightBrutto']}kg")
             total += 1
     print(f"\n合计 {total} 条操作（{len(plans)} 个店铺）。加 --apply 执行。")
 
@@ -156,8 +176,12 @@ def apply_plans(plans):
 
 
 def run(args):
-    pkg = boss_pkg_map()
-    if not pkg:
+    dims = _parse_dims(getattr(args, "dims", "") or "")
+    pkg = boss_pkg_map() if dims is None else {}
+    if dims is not None and not (getattr(args, "vc", "") or getattr(args, "name", "") or getattr(args, "prefix", "")):
+        print("[错误] 使用 --dims 时必须用 --vc / --name / --prefix 至少其一圈定目标，防止误改全部商品")
+        sys.exit(1)
+    if not pkg and dims is None:
         print("[错误] 商品价格表无可用尺寸数据（请确认「尺寸」列格式为 长*宽*高/毛重）")
         sys.exit(1)
     state, _, boss = ops.load_state()
@@ -180,7 +204,7 @@ def run(args):
         print(f"[警告] 以下店铺无数据文件（未 fetch）：{missing}，将跳过")
         shops = [s for s in shops if s in all_shops]
 
-    plans = build_plans(vcs, shops, state, pkg)
+    plans = build_plans(vcs, shops, state, pkg, dims=dims)
     if not plans:
         print(f"\n{RED}⚠ [无任何可执行项]{RESET} 目标商品在各店铺数据中均无法改尺寸（上方 [跳过] 已列明原因）")
         print("  可能原因：未先 fetch 最新数据 / 商品已下架 / nmId 为空 / 中文名无商品价格表尺寸。")

@@ -34,10 +34,11 @@ python wb.py fetch                      # 同步+拉取商品快照（仅当需�
 python wb.py mapping                    # 核对工作台
 python wb.py merge                      # 增量合并映射表（重建唯一状态源；拿到新审核/新上架需入库时才跑）
 python wb.py price --name 充电宝 --apply --yes
-python wb.py dimension                        # 按价格表「尺寸」批量改全部店铺商品尺寸（dry-run 默认）
+python wb.py dimension                        # 按价格表「尺寸」批量改全部店铺商品尺寸（dry-run 默认；也可 --dims "长*宽*高/毛重" 自定义，须配 --vc/--name/--prefix 圈定）
 python wb.py discount --apply           # >50% → 50%（默认不自动同步/不写后验证，仅提示；加 --sync 自动同步并合并映射表）
 python wb.py promo-apply --apply        # 促销报名
 python wb.py price-review --apply       # ⚠ 报名/改折扣后必跑：应用新价格（改折扣也会触发价格审核）
+python wb.py dims-check --name 视黄醇面霜  # 只读：列出尺寸偏差待验证商品（--type weight/all 可看重量/合并）
 python wb.py clean --target all --apply # 清理（默认不自动同步，仅提示；加 --sync 自动同步并合并映射表）
 python wb.py replicate                  # 跨店复制上架（部分覆盖→补齐缺失店铺）
 python wb.py import-shelve 他人表.xlsx  # 他人映射表导入上架（他人有我方无）

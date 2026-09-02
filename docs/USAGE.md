@@ -100,6 +100,9 @@ python wb.py trash --name 某商品 --apply --yes
 python wb.py dimension                    # 预览（dry-run）
 python wb.py dimension --name 育发液 --apply   # 只改中文名含「育发液」的商品
 
+# 自定义尺寸/毛重：给选定的 vc 统一设指定值（必须用 --vc/--name/--prefix 圈定，避免误改全部）
+python wb.py dimension --vc BCS-XXX-123 --dims "8*14*26/0.3" --apply
+
 # ⚠ 仓库默认莫斯科：库存/下架清库存默认只操作「莫斯科仓库」，成都仓库不操作（成都用 wb.py remote-wh 单独处理）
 # ⚠ 同步与写后验证（默认关闭）：改价/库存/下架/折扣/清理/上架/改尺寸默认【不同步、不写后验证、不自动合并映射表】，执行完成仅打印提示。
 #    日常无需同步；只有确实需要 BCS 缓存立刻反映最新结果时才加 --sync，或在需要时单独执行 fetch+merge
@@ -210,6 +213,21 @@ python wb.py banned --limit 10 --apply --yes   # 每店最多处理 10 个
 - 📌 **移到回收站后可恢复**：误删可在 WB 后台「回收站」手动恢复；被阻止商品若有库存/在途可能移失败（打印失败原因），先归零库存（`wb.py stock`）再重跑。
 - ⚠ 纯 WB 接口（cookie 会话），无需 BCS 同步；自动复核也是 WB 侧 count + 列表，不触发 fetch。
 - 明细：`data/logs/被阻止商品_*.csv`（含店铺/ID/vendorCode/中文名/标题/阻止原因/结果）。
+
+## 9c. 查询 WB 尺寸/重量偏差待验证商品（dims-check）
+
+> WB 会把包装尺寸/重量有偏差的商品标记为需验证（“检查包装尺寸 / 请检查重量”）。本功能**只读**列出这批商品，按中文名筛选后，可把 vc 交给 `dimension --dims ...` 逐个测试合适尺寸。
+
+```bash
+python wb.py dims-check --type dims                   # 只读：尺寸偏差待验证商品（默认）
+python wb.py dims-check --type weight --shops 5272    # 只读：重量偏差待验证商品
+python wb.py dims-check --type all --shops 5272       # 尺寸+重量合并去重，标注「偏差类型」
+python wb.py dims-check --type weight --name 视黄醇面霜 # 重量偏差里筛中文名含「视黄醇面霜」
+```
+- 明细：`data/logs/[尺寸|重量|尺寸重量]偏差待验证_*.csv`（店铺/ID/偏差类型/vendorCode/中文名/标题/原因）。
+- 「偏差类型」取值：尺寸 / 重量 / 尺寸+重量（仅 `--type all` 时会有后两者）。
+- 提取测试用：`python wb.py dimension --vc <vc[,vc...]> --dims "长*宽*高/毛重" --apply`（默认 dry-run，确认后 --apply）。
+- ⚠ 纯只读，不改任何数据；纯 WB 接口（cookie 会话）。
 
 ## 10. 价格审核（降价 / 改折扣 30-49.9% 进审查的商品）
 

@@ -34,7 +34,7 @@
 | `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` / `--auto-review` |
 | `stock` | 改库存 | `--amount N`（默认 0） |
 | `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
-| `dimension` | 批量改尺寸：读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` |
+| `dimension` | 批量改尺寸：默认读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；也可用 `--dims "长*宽*高/毛重"` 给选定的 vc 统一设自定义尺寸（有自定义用之、无则回退价格表）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--dims` / `--apply` / `--sync` |
 | `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺（vendorCode 与源店一致、价格=源店现价、直上）；**多目标店一次请求提交**（BCS 已恢复多店一次提交，一个 vc 同时上架全部缺失店）；**启动默认不自动同步（用本地快照判断，可能滞后），加 `--sync` 才先同步全部店铺（约 2 分钟）** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 | `import-shelve` | 他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺；新 vc 我方前缀优先（中文名命中商品价格表前缀码），价格 = floor(双倍售价)；**支持 `ozon-card-` 尾段格式**（他人 vc 为 `BCS-{前缀}-ozon-card-{WB商品码}` 时，新 vc 保留该段：`BCS-{我方前缀}-ozon-card-{WB商品码}`，拉取数据仍用 WB商品码列）；缺失 WB商品码列仍跳过；**多目标店一次请求提交**（BCS 已恢复多店一次提交）；**启动默认不自动同步（用本地快照判断，可能滞后），加 `--sync` 才先同步全部店铺（约 2 分钟）** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 
@@ -47,6 +47,7 @@
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
 | `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
+| `dims-check` | 查询 WB 尺寸/重量偏差待验证商品列表（**只读**，不改数据；`tableListImprovable`），按映射表中文名 `--name` 筛选，`--type dims\|weight\|all` 选尺寸/重量/两者合并去重，供 `dimension --vc ... --dims ...` 单独测试尺寸 | `--type` / `--name` / `--shops` / `--limit` |
 | `discount` | 折扣改价**全量**（BCS，慢）：各店 >阈值→目标；**所有商品→50% 用 `--threshold -1`**；**默认不自动同步**，加 `--sync` 才前置同步 + 提交后同步复核；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--target` / `--shops` / `--sync` |
 | `discount-scan` | 折扣改价**快速**（**混合引擎**）：WB 实时列表按折扣从高到低找 >阈值 → 快照可定位价的商品用 **BCS 批量改**（一次≤300，提速），快照缺失/无价的商品自动改走 **WB 单条**并提示（不做 BCS 全量同步）→ 同接口回验；逐店逐商品（同 vc 各店折扣不同） | `--apply` / `--threshold`(默认50) / `--target`(默认50) / `--shops` / `--limit` |
 | `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**回收站数量以 `countByFilter(TRASH)` 实时计数为准**（`list(TRASH)` 为列表缓存可能滞后，不一致会提示）；一键清空后实时计数仍>0 为平台被拒删残留（有库存/在途/成都仓，订单完成后再清，非命令失败）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
@@ -84,6 +85,7 @@ python wb.py trash --vc BCS-XXX-123 --shops 5272 --apply --yes
 python wb.py dimension                               # 预览：按价格表尺寸改全部店铺商品（dry-run）
 python wb.py dimension --name 育发液 --apply          # 只改中文名含「育发液」的商品
 python wb.py dimension --prefix ZLTH --apply --sync   # 指定前缀码 + 事后同步并合并映射表
+python wb.py dimension --name 感应灯 --dims "8*14*26/0.3" --apply   # 给选定商品统一设自定义尺寸/毛重（必须配 --vc/--name/--prefix 圈定）
 
 # 跨店复制上架（部分覆盖的商品 → 缺失店铺；vendorCode 与源店一致、价格=源店现价）
 # 默认不自动同步（用本地快照判断，可能滞后）；加 --sync 才前置同步全部店铺 + 上架后复核并合并映射表
@@ -113,6 +115,10 @@ python wb.py price-review --apply          # ⚠ 应用新价格（改折扣也�
 python wb.py banned                        # 预览各店被阻止商品（WB 标记 banned）
 python wb.py banned --apply --yes          # 执行：被阻止商品移到回收站（自动复核）
 python wb.py banned --shops 5272 --apply --yes   # 只处理指定店
+python wb.py dims-check --name 视黄醇面霜         # 只读：列出中文名含「视黄醇面霜」的尺寸偏差待验证商品
+python wb.py dims-check --shops 5273             # 只读：只看指定店铺的待验证商品
+python wb.py dims-check --type weight --shops 5272   # 重量偏差待验证商品
+python wb.py dims-check --type all --shops 5272      # 尺寸+重量合并去重，标注偏差类型
 python wb.py clean --target all            # 预览
 python wb.py clean --target all --apply    # 执行（先草稿后回收站；默认不自动同步/不合并，完成后仅提示）
 python wb.py clean --target all --apply --sync  # 执行 + 清理前同步 + 清理后自动合并映射表
