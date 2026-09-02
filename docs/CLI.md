@@ -34,6 +34,7 @@
 | `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` / `--auto-review` |
 | `stock` | 改库存 | `--amount N`（默认 0） |
 | `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
+| `dimension` | 批量改尺寸：读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` |
 | `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺（vendorCode 与源店一致、价格=源店现价、直上）；**多目标店一次请求提交**（BCS 已恢复多店一次提交，一个 vc 同时上架全部缺失店）；**启动默认不自动同步（用本地快照判断，可能滞后），加 `--sync` 才先同步全部店铺（约 2 分钟）** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 | `import-shelve` | 他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺；新 vc 我方前缀优先（中文名命中商品价格表前缀码），价格 = floor(双倍售价)；**支持 `ozon-card-` 尾段格式**（他人 vc 为 `BCS-{前缀}-ozon-card-{WB商品码}` 时，新 vc 保留该段：`BCS-{我方前缀}-ozon-card-{WB商品码}`，拉取数据仍用 WB商品码列）；缺失 WB商品码列仍跳过；**多目标店一次请求提交**（BCS 已恢复多店一次提交）；**启动默认不自动同步（用本地快照判断，可能滞后），加 `--sync` 才先同步全部店铺（约 2 分钟）** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 
@@ -74,12 +75,15 @@ python wb.py mismatch-check                 # 货不对板筛查工作台（看�
 python wb.py mismatch-check --days 2        # 只审最近 2 天（昨天+今天）上架/创建的商品（--days 1=仅今天）
 python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25  # 指定时间段（按映射表创建时间）
 
-# 改价/折扣/库存/下架（dry-run 默认，加 --apply 执行；默认不自动同步/不写后验证，完成后仅打印提示；加 --sync 自动「同步在架商品并合并映射表」）
+# 改价/折扣/库存/下架/改尺寸（dry-run 默认，加 --apply 执行；默认不自动同步/不写后验证，完成后仅打印提示；加 --sync 自动「同步在架商品并合并映射表」）
 python wb.py price --name 充电宝 --apply --yes
 python wb.py price --vc BCS-XXX-123 --price 130 --discount 20 --apply --sync
 python wb.py price --vc BCS-XXX-123 --discount 30 --keep-price --apply --yes
 python wb.py stock --prefix CYQX --amount 0 --apply --yes
 python wb.py trash --vc BCS-XXX-123 --shops 5272 --apply --yes
+python wb.py dimension                               # 预览：按价格表尺寸改全部店铺商品（dry-run）
+python wb.py dimension --name 育发液 --apply          # 只改中文名含「育发液」的商品
+python wb.py dimension --prefix ZLTH --apply --sync   # 指定前缀码 + 事后同步并合并映射表
 
 # 跨店复制上架（部分覆盖的商品 → 缺失店铺；vendorCode 与源店一致、价格=源店现价）
 # 默认不自动同步（用本地快照判断，可能滞后）；加 --sync 才前置同步全部店铺 + 上架后复核并合并映射表

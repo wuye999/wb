@@ -16,6 +16,7 @@ from . import clean
 from . import config
 from . import cookies
 from . import daily
+from . import dimension
 from . import discount
 from . import discount_scan
 from . import import_shelve
@@ -119,6 +120,16 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
     p.add_argument("--sync", action="store_true",
                    help="执行前同步 BCS 缓存 + 提交后同步复核（默认不自动同步/不写后验证，仅打印提示）")
+
+    p = sub.add_parser("dimension", help="批量修改尺寸：按商品价格表尺寸统一修改各店商品")
+    p.add_argument("--vc", default="", help="vendorCode 列表（逗号分隔）")
+    p.add_argument("--prefix", default="", help="商品价格表 vendorCode 前缀码")
+    p.add_argument("--name", default="", help="商品价格表产品中文名包含")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部已 fetch 店铺）")
+    p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
+    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+    p.add_argument("--sync", action="store_true",
+                   help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
 
     p = sub.add_parser("discount-scan",
                        help="折扣快速改价（混合引擎：WB 实时列表 + BCS 批量改 >阈值→目标，快照缺失/无价的商品自动改走 WB 单条并提示）")
@@ -233,6 +244,8 @@ def dispatch(args):
         return promo.run(args)
     if cmd == "discount":
         return discount.run(args)
+    if cmd == "dimension":
+        return dimension.run(args)
     if cmd == "discount-scan":
         return discount_scan.run(args)
     if cmd == "banned":

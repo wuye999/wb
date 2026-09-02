@@ -34,6 +34,7 @@ python wb.py fetch                      # 同步+拉取商品快照（仅当需�
 python wb.py mapping                    # 核对工作台
 python wb.py merge                      # 增量合并映射表（重建唯一状态源；拿到新审核/新上架需入库时才跑）
 python wb.py price --name 充电宝 --apply --yes
+python wb.py dimension                        # 按价格表「尺寸」批量改全部店铺商品尺寸（dry-run 默认）
 python wb.py discount --apply           # >50% → 50%（默认不自动同步/不写后验证，仅提示；加 --sync 自动同步并合并映射表）
 python wb.py promo-apply --apply        # 促销报名
 python wb.py price-review --apply       # ⚠ 报名/改折扣后必跑：应用新价格（改折扣也会触发价格审核）
@@ -42,7 +43,7 @@ python wb.py replicate                  # 跨店复制上架（部分覆盖→�
 python wb.py import-shelve 他人表.xlsx  # 他人映射表导入上架（他人有我方无）
 python wb.py price-review --apply       # 价格审核：应用新价格
 python wb.py orders                     # 订单查询（同步+查询今天）
-# ▸ 写操作（改价/库存/下架/折扣/清理/上架）默认都不同步、不写后验证、不合并映射表；日常无需频繁同步，确需最新 BCS 缓存时才加 --sync 或 fetch。
+# ▸ 写操作（改价/库存/下架/折扣/清理/上架/改尺寸）默认都不同步、不写后验证、不合并映射表；日常无需频繁同步，确需最新 BCS 缓存时才加 --sync 或 fetch。
 python wb.py questions                  # 买家未处理提问查询
 ```
 
