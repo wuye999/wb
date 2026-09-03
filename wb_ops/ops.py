@@ -549,9 +549,19 @@ def run_apply(plans, action, auto_review=False):
 
 
 def _post(body, label):
-    """提交写操作，返回 (ok: bool, msg: str)。ok=False 表示接口失败/异常，供 run_apply 准确计数。"""
+    """提交写操作，返回 (ok: bool, msg: str)。ok=False 表示接口失败/异常，供 run_apply 准确计数。
+    ★ 2026-09-03 BCS 接口变更适配（内部 body 结构不变，提交前按端点转换）：
+    - price/batch：shopId 须在每个 dataList 条目内（顶层 shopId 已不被识别，报 500 null key）
+    - clean/removeToTrash：body 须为根级数组 [{shopId, nmId}]（每条目一个 nmId）"""
     try:
-        r = bcs.http_post_json(f"{bcs.base_url()}/shopKeeper/{_endpoint(body)}", body)
+        ep = _endpoint(body)
+        if ep == "price/batch":
+            payload = {"dataList": [{**it, "shopId": body["shopId"]} for it in body["dataList"]]}
+        elif ep == "clean/removeToTrash":
+            payload = [{"shopId": body["shopId"], "nmId": nm} for nm in body["nmIds"]]
+        else:
+            payload = body
+        r = bcs.http_post_json(f"{bcs.base_url()}/shopKeeper/{ep}", payload)
         msg = r.get("msg", "")
         if r.get("code") == 200:
             print(f"  {GREEN}✓{RESET} {label} 成功: {msg}")

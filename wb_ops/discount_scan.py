@@ -98,7 +98,8 @@ def bcs_batch_discount(shop_id, items, target):
     url = bcs.base_url() + "/shopKeeper/price/batch"
     for i in range(0, len(dl), CHUNK):
         chunk = dl[i:i + CHUNK]
-        body = {"shopId": shop_id, "dataList": chunk}
+        # ★ 2026-09-03 BCS 接口变更：shopId 须在每个 dataList 条目内（同 dimension/batch）
+        body = {"dataList": [{**c, "shopId": shop_id} for c in chunk]}
         try:
             r = bcs.http_post_json(url, body)
             if r.get("code") == 200:

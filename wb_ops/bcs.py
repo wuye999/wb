@@ -125,9 +125,11 @@ def default_warehouse_id(shop_id):
 
 
 def remove_to_trash(shop_id, nm_ids):
-    """移至回收站（不可逆）；nm_ids 为 BCS 内部 nmId 列表"""
+    """移至回收站（不可逆）；nm_ids 为 BCS 内部 nmId 列表
+    ★ 2026-09-03 BCS 接口变更：body 改为根级数组，每条目 {shopId, nmId}（服务端反序列化
+    ArrayList<WbShopProductTrashBodyVo>；旧 {"shopId":顶,"nmIds":[...]} 已 500 JSON parse error）"""
     return http_post_json(f"{base_url()}/shopKeeper/clean/removeToTrash",
-                          {"shopId": shop_id, "nmIds": nm_ids})
+                          [{"shopId": shop_id, "nmId": nm} for nm in nm_ids])
 
 
 # ---------------- BCS 数据同步（拉取 WB 数据） ----------------

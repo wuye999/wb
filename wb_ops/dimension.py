@@ -150,12 +150,12 @@ def apply_plans(plans):
     for pi, p in enumerate(plans):
         sid = p["shopId"]
         dl = [{"nmId": it["nmId"], "length": it["length"], "width": it["width"],
-               "height": it["height"], "weightBrutto": it["weightBrutto"]} for it in p["items"]]
+               "height": it["height"], "weightBrutto": it["weightBrutto"], "shopId": sid} for it in p["items"]]
         num = 0
         for i in range(0, len(dl), CHUNK):
             chunk = dl[i:i + CHUNK]
             batch_items = p["items"][i:i + CHUNK]
-            body = {"shopId": sid, "dataList": chunk}
+            body = {"dataList": chunk}
             ok_flag, msg = _post(body, f"dimension 批{i // CHUNK + 1}")
             if ok_flag:
                 ok += len(chunk)
