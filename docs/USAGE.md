@@ -255,6 +255,30 @@ python wb.py orders --no-sync                         # 跳过同步，直接查
 - ✅ 成功：`[汇总] 订单 N 条`；日志 `data/logs/订单查询_*.csv`。
 - `--shops` 可限定同步范围与结果；`--page-size` 控制分页（默认 50）。
 
+## 11b. 每日新订单处理（马帮 → 飞书 → 预报 → 交运）【2026-09-07 新增】
+
+> **固定顺序：先登记飞书，再执行处理流程**——订单处理后离开待处理页进入全部订单，不便筛查。
+
+```bash
+# 一键全链路（推荐日常入口）：①登记飞书→②匹配更换→③预报批次/上传/交运→④归属统计
+python wb.py orders-pipeline --url "<飞书多维表格地址>"
+
+# 分步执行（排查用）
+python wb.py feishu-register --url "<表格地址>"            # ①登记（dry-run）→ --apply 写入
+python wb.py mabang-orders --apply                        # ②SKU 匹配强制更换
+python wb.py mabang-forecast --apply                      # ③预报批次/上传/等待/交运
+python wb.py mabang-forecast --check                      #    上传 5-10 分钟后查预报结果
+
+# 补录历史订单（全部状态，指定日期/区间）
+python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-05 --apply
+```
+
+- 前置：`data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）为最新值；飞书鉴权走 `lark-cli` 用户身份。
+- 口径：只处理 shop_map 内店铺（马帮 子龙主2/子龙主2（1）/子龙主2（2）↔ 袁州1/2/3）；订单编号为飞书去重键，重复不登记；wb编号 = **下单店铺自己的码**（非映射表主店码）。
+- 每步产出 CSV 报告（`data/logs/飞书订单登记_* / 马帮订单匹配_* / 马帮预报批次_* / 新订单归属统计_*.csv`）；某步失败即中止后续。
+- 飞书侧结构：「订单登记」表（明细，日期精确到分钟/店铺短名/中文名/wb编号/商品链接/订单量/下单日期公式字段）+「销量看板」仪表盘（实时聚合图表：每天×中文名柱状图、中文名与商品(链接)排行，手工改动也自动反映）。
+- 接口细节见 `api/BCS_API完整文档_核对版.md` 第八章。
+
 ## 12. 买家提问查询 + AI 回复（前台 / 后台两种模式，二选一）
 
 ### 查询（两种模式的基础，自动关联商品信息）

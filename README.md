@@ -46,6 +46,12 @@ python wb.py price-review --apply       # 价格审核：应用新价格
 python wb.py orders                     # 订单查询（同步+查询今天）
 # ▸ 写操作（改价/库存/下架/折扣/清理/上架/改尺寸）默认都不同步、不写后验证、不合并映射表；日常无需频繁同步，确需最新 BCS 缓存时才加 --sync 或 fetch。
 python wb.py questions                  # 买家未处理提问查询
+
+# ▸ 每日新订单处理（马帮 → 飞书 → 预报 → 交运，一键全链路）
+python wb.py orders-pipeline --url "<飞书多维表格地址>"   # ①登记飞书→②匹配更换→③预报/上传/交运→④归属统计
+python wb.py mabang-orders --apply                      # 分步：SKU 匹配强制更换
+python wb.py mabang-forecast --apply                    # 分步：预报批次/上传/物流交运（--check 查结果）
+python wb.py feishu-register --url "<飞书表格地址>" --scope all --date 2026-09-05 --apply   # 补录历史订单
 ```
 
 ## 文档

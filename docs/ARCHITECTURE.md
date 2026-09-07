@@ -59,6 +59,7 @@
 业务层   mapping / mapping_sync / mapping_check / mismatch_check / ops
          promo / discount / banned / clean / cookies / daily / schedule
          price_review / orders / questions
+         mabang / feishu_register / order_pipeline
           │ 依赖
           ▼
 支撑层   bcs / wb_api / products / workbench / keywords
@@ -105,6 +106,9 @@
 10. **vendorCode 中段 4 字母**命中商品价格表前缀码 → 免人工审核自动补录。
 11. **改折扣同样触发价格审核**（实测 2026-08-20）：WB 按「新价相对原价降幅」判定，改价**或改折扣**降幅落入 30–49.9% → 进隔离区（quarantine），**必须** **`price-review --apply`「应用新价格」才生效**；>50% 直接被拒。因此**每次** **`promo-apply`** **/** **`discount --apply`** **之后必跑一次** **`price-review`**（dry-run 预览 → 有货再 `--apply`）。
 12. **上架** **`shopDatas[].nmId`** **提交前置空** **`null`**（BCS 插件 1.2.2，2026-08-26）：新版后端按 `nmId` 判「是否已有卡」，带值会被当「更新已有卡」处理导致上架失败；WB 原始 nmId 由 `sourceSku` 保留，勿在上架请求体携带。
+13. **马帮订单处理顺序（2026-09-07）**：新订单**先登记飞书「订单登记」表**（订单编号去重），再执行 匹配更换→预报批次→上传→物流交运「莫斯科仓-七库海外仓」；处理后订单离开待处理页进入全部订单，故不可颠倒。各步幂等：`order_label` 含「已预报」跳过生成批次、已上传批次不在待上传列表、`cansend1logisticsHtml` 已选交运跳过；改折扣/报名后必跑 `price-review` 的规则不变。
+14. **wb 码按店不同**：同一 vendorCode 在各店的 nmId 各不相同；飞书登记/统计用的 wb编号 = **下单店铺自己的 nmId**（快照 vendorCode→nmId 反查），映射表 WB商品码只是主店码。
+15. **飞书销量统计用仪表盘**：实时聚合图表（销量看板）直接引用「订单登记」表，手动/脚本改动即时反映；不另建聚合数据表。
 
 ## 六、数据流全链路时序
 
@@ -129,6 +133,18 @@ wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，�
 wb.py banned         ⑨b 查询被阻止商品（tableListImprovable 分页）→ dry-run → --apply moveNmsToTrash 移回收站 → count/列表自动复核
 wb.py daily          ⑩ morning=报名+改价（含价格审核）/ check=只改价（含价格审核）（可手动跑，或仅在主动运行 wb.py schedule 后由计划任务 9:00/11/15/19 点触发；默认不建计划任务）
 ```
+
+### 每日新订单处理链路（2026-09-07 新增，`orders-pipeline` 编排）
+
+```
+wb.py orders-pipeline ① feishu-register 登记飞书「订单登记」（订单编号去重；先登记再处理）
+wb.py mabang-orders   ② VC→映射表中文名→价格表库存SKU → replaceOrderItem 强制更换
+wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传 → 等待 150s → 物流交运（已选跳过）
+                      ④ 归属统计（店铺×中文名单量 CSV）
+```
+
+- 飞书侧：Base 内「订单登记」明细表（日期精确到分钟/店铺短名/BCS编号/中文名/wb编号/商品链接/订单量/下单日期公式字段）+「销量看板」仪表盘（实时图表：每天×中文名柱状图、中文名与商品(链接)排行）。
+- 马帮接口（order.oTc 两变体 / showOrderItems / searchStockList / replaceOrderItem / getForecastLogistics / doBatchCreateForecast / getForecastOrderList / uploadForecastBatch / getReportingInformation / doReportingInformation）参数与实测结论见 `api/BCS_API完整文档_核对版.md` 第八章。
 
 ## 七、映射表 8 Sheet 结构
 
