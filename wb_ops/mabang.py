@@ -41,13 +41,26 @@ PLATFORM_ID_WB = ""             # 空=全部平台（列表里按 platformIdText
 
 # ---------------- 凭证 ----------------
 def _mabang_cred():
-    """读 credentials.json 的 mabang 段：www_cookie / api_bearer / api_key / warehouse_id / shop_map"""
+    """读 credentials.json 的 mabang 段。
+    必填：www_cookie / shop_map；可选：api_bearer（SKU 搜索/更换需要，缺失时仅限
+    非更换功能）、api_key（可从 www_cookie 的 MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE
+    自动提取）、aamz_cookie（可省，自动回退 www_cookie）。"""
     from . import credentials
     data = credentials.get().data.get("mabang") or {}
-    missing = [k for k in ("www_cookie", "api_bearer", "api_key", "shop_map") if not data.get(k)]
+    missing = [k for k in ("www_cookie", "shop_map") if not data.get(k)]
     if missing:
         raise RuntimeError(f"credentials.json 缺少 mabang.{missing[0]}（马帮凭证/店铺映射不完整）")
     return data
+
+
+def _api_ready(cred):
+    """api 域（SKU 搜索/更换订单商品）凭证是否就绪"""
+    return bool(cred.get("api_bearer"))
+
+
+def _cookie_value(www_cookie, name):
+    m = re.search(re.escape(name) + r"=([^;]+)", www_cookie or "")
+    return m.group(1) if m else ""
 
 
 def _www_headers(cred):
@@ -62,11 +75,21 @@ def _www_headers(cred):
 
 
 def _api_headers(cred):
+    bearer = cred.get("api_bearer") or ""
+    if not bearer:
+        raise RuntimeError(
+            "缺少 mabang.api_bearer（SKU 搜索/更换订单商品需要）：浏览器 F12 → Network → "
+            "抓一条 api.mabangerp.com/v2/... 请求，复制 Authorization: Bearer 后的值填入 "
+            "credentials.json 的 mabang.api_bearer")
+    key = cred.get("api_key") or _cookie_value(cred.get("www_cookie", ""),
+                                               "MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE")
+    if not key:
+        raise RuntimeError("无法确定 api 域 key 头（www_cookie 中无 MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE）")
     return {
         "User-Agent": common.UA,
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + cred["api_bearer"],
-        "key": cred["api_key"],
+        "Authorization": "Bearer " + bearer,
+        "key": key,
         "ProjectId": "erp",
         "TimeZone": "UTC+8",
         "cluster-id": "1",
@@ -284,13 +307,15 @@ DEF_FORECAST_CHANNEL = "wb_box"           # wildberries组包服务+打印箱贴
 
 
 def _aamz_headers(cred):
+    """aamz 域：实测接受 www 登录态（MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE），优先
+    独立 aamz_cookie，未配置时回退 www_cookie"""
     return {
         "User-Agent": common.UA,
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
         "Origin": "https://aamz.mabangerp.com",
         "Referer": "https://aamz.mabangerp.com/index.php?mod=uploadforecastorderv2",
-        "Cookie": cred["aamz_cookie"],
+        "Cookie": cred.get("aamz_cookie") or cred["www_cookie"],
     }
 
 
@@ -554,6 +579,10 @@ def run(args):
     warehouse_id = int(cred.get("warehouse_id") or 1457537)
     shop_map = cred["shop_map"]
     print(f"[配置] 目标店铺: {'、'.join(f'{k}→{v}' for k, v in shop_map.items())}")
+    if args.apply and not _api_ready(cred):
+        print("[错误] 更换订单商品需要 api 域凭证：请在 credentials.json 的 mabang.api_bearer "
+              "填入 api.mabangerp.com 请求头 Authorization: Bearer 的值后重试")
+        return 1
 
     print(f"\n[查询] 待处理订单（最近 {args.days} 天，平台=全部，tabId=7）...")
     orders = fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
