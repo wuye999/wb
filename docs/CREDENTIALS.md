@@ -27,6 +27,18 @@
     "model": "deepseek-chat",
     "api_key": "<OpenAI 兼容 LLM 的 API Key，用于后台模式买家提问自动回复>",
     "watch_interval": 90
+  },
+  "mabang": {
+    "www_cookie": "<www.mabangerp.com 全串 Cookie（PHPSESSID/memberInfo 等）>",
+    "aamz_cookie": "<aamz.mabangerp.com 独立 Cookie（PHPSESSID/signed/route，与 www 不同）>",
+    "api_bearer": "<api.mabangerp.com 的 Authorization Bearer 令牌>",
+    "api_key": "<api.mabangerp.com 的 key 头 = 登录 cookie MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE>",
+    "warehouse_id": 1457537,
+    "shop_map": { "子龙主2": "袁州1(9352)", "子龙主2（1）": "袁州2(9353)", "子龙主2（2）": "袁州3(9356)" },
+    "handover_channel_id": "830556",
+    "handover_keyword": "七库海外仓",
+    "handover_channel_value": "830556_262535_七库海外仓_3048",
+    "handover_wait_seconds": 150
   }
 }
 ```
@@ -74,6 +86,24 @@
 
 - 失效表现：`cfidsw-wb` 过期 → **403**。保鲜实测 ≥46 小时，建议每周刷新。
 
+### C. 马帮 ERP（mabangerp.com，2026-09-07 新增）
+
+服务于 `mabang-orders / mabang-forecast / orders-pipeline`（接口参数见 `api/BCS_API完整文档_核对版.md` 第八章）。**三个域名三套会话，互不通用**：
+
+| 字段 | 位置 | 说明 |
+| --- | --- | --- |
+| `www_cookie` | `mabang.www_cookie` | `www.mabangerp.com` 全串 Cookie（含 `PHPSESSID`/`memberInfo` 等）；订单列表/明细/预报批次生成/物流交运 |
+| `aamz_cookie` | `mabang.aamz_cookie` | `aamz.mabangerp.com` **独立** Cookie（`PHPSESSID` 不同，另有 `signed`/`route`）；预报批次列表/上传 |
+| `api_bearer` | `mabang.api_bearer` | `api.mabangerp.com/v2` 的 `Authorization: Bearer` 令牌；库存搜索/更换订单商品 |
+| `api_key` | `mabang.api_key` | api 域 `key` 头，值 = 登录 cookie `MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE` |
+| `warehouse_id` | `mabang.warehouse_id` | 默认操作仓库（1457537 莫斯科仓-七库海外仓） |
+| `shop_map` | `mabang.shop_map` | 马帮店铺名 → 本地店铺；**只处理名单内店铺**的订单（如 `子龙主2 → 袁州1(9352)`） |
+| `handover_channel_id` / `handover_keyword` / `handover_channel_value` | `mabang.handover_*` | 物流交运渠道（830556 七库海外仓）；脚本优先从 order.list 页面动态发现，配置仅兜底 |
+| `handover_wait_seconds` | `mabang.handover_wait_seconds` | 上传批次后等待系统更新的秒数（默认 150，`--wait` 可覆盖） |
+
+- 失效表现：www 域 401/跳登录 → 重抓 www_cookie；aamz 域（`feishu-register`/`mabang-forecast --check` 报错）→ 重抓 aamz_cookie；api 域 401 → 重抓 Bearer/key。三者都从浏览器 F12 → Network 对应域名的请求头复制。
+- 注意：`order.list` 页面渠道数组、`getReportingInformation` 的渠道值会随马帮后台配置变化，脚本已做动态发现 + 配置兜底，一般无需手工维护。
+
 ## 三、如何刷新
 
 ### WB cookie（403 时）
@@ -108,6 +138,14 @@ python wb.py cookies-update data/har/我的抓包.md
 
 重新登录 BCS 后，把新 token / limit\_key 填进 `data/credentials.json` 的 `bcs` 段。
 
+### 马帮 cookie / 令牌（401 或跳登录时）
+
+1. 浏览器登录 `www.mabangerp.com`，F12 → Network → 随便点一个请求 → **Request Headers**。
+2. 按用途复制三处（都是整串值，分别填回 `credentials.json` 的 `mabang` 段）：
+   - `www_cookie`：`www.mabangerp.com` 任意请求的 `Cookie:` 整串（订单列表/明细/交运用）；
+   - `aamz_cookie`：切到「上传预报批次」页面，抓 `aamz.mabangerp.com` 请求的 `Cookie:` 整串（注意 `PHPSESSID` 与 www 的不同）；
+   - `api_bearer` + `api_key`：抓 `api.mabangerp.com/v2/...` 请求的 `Authorization: Bearer` 与 `key` 请求头。
+
 ## 四、校验
 
 ```bash
@@ -115,7 +153,10 @@ python wb.py cookies-update data/har/我的抓包.md
 python -c "from wb_ops import credentials; ok,p=credentials.get().validate(); print('OK' if ok else p)"
 # 端到端验证
 python wb.py shops       # BCS 通 = token/limit_key 有效
-python wb.py promo-apply # WB 通 = 5 店 cookie 有效
+python wb.py promo-apply # WB 通 = 店铺 cookie 有效
+python wb.py mabang-orders   # 马帮 www cookie + 飞书 lark-cli 通（dry-run 不写）
+python wb.py mabang-forecast --check   # 马帮 aamz cookie 通（查批次列表）
+python wb.py shops && python wb.py mabang-orders   # 组合验证，按需单跑
 ```
 
 ## 五、安全注意事项
