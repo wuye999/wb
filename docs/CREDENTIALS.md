@@ -101,7 +101,8 @@
 | `handover_channel_id` / `handover_keyword` / `handover_channel_value` | `mabang.handover_*` | 物流交运渠道（830556 七库海外仓）；脚本优先从 order.list 页面动态发现，配置仅兜底 |
 | `handover_wait_seconds` | `mabang.handover_wait_seconds` | 上传批次后等待系统更新的秒数（默认 150，`--wait` 可覆盖） |
 
-- 失效表现：www 域 401/跳登录 → 重抓 www_cookie；aamz 域（`feishu-register`/`mabang-forecast --check` 报错）→ 重抓 aamz_cookie；api 域 401 → 重抓 Bearer/key。三者都从浏览器 F12 → Network 对应域名的请求头复制。
+- 失效表现：www 域 401/跳登录 → 重抓 www_cookie；aamz 域（`mabang-forecast --check` 报错）→ 重抓 aamz_cookie（实测 www 登录态可直接用 aamz 域，通常无需单独抓）。
+- **api 域 401 无需手工处理（2026-09-08）**：脚本检测到 Bearer 过期会自动用 www cookie 中的 `MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE` 作 key 调 `POST api.mabangerp.com/sso/api/v1/getTokenByKey` 换发新 Bearer 并写回 credentials.json（`refresh_api_token`）。只要 www cookie 有效，api 域永远可用。
 - 注意：`order.list` 页面渠道数组、`getReportingInformation` 的渠道值会随马帮后台配置变化，脚本已做动态发现 + 配置兜底，一般无需手工维护。
 
 ## 三、如何刷新

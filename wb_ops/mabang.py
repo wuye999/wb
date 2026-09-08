@@ -54,8 +54,44 @@ def _mabang_cred():
 
 
 def _api_ready(cred):
-    """api 域（SKU 搜索/更换订单商品）凭证是否就绪"""
-    return bool(cred.get("api_bearer"))
+    """api 域凭证是否可用：有 Bearer，或 www_cookie 里能提取 key（可自动续期）"""
+    return bool(cred.get("api_bearer")) or bool(_api_key_from_www(cred))
+
+
+def _api_key_from_www(cred):
+    return _cookie_value(cred.get("www_cookie", ""),
+                         "MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE")
+
+
+SSO_GET_TOKEN_URL = "https://api.mabangerp.com/sso/api/v1/getTokenByKey"
+
+
+def refresh_api_token(cred):
+    """用 key（www cookie 提取）调 sso getTokenByKey 换发新 Bearer 并写回
+    credentials.json 的 mabang.api_bearer/api_key；返回新 token。
+    2026-09-08 实测：仅 body.key 即可换发（无需旧 Bearer）。"""
+    key = _api_key_from_www(cred)
+    if not key:
+        raise RuntimeError("www_cookie 中未找到 MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE，"
+                           "无法自动续期 api token")
+    r = requests.post(SSO_GET_TOKEN_URL,
+                      headers={"User-Agent": common.UA, "Content-Type": "application/json",
+                               "ProjectId": "erp", "cluster-id": "1", "lang": "cn",
+                               "TimeZone": "UTC+8"},
+                      data=json.dumps({"key": key, "lang": "zh"}), timeout=30)
+    d = _parse_json(r)
+    token = (d.get("data") or {}).get("token")
+    if d.get("code") != 200 or not token:
+        raise RuntimeError(f"getTokenByKey 续期失败: {str(d)[:150]}")
+    from . import credentials
+    c = credentials.get()
+    mb = c.data.setdefault("mabang", {})
+    mb["api_bearer"] = token
+    mb["api_key"] = key
+    with open(c.path, "w", encoding="utf-8") as f:
+        json.dump(c.data, f, ensure_ascii=False, indent=2)
+    c.reload()
+    return token
 
 
 def _cookie_value(www_cookie, name):
@@ -77,12 +113,9 @@ def _www_headers(cred):
 def _api_headers(cred):
     bearer = cred.get("api_bearer") or ""
     if not bearer:
-        raise RuntimeError(
-            "缺少 mabang.api_bearer（SKU 搜索/更换订单商品需要）：浏览器 F12 → Network → "
-            "抓一条 api.mabangerp.com/v2/... 请求，复制 Authorization: Bearer 后的值填入 "
-            "credentials.json 的 mabang.api_bearer")
-    key = cred.get("api_key") or _cookie_value(cred.get("www_cookie", ""),
-                                               "MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE")
+        # 无 Bearer 时自动续期（用 www cookie 提取的 key 换发）
+        bearer = refresh_api_token(cred)
+    key = cred.get("api_key") or _api_key_from_www(cred)
     if not key:
         raise RuntimeError("无法确定 api 域 key 头（www_cookie 中无 MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE）")
     return {
@@ -95,6 +128,22 @@ def _api_headers(cred):
         "cluster-id": "1",
         "lang": "cn",
     }
+
+
+def _api_post(cred, path, body):
+    """api 域 POST：401 时自动续期 Bearer 后重试一次"""
+    payload = json.dumps(body)
+    for attempt in (1, 2):
+        r = requests.post(API_BASE + path, headers=_api_headers(cred),
+                          data=payload, timeout=60)
+        if r.status_code != 401:
+            return r
+        if attempt == 2:
+            break
+        print("  [api] 401，自动续期 Bearer 后重试...")
+        refresh_api_token(cred)
+        cred = _mabang_cred()
+    return r
 
 
 def _parse_json(resp):
@@ -275,8 +324,7 @@ def search_stock(cred, sku, warehouse_id, page_size=20):
             "status": [1, 2, 3, 4, 5], "stockSkuOperate": "like",
             "stockNameCNOperate": "like", "stockNameENOperate": "like",
             "warehouseOperate": "like"}
-    r = requests.post(API_BASE + "/product/Stock/searchStockList",
-                      headers=_api_headers(cred), data=json.dumps(body), timeout=60)
+    r = _api_post(cred, "/product/Stock/searchStockList", body)
     r.raise_for_status()
     d = r.json()
     if d.get("code") != 200:
@@ -292,8 +340,7 @@ def replace_order_item(cred, order_item_id, stock_id, warehouse_id):
     """更换订单商品（replaceOrderItem）"""
     body = {"orderItemId": str(order_item_id), "stockId": int(stock_id),
             "skuType": 1, "warehouseId": int(warehouse_id)}
-    r = requests.post(API_BASE + "/order/order/replaceOrderItem",
-                      headers=_api_headers(cred), data=json.dumps(body), timeout=60)
+    r = _api_post(cred, "/order/order/replaceOrderItem", body)
     r.raise_for_status()
     d = r.json()
     if d.get("code") != 200:
