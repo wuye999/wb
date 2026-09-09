@@ -416,39 +416,70 @@ def get_forecast_list(cred, status=1, rows_per_page=50):
     return d.get("orderList") or [], stats
 
 
-def upload_forecast_batch(cred, batch_nos):
-    """④ 上传预报批次（aamz 域，异步队列）；返回 message"""
-    form = {"batchNoInfo": ",".join(batch_nos), "forecastLogistics": "100",
-            "forecastChannel": "", "shipmentMethod": "", "appointment_type": "",
-            "expressCompany": "", "trackNumber": "", "shipmentDate": "",
-            "cainiaoShipmentDate": "", "shopeeV2PaymentMethod": "1",
-            "shippingAddressId": "", "lazadaReturnType": "",
-            "cainiaoRegularSchedulesDayesArr": "", "cainiaoStart": "", "cainiaoEnd": "",
-            "cainiaoPalletQuantity": "", "returnAddressId": "",
-            "smt_sfc_shipping_method": "3", "smt_sfc_car_type": "", "smt_sfc_goods_type": "",
-            "smt_sfc_box_number": "", "smt_sfc_weight": "", "smt_sfc_volume": "",
-            "smt_jit_shipping_method": "1", "smt_jit_shipping_service": "",
-            "smt_jit_shipping_tracknumber": "", "smt_jit_shipping_remark": "",
-            "smt_jit_car_number": "", "smt_jit_driver_phone": "",
-            "smt_jit_shipping_volume": "", "smt_shipping_except_method": "",
-            "smt_sfc_city_code": "", "smt_sfc_amount": "",
-            "lazada_fcs_shipping_method": "parcel", "lazada_fcs_shipping_service": "",
-            "lazada_fcs_shipping_tracknumber": "", "lazada_fcs_car_number": "",
-            "lazada_fcs_driver_phone": "", "lazada_fcs_pickup_date": "",
-            "lazada_fcs_shipping_weight": "", "lazada_fcs_shipping_volume": "",
-            "lazada_fcs_shipping_pack_num": "", "lazada_fcs_shipping_pickup_address": "",
-            "lazada_shop_type": "", "lazada_division_id": "", "joomBoxesCount": "",
-            "joomBoxesTotalWeight": "", "shein_fcs_shipping_method": "1",
-            "shein_fcs_reach_time": "", "shein_fcs_shipping_tracknumber": "",
-            "shein_fcs_pickup_time": "", "shein_fcs_package_number": "",
-            "shein_fcs_package_weight": "", "wb_supplier_no": ""}
-    r = requests.post(AAMZ_BASE, params={"mod": "uploadforecastorderv2.uploadForecastBatch"},
-                      headers=_aamz_headers(cred), data=form, timeout=120)
+def get_forecast_config(cred, my_logistics_id="262534"):
+    """取上传预报单配置模板（aamz 域）：返回 forecast_config_json dict 或 None"""
+    r = requests.post(AAMZ_BASE,
+                      params={"mod": "uploadforecastorderv2.getForecastConfig"},
+                      headers=_aamz_headers(cred),
+                      data={"myLogisticsId": my_logistics_id}, timeout=60)
     r.raise_for_status()
     d = _parse_json(r)
-    if not d.get("success"):
-        raise RuntimeError(f"uploadForecastBatch 返回失败: {d.get('message')}")
-    return d.get("message") or ""
+    return d.get("forecast_config_json") if d.get("success") else None
+
+
+def upload_forecast_batch(cred, batch_nos):
+    """④ 依次上传预报批次（aamz 域，异步队列，勾选自动发货 wb_automark=1）。
+    每批：getForecastConfig 取模板 → 覆盖 batchNoInfo/追加 wb_automark=1、
+    is_set_forecast=2 → uploadForecastBatch（单批次号）。config 失败时回退
+    旧固定表单（forecastLogistics=100，不勾自动发货）。返回 message 列表"""
+    msgs = []
+    for i, batch in enumerate(batch_nos):
+        form = get_forecast_config(cred) or {}
+        automark = bool(form)
+        if form:
+            form["batchNoInfo"] = batch
+            form["wb_automark"] = "1"
+            form["is_set_forecast"] = "2"
+        else:
+            # 回退：旧固定表单（与 2026-09-07 批量上传一致）
+            form = {"batchNoInfo": batch, "forecastLogistics": "100",
+                    "forecastChannel": "", "shipmentMethod": "", "appointment_type": "",
+                    "expressCompany": "", "trackNumber": "", "shipmentDate": "",
+                    "cainiaoShipmentDate": "", "shopeeV2PaymentMethod": "1",
+                    "shippingAddressId": "", "lazadaReturnType": "",
+                    "cainiaoRegularSchedulesDayesArr": "", "cainiaoStart": "", "cainiaoEnd": "",
+                    "cainiaoPalletQuantity": "", "returnAddressId": "",
+                    "smt_sfc_shipping_method": "3", "smt_sfc_car_type": "", "smt_sfc_goods_type": "",
+                    "smt_sfc_box_number": "", "smt_sfc_weight": "", "smt_sfc_volume": "",
+                    "smt_jit_shipping_method": "1", "smt_jit_shipping_service": "",
+                    "smt_jit_shipping_tracknumber": "", "smt_jit_shipping_remark": "",
+                    "smt_jit_car_number": "", "smt_jit_driver_phone": "",
+                    "smt_jit_shipping_volume": "", "smt_shipping_except_method": "",
+                    "smt_sfc_city_code": "", "smt_sfc_amount": "",
+                    "lazada_fcs_shipping_method": "parcel", "lazada_fcs_shipping_service": "",
+                    "lazada_fcs_shipping_tracknumber": "", "lazada_fcs_car_number": "",
+                    "lazada_fcs_driver_phone": "", "lazada_fcs_pickup_date": "",
+                    "lazada_fcs_shipping_weight": "", "lazada_fcs_shipping_volume": "",
+                    "lazada_fcs_shipping_pack_num": "", "lazada_fcs_shipping_pickup_address": "",
+                    "lazada_shop_type": "", "lazada_division_id": "", "joomBoxesCount": "",
+                    "joomBoxesTotalWeight": "", "shein_fcs_shipping_method": "1",
+                    "shein_fcs_reach_time": "", "shein_fcs_shipping_tracknumber": "",
+                    "shein_fcs_pickup_time": "", "shein_fcs_package_number": "",
+                    "shein_fcs_package_weight": "", "wb_supplier_no": ""}
+        r = requests.post(AAMZ_BASE,
+                          params={"mod": "uploadforecastorderv2.uploadForecastBatch"},
+                          headers=_aamz_headers(cred), data=form, timeout=120)
+        r.raise_for_status()
+        d = _parse_json(r)
+        if not d.get("success"):
+            raise RuntimeError(f"uploadForecastBatch({batch}) 返回失败: {d.get('message')}")
+        msg = d.get("message") or ""
+        tag = "自动发货" if automark else "普通"
+        print(f"    [{i + 1}/{len(batch_nos)}] {batch} 上传成功（{tag}）")
+        msgs.append(msg)
+        if i + 1 < len(batch_nos):
+            time.sleep(1)
+    return msgs[-1] if msgs else ""
 
 
 # ---------------- 物流交运 ----------------
@@ -661,9 +692,34 @@ def run(args):
     else:
         print("\n（dry-run 模式未做任何更换；确认无误后加 --apply 执行）")
 
+    report_no_sku(recs)
+
     csv_path = write_csv(recs)
     print(f"\n[汇总] 明细: {csv_path}")
     return 0
+
+
+def report_no_sku(recs):
+    """NO_SKU 明细报告（控制台 + CSV）：价格表缺库存 SKU 的订单需人工处理，
+    仅做飞书登记/匹配，不进批次生成/上传/交运"""
+    rows = [r for r in recs if r.get("status") == "NO_SKU"]
+    if not rows:
+        return
+    print(f"\n[⚠ 需人工处理] 价格表缺库存 SKU 的订单 {len(rows)} 单"
+          "（仅登记/匹配，未进批次生成/上传/交运）：")
+    for r in rows:
+        print(f"  {r['order_id']} [{r['shop_bcs'] or r['shop']}] "
+              f"{r['vc'] or '(无VC)'} {r['cn_name']}")
+    os.makedirs(config.LOG_DIR, exist_ok=True)
+    path = os.path.join(config.LOG_DIR,
+                        f"缺库存SKU订单_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["平台单号", "店铺", "中文名", "BCS编号", "说明"])
+        for r in rows:
+            w.writerow([r["order_id"], r["shop_bcs"] or r["shop"],
+                        r["cn_name"], r["vc"], r["note"]])
+    print(f"[报告] 明细: {path}")
 
 
 # ---------------- 预报批次主流程 ----------------
@@ -714,6 +770,7 @@ def collect_forecast_orders(args):
             other[r["status"]] = other.get(r["status"], 0) + 1
     print(f"[圈定] 可预报（已匹配商品）{len(target)} 单；"
           f"排除: {' / '.join(f'{k}={v}' for k, v in sorted(other.items())) or '无'}")
+    report_no_sku(recs)
     return target, cred
 
 

@@ -64,7 +64,7 @@
 | 子命令 | 用途 | 关键参数 |
 |---|---|---|
 | `mabang-orders` | 马帮待处理订单 SKU 匹配更换：平台 SKU(VC)→映射表中文名→价格表库存SKU，**全部强制更换**（含系统匹配一致者，幂等）；状态分类 REPLACE/NO_VC/SKIP_SHOP | `--apply` / `--days`(默认30) / `--page-size` |
-| `mabang-forecast` | 预报批次全链路（幂等状态机）：①生成批次（`order_label` 含「已预报」跳过）→②上传（仅本次新批次）→③等待→④物流交运「莫斯科仓-七库海外仓」（已选择跳过）；`--check` 只查批次状态（上传后 5-10 分钟确认用） | `--apply` / `--check` / `--wait S` / `--upload-waiting` / `--days` |
+| `mabang-forecast` | 预报批次全链路（幂等状态机）：①生成批次（`order_label` 含「已预报」跳过）→②**依次上传**（逐批 getForecastConfig 模板 + `wb_automark=1` 自动发货 + 单批次号）→③等待→④物流交运「莫斯科仓-七库海外仓」（已选择跳过）；`--check` 只查批次状态 | `--apply` / `--check` / `--wait S` / `--upload-waiting` / `--days` |
 | `feishu-register` | 新订单登记到飞书多维表格「订单登记」（**先登记再处理**）：VC→中文名→下单店 wb编号→WB链接；按订单编号去重；`--scope all --date/--begin/--end` 补录历史全部状态订单（orderalllist 忽略服务端日期过滤，本地按 paidTime 筛） | `--url`(表格地址) / `--table`(默认 订单登记) / `--scope pending\|all` / `--date` / `--begin` / `--end` / `--apply` |
 | `orders-pipeline` | **新订单全链路编排（推荐日常入口）**：①登记飞书→②匹配更换→③预报批次/上传/交运→④归属统计+重建汇总；每步独立 CSV 报告，失败即中止 | `--url` / `--table`(默认 订单登记) / `--days`(默认1) |
 
