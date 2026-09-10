@@ -32,6 +32,37 @@ STOCKS_URL = ("https://marketplace.wildberries.ru/ns/marketplace-app/"
 CHENGDU_NAME = "成都仓库"
 
 
+CANCELED_URL = ("https://marketplace.wildberries.ru/ns/marketplace-app/"
+                "marketplace-remote-wh/api/v3/portal/fbs/orders/canceled")
+
+
+def fetch_canceled_ids(shop_id, max_pages=10):
+    """查询该店已取消订单的 WB 平台单号集合（2026-09-09 抓包实测）。
+    GET portal/fbs/orders/canceled?order=desc&type=fbs&next=<游标>
+    鉴权：WB 三件套（wb_api.make_session）；翻页跟随 data.next，
+    游标不变或超 max_pages 终止防死循环。失败抛异常由调用方降级。"""
+    cred = credentials.get()
+    shop = next((s for s in cred.wb_shops()
+                 if int(s.get("shopId", 0)) == int(shop_id)), None)
+    if not shop:
+        raise RuntimeError(f"credentials.json wb.shops 中无店铺 {shop_id}")
+    session = wb_api.make_session(shop, cred.root_version)
+    ids, nxt, page, seen = set(), 0, 0, None
+    while True:
+        params = {"order": "desc", "type": "fbs", "next": nxt}
+        d = wb_api.request(session, "GET", CANCELED_URL, params=params)
+        data = d.get("data") or {}
+        for o in data.get("orders") or []:
+            if o.get("id"):
+                ids.add(str(o["id"]))
+        page += 1
+        nxt = data.get("next")
+        if not nxt or str(nxt) == str(seen) or page >= max_pages:
+            break
+        seen = nxt
+    return ids
+
+
 def list_chengdu_warehouses():
     """从 BCS 仓库列表筛出全部店铺「成都仓库」→ [{'shopId','id','name'}]"""
     whs = bcs.fetch_warehouses(-1)  # shopId=-1 一次返回全部

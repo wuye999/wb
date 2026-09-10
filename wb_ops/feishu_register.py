@@ -188,11 +188,26 @@ def build_records(args):
             rows = rows.get("rows") or []
         snaps[shop] = {r.get("vendorCode"): r.get("nmId") for r in rows if r.get("vendorCode")}
 
+    # 已取消订单排除（WB 门户取消单；马帮不同步取消单，防御性过滤）
+    canceled = set()
+    for shop, sid in shop_ids.items():
+        try:
+            from . import remote_wh
+            ids = remote_wh.fetch_canceled_ids(sid)
+            canceled |= ids
+            if ids:
+                print(f"  [取消单] 店{sid}: {len(ids)} 单已取消")
+        except Exception as e:
+            print(f"  [警告] 店{sid} 取消单查询失败（跳过排除）: {e}")
+
     records, skip = [], {}
     for o in orders:
         p = mabang.parse_order(o)
         if p["shop"] not in shop_map:
             skip["非目标店铺"] = skip.get("非目标店铺", 0) + 1
+            continue
+        if str(p["platform_order_id"]) in canceled:
+            skip["已取消"] = skip.get("已取消", 0) + 1
             continue
         if not p["platform_order_id"]:
             skip["无平台单号"] = skip.get("无平台单号", 0) + 1
@@ -218,6 +233,8 @@ def build_records(args):
             "店铺": [shop_label],
             "BCS编号": p["vc"] or None,
             "商品中文名": (cn or None) if p["vc"] else None,
+            # 库存SKU = 马帮订单列表实际选择的库存SKU（order_ellipsis_title）
+            "库存SKU": (p["matched_sku"] or None) or None,
             "wb编号": wb_code or None,
             "商品链接": (f"https://www.wildberries.ru/catalog/{wb_code}/detail.aspx"
                         if wb_code else None),
@@ -227,7 +244,7 @@ def build_records(args):
     return records, skip, cred
 
 
-CSV_FIELDS = ["订单编号", "日期", "店铺", "BCS编号", "商品中文名", "wb编号", "订单量", "结果"]
+CSV_FIELDS = ["订单编号", "日期", "店铺", "BCS编号", "商品中文名", "库存SKU", "wb编号", "订单量", "结果"]
 
 
 def write_csv(records, existing_ids):

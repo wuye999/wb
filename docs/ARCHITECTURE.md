@@ -137,8 +137,8 @@ wb.py daily          ⑩ morning=报名+改价（含价格审核）/ check=只�
 ### 每日新订单处理链路（2026-09-07 新增，`orders-pipeline` 编排）
 
 ```
-wb.py orders-pipeline ① feishu-register 登记飞书「订单登记」（订单编号去重；先登记再处理）
-wb.py mabang-orders   ② VC→映射表中文名→价格表库存SKU → replaceOrderItem 强制更换
+wb.py mabang-orders   ① VC→映射表中文名→价格表库存SKU → replaceOrderItem 强制更换（先匹配）
+wb.py feishu-register ② 登记飞书「订单登记」（订单编号去重；库存SKU=匹配后实际值；排除已取消订单）
 wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传 → 等待 150s → 物流交运（已选跳过）
                       ④ 归属统计（店铺×中文名单量 CSV）
 ```

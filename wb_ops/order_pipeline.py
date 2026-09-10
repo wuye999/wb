@@ -63,29 +63,29 @@ def run(args):
         return 1
 
     t0 = time.time()
-    # ① 登记飞书（先登记再处理，用户规则）
-    ns = SimpleNamespace(url=args.url, table=args.table, days=args.days,
-                         page_size=args.page_size, scope="pending",
-                         date="", begin="", end="", apply=True,
-                         registered_new=[])
+    # ① 商品匹配更换（先匹配：登记飞书的库存SKU 才是更换后的正确值）
     print("\n" + "#" * 72)
-    print("# 步骤 ① 新订单登记飞书")
-    print("#" * 72)
-    code = feishu_register.run(ns)
-    if code:
-        print("[中止] 登记飞书失败，后续步骤不执行")
-        return code
-    registered = list(getattr(ns, "registered_new", []))
-
-    # ② 商品匹配更换
-    print("\n" + "#" * 72)
-    print("# 步骤 ② 新订单商品匹配更换（VC→中文名→库存SKU）")
+    print("# 步骤 ① 新订单商品匹配更换（VC→中文名→库存SKU）")
     print("#" * 72)
     ns2 = SimpleNamespace(days=args.days, page_size=args.page_size, apply=True, sync=False)
     code = mabang.run(ns2)
     if code:
         print("[中止] 商品匹配更换失败，后续步骤不执行")
         return code
+
+    # ② 登记飞书（匹配完成后登记，库存SKU=马帮实际匹配值）
+    ns = SimpleNamespace(url=args.url, table=args.table, days=args.days,
+                         page_size=args.page_size, scope="pending",
+                         date="", begin="", end="", apply=True,
+                         registered_new=[])
+    print("\n" + "#" * 72)
+    print("# 步骤 ② 新订单登记飞书（匹配完成后，库存SKU 为实际匹配值）")
+    print("#" * 72)
+    code = feishu_register.run(ns)
+    if code:
+        print("[中止] 登记飞书失败，后续步骤不执行")
+        return code
+    registered = list(getattr(ns, "registered_new", []))
 
     # ③ 预报批次→上传→等待→交运
     print("\n" + "#" * 72)

@@ -260,7 +260,7 @@ python wb.py orders --no-sync                         # 跳过同步，直接查
 > **固定顺序：先登记飞书，再执行处理流程**——订单处理后离开待处理页进入全部订单，不便筛查。
 
 ```bash
-# 一键全链路（推荐日常入口）：①登记飞书→②匹配更换→③预报批次/上传/交运→④归属统计
+# 一键全链路（推荐日常入口）：①匹配更换→②登记飞书（库存SKU=匹配后实际值）→③预报批次/上传/交运→④归属统计
 python wb.py orders-pipeline --url "<飞书多维表格地址>"
 
 # 分步执行（排查用）
@@ -273,7 +273,7 @@ python wb.py mabang-forecast --check                      #    上传 5-10 分�
 python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-05 --apply
 ```
 
-- ⚠ 口径：只处理 `shop_map` 内店铺（其他员工的马帮店铺如 子龙2/子龙 不在本环境处理，由其在自己环境运行）；**价格表缺库存 SKU 的订单（NO_SKU）只登记/匹配、不进批次/上传/交运**，执行时逐单打印并导出 `data/logs/缺库存SKU订单_*.csv`，需人工处理。
+- ⚠ 口径：只处理 `shop_map` 内店铺（其他员工的马帮店铺如 子龙2/子龙 不在本环境处理，由其在自己环境运行）；**已取消订单（WB 门户 portal/fbs/orders/canceled 逐店查询）排除在登记/预报/上传/交运之外**（取消单不出现在马帮列表，属防御性过滤，逐店查询失败时降级跳过）；**价格表缺库存 SKU 的订单（NO_SKU）只登记/匹配、不进批次/上传/交运**，执行时逐单打印并导出 `data/logs/缺库存SKU订单_*.csv`，需人工处理。
 - 前置：`data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）为最新值；飞书鉴权走 `lark-cli` 用户身份。
 - 口径：只处理 shop_map 内店铺（马帮 子龙主2/子龙主2（1）/子龙主2（2）↔ 袁州1/2/3）；订单编号为飞书去重键，重复不登记；wb编号 = **下单店铺自己的码**（非映射表主店码）。
 - 每步产出 CSV 报告（`data/logs/飞书订单登记_* / 马帮订单匹配_* / 马帮预报批次_* / 新订单归属统计_*.csv`）；某步失败即中止后续。

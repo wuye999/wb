@@ -768,6 +768,21 @@ def collect_forecast_orders(args):
     for r in recs:
         if r["status"] != "REPLACE":
             other[r["status"]] = other.get(r["status"], 0) + 1
+    # 已取消订单排除（WB 门户取消单；马帮不同步取消单，防御性过滤）
+    from . import remote_wh
+    canceled = set()
+    for label in shop_map.values():
+        m = re.search(r"\((\d+)\)", label)
+        if not m:
+            continue
+        try:
+            canceled |= remote_wh.fetch_canceled_ids(int(m.group(1)))
+        except Exception as e:
+            print(f"  [警告] 店{m.group(1)} 取消单查询失败（跳过排除）: {e}")
+    n_cancel = sum(1 for r in target if str(r["platform_order_id"]) in canceled)
+    if n_cancel:
+        target = [r for r in target if str(r["platform_order_id"]) not in canceled]
+        other["已取消"] = other.get("已取消", 0) + n_cancel
     print(f"[圈定] 可预报（已匹配商品）{len(target)} 单；"
           f"排除: {' / '.join(f'{k}={v}' for k, v in sorted(other.items())) or '无'}")
     report_no_sku(recs)
