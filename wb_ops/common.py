@@ -39,3 +39,18 @@ def ensure_utf8_stdout():
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+
+def extract_wb_nm(vc):
+    """从 vendorCode 提取 WB原始nmId（纯数字才有效，否则返回 None）。
+    兼容：
+    1. 经典/他人表格式：BCS-{前缀}-{WB原始nmId} 或 BCS-{前缀}-ozon-card-{WB原始nmId}
+    2. 新供应商代码格式：BCS-{前缀}-{标识}/{WB原始nmId}（如 BCS-QQNN-WRLINWI/1078999444）
+    """
+    s = str(vc or "").strip()
+    if "/" in s:
+        tail = s.rsplit("/", 1)[-1]
+    else:
+        tail = s.rsplit("-", 1)[-1]
+    return tail if tail.isdigit() else None
+

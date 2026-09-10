@@ -3,10 +3,13 @@
 wb_ops 跨店复制上架（replicate）
 
 把只覆盖部分店铺的商品（按 vendorCode 判断）上架到缺失的店铺：
-- 覆盖判断：5 店快照（filter=BASE，仅滤 trashedAt）按 vendorCode 汇总 → 缺失店即目标店。
-- 上架提交：POST /system/wbCollection/wb/new（API 文档 §2.6），vendorCode 与源店完全一致。
-- 商品数据：源店快照（标题/图片/尺寸/价格）+ WB detail（BCS 代理）+ card.json（basket CDN）。
-- 防重复：快照覆盖判断 + 执行时 vendorCodeMulti(filter=ALL) 实时查重，双层防护。
+- 覆盖判断：多店快照（filter=BASE，仅滤 trashedAt）按 vendorCode 汇总 → 缺失店即目标店。
+- 上架提交：POST /products/batch/push（BCS 新版批量上品接口），单批次最多 50 个商品批量推送。
+- 商品数据：
+  * sku: 必须读取映射表「WB商品码」列（商品真实 WB 编号），无商品码坚决跳过；
+  * 包装尺寸：优先读取映射表（尺寸长/宽/高/毛重，绝不读取快照尺寸）→ 商品价格表兜底 → card.json 兜底；
+  * 前缀码：中文名匹配商品价格表前缀码优先 → 提取原 vendorCode 前缀码 → 随机 4 位大写字母（均自动拼接 BCS- 前缀）。
+- 防重复：快照覆盖判断 + 本地记录 + 执行时 vendorCodeMulti(filter=ALL) 实时查重。
 
 用法：wb.py replicate [--vc|--prefix|--name|--shops|--limit] [--apply] [--no-verify] [--interval S]
 """
@@ -15,7 +18,9 @@ import csv
 import json
 import math
 import os
+import random
 import re
+import string
 import time
 from datetime import datetime
 
@@ -30,7 +35,8 @@ from . import products
 DETAIL_URL_TPL = ("https://www.wildberries.ru/__internal/u-card/cards/v4/detail"
                   "?appType=1&curr=rub&dest=-1257786&spp=30&hide_vflags=4294967296"
                   "&hide_dtype=15&mtype=257&lang=ru&ab_testing=false&nm={nm}")
-# basket 分片表（来源：批量上架项目 45-api-wb.js 权威表，46 区间，勿改动）
+
+# basket 分片表（来源：批量上架项目 45-api-wb.js 权威表，46 区间，供 card.json 包装与商品详情查询使用）
 _BASKET_TABLE = [
     (143, "01"), (287, "02"), (431, "03"), (719, "04"), (1007, "05"), (1061, "06"),
     (1115, "07"), (1169, "08"), (1313, "09"), (1601, "10"), (1655, "11"), (1919, "12"),
@@ -41,11 +47,15 @@ _BASKET_TABLE = [
     (8309, "37"), (8741, "38"), (9173, "39"), (9605, "40"), (10373, "41"), (11141, "42"),
     (11909, "43"), (12677, "44"), (13445, "45"), (14213, "46"),
 ]
-DETAIL_INTERVAL = 1.2      # detail 请求间隔（秒）
 CARD_INTERVAL = 0.5        # card.json 请求间隔（秒）
-DETAIL_FAIL_ABORT = 3      # 连续 N 个 vc detail 失败 → 中止（防反爬雪崩）
-DEFAULT_STOCK = 999        # 上架默认库存（对齐批量上架脚本 A6 设计）
+DEFAULT_STOCK = 999        # 上架默认库存
+BATCH_SIZE = 50            # 新版批量上品单次最大商品数
 RE_REGION = re.compile(r"подольск|электросталь|хоругвино|колчанино|восток|север|юг", re.I)
+
+
+def fetch_wb_detail(nm_id):
+    """[已弃用] 旧版 WB detail 抓取桩函数（新版批量上品接口由 BCS 后端自动抓取，已无需本地抓取）"""
+    return None
 
 
 def parse_cn_stock(s):
@@ -73,7 +83,7 @@ def stock_for(cn, overrides=None):
 
 
 def _basket_base(nm_id):
-    """nmId → basket CDN 基础路径（vol/part/图片与 card.json 都基于它）"""
+    """nmId → basket CDN 基础路径（card.json 基于它）"""
     n = int(nm_id)
     vol, part = n // 100000, n // 1000
     basket = "47"
@@ -82,6 +92,91 @@ def _basket_base(nm_id):
             basket = no
             break
     return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{n}"
+
+
+# ---------------- 商品价格表尺寸缓存 ----------------
+_pkg_cache = None
+
+
+def boss_pkg_map():
+    """商品价格表「尺寸」列 → {中文名: (L, W, H, weight)}（格式 `长*宽*高/毛重`，容错空格）。
+    兜底来源：映射表缺毛重/尺寸时，按中文名取我方商品价格表同名的包装数据。"""
+    global _pkg_cache
+    if _pkg_cache is not None:
+        return _pkg_cache
+    import openpyxl
+    out = {}
+    try:
+        wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
+        ws = wb["Sheet1"]
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            cn = str(r[2] or "").strip()
+            dim = str(r[4] or "").strip() if len(r) > 4 else ""
+            if not cn or not dim:
+                continue
+            m = re.match(r"^([\d.]+)\s*\*\s*([\d.]+)\s*\*\s*([\d.]+)\s*/\s*([\d.]+)$", dim)
+            if not m:
+                continue
+            out[cn] = (float(m.group(1)), float(m.group(2)),
+                       float(m.group(3)), float(m.group(4)))
+        wb.close()
+    except Exception:
+        pass
+    _pkg_cache = out
+    return out
+
+
+# ---------------- 供应商代码前缀处理 ----------------
+def extract_vc_prefix(vc):
+    """从现有 vendorCode 提取 4 位前缀码。
+    支持：
+      BCS-QQNN-1078999444 -> QQNN
+      BCS-QQNN-ozon-card-1078999444 -> QQNN
+      BCS-QQNN-WRLINWI/1078999444 -> QQNN
+    未提取到返回 None
+    """
+    s = str(vc or "").strip()
+    m = re.match(config.VC_PREFIX_RE, s)
+    if m:
+        return m.group(1).upper()
+    m = re.match(r"^BCS-([A-Za-z]{4})(?:-|$|/)", s)
+    if m:
+        return m.group(1).upper()
+    return None
+
+
+def random_prefix():
+    """生成 4 位大写字母随机前缀"""
+    return "".join(random.choices(string.ascii_uppercase, k=4))
+
+
+def resolve_vendor_prefix(cn, old_vc, cn2prefix=None):
+    """根据规则匹配并生成提交给新批量上品接口的 vendorCodePrefix（必须携带 BCS- 前缀）。
+    规则：
+    1. 能识别中文名 → 匹配商品价格表前缀码，拼接为 BCS-{前缀码}
+    2. 匹配不到 → 尝试从旧 vendorCode 提取 4 位前缀码，拼接为 BCS-{前缀码}
+    3. 仍没有 → 随机生成 4 位大写字母，拼接为 BCS-{4位字母}
+    返回: (prefix_with_bcs, prefix_source)
+    """
+    prefix = None
+    source = "随机"
+    if cn and cn2prefix and cn in cn2prefix:
+        p = str(cn2prefix[cn]).strip().upper()
+        if p:
+            prefix = p
+            source = "价格表"
+    if not prefix and old_vc:
+        p = extract_vc_prefix(old_vc)
+        if p:
+            prefix = p
+            source = "源vc"
+    if not prefix:
+        prefix = random_prefix()
+        source = "随机"
+
+    if not prefix.startswith("BCS-"):
+        prefix = f"BCS-{prefix}"
+    return prefix, source
 
 
 # ---------------- 覆盖计算 ----------------
@@ -140,30 +235,9 @@ def main_warehouse(sid, shops_data=None):
     return wh_id
 
 
-# ---------------- WB 数据获取 ----------------
-def _fetch_wb_detail_bcs(nm_id):
-    """WB detail（BCS 代理，带 BCS 凭证）→ product 对象；失败返回 None。"""
-    from urllib.parse import quote
-    wb_url = DETAIL_URL_TPL.format(nm=nm_id)
-    url = f"{bcs.base_url()}/wb/api/proxy/common?url={quote(wb_url, safe='')}"
-    try:
-        d = bcs.http_get_json(url)
-        if d.get("code") != 200:
-            return None
-        products_ = (d.get("data") or {}).get("products") or []
-        return products_[0] if products_ else None
-    except Exception:
-        return None
-
-
-def fetch_wb_detail(nm_id):
-    """WB detail（BCS 代理）→ product 对象；失败返回 None。
-    （synthetic 拼装通道由 run() 直接调用 build_synthetic_detail）"""
-    return _fetch_wb_detail_bcs(nm_id)
-
-
+# ---------------- card.json 与包装数据获取 ----------------
 def fetch_card_json(nm_id):
-    """basket CDN card.json → dict；失败返回 None。"""
+    """basket CDN card.json → dict；失败返回 None。供 questions 客服与包装兜底使用。"""
     url = f"{_basket_base(nm_id)}/info/ru/card.json"
     try:
         resp = requests.get(url, headers={"User-Agent": common.UA}, timeout=30)
@@ -172,44 +246,6 @@ def fetch_card_json(nm_id):
         return resp.json()
     except Exception:
         return None
-
-
-def build_synthetic_detail(meta, card_info, nm_id):
-    """用 BCS 商品数据 + card.json 拼装伪 detail product（替代 WB detail）。
-
-    背景：BCS 代理 detail 持续超时；而 BCS 列表行 / 他人映射表行 + card.json
-    （CDN 直连）已覆盖 wbDetail 所需字段的绝大部分。
-    已实验验证（2026-08-22）：拼装上架 BCS-YSGK-1317303667 → 店5281 成功建卡，
-    商品信息（标题/图片11/尺寸/价格）与源店一致，同步后 vendorCode 可查。
-    meta：BCS list 行（replicate 场景，键 title/sizeList/dimensionsWeightBrutto）
-    或他人表 item（import-shelve 场景，键 title_ru/weight，subjectId 由 card.json 兜底）。
-    返回伪 detail product dict；sizes 仅非空占位（build_payload 会重写）。"""
-    ci = card_info or {}
-    data = ci.get("data") or {}
-    sizes = []
-    for s in (meta.get("sizeList") or []):
-        orig = s.get("techSizeName")
-        try:
-            orig = int(float(orig)) if orig not in (None, "") else 0
-        except (TypeError, ValueError):
-            orig = 0
-        sizes.append({"origName": orig, "name": str(s.get("techSizeName") or ""),
-                      "price": s.get("price"), "vendorCode": meta.get("vendorCode")})
-    if not sizes:  # 占位（build_payload/build_import_payload 会重写为正确格式）
-        sizes = [{"origName": 0, "name": "", "price": None, "vendorCode": meta.get("vendorCode")}]
-    return {
-        "id": int(nm_id),
-        "root": ci.get("imt_id") or meta.get("imtId") or 0,
-        "brand": meta.get("brand") or "",
-        "brandId": 0,
-        "colors": ci.get("colors") or [],
-        "subjectId": meta.get("subjectId") or data.get("subject_id"),
-        "subjectParentId": data.get("subject_root_id") or 0,
-        "name": meta.get("title") or meta.get("title_ru") or ci.get("imt_name") or "",
-        "pics": (ci.get("media") or {}).get("photo_count") or 0,
-        "weight": meta.get("dimensionsWeightBrutto") or meta.get("weight") or 0,
-        "sizes": sizes,
-    }
 
 
 _own_map_cache = None
@@ -228,8 +264,7 @@ def _own_map():
 
 
 def _card_color_names(card):
-    """从 card.json 提取颜色名（兼容 colors 为 dict 列表 / ID 列表 + nm_colors_names 兜底）。
-    card.json 通常只有颜色 ID（nm_colors_names 常为 null），拿不到名字时返回空串。"""
+    """从 card.json 提取颜色名。供 questions 模块调用。"""
     colors = card.get("colors") or []
     nm_names = card.get("nm_colors_names")
     if isinstance(nm_names, str):
@@ -248,11 +283,7 @@ def _card_color_names(card):
 
 
 def fetch_product_info(nm_id, vc="", own=None):
-    """整合商品信息：card.json（标题+描述+特征+颜色）+ 价格映射表行（店铺价CNY）。
-    返回 dict {title, brand, colors, price, description, options}；拉不到的字段为空。
-    描述/特征截断，避免 token 过载。
-    ★ 不再依赖 WB detail（BCS 代理超时易失败）：brand 无来源留空；价格=价格映射表店铺价(CNY)。
-    own: 价格映射表状态 {vc: {cn,dp,shop_price}}（None 时内部懒加载）。"""
+    """整合商品信息：供 questions / questions_watch 模块调用。"""
     info = {"title": "", "brand": "", "colors": "", "price": "", "description": "", "options": ""}
     card = fetch_card_json(nm_id)
     if card:
@@ -264,7 +295,6 @@ def fetch_product_info(nm_id, vc="", own=None):
             if o.get("name") and o.get("value"))
         info["options"] = opts_str[:600] + ("…" if len(opts_str) > 600 else "")
         info["colors"] = _card_color_names(card)
-    # 价格：价格映射表店铺价(CNY，原价) 减去折扣% = 实际售价；无折扣列时按原价
     row = (own if own is not None else _own_map()).get(vc or "")
     if row:
         price_v = None
@@ -276,7 +306,7 @@ def fetch_product_info(nm_id, vc="", own=None):
         if price_v is not None:
             disc = common.to_int(row.get("discount")) if row.get("discount") not in (None, "") else 0
             if disc:
-                price_v = price_v * (100 - disc) / 100  # WB 折扣=减价%，现价=原价×(1-disc/100)
+                price_v = price_v * (100 - disc) / 100
             info["price"] = f"{price_v:.0f} CNY"
     return info
 
@@ -327,12 +357,71 @@ def parse_package_info(card_info):
     return result
 
 
-def generate_image_urls(nm_id, photo_count):
-    """按 photo_count 生成 basket big 图 URL 列表（无图兜底单张主图）"""
-    urls = [f"{_basket_base(nm_id)}/images/big/{i}.webp" for i in range(1, (photo_count or 0) + 1)]
-    if not urls:
-        urls = [f"{_basket_base(nm_id)}/images/big/1.webp"]
-    return urls
+def resolve_replicate_package(vc, cn, nm_id, map_state, card_cache=None):
+    """
+    获取复制上架的包装尺寸与重量：
+    ★ 严格规则：绝不使用快照的尺寸数据！
+    1. 优先读取价格映射表 (map_state.get(vc)) 的 L, W, H, weight
+    2. 若缺失或 <= 0，查商品价格表 (boss_pkg_map) 兜底
+    3. 若仍缺失，查 card.json 兜底
+    返回: ((L, W, H, weight), None) 或 (None, err_msg)
+    其中 L, W, H 为整型 cm (ceil)，weight 为 float kg (round 3)
+    """
+    row = (map_state or {}).get(vc) or {}
+    length = row.get("L")
+    width = row.get("W")
+    height = row.get("H")
+    weight = row.get("weight")
+
+    def _valid(val):
+        try:
+            return float(val) > 0
+        except (TypeError, ValueError):
+            return False
+
+    # 2. 商品价格表兜底
+    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
+        bp = boss_pkg_map().get(cn or "")
+        if bp:
+            bl, bw, bh, bwgt = bp
+            if not _valid(length):
+                length = bl
+            if not _valid(width):
+                width = bw
+            if not _valid(height):
+                height = bh
+            if not _valid(weight):
+                weight = bwgt
+
+    # 3. card.json 兜底
+    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
+        card_info = None
+        if card_cache is not None and nm_id in card_cache:
+            card_info = card_cache[nm_id]
+        else:
+            card_info = fetch_card_json(nm_id)
+            if card_cache is not None:
+                card_cache[nm_id] = card_info
+        if card_info:
+            pkg = parse_package_info(card_info)
+            if not _valid(length):
+                length = pkg.get("length")
+            if not _valid(width):
+                width = pkg.get("width")
+            if not _valid(height):
+                height = pkg.get("height")
+            if not _valid(weight):
+                weight = pkg.get("weight")
+
+    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
+        return None, f"包装数据缺失（L={length} W={width} H={height} 重={weight}）"
+
+    return (
+        math.ceil(float(length)),
+        math.ceil(float(width)),
+        math.ceil(float(height)),
+        round(float(weight), 3)
+    ), None
 
 
 # ---------------- 查重（本地记录 + 实时 API 双防线） ----------------
@@ -354,7 +443,7 @@ def _save_records(records):
 
 
 def vc_exists_in_shop(vc, sid, records=None):
-    """执行时查重：先查本地提交记录（BCS 缓存滞后窗口内 API 不可靠），再查 API（filter=ALL 含草稿箱/回收站）"""
+    """执行时查重：先查本地提交记录，再查 API（filter=ALL 含草稿箱/回收站）"""
     if records and str(sid) in (records.get(vc) or {}):
         return True
     url = (f"{bcs.base_url()}/shopKeeper/productList/list?filter=ALL&pageNum=1&pageSize=10"
@@ -363,114 +452,12 @@ def vc_exists_in_shop(vc, sid, records=None):
         d = bcs.http_get_json(url)
         return bool(d.get("code") == 200 and d.get("rows"))
     except Exception:
-        return False  # 查询失败按不存在处理，由 BCS 服务端 vendorCode 幂等兜底（实测重复提交不建重复商品）
-
-
-# ---------------- 上架请求体构造 ----------------
-def build_payload(vc, src_sid, src_row, target_sids, warehouses, detail, card_info, nm_id, cn="-", overrides=None):
-    """构造 /system/wbCollection/wb/new 请求体。返回 (payload, err)。
-    vendorCode 与源店完全一致；价格=源店现价；直上/不合并/不带品牌。
-    nm_id：可靠 WB商品码（映射表主店 nmId），用作请求体 nmId/sourceSku 及图片兜底基准。
-    cn/overrides：用于按中文名决定上架库存（stock_for）。"""
-    nm_id = int(nm_id)
-    sl = src_row.get("sizeList") or []
-    price = sl[0].get("price") if sl else None
-    if price is None:
-        return None, "源店无价格"
-    price_str = f"{float(price):.2f}"
-
-    # wbDetail：detail product 深拷贝 + sizes 重写（对齐源店规格数，绝大多数 1 条）
-    wb_detail = copy.deepcopy(detail)
-    sizes = wb_detail.get("sizes") or []
-    if not sizes:
-        return None, "WB 详情缺少规格数据（sizes 为空）"
-    n = max(len(sl), 1)
-    new_sizes = []
-    for s in sizes[:n]:
-        orig = s.get("origName")
-        if orig is None:
-            orig = s.get("techSize") if s.get("techSize") else 0
-        try:
-            orig = int(float(orig))
-        except (TypeError, ValueError):
-            orig = 0
-        new_sizes.append({"origName": orig,
-                          "name": s.get("name") if s.get("name") is not None else (s.get("wbSize") or ""),
-                          "price": price_str,
-                          "vendorCode": vc})
-    wb_detail["sizes"] = new_sizes
-
-    # 图片：源店快照优先，缺失按 photo_count 生成
-    images = src_row.get("images") or ""
-    if not images:
-        images = ";".join(generate_image_urls(nm_id, ((card_info or {}).get("media") or {}).get("photo_count")))
-    main_image = src_row.get("repImg") or images.split(";")[0]
-
-    # 包装尺寸/重量：源店快照优先 → card.json 包装组兜底 → 仍缺则失败（不造假数据）
-    pkg = parse_package_info(card_info)
-    length = src_row.get("dimensionsLength") or pkg["length"]
-    width = src_row.get("dimensionsWidth") or pkg["width"]
-    height = src_row.get("dimensionsHeight") or pkg["height"]
-    weight = src_row.get("dimensionsWeightBrutto") or pkg["weight"]
-    if not length or not width or not height or not weight:
-        return None, f"包装数据缺失（L={length} W={width} H={height} 重={weight}）"
-
-    subject_id = src_row.get("subjectId") or detail.get("subjectId")
-    if not subject_id:
-        return None, "类目 ID 缺失"
-    parent_id = detail.get("subjectParentId") or ((card_info or {}).get("data") or {}).get("subject_root_id") or 0
-    parent_name = (card_info or {}).get("subj_root_name") or ""
-
-    shop_arr = [{"id": sid, "warehouseId": warehouses[sid], "warehouseQuantity": stock_for(cn, overrides)}
-                for sid in target_sids]
-    payload = {
-        "shop": json.dumps(shop_arr, ensure_ascii=False, separators=(",", ":")),
-        "offerDIY": "",
-        "brandStatus": False,
-        "oModel": True,
-        "status": "1",
-        "collectionType": "0",
-        "shopDatas": [{
-            # ★ v1.2.2（2026-08-26）：shopDatas[].nmId 提交前必须置空 null——新版后端按 nmId 判「是否已有卡」，
-            #   带值会被当「更新已有卡」处理导致上架失败；WB 原始 nmId 由下方 sourceSku 保留，不影响查重/匹配。
-            "nmId": None,
-            "wbDetail": json.dumps(wb_detail, ensure_ascii=False, separators=(",", ":")),
-            "name": src_row.get("title") or "",
-            "subjectId": subject_id,
-            "parentId": parent_id,
-            "wbCardInfo": json.dumps(card_info, ensure_ascii=False, separators=(",", ":")),
-            "images": images,
-            "video": src_row.get("video") or "",
-            "mainImage": main_image,
-            "packagLength": math.ceil(float(length)),
-            "packagWidth": math.ceil(float(width)),
-            "packagHeight": math.ceil(float(height)),
-            "weightBrutto": str(weight),
-            "vendorCode": vc,
-            "brand": "",
-            "hsCode": None,
-            "subjectName": src_row.get("subjectName") or "",
-            "parentName": parent_name,
-            "sourceSku": str(nm_id),
-        }],
-        "mode": 1,
-        "mergeCards": 1,
-        "carryBrand": 1,
-        "customBrand": None,
-        "titleSuffix": None,
-        "aiRewrite": False,
-        "aiRetouch": False,
-        "aiRetouchTemplateId": None,
-        "imgUploadMode": 0,
-    }
-    return payload, None
+        return False
 
 
 # ---------------- 主流程 ----------------
 def ensure_snapshots(args):
-    """前置同步：启动时刷新全部店铺快照（WB→BCS 并发同步 + 逐店拉取，约 2 分钟）。
-    默认**不**自动同步，直接使用本地快照（覆盖/差集判断可能滞后）；
-    加 --sync 才先刷新全部店铺，保证判断基于最新数据。"""
+    """前置同步：启动时刷新全部店铺快照"""
     if not getattr(args, "sync", False):
         print("[前置同步] 未加 --sync，跳过同步，使用本地快照（覆盖/差集判断可能滞后；需最新请加 --sync）")
         return
@@ -486,14 +473,16 @@ def run(args):
     vc_shops, vc_rows, all_shop_ids = build_coverage(shops_data)
     sid_main = mapping.shop_id()
 
-    # 中文名 + 可靠 WB商品码（映射表）显示/使用
-    cn_map, own_nm = {}, {}
-    try:
-        state, _ = mapping.load_mapping_state()
-        cn_map = {vc: v.get("cn") or "" for vc, v in state.items()}
-        own_nm = {vc: v.get("nmId") or "" for vc, v in state.items()}
-    except Exception:
-        pass
+    # 映射表状态：中文名 + 可靠 WB商品码（映射表） + 映射表包装尺寸
+    mapping_state, _ = mapping.load_mapping_state()
+    cn_map = {vc: v.get("cn") or "" for vc, v in mapping_state.items()}
+    own_nm = {vc: str(v.get("nmId") or "").strip() for vc, v in mapping_state.items()}
+
+    # 商品价格表前缀映射：{中文名: 前缀码}
+    pmap = mapping.load_prefix_map()
+    cn2prefix = {}
+    for prefix, info in pmap.items():
+        cn2prefix.setdefault(info.get("cn") or "", prefix)
 
     # 目标店限定
     allow_shops = ([int(x) for x in args.shops.split(",") if x.strip()]
@@ -528,27 +517,34 @@ def run(args):
 
     no_source = [p for p in partial if p[1] is None]
     plans = [p for p in partial if p[1] is not None]
-    no_nm = [p for p in plans if not own_nm.get(p[0])]
+
+    # 校验：必须读取价格映射表的「WB商品码」这一列的码，绝不能从 vendorCode 提取末尾数字；无商品码坚决跳过
+    no_nm = [p for p in plans if not (own_nm.get(p[0]) and own_nm.get(p[0]).isdigit())]
 
     print(f"店铺: {all_shop_ids}（主店 {sid_main}）")
     print(f"候选 {len(partial)} 个 vc（部分覆盖），其中 {len(no_source)} 个全店无价格（不可上架），"
-          f"{len(no_nm)} 个映射表无WB商品码（跳过避免误上架），{len(plans) - len(no_nm)} 个可执行")
+          f"{len(no_nm)} 个映射表无有效WB商品码（跳过避免误上架），{len(plans) - len(no_nm)} 个可执行")
     if no_source:
         print("[无可用源清单] " + ", ".join(p[0] for p in no_source[:20]) + ("..." if len(no_source) > 20 else ""))
     if no_nm:
         print("[无WB商品码跳过] " + ", ".join(p[0] for p in no_nm[:20]) + ("..." if len(no_nm) > 20 else ""))
 
     # dry-run 清单
-    print("\n" + "=" * 84)
-    print(f"{'vendorCode':<28} {'中文名':<12} {'源店':<6} {'价格':<8} {'可靠nmId':<11} 目标店")
-    print("-" * 84)
+    print("\n" + "=" * 100)
+    print(f"{'vendorCode':<28} {'中文名':<14} {'源店':<6} {'价格':<8} {'WB商品码':<12} {'提交前缀':<12} 目标店")
+    print("-" * 100)
     for vc, src_sid, src_row, missing in plans:
-        price = (src_row.get("sizeList") or [{}])[0].get("price")
+        sl = src_row.get("sizeList") or []
+        price = sl[0].get("price") if sl else None
+        if price is None and vc in mapping_state:
+            price = mapping_state[vc].get("shop_price") or mapping_state[vc].get("dp")
         cn = cn_map.get(vc) or "-"
         rel_nm = own_nm.get(vc) or ""
-        flag = "  [跳过-无WB商品码]" if not rel_nm else ""
-        print(f"{vc:<28} {cn:<12} {src_sid:<6} {price:<8} {rel_nm:<11} {','.join(str(s) for s in missing)}{flag}")
-    print("=" * 84)
+        valid_nm = rel_nm if rel_nm.isdigit() else ""
+        target_prefix, prefix_src = resolve_vendor_prefix(cn, vc, cn2prefix)
+        flag = "  [跳过-无有效WB商品码]" if not valid_nm else ""
+        print(f"{vc:<28} {cn:<14} {src_sid:<6} {str(price):<8} {valid_nm:<12} {target_prefix:<12} {','.join(str(s) for s in missing)}{flag}")
+    print("=" * 100)
 
     if not plans:
         print("无可执行任务")
@@ -571,33 +567,44 @@ def run(args):
     print(f"各店主仓库: {warehouses}")
 
     records = _load_records()
+    card_cache = {}
 
     csv_path = os.path.join(config.LOG_DIR, f"复制上架_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     os.makedirs(config.LOG_DIR, exist_ok=True)
     csv_file = open(csv_path, "w", newline="", encoding="utf-8-sig")
     writer = csv.writer(csv_file)
-    writer.writerow(["时间", "vendorCode", "中文名", "源店", "目标店", "价格", "结果", "原因"])
+    writer.writerow(["时间", "vendorCode", "中文名", "WB商品码", "源店", "目标店", "提交前缀", "价格", "结果", "原因"])
 
     ok = skip = fail = 0
-    detail_fail_streak = 0
-    aborted = False
     t0 = time.time()
+
+    # 1) 逐个商品进行前置校验与数据准备
+    valid_items = []
     for i, (vc, src_sid, src_row, missing) in enumerate(plans, 1):
         tag = f"[{i}/{len(plans)}]"
         cn = cn_map.get(vc) or "-"
-        price = (src_row.get("sizeList") or [{}])[0].get("price")
+        sl = src_row.get("sizeList") or []
+        price = sl[0].get("price") if sl else None
+        if price is None and vc in mapping_state:
+            price = mapping_state[vc].get("shop_price") or mapping_state[vc].get("dp")
         now = datetime.now().strftime("%H:%M:%S")
-        # 0) 可靠 WB商品码（映射表主店 nmId）：缺失则跳过，避免拉取过期的 WB原始nmId 误上架
+
+        # 0) 严格 WB商品码校验：必须存在且纯数字
         nm_id = own_nm.get(vc) or ""
-        if not nm_id:
-            print(f"  {tag} [跳过] {vc} 映射表无WB商品码，避免误上架")
-            writer.writerow([now, vc, cn, src_sid, ",".join(map(str, missing)), price, "跳过", "映射表无WB商品码（避免误上架）"])
+        if not (nm_id and nm_id.isdigit()):
+            print(f"  {tag} [跳过] {vc} 映射表无有效WB商品码，避免误上架")
+            writer.writerow([now, vc, cn, nm_id, src_sid, ",".join(map(str, missing)), "-", price, "跳过", "映射表无有效WB商品码"])
             skip += 1
             continue
-        if aborted:
-            writer.writerow([now, vc, cn, src_sid, ",".join(map(str, missing)), price, "中止", "连续 detail 失败触发中止"])
-            skip += 1
+
+        if price is None:
+            print(f"  {tag} [失败] {vc} 无价格数据")
+            writer.writerow([now, vc, cn, nm_id, src_sid, ",".join(map(str, missing)), "-", price, "失败", "无价格数据"])
+            fail += 1
             continue
+
+        price_val = float(price)
+        price_str = str(int(price_val)) if price_val.is_integer() else f"{price_val:.2f}"
 
         # 1) 查重：本地记录 + 实时 API，剔除已存在店
         targets = []
@@ -610,81 +617,100 @@ def run(args):
                 targets.append(sid)
         if not targets:
             print(f"  {tag} [跳过] {vc} 目标店均已存在或无仓库")
-            writer.writerow([now, vc, cn, src_sid, ",".join(map(str, missing)), price, "跳过", "已存在或无仓库"])
+            writer.writerow([now, vc, cn, nm_id, src_sid, ",".join(map(str, missing)), "-", price_str, "跳过", "已存在或无仓库"])
             skip += 1
             continue
 
-        # 2) WB detail：按 --detail-source 选通道
-        #    synthetic=BCS 列表 + card.json 拼装（不依赖 WB detail）
-        #    auto=BCS 代理，失败后拼装兜底；bcs=仅 BCS 代理
-        ds = getattr(args, "detail_source", "auto")
-        card_info = None
-        if ds == "synthetic":
-            card_info = fetch_card_json(nm_id)
-            time.sleep(CARD_INTERVAL)
-            detail = build_synthetic_detail(src_row, card_info, nm_id) if card_info else None
-        else:
-            detail = fetch_wb_detail(nm_id)
-            time.sleep(DETAIL_INTERVAL)
-            if detail is None and ds == "auto":  # auto 兜底：BCS 拼装
-                card_info = fetch_card_json(nm_id)
-                time.sleep(CARD_INTERVAL)
-                if card_info is not None:
-                    detail = build_synthetic_detail(src_row, card_info, nm_id)
-        if detail is None:
-            # ★ synthetic 模式失败=该商品 card.json 缺失（个体坏数据），非反爬限流，不累计中止计数
-            if ds != "synthetic":
-                detail_fail_streak += 1
-                if detail_fail_streak >= DETAIL_FAIL_ABORT:
-                    print("  [中止] 连续多个商品 detail 失败，疑似反爬限流，停止后续执行（已成功不回滚）")
-                    aborted = True
-            print(f"  {tag} [失败] {vc} WB detail 获取失败")
-            writer.writerow([now, vc, cn, src_sid, ",".join(map(str, targets)), price, "失败", "WB detail 获取失败"])
-            fail += 1
-            continue
-        detail_fail_streak = 0
-
-        # 3) card.json（CDN 直连；synthetic/auto 兜底已取则跳过）
-        if card_info is None:
-            card_info = fetch_card_json(nm_id)
-            time.sleep(CARD_INTERVAL)
-        if card_info is None:
-            print(f"  {tag} [失败] {vc} card.json 获取失败")
-            writer.writerow([now, vc, cn, src_sid, ",".join(map(str, targets)), price, "失败", "card.json 获取失败"])
+        # 2) 包装数据提取：优先映射表 → 商品价格表兜底 → card.json 兜底（严禁使用快照数据）
+        dims, err = resolve_replicate_package(vc, cn, nm_id, mapping_state, card_cache)
+        if err:
+            print(f"  {tag} [失败] {vc}: {err}")
+            writer.writerow([now, vc, cn, nm_id, src_sid, ",".join(map(str, targets)), "-", price_str, "失败", err])
             fail += 1
             continue
 
-        # 4) 构造 + 一次提交全部目标店
-        # ★ BCS 已恢复多店一次提交：shop 数组带全部目标店（原 2026-08-20 多店静默失效 bug 已修复），
-        #   一个 vc 一次请求同时上架到全部目标店，提速。按用户确认：直接信任 code==200 即整批成功，不做逐店回验。
-        targets_str = ",".join(map(str, targets))
-        payload, err = build_payload(vc, src_sid, src_row, targets, warehouses, detail, card_info, nm_id, cn, overrides)
-        if payload is None:
-            fail += 1
-            print(f"  {tag} [失败] {vc} 店{targets_str}: {err}")
-            writer.writerow([now, vc, cn, src_sid, targets_str, price, "失败", err])
-        else:
+        # 3) 前缀码决策
+        prefix, prefix_src = resolve_vendor_prefix(cn, vc, cn2prefix)
+
+        valid_items.append({
+            "vc": vc,
+            "cn": cn,
+            "src_sid": src_sid,
+            "targets": targets,
+            "price_str": price_str,
+            "sku": int(nm_id),
+            "packageLength": dims[0],
+            "packageWidth": dims[1],
+            "packageHeight": dims[2],
+            "weightBrut": dims[3],
+            "vendorCodePrefix": prefix,
+            "prefix_src": prefix_src,
+            "stock": stock_for(cn, overrides),
+        })
+
+    # 2) 按目标店铺与库存分组，每组按 BATCH_SIZE (50) 分片推送到新批量上品接口
+    groups = {}
+    for it in valid_items:
+        key = (tuple(sorted(it["targets"])), it["stock"])
+        groups.setdefault(key, []).append(it)
+
+    total_chunks = sum((len(items) + BATCH_SIZE - 1) // BATCH_SIZE for items in groups.values())
+    curr_chunk = 0
+
+    for (target_tuple, stock_qty), items in groups.items():
+        shop_configs = [
+            {"id": sid, "warehouseId": warehouses[sid], "warehouseQuantity": stock_qty}
+            for sid in target_tuple
+        ]
+        target_str = ",".join(map(str, target_tuple))
+
+        for chunk_idx in range(0, len(items), BATCH_SIZE):
+            curr_chunk += 1
+            chunk = items[chunk_idx:chunk_idx + BATCH_SIZE]
+            sku_prices = [
+                {
+                    "sku": it["sku"],
+                    "price": it["price_str"],
+                    "packageLength": it["packageLength"],
+                    "packageWidth": it["packageWidth"],
+                    "packageHeight": it["packageHeight"],
+                    "weightBrut": it["weightBrut"],
+                    "vendorCodePrefix": it["vendorCodePrefix"],
+                }
+                for it in chunk
+            ]
+
+            print(f"\n[批次 {curr_chunk}/{total_chunks}] 推送 {len(chunk)} 个商品 → 店[{target_str}]（库存={stock_qty}）...")
             try:
-                resp = bcs.http_post_json(f"{bcs.base_url()}/system/wbCollection/wb/new", payload)
+                resp = bcs.batch_push_products(shop_configs, sku_prices, mode=1, carry_brand=1)
+                now = datetime.now().strftime("%H:%M:%S")
                 if resp.get("code") == 200:
-                    ok += 1
-                    print(f"  {tag} [成功] {vc} → 店{targets_str}（¥{price}）")
-                    writer.writerow([now, vc, cn, src_sid, targets_str, price, "成功", ""])
-                    # 本地记录：防缓存滞后窗口内重复提交（一次提交覆盖全部目标店）
-                    for sid in targets:
-                        records.setdefault(vc, {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    task_id = (resp.get("data") or {}).get("taskId") or "已提交"
+                    print(f"  ✓ 批次提交成功 (taskId={task_id})")
+                    for it in chunk:
+                        ok += 1
+                        writer.writerow([now, it["vc"], it["cn"], it["sku"], it["src_sid"],
+                                         target_str, it["vendorCodePrefix"], it["price_str"], "成功", f"taskId={task_id}"])
+                        for sid in it["targets"]:
+                            records.setdefault(it["vc"], {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     _save_records(records)
                 else:
-                    fail += 1
                     msg = resp.get("msg") or f"code={resp.get('code')}"
-                    print(f"  {tag} [失败] {vc} 店{targets_str}: {msg}")
-                    writer.writerow([now, vc, cn, src_sid, targets_str, price, "失败", msg])
+                    print(f"  ✗ 批次提交失败: {msg}")
+                    for it in chunk:
+                        fail += 1
+                        writer.writerow([now, it["vc"], it["cn"], it["sku"], it["src_sid"],
+                                         target_str, it["vendorCodePrefix"], it["price_str"], "失败", msg])
             except Exception as e:
-                fail += 1
-                print(f"  {tag} [失败] {vc} 店{targets_str}: {e}")
-                writer.writerow([now, vc, cn, src_sid, targets_str, price, "失败", str(e)])
-        if i < len(plans):
-            time.sleep(args.interval)
+                now = datetime.now().strftime("%H:%M:%S")
+                print(f"  ✗ 批次请求异常: {e}")
+                for it in chunk:
+                    fail += 1
+                    writer.writerow([now, it["vc"], it["cn"], it["sku"], it["src_sid"],
+                                     target_str, it["vendorCodePrefix"], it["price_str"], "失败", str(e)])
+
+            if curr_chunk < total_chunks:
+                time.sleep(getattr(args, "interval", 1.0))
 
     csv_file.close()
     print(f"\n[汇总] 计划 {len(plans)} | 成功 {ok} | 跳过 {skip} | 失败 {fail}（{time.time() - t0:.0f}s）")
@@ -704,7 +730,6 @@ def run(args):
             print(f"[验证] 各店在架 vc 数：{per_shop}")
         except Exception as e:
             print(f"[验证] 失败：{e}（可稍后手动 wb.py fetch 复核）")
-        # 写后验证已 fetch 最新快照 → 顺带增量合并映射表（上架后自动补录/同步覆盖）
         from . import mapping_sync
         mapping_sync.post_write_merge(fetch=False)
     elif ok > 0:

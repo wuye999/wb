@@ -132,6 +132,44 @@ def remove_to_trash(shop_id, nm_ids):
                           [{"shopId": shop_id, "nmId": nm} for nm in nm_ids])
 
 
+# ---------------- 新版批量上品（POST /products/batch/push） ----------------
+def batch_push_products(shop_configs, sku_prices, mode=1, carry_brand=1):
+    """BCS 新版批量上品接口：POST /products/batch/push
+    shop_configs: [{'id': sid, 'warehouseId': wid, 'warehouseQuantity': qty}, ...]
+    sku_prices: [
+        {
+            'sku': int(wb_nm),
+            'price': str(price),
+            'packageLength': int(round(length)),
+            'packageWidth': int(round(width)),
+            'packageHeight': int(round(height)),
+            'weightBrut': float(round(weight, 3)),
+            'vendorCodePrefix': 'BCS-XXXX'
+        },
+        ...
+    ]
+    mode: 1=直上, 0=存入采集箱
+    carry_brand: 1=不带品牌, 0=携带原品牌
+    返回 BCS API 响应 dict（如 {"code": 200, "data": {"taskId": ...}}）
+    """
+    url = f"{base_url()}/products/batch/push"
+    body = {
+        "shop": shop_configs,
+        "mode": mode,
+        "carryBrand": carry_brand,
+        "customBrand": None,
+        "vendorCodePrefix": None,
+        "titleSuffix": None,
+        "aiRewrite": False,
+        "aiRetouch": False,
+        "aiRetouchTemplateId": None,
+        "imgUploadMode": 0,
+        "skuPrices": sku_prices,
+        "wbCollection": {},
+    }
+    return http_post_json(url, body)
+
+
 # ---------------- BCS 数据同步（拉取 WB 数据） ----------------
 def sync_shop(shop_id, filter_type="ALL"):
     """触发 BCS「拉取店铺商品数据」同步（BCS 从 WB 官方拉取，异步任务）。

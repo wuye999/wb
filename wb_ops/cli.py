@@ -88,13 +88,13 @@ def build_parser():
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
     p.add_argument("--sync", action="store_true",
                    help="启动前同步全部店铺 + 上架后复核并合并映射表（默认不自动同步/不写后验证，仅打印提示；用本地快照判断可能滞后，需最新务必加 --sync）")
-    p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
+    p.add_argument("--interval", type=float, default=1.0, help="批次上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
     p.add_argument("--detail-source", default="synthetic",
                    choices=["auto", "bcs", "synthetic"],
-                   help="WB detail 来源：synthetic=BCS列表+card.json拼装（默认，已实验验证）；bcs=仅BCS代理；auto=BCS代理→拼装兜底")
+                   help="[已弃用/兼容保留] 新版批量上品接口已由 BCS 后端自动抓取 WB 数据")
 
-    p = sub.add_parser("import-shelve", help="他人映射表导入上架：他人有我方无的商品（按 WB原始nmId 匹配）上架到我的店铺")
+    p = sub.add_parser("import-shelve", help="他人映射表导入上架：他人有我方无的商品（按真实 WB商品码 匹配）上架到我的店铺")
     p.add_argument("xlsx", help="他人映射表 xlsx 路径（同项目「映射总表」格式）")
     p.add_argument("--cn", default="", help="他人表中文名包含过滤（逗号分隔多个）")
     p.add_argument("--shops", default="", help="限定目标店铺 id 逗号分隔（默认全部店铺）")
@@ -103,11 +103,11 @@ def build_parser():
     p.add_argument("--no-verify", action="store_true", help="跳过执行后 fetch 复核")
     p.add_argument("--sync", action="store_true",
                    help="启动前同步全部店铺 + 上架后复核并合并映射表（默认不自动同步/不写后验证，仅打印提示；用本地快照判断可能滞后，需最新务必加 --sync）")
-    p.add_argument("--interval", type=float, default=1.0, help="上架请求间隔秒")
+    p.add_argument("--interval", type=float, default=1.0, help="批次上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
     p.add_argument("--detail-source", default="synthetic",
                    choices=["auto", "bcs", "synthetic"],
-                   help="WB detail 来源：synthetic=BCS列表+card.json拼装（默认，已实验验证）；bcs=仅BCS代理；auto=BCS代理→拼装兜底")
+                   help="[已弃用/兼容保留] 新版批量上品接口已由 BCS 后端自动抓取 WB 数据")
 
     p = sub.add_parser("promo-apply", help="促销报名（cookie 会话，applyAll）")
     p.add_argument("--apply", action="store_true", help="真正报名（默认 dry-run 预览）")

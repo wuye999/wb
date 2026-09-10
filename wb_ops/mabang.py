@@ -32,7 +32,7 @@ from . import common
 WWW_BASE = "https://www.mabangerp.com/index.php"
 AAMZ_BASE = "https://aamz.mabangerp.com/index.php"
 API_BASE = "https://api.mabangerp.com/v2"
-VC_RE = re.compile(r"(BCS-[A-Z]{4}-(?:ozon-card-)?[A-Za-z0-9-]+?)\*?\d*$")
+VC_RE = re.compile(r"(BCS-[A-Z]{4}-(?:(?:ozon-card-)?[A-Za-z0-9-]+|[^/*\s]+/\d+))(?:\*\d+)?$")
 SKU_RE = re.compile(r"商品编号\*数量:(.+?)\*?\d*$")
 TITLE_SKU_RE = re.compile(r"数量:(.*)$")
 REQUEST_INTERVAL = 0.6          # 订单明细/更换请求间隔秒

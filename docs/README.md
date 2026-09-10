@@ -21,7 +21,7 @@
 |---|---|
 | **商品价格表** | 唯一权威商品清单（`data/商品价格表.xlsx`，7 列，你只维护它） |
 | **价格映射表** | 唯一状态源（`data/价格映射表.xlsx`，8 Sheet，merge 自动重建，勿手改） |
-| **vendorCode** | `BCS-{4位前缀码}-{WB原始nmId}`，跨店唯一键，映射表主键 |
+| **vendorCode** | `BCS-{4位前缀码}-{WB原始nmId}` 或 `BCS-{4位前缀码}-{中间标识}/{WB原始nmId}`，跨店唯一键，映射表主键 |
 | **credentials.json** | 统一凭证（BCS 三件套 + WB 各店 cookie） |
 
 **两大业务线**（现合并在一个入口 `wb.py` 下）：

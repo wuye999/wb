@@ -19,13 +19,17 @@ SHOP_SLEEP = 0.6
 FILTER_DEF = "BASE"
 
 
-def collect(shop_id, threshold, limit):
-    """拉取单店在架商品，过滤 discount>threshold，返回待改清单。"""
+def collect(shop_id, threshold, limit, skip_equal_to=None):
+    """拉取单店在架商品，过滤 discount>threshold（且跳过已等于目标折扣的），
+    返回待改清单。"""
     rows = bcs.fetch_shop_products(shop_id, FILTER_DEF)
     items, skip_no_price, skip_other = [], 0, 0
     for r in rows:
         d = common.to_int(r.get("discount"))
         if d <= threshold:
+            continue
+        if skip_equal_to is not None and d == skip_equal_to:
+            skip_other += 1
             continue
         sl = r.get("sizeList") or []
         price = None
@@ -109,11 +113,13 @@ def run(args):
     for s in shops:
         sid = s["id"]
         try:
-            items, st = collect(sid, args.threshold, args.limit)
+            items, st = collect(sid, args.threshold, args.limit,
+                                skip_equal_to=args.target)
             plan[sid] = items
             stats[sid] = st
             no_price = st["skip_no_price"]
-            suffix = f"（跳过无价格 {no_price}）" if no_price else ""
+            skip_eq = st.get("skip_other", 0)
+            suffix = f"（跳过无价格 {no_price}、已等于目标 {skip_eq}）"
             print(f"  店{sid} ({s['name']}): 在架待改 {len(items)} 条{suffix}")
         except Exception as e:
             stats[sid] = {"error": str(e)}

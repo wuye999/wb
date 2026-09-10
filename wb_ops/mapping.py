@@ -15,6 +15,7 @@ from collections import defaultdict
 import openpyxl
 
 from . import bcs
+from . import common
 from . import config
 from . import keywords
 from . import workbench
@@ -142,13 +143,21 @@ def load_mapping_state():
                          if re.match(r"^店铺\d+价格\(CNY\)$", h)), None)
             i_disc = headers.index("折扣%") if "折扣%" in headers else None
             i_nm = headers.index("WB商品码") if "WB商品码" in headers else None
+            i_l = headers.index("尺寸长(cm)") if "尺寸长(cm)" in headers else None
+            i_w = headers.index("尺寸宽(cm)") if "尺寸宽(cm)" in headers else None
+            i_h = headers.index("尺寸高(cm)") if "尺寸高(cm)" in headers else None
+            i_wt = headers.index("毛重(kg)") if "毛重(kg)" in headers else None
             for r in ws.iter_rows(min_row=2, values_only=True):
                 vc = r[i_vc]
                 if vc:
                     state[vc] = {"cn": r[i_cn] or "", "dp": r[i_dp] if i_dp is not None else None,
                                  "shop_price": r[i_sp] if i_sp is not None else None,
                                  "discount": r[i_disc] if i_disc is not None else None,
-                                 "nmId": (r[i_nm] if i_nm is not None else None)}
+                                 "nmId": (r[i_nm] if i_nm is not None else None),
+                                 "L": (r[i_l] if i_l is not None else None),
+                                 "W": (r[i_w] if i_w is not None else None),
+                                 "H": (r[i_h] if i_h is not None else None),
+                                 "weight": (r[i_wt] if i_wt is not None else None)}
     if "已排除清单" in wb.sheetnames:
         ws2 = wb["已排除清单"]
         for r in ws2.iter_rows(min_row=2, values_only=True):
@@ -171,7 +180,7 @@ def load_bcs():
         c = dict(r)
         c["price"] = int(price)
         c["vc"] = r.get("vendorCode") or ""
-        c["wbnm"] = str(c["vc"]).rsplit("-", 1)[-1]
+        c["wbnm"] = str(r.get("nmId")) if r.get("nmId") else (common.extract_wb_nm(c["vc"]) or str(c["vc"]).rsplit("-", 1)[-1])
         c["img"] = r.get("repImg") or ""
         out.append(c)
     return out
