@@ -26,6 +26,7 @@ from . import mapping_check
 from . import mapping_sync
 from . import mabang
 from . import feishu_register
+from . import mabang_stock
 from . import order_pipeline
 from . import mismatch_check
 from . import ops
@@ -235,6 +236,22 @@ def build_parser():
     p.add_argument("--page-size", type=int, default=100, help="订单列表每页条数")
 
 
+    p = sub.add_parser("mabang-stock-register",
+                       help="拉取马帮全部库存 SKU → 全量重建飞书「马帮库存登记表」（含图片附件）")
+    p.add_argument("--url", default="", help="飞书多维表格地址（变量）")
+    p.add_argument("--table", default="马帮库存登记表", help="目标表名（默认 马帮库存登记表）")
+    p.add_argument("--apply", action="store_true", help="真正全量重建（默认 dry-run 预览）")
+
+    p = sub.add_parser("mabang-stock-daily",
+                       help="「马帮库存登记表」按日新增 <M月D日新订单量> 列（统计订单登记当日各SKU数量）")
+    p.add_argument("--url", default="", help="飞书多维表格地址（变量）")
+    p.add_argument("--table", default="马帮库存登记表", help="库存表名（默认 马帮库存登记表）")
+    p.add_argument("--orders-table", default="订单登记", help="订单明细表名（默认 订单登记）")
+    p.add_argument("--date", default="", help="单天日期 YYYY-MM-DD（默认今天）")
+    p.add_argument("--begin", default="", help="开始日期 YYYY-MM-DD（回填区间用）")
+    p.add_argument("--end", default="", help="结束日期 YYYY-MM-DD")
+    p.add_argument("--apply", action="store_true", help="真正建列并填充（默认 dry-run 预览）")
+
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
     p.add_argument("md_file", help="含 fetch 块的 md 文件")
 
@@ -320,6 +337,12 @@ def dispatch(args):
         return feishu_register.run(args)
     if cmd == "orders-pipeline":
         return order_pipeline.run(args)
+    if cmd == "mabang-stock-register":
+        return mabang_stock.run(args)
+
+    if cmd == "mabang-stock-daily":
+        return mabang_stock.run_daily(args)
+
     if cmd == "cookies-update":
         return cookies.run(args.md_file)
     if cmd == "daily":
