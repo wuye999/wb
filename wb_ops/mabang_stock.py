@@ -243,7 +243,8 @@ def run_daily(args):
     """马帮库存登记表日期列管理：
     默认（不带 --begin/--date）：不删旧列、只建今天列（缺失时）、更新所有已存在日期列数据；
     显式 --begin（或 --date）：删除 begin 之前的日期列 + 补建区间缺列 + 填充。
-    填充口径：有订单的 SKU 写数量；无订单的 SKU 留空；重跑时清空旧 0 值。"""
+    填充口径：有订单的 SKU 写数量；无订单的 SKU 留空（重跑时清空残留旧值，含旧 "0" 与旧非零）；
+      总新增订单量 = 本次运行区间各日之和，同口径清空。"""
     common.ensure_utf8_stdout()
     url = args.url or credentials.get().feishu_base_url()
     if not url:
@@ -332,7 +333,8 @@ def run_daily(args):
             if want:
                 if cur != str(want):
                     updates[rid] = {col: str(want)}
-            elif cur == "0":
+            elif cur:
+                # 无单即清空：不只清旧的 "0"，也清残留的旧非零值（订单改期/取消后重跑）
                 updates[rid] = {col: None}
                 cleared += 1
         items = list(updates.items())
@@ -359,7 +361,8 @@ def run_daily(args):
                 updates[rid] = {total_col: str(want)}
             else:
                 ok_total += 1
-        elif cur == "0":
+        elif cur:
+            # 无单即清空：旧值可能来自更早区间（如已删的 begin 之前日期列）
             updates[rid] = {total_col: None}
             cleared += 1
     items = list(updates.items())

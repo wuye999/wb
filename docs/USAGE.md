@@ -278,7 +278,7 @@ python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-0
 - 口径：只处理 shop_map 内店铺（马帮 子龙主2/子龙主2（1）/子龙主2（2）↔ 袁州1/2/3）；订单编号为飞书去重键，重复不登记；wb编号 = **下单店铺自己的码**（非映射表主店码）；库存SKU = **马帮订单列表实际选择的 SKU**（匹配后即价格表库存SKU）。
 - 每步产出 CSV 报告（`data/logs/马帮订单匹配_* / 马帮预报批次_* / 飞书订单登记_*.csv`）；某步失败即中止后续。
 - 飞书侧结构：「订单登记」表（明细，日期精确到分钟/店铺短名/中文名/**库存SKU**/wb编号/商品链接/订单量/下单日期公式字段）+「销量看板」仪表盘（实时聚合图表：每天×中文名柱状图、中文名与商品(链接)排行，手工改动也自动反映）。
-- 马帮库存登记：`python wb.py mabang-stock-register --apply` 全量重建「马帮库存登记表」（马帮全部库存SKU 的库存总量/状态/图片）；每日新订单量列（时间段管理）：`python wb.py mabang-stock-daily --begin 2026-09-08 --apply`（删除 begin 前的旧日期列、补建区间内缺失列；填充=有单写数量、**无单留空**、清旧 0 值；同步更新「总新增订单量」列=当前日期列之和；⚠ `mabang-stock-register` 全量重建会清空各日列，重建后需重跑 `mabang-stock-daily --begin 2026-09-05` 回填）。
+- 马帮库存登记：`python wb.py mabang-stock-register --apply` 全量重建「马帮库存登记表」（马帮全部库存SKU 的库存总量/状态/图片）；每日新订单量列（时间段管理）：`python wb.py mabang-stock-daily --begin 2026-09-08 --apply`（删除 begin 前的旧日期列、补建区间内缺失列；填充=有单写数量、**无单即清空（含残留旧值）**；同步更新「总新增订单量」列=当前日期列之和；⚠ `mabang-stock-register` 全量重建会清空各日列，重建后需重跑 `mabang-stock-daily --begin 2026-09-05` 回填）。
 - 接口细节见 `api/BCS_API完整文档_核对版.md` 第八章。
 
 ## 12. 买家提问查询 + AI 回复（前台 / 后台两种模式，二选一）
