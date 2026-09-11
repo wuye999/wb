@@ -343,6 +343,31 @@ def run_daily(args):
             time.sleep(0.4)
         print(f"  [完成] {col}: 有单 {len(counts)} 款（{sum(counts.values())} 件）"
               f"→ 写入/更新 {len(items) - cleared} 条，清空旧0 {cleared} 条")
+
+    # 总新增订单量列：各日期列之和（与日列同口径：0 值清空、留空不动）
+    total_col = "总新增订单量"
+    if not _field_id_by_name(base_token, table_id, total_col):
+        _lark(["+field-create", "--base-token", base_token, "--table-id", table_id,
+               "--as", "user"], payload={"name": total_col, "type": "text"})
+        print(f"  [建列] {total_col}")
+    updates, cleared, ok_total = {}, 0, 0
+    for rid, sku, fields in stock_rows:
+        want = sum(daily.get(d, Counter()).get(sku, 0) for d, _ in rng)
+        cur = str(fields.get(total_col) or "").strip()
+        if want:
+            if cur != str(want):
+                updates[rid] = {total_col: str(want)}
+            else:
+                ok_total += 1
+        elif cur == "0":
+            updates[rid] = {total_col: None}
+            cleared += 1
+    items = list(updates.items())
+    for i in range(0, len(items), 200):
+        _lark(["+record-batch-update", "--base-token", base_token,
+               "--table-id", table_id],
+              payload={"update_records": dict(items[i:i + 200])})
+    print(f"  [完成] {total_col}: 已更新 {len(items)} 条（一致 {ok_total} 条 / 清空 {cleared} 条）")
     print("\n[完成] 全部日期列处理完毕")
     return 0
 
