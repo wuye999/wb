@@ -55,7 +55,7 @@
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
 | `questions-watch` | 买家提问实时监听（双模式：**front=前台AI** 打印提问/商品信息到控制台与日志、前台手动回复；**back=后台AI** 常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` |
-| `mabang-stock-daily` | 「马帮库存登记表」按日新增 `<M月D日新订单量>` 列（统计「订单登记」当日各库存SKU 数量，无订单填 0；重跑幂等更新） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
+| `mabang-stock-daily` | 「马帮库存登记表」时间段列管理：`--begin` 起删除之前的日期列、补建区间内缺失列；填充口径=有订单的 SKU 写数量、**无订单留空**、清旧 0 值（幂等） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
 | `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/图片附件） | `--url` / `--table` / `--apply` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
 | `daily` | 每日任务 | `morning\|check`（+ 透传参数） |

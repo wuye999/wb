@@ -10,9 +10,11 @@ wb_ops 马帮库存登记：拉取马帮全部库存 SKU → 全量重建飞书�
 """
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
+from datetime import timedelta
 from collections import Counter
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -178,7 +180,7 @@ def read_orders_daily(base_token, orders_table_id, begin, end):
 
 
 def read_stock_records(base_token, table_id):
-    """读「马帮库存登记表」→ [(record_id, 库存SKU)]"""
+    """读「马帮库存登记表」→ [(record_id, 库存SKU, fields_dict)]"""
     out = os.path.join(tempfile.gettempdir(), "_mbsku_stock.ndjson")
     if os.path.exists(out):
         os.remove(out)
@@ -202,7 +204,7 @@ def read_stock_records(base_token, table_id):
                 return str(v).strip()
 
             if rid:
-                res.append((str(rid), _sv(f.get("库存SKU"))))
+                res.append((str(rid), _sv(f.get("库存SKU")), f))
     try:
         os.remove(out)
         os.remove(out.replace(".ndjson", ".manifest.json"))
@@ -211,8 +213,35 @@ def read_stock_records(base_token, table_id):
     return res
 
 
+DATE_COL_RE = re.compile(r"^(\d{1,2})月(\d{1,2})日新订单量$")
+
+
+def _list_date_columns(base_token, table_id, year):
+    """field-list → {(month, day): 列名}（仅当年日期列）"""
+    d = _lark(["+field-list", "--base-token", base_token, "--table-id", table_id])
+    cols = {}
+    for f in d.get("fields") or []:
+        m = DATE_COL_RE.match(f.get("name") or "")
+        if m:
+            cols[(int(m.group(1)), int(m.group(2)))] = f["name"]
+    return cols
+
+
+def _date_range(begin, end):
+    """[begin, end] 闭区间日期列表 → [(YYYY-MM-DD, (month, day))]"""
+    b = datetime.strptime(begin, "%Y-%m-%d")
+    e = datetime.strptime(end, "%Y-%m-%d")
+    out, cur = [], b
+    while cur <= e:
+        out.append((cur.strftime("%Y-%m-%d"), (cur.month, cur.day)))
+        cur += timedelta(days=1)
+    return out
+
+
 def run_daily(args):
-    """每日新订单量列：按日期在「马帮库存登记表」新增/更新 <M月D日新订单量> 列"""
+    """时间段列管理：删除 begin 之前的日期列；补建/填充 begin~end 的日期列。
+    填充口径：有订单的 SKU 写数量；无订单的 SKU 留空（不填 0）；
+    重跑时清空该列旧 0 值，非 0 值重写为最新统计。"""
     common.ensure_utf8_stdout()
     if not args.url:
         print("[错误] 必须提供 --url 表格地址")
@@ -229,40 +258,69 @@ def run_daily(args):
     print(f"[表格] 库存表={table_id} 订单表={orders_tid}")
     print(f"[日期] {begin} ~ {end}")
 
-    daily, no_sku = read_orders_daily(base_token, orders_tid, begin, end)
-    dates = sorted(daily)
-    print(f"[订单] 区间内 SKU 订单 {sum(sum(c.values()) for c in daily.values())} 件；"
-          f"无库存SKU 未归属: " +
-          ("、".join(f"{k}={v}" for k, v in sorted(no_sku.items())) if no_sku else "无"))
-
     stock_rows = read_stock_records(base_token, table_id)
     print(f"[库存] 马帮库存登记表 {len(stock_rows)} 条记录")
 
+    year = int(begin[:4])
+    existing = _list_date_columns(base_token, table_id, year)
+
     if not args.apply:
-        for dt in dates:
-            d = datetime.strptime(dt, "%Y-%m-%d")
-            col = f"{d.month}月{d.day}日新订单量"
-            top = ", ".join(f"{k}={v}" for k, v in daily[dt].most_common(5))
-            print(f"  [dry-run] {col}: 订单 {sum(daily[dt].values())} 件/{len(daily[dt])} 款 | Top: {top}")
-        print("\n（dry-run 未写入；确认无误后加 --apply 建列并填充）")
+        # 删除清单：begin 之前的日期列
+        del_cols = [nm for (mo, dy), nm in sorted(existing.items())
+                    if datetime(year, mo, dy).strftime("%Y-%m-%d") < begin]
+        rng = _date_range(begin, end)
+        missing = [f"{mo}月{dy}日新订单量" for _, (mo, dy) in rng if (mo, dy) not in existing]
+        print(f"[dry-run] 将删除旧列 {len(del_cols)} 个: {del_cols or '无'}")
+        print(f"[dry-run] 将新建列 {len(missing)} 个: {missing or '无'}")
+        print("（dry-run 未写入；确认无误后加 --apply 执行）")
         return 0
 
-    cache = {}
-    for dt in dates:
-        d = datetime.strptime(dt, "%Y-%m-%d")
-        col = f"{d.month}月{d.day}日新订单量"
-        _ensure_date_field(base_token, table_id, col, cache)
-        updates = {}
-        for rid, sku in stock_rows:
-            updates[rid] = {col: str(daily[dt].get(sku, 0))}
+    # 1) 删除 begin 之前的日期列
+    del_cols = [nm for (mo, dy), nm in sorted(existing.items())
+                if datetime(year, mo, dy).strftime("%Y-%m-%d") < begin]
+    for nm in del_cols:
+        _lark(["+field-delete", "--base-token", base_token, "--table-id", table_id,
+               "--field-id", nm, "--yes"])
+        print(f"  [删列] {nm}")
+    time.sleep(0.5)
+
+    # 2) 补建区间内缺失的日期列
+    rng = _date_range(begin, end)
+    existing = _list_date_columns(base_token, table_id, year)
+    for _, (mo, dy) in rng:
+        col = f"{mo}月{dy}日新订单量"
+        if (mo, dy) not in existing:
+            _lark(["+field-create", "--base-token", base_token, "--table-id", table_id,
+                   "--as", "user"], payload={"name": col, "type": "text"})
+            print(f"  [建列] {col}")
+            time.sleep(0.3)
+
+    # 3) 逐日期填充：有单写数量、无单留空、清旧 0
+    daily, no_sku = read_orders_daily(base_token, orders_tid, begin, end)
+    print(f"[订单] 区间内 SKU 订单 {sum(sum(c.values()) for c in daily.values())} 件；"
+          f"无库存SKU 未归属: " +
+          ("、".join(f"{k}={v}" for k, v in sorted(no_sku.items())) if no_sku else "无"))
+    for date_str, (mo, dy) in rng:
+        col = f"{mo}月{dy}日新订单量"
+        counts = daily.get(date_str, Counter())
+        updates, cleared = {}, 0
+        for rid, sku, fields in stock_rows:
+            want = counts.get(sku)
+            cur = str(fields.get(col) or "").strip()
+            if want:
+                if cur != str(want):
+                    updates[rid] = {col: str(want)}
+            elif cur == "0":
+                updates[rid] = {col: None}
+                cleared += 1
         items = list(updates.items())
         for i in range(0, len(items), 200):
             _lark(["+record-batch-update", "--base-token", base_token,
                    "--table-id", table_id],
                   payload={"update_records": dict(items[i:i + 200])})
             time.sleep(0.4)
-        print(f"  [完成] {col}: 已填充 {len(items)} 条（订单 {sum(daily[dt].values())} 件/"
-              f"{len(daily[dt])} 款）")
+        print(f"  [完成] {col}: 有单 SKU {len(counts)} 款（{sum(counts.values())} 件）"
+              f"→ 写入/更新 {len(items) - cleared} 条，清空旧0 {cleared} 条")
     print("\n[完成] 全部日期列处理完毕")
     return 0
 
