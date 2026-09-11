@@ -39,6 +39,9 @@
     "handover_keyword": "七库海外仓",
     "handover_channel_value": "830556_262535_七库海外仓_3048",
     "handover_wait_seconds": 150
+  },
+  "feishu": {
+    "base_url": "https://<your-base>.feishu.cn/base/<base_token>（订单登记/马帮库存登记表所在多维表格地址；mabang-process / feishu-register / mabang-stock-* 默认读取，--url 可临时覆盖）"
   }
 }
 ```
