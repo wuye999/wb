@@ -55,8 +55,8 @@
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
 | `questions-watch` | 买家提问实时监听（双模式：**front=前台AI** 打印提问/商品信息到控制台与日志、前台手动回复；**back=后台AI** 常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` |
-| `mabang-stock-daily` | 「马帮库存登记表」时间段列管理：`--begin` 起删除之前的日期列、补建区间内缺失列；填充口径=有订单的 SKU 写数量、**无订单留空**、清旧 0 值（幂等） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
-| `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/图片附件） | `--url` / `--table` / `--apply` |
+| `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新所有已有日期列**（有单写数量、无单留空、清旧 0）；`--begin` 显式指定时删除之前旧列+补区间列 | | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
+| `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/图片附件） | `--url` / `--table` / `--apply` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
 | `daily` | 每日任务 | `morning\|check`（+ 透传参数） |
 | `schedule` | 创建/删除 Windows 计划任务（⚠ 默认不创建，仅按需执行） | `--remove` |
@@ -67,7 +67,7 @@
 |---|---|---|
 | `mabang-orders` | 马帮待处理订单 SKU 匹配更换：平台 SKU(VC)→映射表中文名→价格表库存SKU，**全部强制更换**（含系统匹配一致者，幂等）；状态分类 REPLACE/NO_VC/SKIP_SHOP | `--apply` / `--days`(默认30) / `--page-size` |
 | `mabang-forecast` | 预报批次全链路（幂等状态机）：①生成批次（`order_label` 含「已预报」跳过）→②**依次上传**（逐批 getForecastConfig 模板 + `wb_automark=1` 自动发货 + 单批次号）→③等待→④物流交运「莫斯科仓-七库海外仓」（已选择跳过）；`--check` 只查批次状态 | `--apply` / `--check` / `--wait S` / `--upload-waiting` / `--days` |
-| `mabang-process` | **马帮订单处理一体（零飞书依赖）**：匹配商品→预报单生成→依次上传（自动发货）→物流交运；过滤/幂等机制与 mabang-orders+mabang-forecast 一致；本命令不登记飞书 | `--days` / `--page-size` / `--wait` / `--apply` |
+| `mabang-process` | **马帮订单处理一体（零飞书依赖）**：匹配商品→预报单生成→依次上传（自动发货）→物流交运；过滤/幂等机制与 mabang-orders+mabang-forecast 一致；末尾自动登记飞书（URL 读配置 feishu.base_url，--url 可覆盖） | `--days` / `--page-size` / `--wait` / `--url` / `--table` / `--apply` |
 | `feishu-register` | 新订单登记到飞书多维表格「订单登记」（数据源=**orderalllist 最近 500 条全状态订单**，按订单编号去重只登记新增）：VC→中文名→下单店 wb编号→库存SKU（马帮实际匹配值）→WB链接；`--scope all --date/--begin/--end` 补录历史全部状态订单（orderalllist 忽略服务端日期过滤，本地按 paidTime 筛） | `--url`(表格地址) / `--table`(默认 订单登记) / `--scope pending\|all` / `--date` / `--begin` / `--end` / `--apply` |
 | `orders-pipeline` | **【已停用】** 编排命令（功能拆分为 mabang-process 与 feishu-register 两个独立命令）：①登记飞书→②匹配更换→③预报批次/上传/交运→④归属统计+重建汇总；每步独立 CSV 报告，失败即中止 | `--url` / `--table`(默认 订单登记) / `--days`(默认1) |
 

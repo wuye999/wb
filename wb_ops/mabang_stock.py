@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 from . import common
+from . import credentials
 from . import mabang
 from .feishu_register import _lark, resolve_base, resolve_table
 
@@ -239,24 +240,27 @@ def _date_range(begin, end):
 
 
 def run_daily(args):
-    """时间段列管理：删除 begin 之前的日期列；补建/填充 begin~end 的日期列。
-    填充口径：有订单的 SKU 写数量；无订单的 SKU 留空（不填 0）；
-    重跑时清空该列旧 0 值，非 0 值重写为最新统计。"""
+    """马帮库存登记表日期列管理：
+    默认（不带 --begin/--date）：不删旧列、只建今天列（缺失时）、更新所有已存在日期列数据；
+    显式 --begin（或 --date）：删除 begin 之前的日期列 + 补建区间缺列 + 填充。
+    填充口径：有订单的 SKU 写数量；无订单的 SKU 留空；重跑时清空旧 0 值。"""
     common.ensure_utf8_stdout()
-    if not args.url:
-        print("[错误] 必须提供 --url 表格地址")
+    url = args.url or credentials.get().feishu_base_url()
+    if not url:
+        print("[错误] 未提供 --url 且配置 feishu.base_url 缺失")
         return 1
-    base_token = resolve_base(args.url)
+    base_token = resolve_base(url)
     table_id = resolve_table(base_token, args.table)
     orders_tid = resolve_table(base_token, args.orders_table)
 
     today = time.strftime("%Y-%m-%d")
+    explicit = bool(args.begin or args.date)
     begin = args.begin or args.date or today
     end = args.end or args.date or today
     if begin > end:
         begin, end = end, begin
     print(f"[表格] 库存表={table_id} 订单表={orders_tid}")
-    print(f"[日期] {begin} ~ {end}")
+    print(f"[日期] {begin} ~ {end}（explicit={explicit}）")
 
     stock_rows = read_stock_records(base_token, table_id)
     print(f"[库存] 马帮库存登记表 {len(stock_rows)} 条记录")
@@ -264,29 +268,37 @@ def run_daily(args):
     year = int(begin[:4])
     existing = _list_date_columns(base_token, table_id, year)
 
-    if not args.apply:
-        # 删除清单：begin 之前的日期列
+    # 删除清单：仅显式 --begin/--date 时删除 begin 之前的日期列
+    del_cols = []
+    if explicit:
         del_cols = [nm for (mo, dy), nm in sorted(existing.items())
                     if datetime(year, mo, dy).strftime("%Y-%m-%d") < begin]
-        rng = _date_range(begin, end)
-        missing = [f"{mo}月{dy}日新订单量" for _, (mo, dy) in rng if (mo, dy) not in existing]
+
+    # 建列清单：显式=begin~end 区间缺列；默认=仅今天缺列
+    rng = _date_range(begin, end)
+    if not explicit:
+        rng = [(today, (int(today[5:7]), int(today[8:10])))]
+
+    if not args.apply:
+        missing = [f"{mo}月{dy}日新订单量" for _, (mo, dy) in rng
+                   if (mo, dy) not in existing]
         print(f"[dry-run] 将删除旧列 {len(del_cols)} 个: {del_cols or '无'}")
         print(f"[dry-run] 将新建列 {len(missing)} 个: {missing or '无'}")
+        upd_dates = sorted({f"{mo}月{dy}日" for _, (mo, dy) in rng} |
+                           {f"{mo}月{dy}日" for (mo, dy) in existing
+                            if datetime(year, mo, dy).strftime("%Y-%m-%d") >= begin})
+        print(f"[dry-run] 将更新数据列 {len(upd_dates)} 个: {upd_dates or '无'}")
         print("（dry-run 未写入；确认无误后加 --apply 执行）")
         return 0
 
-    # 1) 删除 begin 之前的日期列
-    del_cols = [nm for (mo, dy), nm in sorted(existing.items())
-                if datetime(year, mo, dy).strftime("%Y-%m-%d") < begin]
     for nm in del_cols:
         _lark(["+field-delete", "--base-token", base_token, "--table-id", table_id,
                "--field-id", nm, "--yes"])
         print(f"  [删列] {nm}")
-    time.sleep(0.5)
+    if del_cols:
+        time.sleep(0.5)
+        existing = _list_date_columns(base_token, table_id, year)
 
-    # 2) 补建区间内缺失的日期列
-    rng = _date_range(begin, end)
-    existing = _list_date_columns(base_token, table_id, year)
     for _, (mo, dy) in rng:
         col = f"{mo}月{dy}日新订单量"
         if (mo, dy) not in existing:
@@ -294,14 +306,24 @@ def run_daily(args):
                    "--as", "user"], payload={"name": col, "type": "text"})
             print(f"  [建列] {col}")
             time.sleep(0.3)
+            existing[(mo, dy)] = col
 
-    # 3) 逐日期填充：有单写数量、无单留空、清旧 0
-    daily, no_sku = read_orders_daily(base_token, orders_tid, begin, end)
-    print(f"[订单] 区间内 SKU 订单 {sum(sum(c.values()) for c in daily.values())} 件；"
+    # 统计区间：覆盖所有目标日期列对应日期 ~ 今天（保证已有列更新数据完整）
+    all_dates = [datetime(year, mo, dy).strftime("%Y-%m-%d") for (mo, dy), _ in existing.items()]
+    all_dates += [d for d, _ in rng]
+    stats_begin = min(all_dates + [begin, today])[:10]
+    daily, no_sku = read_orders_daily(base_token, orders_tid, stats_begin, today)
+    print(f"[订单] 统计区间 {stats_begin}~{today}："
+          f"{sum(sum(c.values()) for c in daily.values())} 件；"
           f"无库存SKU 未归属: " +
           ("、".join(f"{k}={v}" for k, v in sorted(no_sku.items())) if no_sku else "无"))
-    for date_str, (mo, dy) in rng:
-        col = f"{mo}月{dy}日新订单量"
+
+    # 更新/填充：目标列 = rng 列 + 存活的所有已存在日期列
+    targets = {(mo, dy): col for (mo, dy), col in existing.items()}
+    for _, (mo, dy) in rng:
+        targets[(mo, dy)] = f"{mo}月{dy}日新订单量"
+    for (mo, dy), col in sorted(targets.items()):
+        date_str = datetime(year, mo, dy).strftime("%Y-%m-%d")
         counts = daily.get(date_str, Counter())
         updates, cleared = {}, 0
         for rid, sku, fields in stock_rows:
@@ -319,7 +341,7 @@ def run_daily(args):
                    "--table-id", table_id],
                   payload={"update_records": dict(items[i:i + 200])})
             time.sleep(0.4)
-        print(f"  [完成] {col}: 有单 SKU {len(counts)} 款（{sum(counts.values())} 件）"
+        print(f"  [完成] {col}: 有单 {len(counts)} 款（{sum(counts.values())} 件）"
               f"→ 写入/更新 {len(items) - cleared} 条，清空旧0 {cleared} 条")
     print("\n[完成] 全部日期列处理完毕")
     return 0
@@ -328,10 +350,11 @@ def run_daily(args):
 def run(args):
     common.ensure_utf8_stdout()
     cred = mabang._mabang_cred()
-    if not args.url:
-        print("[错误] 必须提供 --url 表格地址")
+    url = args.url or credentials.get().feishu_base_url()
+    if not url:
+        print("[错误] 未提供 --url 且配置 feishu.base_url 缺失")
         return 1
-    base_token = resolve_base(args.url)
+    base_token = resolve_base(url)
     table_id = resolve_table(base_token, args.table)
     print(f"[表格] base_token={base_token} table_id={table_id}（{args.table}）")
 

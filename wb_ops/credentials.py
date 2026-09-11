@@ -97,6 +97,9 @@ class Credentials:
             return 2000
 
     # ---- WB 卖家后台 cookie 三件套 ----
+    def feishu_base_url(self):
+        return (self.data.get("feishu") or {}).get("base_url") or ""
+
     def wb_shops(self):
         return self.shops
 

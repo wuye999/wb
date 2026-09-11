@@ -233,13 +233,13 @@ def build_parser():
 
     p = sub.add_parser("mabang-stock-register",
                        help="拉取马帮全部库存 SKU → 全量重建飞书「马帮库存登记表」（含图片附件）")
-    p.add_argument("--url", default="", help="飞书多维表格地址（变量）")
+    p.add_argument("--url", default="", help="飞书多维表格地址（可选，默认读配置 feishu.base_url）")
     p.add_argument("--table", default="马帮库存登记表", help="目标表名（默认 马帮库存登记表）")
     p.add_argument("--apply", action="store_true", help="真正全量重建（默认 dry-run 预览）")
 
     p = sub.add_parser("mabang-stock-daily",
-                       help="「马帮库存登记表」按日新增 <M月D日新订单量> 列（统计订单登记当日各SKU数量）")
-    p.add_argument("--url", default="", help="飞书多维表格地址（变量）")
+                       help="「马帮库存登记表」日期列管理：默认只建今天列+更新所有已有日期列（--begin 显式时删旧列/补区间列）")
+    p.add_argument("--url", default="", help="飞书多维表格地址（可选，默认读配置 feishu.base_url）")
     p.add_argument("--table", default="马帮库存登记表", help="库存表名（默认 马帮库存登记表）")
     p.add_argument("--orders-table", default="订单登记", help="订单明细表名（默认 订单登记）")
     p.add_argument("--date", default="", help="单天日期 YYYY-MM-DD（默认今天）")
@@ -252,6 +252,8 @@ def build_parser():
     p.add_argument("--days", type=int, default=1, help="查询最近 N 天待处理订单（默认 1）")
     p.add_argument("--page-size", type=int, default=100, help="订单列表分页大小（默认 100）")
     p.add_argument("--wait", type=int, default=0, help="上传批次后等待秒数（默认 0 不额外等待）")
+    p.add_argument("--url", default="", help="飞书表格地址（可选，默认读配置 feishu.base_url）")
+    p.add_argument("--table", default="订单登记", help="飞书订单登记表名（默认 订单登记）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run 预览）")
 
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
