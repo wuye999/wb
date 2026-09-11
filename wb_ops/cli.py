@@ -26,6 +26,7 @@ from . import mapping_check
 from . import mapping_sync
 from . import mabang
 from . import feishu_register
+from . import mabang_process
 from . import mabang_stock
 from . import order_pipeline
 from . import mismatch_check
@@ -219,7 +220,7 @@ def build_parser():
     p = sub.add_parser("feishu-register", help="马帮订单登记到飞书多维表格（按订单编号去重，dry-run 默认）")
     p.add_argument("--url", default="", help="飞书多维表格地址（变量）")
     p.add_argument("--table", default="订单登记", help="表格名（默认 订单登记）")
-    p.add_argument("--scope", choices=["pending", "all"], default="pending",
+    p.add_argument("--scope", choices=["latest", "pending", "all"], default="latest",
                    help="pending=待处理订单（默认）；all=全部状态订单（补录历史，配合 --date 或 --begin/--end）")
     p.add_argument("--date", default="", help="单天日期 YYYY-MM-DD（--scope all 用）")
     p.add_argument("--begin", default="", help="开始日期 YYYY-MM-DD（--scope all 用）")
@@ -228,12 +229,6 @@ def build_parser():
     p.add_argument("--page-size", type=int, default=100, help="订单列表每页条数")
     p.add_argument("--apply", action="store_true", help="真正写入（默认 dry-run 只列出将登记订单）")
 
-    p = sub.add_parser("orders-pipeline",
-                       help="新订单全链路（固化顺序）：①登记飞书→②匹配更换→③预报批次/上传/交运→④店铺×中文名归属统计")
-    p.add_argument("--url", default="", help="飞书多维表格地址（变量）")
-    p.add_argument("--table", default="订单登记", help="表格名（默认 订单登记）")
-    p.add_argument("--days", type=int, default=1, help="查询最近 N 天订单（默认 1）")
-    p.add_argument("--page-size", type=int, default=100, help="订单列表每页条数")
 
 
     p = sub.add_parser("mabang-stock-register",
@@ -251,6 +246,13 @@ def build_parser():
     p.add_argument("--begin", default="", help="开始日期 YYYY-MM-DD（回填区间用）")
     p.add_argument("--end", default="", help="结束日期 YYYY-MM-DD")
     p.add_argument("--apply", action="store_true", help="真正建列并填充（默认 dry-run 预览）")
+
+    p = sub.add_parser("mabang-process",
+                       help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运（零飞书依赖）")
+    p.add_argument("--days", type=int, default=1, help="查询最近 N 天待处理订单（默认 1）")
+    p.add_argument("--page-size", type=int, default=100, help="订单列表分页大小（默认 100）")
+    p.add_argument("--wait", type=int, default=0, help="上传批次后等待秒数（默认 0 不额外等待）")
+    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run 预览）")
 
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
     p.add_argument("md_file", help="含 fetch 块的 md 文件")
@@ -335,8 +337,9 @@ def dispatch(args):
         return mabang.run_forecast(args)
     if cmd == "feishu-register":
         return feishu_register.run(args)
-    if cmd == "orders-pipeline":
-        return order_pipeline.run(args)
+    if cmd == "mabang-process":
+        return mabang_process.run(args)
+
     if cmd == "mabang-stock-register":
         return mabang_stock.run(args)
 

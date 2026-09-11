@@ -161,6 +161,10 @@ def build_records(args):
         print(f"[过滤] 日期 {begin}~{end} 命中 {len(in_range)} 单"
               f"（无付款时间 {no_paid} 单不计）")
         orders = in_range
+    elif args.scope == "latest":
+        # 默认：最近 500 条全状态订单（最新在前），按订单编号去重后只登记新增
+        print("\n[查询] 最近 500 条全状态订单（orderalllist，最新在前）...")
+        orders = mabang.fetch_all_orders(cred, page_size=500, max_pages=1)
     else:
         print(f"\n[查询] 待处理订单（最近 {args.days} 天）...")
         orders = mabang.fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
