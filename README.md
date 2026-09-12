@@ -32,7 +32,9 @@ python wb.py shops                      # 打印你的店铺列表（验证鉴�
 # 常用
 python wb.py fetch                      # 同步+拉取商品快照（仅当需要 BCS 缓存反映最新结果时才跑，日常写操作默认不用）
 python wb.py mapping                    # 核对工作台
-python wb.py merge                      # 增量合并映射表（重建唯一状态源；拿到新审核/新上架需入库时才跑）
+python wb.py merge                      # 增量合并映射表（同步各店单表并聚合总表；拿到新审核/新上架需入库时跑）
+python wb.py shops-mapping              # 刷新各店铺独立映射表（data/shops/shop_*.xlsx）
+python wb.py mapping-rename --vc BCS-XXX-123 --cn "新中文名" # 货不对板纠偏/改名：全店单表与总表一键同步
 python wb.py price --name 充电宝 --apply --yes
 python wb.py dimension                        # 按价格表「尺寸」批量改全部店铺商品尺寸（dry-run 默认；也可 --dims "长*宽*高/毛重" 自定义，须配 --vc/--name/--prefix 圈定）
 python wb.py discount --apply           # >50% → 50%（默认不自动同步/不写后验证，仅提示；加 --sync 自动同步并合并映射表）

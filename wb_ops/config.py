@@ -17,6 +17,8 @@ STATE_DIR = os.path.join(DATA_DIR, "state")           # 同步状态 / 自动新
 HAR_DIR = os.path.join(DATA_DIR, "har")               # 抓包 md/har 凭证源（cookies-update 输入）
 WORKBENCH_DIR = os.path.join(DATA_DIR, "workbench")   # 生成的工作台 *.html
 LOG_DIR = os.path.join(DATA_DIR, "logs")              # 运行日志 + 结果 CSV
+SHOPS_DIR = os.path.join(DATA_DIR, "shops")           # 各店铺独立映射表目录
+SHOPS_ARCHIVE_DIR = os.path.join(SHOPS_DIR, "_archive")  # 归档/停用店铺目录
 
 # ---------------- 文件路径 ----------------
 CREDENTIALS_JSON = os.path.join(DATA_DIR, "credentials.json")   # 统一凭证（BCS + WB 5 店）
@@ -26,6 +28,9 @@ MAPPING_XLSX = os.path.join(DATA_DIR, "价格映射表.xlsx")  # 唯一状态源
 
 STATUS_JSON = os.path.join(STATE_DIR, "多店铺同步状态.json")
 AUTO_ADD_JSON = os.path.join(STATE_DIR, "多店铺自动新增清单.json")
+VC_KNOWN_JSON = os.path.join(STATE_DIR, "vc_known.json")        # 全局已知 VC 归属池
+VC_OVERRIDE_JSON = os.path.join(STATE_DIR, "vc_override.json")  # 全局 VC 纠偏改名清单
+VC_EXCLUDED_JSON = os.path.join(STATE_DIR, "vc_excluded.json")  # 全局排除清单
 
 # 工作台 HTML 输出
 OUT_MAPPING_HTML = os.path.join(WORKBENCH_DIR, "价格映射核对工作台.html")
@@ -40,6 +45,27 @@ RESULT_CSV = os.path.join(LOG_DIR, "ops_result.csv")
 def shop_json_path(shop_id):
     """某店商品快照路径"""
     return os.path.join(PRODUCTS_DIR, f"shop{shop_id}_products_all.json")
+
+
+def shop_mapping_xlsx(shop_id, shop_name=None):
+    """某店铺独立映射表路径。若未传 shop_name，尝试从已存在文件查找，或默认命名。"""
+    os.makedirs(SHOPS_DIR, exist_ok=True)
+    if shop_name:
+        return os.path.join(SHOPS_DIR, f"shop_{shop_id}_{shop_name}.xlsx")
+    # 查找已有匹配
+    import glob
+    matches = glob.glob(os.path.join(SHOPS_DIR, f"shop_{shop_id}_*.xlsx"))
+    if matches:
+        return matches[0]
+    return os.path.join(SHOPS_DIR, f"shop_{shop_id}.xlsx")
+
+
+def is_shop_archived(shop_id):
+    """检查某店铺是否已被归档（放置在 data/shops/_archive/ 下）"""
+    import glob
+    os.makedirs(SHOPS_ARCHIVE_DIR, exist_ok=True)
+    matches = glob.glob(os.path.join(SHOPS_ARCHIVE_DIR, f"shop_{shop_id}_*.xlsx"))
+    return bool(matches)
 
 
 # ---------------- 业务常量 ----------------

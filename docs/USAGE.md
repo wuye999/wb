@@ -76,10 +76,35 @@ python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25   # 指定时间
 #   点击标题（或左侧复选框）勾选「货不对板」（勾选状态浏览器本地保存，刷新不丢）
 # → 点「导出勾选 vc」下载 货不对板vc.json，或「复制 vc」复制逗号分隔列表
 python wb.py trash --vc <vc列表> --apply --yes   # 清空库存并移至回收站
+
+# 纠偏改名（若商品不需要下架，仅是映射错了中文名）：
+python wb.py mapping-rename --vc BCS-XXX-123 --cn "正确中文名"   # 一键同步全店铺单表与聚合总表
+python wb.py mapping-rename --file 纠偏清单.json               # 批量纠偏更正
 ```
 - ✅ 成功：工作台「共 N 条 · M 个中文名商品」；用 `--begin/--end/--days` 时会打印 `[时间段] 创建时间 X ~ Y → N 条`；无创建时间的商品在时间筛选时被过滤并提示「过滤了 N 行无创建时间」。
 - 📌 时间段依据映射表「映射总表」的**创建时间**（上架/建立时间，来自 BCS 快照经 merge 入库）；若映射表很久未 merge，该列可能缺失/滞后，提示重新 `fetch + merge`。
 - 📌 下架前先去 `--apply` 跑 dry-run 预览清单；`trash` 会自动先清库存再移回收站。
+
+## 5.1 店铺增删与单店映射表管理（独立单表 + 归档解耦）
+
+系统在 `data/shops/` 为每个活跃店铺维护各自独立的映射表（`shop_{id}_{name}.xlsx`），通过 `wb.py merge` 自动做 Outer Join 聚合成全景 `价格映射表.xlsx`。
+
+```bash
+# 1) 刷新全部店铺单表（或指定店铺单表）
+python wb.py shops-mapping
+python wb.py shops-mapping --shop-id 9352
+
+# 2) 新增店铺（例如新上店 9358）：
+#    a. 在 credentials.json 加入该店；
+#    b. python wb.py fetch --shop-id 9358 拉取在架快照；
+#    c. python wb.py merge 自动创建 shop_9358_xxx.xlsx 并并入总表（老商品自动挂载归属，零审核）。
+
+# 3) 停用 / 移除店铺（例如店 9356 被封或转出）：
+#    a. 直接将 data/shops/shop_9356_xxx.xlsx 移到 data/shops/_archive/；
+#    b. python wb.py merge 重新聚合；
+#    c. 聚合总表立刻剔除该店；该店独有的 VC 自然从总表中清除（“消失即移除”生效，ops 批量改价绝不发脏请求）；
+#    d. 若后续解封恢复：把文件移回 data/shops/ 再跑 merge 即可瞬间无损恢复。
+```
 
 ## 6. 改价 / 设折扣 / 库存 / 下架（两段式）
 

@@ -25,7 +25,9 @@
 | `mapping-check` | `--tol N`（默认 5） | 映射表核查工作台（带图，可疑项标记） | `data/workbench/映射表核查工作台.html` |
 | `mismatch-check` | `--cn` / `--begin` / `--end` / `--days` | 货不对板筛查工作台（看图勾选，导出 vc 下架）；`--begin`/`--end`/`--days` 按映射表创建时间（上架/建立时间）时间段筛选，如只审昨天+今天上架用 `--days 2`（`--days 1`=仅今天） | `data/workbench/货不对板筛查工作台.html` |
 | `review` | 无 | 其余 4 店新商品待审核（前缀命中自动补录） | `data/workbench/多店铺待审核.html` |
-| `merge` | `[审核.json]`（可选） | 增量合并（继承+追加+消失即移除）→ 重建映射表 | `data/价格映射表.xlsx` |
+| `merge` | `[审核.json]`（可选） | 增量合并：自动同步刷新活跃店铺单店表并做 Outer Join 聚合成全景总表 | `data/shops/shop_*.xlsx` + `data/价格映射表.xlsx` |
+| `shops-mapping` | `--shop-id N` / `--force` | 刷新或生成指定店铺（或全部活跃店铺）的独立映射表 | `data/shops/shop_{id}_{name}.xlsx` |
+| `mapping-rename` | `--vc VC --cn "新中文名"` / `--file 纠偏.json` | 纠偏/修改商品中文名：自动写入全局纠偏池并级联同步全部店铺单表与聚合总表 | `data/state/vc_override.json` + 全部单店表 + `data/价格映射表.xlsx` |
 
 ### 一键操作（ops）
 
@@ -83,8 +85,11 @@ python wb.py fetch --no-sync               # 跳过同步快速拉取（~30s）
 python wb.py fetch --shop-id 5272          # 单店
 python wb.py mapping                       # 统一核对工作台
 python wb.py review                        # 待审核工作台
-python wb.py merge                         # 增量合并（无新审核）
-python wb.py merge 统一审核.json            # 合并本次审核
+python wb.py merge                         # 增量合并（同步各店单表并聚合总表）
+python wb.py merge 统一审核.json            # 合并本次审核（新归属自动分发到各单店表与总表）
+python wb.py shops-mapping                 # 刷新全部店铺单表（data/shops/shop_*.xlsx）
+python wb.py shops-mapping --shop-id 9352  # 仅刷新指定店铺单表
+python wb.py mapping-rename --vc BCS-XXX-123 --cn "新中文名" # 纠偏改名：全店单表与总表一键同步
 python wb.py mapping-check --tol 3         # 核查工作台
 python wb.py mismatch-check                 # 货不对板筛查工作台（看图勾选 → 导出 vc → trash --vc）
 python wb.py mismatch-check --days 2        # 只审最近 2 天（昨天+今天）上架/创建的商品（--days 1=仅今天）

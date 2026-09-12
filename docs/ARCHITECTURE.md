@@ -38,9 +38,11 @@
 ├── data/                     ★ 统一数据目录
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
 │   ├── 商品价格表.xlsx         唯一权威商品清单（用户维护）
-│   ├── 价格映射表.xlsx         唯一状态源（merge 自动重建）
+│   ├── 价格映射表.xlsx         聚合全景总表（8-Sheet，merge 自动重建）
+│   ├── shops/                ★ 单店映射表（shop_{id}_{name}.xlsx，各店独立资产）
+│   │   └── _archive/         ★ 停用/归档店铺目录
 │   ├── products/             shop{id}_products_all.json 快照
-│   ├── state/                同步状态 / 自动新增清单
+│   ├── state/                同步状态 / vc_known.json / vc_override.json 全局归属池
 │   ├── har/                  抓包 md/har（cookies-update 输入）
 │   ├── workbench/            生成的工作台 *.html
 │   └── logs/                 运行日志 + 结果 CSV
@@ -85,19 +87,25 @@
 
 | ID                | 格式/来源                       | 作用域   | 用途                                |
 | ----------------- | --------------------------- | ----- | --------------------------------- |
-| `vendorCode`      | `BCS-{4位前缀码}-{WB原始nmId}` 或 `BCS-{4位前缀码}-{中间标识}/{WB原始nmId}` | 跨店唯一键 | 映射表主键、review/merge 比对、ops 定位（兼容 ozon-card 与 `/` 格式） |
+| `vendorCode`      | `BCS-{4位前缀码}-{WB原始nmId}` 或 `BCS-{4位前缀码}-{中间标识}/{WB原始nmId}` | 跨店唯一键 | 单店表与总表主键、review/merge 比对、ops 定位（兼容 ozon-card 与 `/` 格式） |
 | `nmId`（BCS 内部）    | 店铺 JSON 顶层字段                | 每店不同  | 改价（price/batch）、下架（removeToTrash） |
 | `chrtId`（规格）      | 店铺 JSON `sizeList[].chrtId` | 每店每规格 | 改库存（stock/batchSetByChrtIdsBatch） |
 | `warehouseId`（仓库） | `stockList[].warehouseId`   | 每店每仓  | 改库存的分组键                           |
 
-> 映射表**无 nmId/chrtId 列**——ops 操作前必须 `fetch`，从 `data/products/shop{id}_products_all.json` 按 vendorCode 查行取 ID。
+> 单店映射表（`data/shops/shop_{id}_{name}.xlsx`）记录单店的 vendorCode、nmId、真实价格与库存；聚合全景表（`data/价格映射表.xlsx`）以 vendorCode 为跨店主键汇聚各店数据。ops 操作前需 `fetch` 结合快照中的 `nmId/chrtId/warehouseId` 执行底层操作。
 
 ## 五、核心业务规则（不可改变）
 
 1. **半价口径**：商品价格表「双倍售价」= 最低售价 ×2（D 列公式）；店铺整数价 = `floor(双倍售价)`。
 2. **折扣规则**：所有 `discount > 50%` → 改为 `50%`（`wb.py discount`）。
 3. **先同步再查询**：BCS productList 是缓存，改价/报名/删除前后应先触发同步（\~40-50s/店）否则漏查/误判。**默认不自动同步**：写操作（改价/库存/下架/折扣/清理/上架）默认**不自动同步、不写后验证、不自动 merge**，命令执行完成仅打印提示（因 WB/BCS 异步回填，当场验证不一定准确）；需同步在架并合并映射表时，给写命令加 `--sync`（命令内自动 fetch+merge）或显式 `wb.py fetch`。`fetch`/`orders` 属显式同步/查询工具，仍默认同步。
-4. **增量 merge 唯一状态源**：映射表 xlsx = 状态；审核文件是一次性输入用完即弃；继承旧归属 + 追加审核 + 消失即移除（缺店保护）。
+4. **单店独立表 + 全局归属池 + 增量聚合总表（多店解耦核心）**：
+   - **单店映射表**（`data/shops/shop_{id}_{name}.xlsx`）：每家活跃店铺拥有一张独立的映射表，反映该店铺当前存活在架的真实商品清单、单店 nmId、各店在架价格与库存，是店铺级真实资产。
+   - **全局 VC 归属与纠偏池**（`data/state/vc_known.json` 与 `vc_override.json`）：解耦「商品中文名归属」与「店铺生命周期」。无论是统一审核、前缀自动识别，还是人工通过 `mapping-rename` 纠偏的 VC 归属，均沉淀入全局池；老商品上新店时免审核自动认领。
+   - **聚合全景总表**（`data/价格映射表.xlsx`）：`wb.py merge` 自动同步所有活跃单店表并执行 Outer Join，重建 8-Sheet 全景总表。下游 `ops`、`mabang` 等全量跨店操作完全基于总表无缝兼容。
+   - **“消失即移除”与店铺增删解耦**：
+     - **停用/归档店铺**：将单店表移入 `data/shops/_archive/` 后执行 `merge`，总表立即剔除该店，且该店独有的 VC 从总表中彻底消除（防止跨店批量操作发脏请求）；日后店铺恢复只需移回并 `merge` 即可瞬间无损复原。
+     - **在架商品下架**：单店下架或清理后，执行 `fetch + merge` 刷新单店表与总表，下架商品自然从总表中移除。
 5. **价格下限**：目标价 ≤ 原价÷2 时 WB 静默拒绝（返回 200 不生效）→ ops 自动剔除。
 6. **0 值商品是正常数据**（WB 延迟/受限）：照常修改并显式报告，复查仍 0 不反复操作。
 7. **删除/下架不可逆**：默认 dry-run，需 `--apply`；trash/库存归零还需 `--yes`。
@@ -113,14 +121,19 @@
 ## 六、数据流全链路时序
 
 ```
-wb.py fetch          ① 并发同步 5 店（WB→BCS ~50s）→ 逐店拉 BASE 在架 → data/products/shop{id}_json
-wb.py mapping        ② 5 店并集按 vc 去重 → 四分类（已知跳过/前缀自动/候选池/未归属）→ 统一核对工作台
-   （人工）          ③ 打开 workbench HTML 勾选归属/排除 → 导出 统一审核.json
-wb.py merge [审核]   ④ 增量合并 → 继承旧归属 + 追加审核 + 前缀补录 + 消失即移除 → 重建 8-Sheet 映射表
+wb.py fetch          ① 并发同步各活跃店（WB→BCS ~50s）→ 逐店拉 BASE 在架 → data/products/shop{id}_json
+wb.py mapping / review ② 活跃店铺并集按 vc 去重 → 四分类（已知跳过/前缀自动/候选池/未归属）→ 生成统一核对/审核工作台
+   （人工）          ③ 打开 workbench HTML 勾选归属/排除 → 导出 统一审核.json（或使用 mapping-rename 快速纠偏）
+wb.py merge [审核]   ④ 增量合并与多店聚合：
+                        a. 刷新活跃店铺单店表（data/shops/shop_*.xlsx），写入新归属到全局池（vc_known.json / vc_override.json）；
+                        b. 跨活跃店铺 Outer Join 汇聚各店在架状态（自动跳过 _archive/ 目录）；
+                        c. 重建 8-Sheet 聚合全景总表（价格映射表.xlsx）。
+wb.py shops-mapping  ④a 【独立维护】刷新单店映射表（支持 --shop-id 指定单店或刷新全部活跃店铺）
+wb.py mapping-rename ④b 【纠偏改名】修改某商品中文名：自动持久化全局纠偏池，并级联更新全部单店表与聚合总表
 wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 默认不自动同步/合并（仅提示），加 --sync 自动 fetch + merge（改价/库存/下架提交后自动增量合并映射表）
 wb.py dimension         ⑤a 按商品价格表「尺寸」列（长*宽*高/毛重）批量改各店商品尺寸：映射 vc 中文名 → 各店快照该店 nmId → POST shopKeeper/dimension/batch（≤300/块，数值原样透传）→ 写 尺寸修改_*.csv → 默认不同步/不写后验证
 wb.py fetch + merge  ⑥ 写后验证（可选步骤，仅当需要 BCS 缓存反映最新结果时才执行；改价/库存写 WB 侧需再同步才在 BCS 可见，下架立即可见；默认写操作不要求做）
-wb.py replicate      ⑥b 快照覆盖判断（vc×5店，默认不自动同步、用本地快照）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 加 --sync 才自动 fetch 复核覆盖率 + 写后 merge（上架后映射表自动补录/同步覆盖；否则仅打印提示）
+wb.py replicate      ⑥b 快照覆盖判断（vc×多店，默认不自动同步、用本地快照）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 加 --sync 才自动 fetch 复核覆盖率 + 写后 merge（上架后映射表自动补录/同步覆盖；否则仅打印提示）
 wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原始nmId 与我方快照差集（默认不自动同步、用本地快照）→ 我方前缀优先生成新 vc → 一次请求多店上架（BCS 已恢复多店一次提交）→ 加 --sync 才自动 fetch 复核 + 写后 merge；否则仅打印提示
 （★ 改价/库存/下架/上架/清理写操作默认不自动同步/不写后验证/不自动 merge，完成后仅打印提示；加 `--sync` 才自动 fetch + 增量 merge 映射表；下架/清理的 merge 会「消失即移除」对应商品）
 
@@ -148,6 +161,8 @@ wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传
 
 ## 七、映射表 8 Sheet 结构
 
+> 聚合全景总表（`data/价格映射表.xlsx`）由 `wb.py merge` 汇集所有活跃单店表（`data/shops/shop_*.xlsx`）自动 Outer Join 生成，为跨店运营及下游脚本提供统一视图。
+
 | Sheet   | 内容                                                          | 用途             |
 | ------- | ----------------------------------------------------------- | -------------- |
 | 映射总表    | 14 列（中文名/vendorCode/双倍售价/主店价/折扣/club/库存/俄文标题/主图/尺寸/毛重/店铺覆盖） | 主数据，ops 筛选依据   |
@@ -156,7 +171,7 @@ wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传
 | 已排除清单   | vc + 排除原因                                                   | 增量 merge 排除状态源 |
 | 待核查清单   | 商品价格表有但无归属 vc                                               | 人工补录           |
 | 店铺全量商品  | 主店全部在架明细                                                    | 对照             |
-| 店铺覆盖矩阵  | vendorCode × 5 店（单元格=库存）                                    | 跨店覆盖           |
+| 店铺覆盖矩阵  | vendorCode × 多店（单元格=库存）                                    | 跨店覆盖           |
 | 多店价格一致性 | 同品跨店价格不一致告警                                                 | 复核             |
 
 ## 八、历史沿革
@@ -166,7 +181,8 @@ wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传
 | 早期         | 全量重建 merge（依赖审核文件）                                                                                                                 |
 | 2026-08-16 | 增量 merge（映射表=唯一状态源）；fetch 改 filter=BASE；集成 product/sync 并发同步；网络层 urllib→requests；ops 一键操作；统一核对工作台（5 店并集一页两区）；移除笔记本特殊处理；商品价格表重建 7 列 |
 | 2026-08-17 | BASE\_DIR 相对化；ops\_result.csv 追加；mapping-check、trash 两阶段（先清库存再下架）                                                                  |
-| 2026-08-18 | **本次重构**：检查价格 + 促销折扣整合为 wb\_ops 包，统一凭证 credentials.json、统一入口 wb.py、统一文档 docs/，清理废弃脚本                                               |
+| 2026-08-18 | 检查价格 + 促销折扣整合为 wb\_ops 包，统一凭证 credentials.json、统一入口 wb.py、统一文档 docs/，清理废弃脚本                                               |
+| 2026-09-12 | **单店独立映射表与多店解耦架构重构**：将原本单一映射表拆分为各店铺独立的单店映射表（`data/shops/shop_{id}_{name}.xlsx`），引入全局 VC 归属与纠偏池（`data/state/vc_known.json`, `vc_override.json`），`merge` 采用各活跃店 Outer Join 机制自动聚合 8-Sheet 全景总表，支持店铺一键归档解耦（`_archive/`）与 VC 级联纠偏更名（`mapping-rename`） |
 
 ## 九、外部依赖与运行环境
 

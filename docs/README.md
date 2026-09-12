@@ -19,13 +19,15 @@
 
 | 术语 | 含义 |
 |---|---|
-| **商品价格表** | 唯一权威商品清单（`data/商品价格表.xlsx`，7 列，你只维护它） |
-| **价格映射表** | 唯一状态源（`data/价格映射表.xlsx`，8 Sheet，merge 自动重建，勿手改） |
-| **vendorCode** | `BCS-{4位前缀码}-{WB原始nmId}` 或 `BCS-{4位前缀码}-{中间标识}/{WB原始nmId}`，跨店唯一键，映射表主键 |
+| **商品价格表** | 唯一权威商品清单（`data/商品价格表.xlsx`，7 列，用户唯一定义商品中文名、售价、尺寸毛重、前缀码） |
+| **单店映射表** | 各店铺独立映射表（`data/shops/shop_{id}_{name}.xlsx`，反映各店真实存活商品、真实在架价格与各店独立 nmId/库存） |
+| **全局归属池** | 全局 VC 认领与纠偏中心（`data/state/vc_known.json` 与 `vc_override.json`，多店共享，零审核挂载老商品与级联改名） |
+| **价格映射表** | 聚合全景总表（`data/价格映射表.xlsx`，8 Sheet，由 `merge` 读取所有活跃单店表 Outer Join 自动聚合重建，向下兼容 ops 等操作，勿手改） |
+| **vendorCode** | `BCS-{4位前缀码}-{WB原始nmId}` 或 `BCS-{4位前缀码}-{中间标识}/{WB原始nmId}`，跨店唯一键，单店表与总表主键 |
 | **credentials.json** | 统一凭证（BCS 三件套 + WB 各店 cookie） |
 
 **两大业务线**（现合并在一个入口 `wb.py` 下）：
-1. **商品映射 / 改价 / 库存 / 下架 / 价格审核 / 货不对板筛查**（原「检查价格」）：`shops / fetch / mapping / mapping-check / mismatch-check / review / merge / price / stock / trash / price-review`
+1. **商品映射 / 改价 / 库存 / 下架 / 价格审核 / 货不对板筛查 / 多店解耦维护**（原「检查价格」）：`shops / fetch / mapping / mapping-check / mismatch-check / review / merge / shops-mapping / mapping-rename / price / stock / trash / price-review`
 2. **促销报名 / 折扣改价 / 清理 / 订单 / 买家提问 / 每日自动化**（原「促销折扣」）：`promo-apply / discount / clean / orders / questions / cookies-update / daily / schedule`
 
 ## 文档索引（按需读）

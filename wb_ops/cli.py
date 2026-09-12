@@ -71,6 +71,16 @@ def build_parser():
     p = sub.add_parser("merge", help="增量合并审核 → 映射表（file 可选）")
     p.add_argument("file", nargs="?", default=None, help="本次审核结果 JSON（可选）")
 
+    p = sub.add_parser("mapping-rename", help="纠偏/修改商品中文名（自动级联更新全部店铺单表与聚合总表）")
+    p.add_argument("--vc", default="", help="要改名的 vendorCode")
+    p.add_argument("--cn", default="", help="新产品中文名")
+    p.add_argument("--reason", default="人工纠偏", help="改名原因说明")
+    p.add_argument("--file", default="", help="批量改名 JSON 文件路径（含 [{'vc': ..., 'cn': ...}]）")
+
+    p = sub.add_parser("shops-mapping", help="刷新/生成各店铺独立映射表（data/shops/shop_*.xlsx）")
+    p.add_argument("--shop-id", type=int, default=None, help="指定店铺ID（默认全部活跃店铺）")
+    p.add_argument("--force", action="store_true", help="强制全量重新构建")
+
     p = sub.add_parser("price", help="改价/改折扣（dry-run 默认，--apply 执行）")
     ops.add_ops_args(p, with_price=True)
 
@@ -301,6 +311,11 @@ def dispatch(args):
         return 0
     if cmd == "merge":
         mapping_sync.run_merge(args.file)
+        return 0
+    if cmd == "mapping-rename":
+        return 0 if mapping_sync.set_vc_override(vc=args.vc, new_cn=args.cn, reason=args.reason, file_path=args.file) else 1
+    if cmd == "shops-mapping":
+        mapping_sync.sync_all_shops_mapping(shop_id=args.shop_id, force=args.force)
         return 0
     if cmd in ("price", "stock", "trash"):
         ops.run(cmd, args)

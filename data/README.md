@@ -38,13 +38,14 @@
 - 第 4 列「双倍售价」= 最低售价 ×2（店铺价 = floor(双倍售价)）。
 - 第 7 列「vendorCode前缀码」：4 位大写、全局唯一（上架时用于生成 `BCS-{前缀}-{WB原始nmId}`）。
 
-## 自动生成（无需手动创建）
+## 自动生成与状态维护（无需手动创建）
 
+- `shops/` —— ★ **各店铺独立映射表**（`shop_{id}_{name}.xlsx`，反映单店真实在架存活商品、价格与库存）；子目录 `_archive/` 用于存放停用/归档店铺
+- `state/` —— 同步状态 / 全局归属池（`vc_known.json`、`vc_override.json`、`vc_excluded.json`）
 - `products/` —— `wb.py fetch` 拉取的各店商品快照
-- `state/` —— 同步状态 / 自动新增清单
 - `workbench/` —— 生成的工作台 HTML
 - `logs/` —— 运行日志与结果 CSV
-- `价格映射表.xlsx` —— `wb.py merge` 自动重建（唯一状态源，勿手改）
+- `价格映射表.xlsx` —— ★ **聚合全景总表**（8-Sheet，`wb.py merge` 汇聚所有活跃单店表 Outer Join 自动生成，勿手改）
 
 ## 可选（刷新凭证时用）
 
