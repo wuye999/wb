@@ -228,10 +228,10 @@ def build_parser():
     p.add_argument("--upload-waiting", action="store_true", help="把待上传列表(status=1)中历史批次一并补传")
 
     p = sub.add_parser("feishu-register", help="马帮订单登记到飞书多维表格（按订单编号去重，dry-run 默认）")
-    p.add_argument("--url", default="", help="飞书多维表格地址（变量）")
+    p.add_argument("--url", default="", help="飞书多维表格地址（可选，默认读配置 feishu.base_url）")
     p.add_argument("--table", default="订单登记", help="表格名（默认 订单登记）")
     p.add_argument("--scope", choices=["latest", "pending", "all"], default="latest",
-                   help="pending=待处理订单（默认）；all=全部状态订单（补录历史，配合 --date 或 --begin/--end）")
+                   help="latest=最近500条全状态去重只登新增（默认）；pending=待处理订单；all=全部状态订单（补录历史，配合 --date 或 --begin/--end）")
     p.add_argument("--date", default="", help="单天日期 YYYY-MM-DD（--scope all 用）")
     p.add_argument("--begin", default="", help="开始日期 YYYY-MM-DD（--scope all 用）")
     p.add_argument("--end", default="", help="结束日期 YYYY-MM-DD（--scope all 用）")

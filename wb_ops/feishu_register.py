@@ -24,6 +24,7 @@ import time
 
 from . import config
 from . import common
+from . import credentials
 from . import mabang
 
 # Windows 下 subprocess 需要完整 .cmd 路径（PATH 里的 sh shim 无法直接运行）
@@ -270,10 +271,11 @@ def write_csv(records, existing_ids):
 
 def run(args):
     common.ensure_utf8_stdout()
-    if not args.url or not args.table:
-        print("[错误] 必须提供 --url 表格地址 与 --table 表格名")
+    url = args.url or credentials.get().feishu_base_url()
+    if not url or not args.table:
+        print("[错误] 未提供 --url 且配置 feishu.base_url 缺失（--table 亦不可为空）")
         return 1
-    base_token = resolve_base(args.url)
+    base_token = resolve_base(url)
     table_id = resolve_table(base_token, args.table)
     print(f"[表格] base_token={base_token} table_id={table_id}（{args.table}）")
 
