@@ -98,14 +98,17 @@
 
 1. **半价口径**：商品价格表「双倍售价」= 最低售价 ×2（D 列公式）；店铺整数价 = `floor(双倍售价)`。
 2. **折扣规则**：所有 `discount > 50%` → 改为 `50%`（`wb.py discount`）。
-3. **先同步再查询**：BCS productList 是缓存，改价/报名/删除前后应先触发同步（\~40-50s/店）否则漏查/误判。**默认不自动同步**：写操作（改价/库存/下架/折扣/清理/上架）默认**不自动同步、不写后验证、不自动 merge**，命令执行完成仅打印提示（因 WB/BCS 异步回填，当场验证不一定准确）；需同步在架并合并映射表时，给写命令加 `--sync`（命令内自动 fetch+merge）或显式 `wb.py fetch`。`fetch`/`orders` 属显式同步/查询工具，仍默认同步。
+3. **写操作默认不同步、不合并、不做写后验证（严禁频繁同步与盲目回验）**：
+   - **底层机理**：写后验证必须依赖 BCS 全量同步，若不同步，拉取的快照只是未修改前的旧数据；而触发 BCS 全量同步（`fetch`）极其缓慢（约 40~50s/店），频繁同步极易触发平台接口限流与账号风控。
+   - **业务事实**：写操作（改价 price、改库存 stock、下架 trash、改折扣 discount、清理 clean、改尺寸 dimension、上架 replicate/import-shelve 等）直接调用 WB 或 BCS 写入接口，成功返回即代表平台侧已生效。
+   - **AI 与使用者铁律**：所有写操作执行完毕后在控制台打印提示并**直接结束**。**严禁在写操作后擅自补跑 `fetch`、`merge` 或自写脚本调接口去验证写后结果**。仅在极低频的阶段性全局大盘点、或用户明确手动要求时，才由人工显式执行同步与合并。
 4. **单店独立表 + 全局归属池 + 增量聚合总表（多店解耦核心）**：
    - **单店映射表**（`data/shops/shop_{id}_{name}.xlsx`）：每家活跃店铺拥有一张独立的映射表，反映该店铺当前存活在架的真实商品清单、单店 nmId、各店在架价格与库存，是店铺级真实资产。
    - **全局 VC 归属与纠偏池**（`data/state/vc_known.json` 与 `vc_override.json`）：解耦「商品中文名归属」与「店铺生命周期」。无论是统一审核、前缀自动识别，还是人工通过 `mapping-rename` 纠偏的 VC 归属，均沉淀入全局池；老商品上新店时免审核自动认领。
    - **聚合全景总表**（`data/价格映射表.xlsx`）：`wb.py merge` 自动同步所有活跃单店表并执行 Outer Join，重建 8-Sheet 全景总表。下游 `ops`、`mabang` 等全量跨店操作完全基于总表无缝兼容。
    - **“消失即移除”与店铺增删解耦**：
      - **停用/归档店铺**：将单店表移入 `data/shops/_archive/` 后执行 `merge`，总表立即剔除该店，且该店独有的 VC 从总表中彻底消除（防止跨店批量操作发脏请求）；日后店铺恢复只需移回并 `merge` 即可瞬间无损复原。
-     - **在架商品下架**：单店下架或清理后，执行 `fetch + merge` 刷新单店表与总表，下架商品自然从总表中移除。
+     - **在架商品下架**：单店下架（`wb.py trash`）或清理（`wb.py clean`）完成后直接结束，**日常业务中绝对不要在下架后跑 fetch + merge**！下架在 WB/BCS 平台端已实时生效并将库存清零；映射总表保留历史行完全不影响后续业务逻辑（后续批量改价等操作时系统根据快照与接口自动跳过已下架/0值商品）。仅在未来的周期性全局大盘点或用户显式要求重构映射表时，才做 `fetch + merge`，届时已下架商品才会自然从单店表与总表中移除。
 5. **价格下限**：目标价 ≤ 原价÷2 时 WB 静默拒绝（返回 200 不生效）→ ops 自动剔除。
 6. **0 值商品是正常数据**（WB 延迟/受限）：照常修改并显式报告，复查仍 0 不反复操作。
 7. **删除/下架不可逆**：默认 dry-run，需 `--apply`；trash/库存归零还需 `--yes`。
@@ -121,7 +124,7 @@
 ## 六、数据流全链路时序
 
 ```
-wb.py fetch          ① 并发同步各活跃店（WB→BCS ~50s）→ 逐店拉 BASE 在架 → data/products/shop{id}_json
+wb.py fetch          ① 并发同步各活跃店（WB→BCS ~50s）→ 逐店拉 BASE 在架 → data/products/shop{id}_json（仅按需低频运行）
 wb.py mapping / review ② 活跃店铺并集按 vc 去重 → 四分类（已知跳过/前缀自动/候选池/未归属）→ 生成统一核对/审核工作台
    （人工）          ③ 打开 workbench HTML 勾选归属/排除 → 导出 统一审核.json（或使用 mapping-rename 快速纠偏）
 wb.py merge [审核]   ④ 增量合并与多店聚合：
@@ -130,12 +133,11 @@ wb.py merge [审核]   ④ 增量合并与多店聚合：
                         c. 重建 8-Sheet 聚合全景总表（价格映射表.xlsx）。
 wb.py shops-mapping  ④a 【独立维护】刷新单店映射表（支持 --shop-id 指定单店或刷新全部活跃店铺）
 wb.py mapping-rename ④b 【纠偏改名】修改某商品中文名：自动持久化全局纠偏池，并级联更新全部单店表与聚合总表
-wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 默认不自动同步/合并（仅提示），加 --sync 自动 fetch + merge（改价/库存/下架提交后自动增量合并映射表）
-wb.py dimension         ⑤a 按商品价格表「尺寸」列（长*宽*高/毛重）批量改各店商品尺寸：映射 vc 中文名 → 各店快照该店 nmId → POST shopKeeper/dimension/batch（≤300/块，数值原样透传）→ 写 尺寸修改_*.csv → 默认不同步/不写后验证
-wb.py fetch + merge  ⑥ 写后验证（可选步骤，仅当需要 BCS 缓存反映最新结果时才执行；改价/库存写 WB 侧需再同步才在 BCS 可见，下架立即可见；默认写操作不要求做）
-wb.py replicate      ⑥b 快照覆盖判断（vc×多店，默认不自动同步、用本地快照）→ WB detail（BCS代理）+ card.json（CDN）→ /wbCollection/wb/new 上架缺失店铺（vc 与源店一致）→ 加 --sync 才自动 fetch 复核覆盖率 + 写后 merge（上架后映射表自动补录/同步覆盖；否则仅打印提示）
-wb.py import-shelve  ⑥c 他人映射表「映射总表」解析 → 按 WB原始nmId 与我方快照差集（默认不自动同步、用本地快照）→ 我方前缀优先生成新 vc → 一次请求多店上架（BCS 已恢复多店一次提交）→ 加 --sync 才自动 fetch 复核 + 写后 merge；否则仅打印提示
-（★ 改价/库存/下架/上架/清理写操作默认不自动同步/不写后验证/不自动 merge，完成后仅打印提示；加 `--sync` 才自动 fetch + 增量 merge 映射表；下架/清理的 merge 会「消失即移除」对应商品）
+wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 写入接口成功即代表完成，默认直接结束（★ 严禁擅自补跑 fetch+merge 或自写验证）
+wb.py dimension         ⑤a 按商品价格表「尺寸」列批量改尺寸 → POST shopKeeper/dimension/batch → 写 CSV → 结束（不同步/不做写后验证）
+wb.py replicate      ⑥ 跨店复制上架（vc×多店，基于本地快照；单批50个批量推送）→ 上架成功即结束（默认不同步/不自动 merge）
+wb.py import-shelve  ⑥a 他人映射表导入上架（按 WB原始nmId 差集与我方前缀码）→ 一次请求多店上架 → 结束（默认不同步/不自动 merge）
+（★ 铁律：写操作默认禁止写后验证与同步合并）：写后验证必须依赖全量同步，不同步拉取的快照是未修改前的旧数据；而频繁全量同步耗时极长且极易触发限流风控。改价/库存/下架/折扣/清理/上架/尺寸等操作执行完毕即代表完成，默认严禁自行执行 fetch、merge 或自写脚本验证，除非用户显式手动要求。
 
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）
