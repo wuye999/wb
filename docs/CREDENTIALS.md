@@ -126,7 +126,7 @@
 
 2. 进入 Network 面板后，**刷新页面**（或触发一次操作），点任意 API 请求（如 `promotions/timeline`）→ **Request Headers**。
 
-3. 复制三处值：`authorizev3`、`wb-seller-lk`、`Cookie:` 整串。
+3. 复制三处值：`authorizev3`、`wb-seller-lk`（2026-09 起 WB 新版前端已把该请求头改名为 **`seller-lk`**；`wb.py cookies-update` 两种键名都识别，直接原样粘贴即可）、`Cookie:` 整串。
 
    > ⚠ `Cookie` 必须从 Network 的 `Cookie:` 请求头复制完整值（`document.cookie` 拿不到 HttpOnly 项）。
 

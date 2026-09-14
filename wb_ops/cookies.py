@@ -2,8 +2,9 @@
 """
 wb_ops cookie 刷新（原 update_cookies.py）
 
-从含 fetch 请求块的 .md 抓包文件提取会话（authorizev3 / wb-seller-lk / cookie），
+从含 fetch 请求块的 .md 抓包文件提取会话（authorizev3 / wb-seller-lk 或 seller-lk / cookie），
 解码 wb-seller-lk JWT 取店铺 Z-Sid，按 sid 匹配并更新 data/credentials.json 的 wb.shops。
+（2026-09-14：WB 前端已把该请求头改名为 `seller-lk`，解析时两种键名都兼容。）
 """
 import json
 import os
@@ -19,7 +20,7 @@ def extract_sessions(md_text):
     sessions = []
     for block in re.split(r"\bfetch\(", md_text)[1:]:
         a3 = re.search(r'"authorizev3":\s*"([^"]+)"', block)
-        lk = re.search(r'"wb-seller-lk":\s*"([^"]+)"', block)
+        lk = re.search(r'"(?:wb-seller-lk|seller-lk)":\s*"([^"]+)"', block)
         ck = re.search(r'"cookie":\s*"([^"]+)"', block)
         if not (a3 and lk and ck):
             continue
