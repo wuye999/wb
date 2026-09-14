@@ -14,9 +14,8 @@ import re
 import shutil
 import tempfile
 import time
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from collections import Counter
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -27,6 +26,38 @@ from . import mabang
 from .feishu_register import _lark, resolve_base, resolve_table
 
 STOCK_LIST_URL = "https://aamz.mabangerp.com/index.php"
+
+DATE_FMT = "%Y-%m-%d"
+# 图片附件列候选名（本表实际列名为「图」，其余为兼容）
+PIC_FIELD_CANDIDATES = ("图", "图片", "图片附件")
+
+
+def _sv(v):
+    """单元格值 → 去空格字符串（兼容 list/dict 富文本）"""
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        v = "".join(str(x.get("text", x) if isinstance(x, dict) else x) for x in v)
+    return str(v).strip()
+
+
+def _to_num(v):
+    """尽力转数值；失败返回 None（兼容 "‑2" 这类字符串库存）"""
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_day(s, flag):
+    """YYYY-M-D → date（strptime 自动补零规范化）；空串返回 None，非法抛 ValueError"""
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, DATE_FMT).date()
+    except ValueError:
+        raise ValueError(f"{flag} 日期格式应为 YYYY-MM-DD，实际收到: {s!r}")
 
 
 def fetch_stock_list(cred):
@@ -60,28 +91,43 @@ def fetch_stock_list(cred):
     return out
 
 
+def _record_list_all(base_token, table_id):
+    """分页读全表 → list[dict]（lark-cli ndjson 单次上限 2000，按 manifest 翻页）"""
+    rows, offset, page = [], 0, 0
+    while True:
+        out = os.path.join(tempfile.gettempdir(), f"_mbstock_rl_{os.getpid()}_{page}.ndjson")
+        man_path = out.replace(".ndjson", ".manifest.json")
+        for p in (out, man_path):
+            if os.path.exists(p):
+                os.remove(p)
+        man = _lark(["+record-list", "--base-token", base_token, "--table-id", table_id,
+                     "--limit", "2000", "--offset", str(offset),
+                     "--format", "ndjson", "--output", out, "--overwrite"])
+        if os.path.exists(out):
+            with open(out, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+        for p in (out, man_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        if not man.get("has_more"):
+            return rows
+        nxt = man.get("next_offset")
+        if nxt in (None, ""):
+            raise RuntimeError(f"record-list 报告 has_more 但未给 next_offset"
+                               f"（已读 {len(rows)} 条），为避免漏读已中止")
+        offset, page = int(nxt), page + 1
+        time.sleep(0.3)
+
+
 def _read_all_record_ids(base_token, table_id):
-    """读全表现有记录 ID 列表（清空前用）"""
-    out = os.path.join(tempfile.gettempdir(), "_mbstock_read.ndjson")
-    if os.path.exists(out):
-        os.remove(out)
-    _lark(["+record-list", "--base-token", base_token, "--table-id", table_id,
-           "--format", "ndjson", "--output", out, "--overwrite"])
-    res = []
-    with open(out, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                d = json.loads(line)
-                rid = d.get("record_id")
-                if rid:
-                    res.append(str(rid))
-    try:
-        os.remove(out)
-        os.remove(out.replace(".ndjson", ".manifest.json"))
-    except OSError:
-        pass
-    return res
+    """读全表现有记录 ID 列表（清空前用；分页防截断）"""
+    return [str(d["record_id"]) for d in _record_list_all(base_token, table_id)
+            if d.get("record_id")]
 
 
 def _create_records(base_token, table_id, items):
@@ -97,7 +143,12 @@ def _create_records(base_token, table_id, items):
                    "--table-id", table_id],
                   payload={"create_records": chunk})
         rid_list = d.get("record_id_list") or []
-        for rid, it in zip(rid_list, items[i:i + 200]):
+        chunk_items = items[i:i + 200]
+        if len(rid_list) != len(chunk_items):
+            raise RuntimeError(
+                f"record-batch-create 第 {i // 200 + 1} 批返回 {len(rid_list)}/{len(chunk_items)} 条，"
+                f"数量不符已中止（请核对飞书表后重跑 mabang-stock-register --apply）")
+        for rid, it in zip(rid_list, chunk_items):
             pairs.append((str(rid), it))
         time.sleep(0.5)
     return pairs
@@ -106,145 +157,97 @@ def _create_records(base_token, table_id, items):
 # ---------------- 每日新订单量列 ----------------
 
 def _field_id_by_name(base_token, table_id, name):
-    """field-list 查列 id（走 fr._lark，二进制解析已验证）；失败返回 None"""
-    try:
-        d = _lark(["+field-list", "--base-token", base_token,
-                   "--table-id", table_id])
-        # fr._lark 已剥壳：字段列表直接在顶层 d["fields"]
-        for f in d.get("fields") or []:
-            if f.get("name") == name:
-                return f.get("id")
-    except Exception as e:
-        print(f"  [警告] field-list 查询失败（按新建处理）: {str(e)[:60]}")
+    """field-list 查列 id（走 fr._lark，二进制解析已验证）。
+    查询失败直接抛出 —— 不再把「查询失败」当「列不存在」，否则会误建同名列
+    （飞书报 800010205 unique field name，且发生在数百条写入之后）。"""
+    d = _lark(["+field-list", "--base-token", base_token,
+               "--table-id", table_id])
+    # fr._lark 已剥壳：字段列表直接在顶层 d["fields"]
+    for f in d.get("fields") or []:
+        if f.get("name") == name:
+            return f.get("id")
     return None
 
 
-def _ensure_date_field(base_token, table_id, name, cache):
-    """确保日期列（text）存在；返回 field name（写记录用列名即可）。"""
-    if name in cache:
-        return cache[name]
-    fid = _field_id_by_name(base_token, table_id, name)
-    if not fid:
-        d = _lark(["+field-create", "--base-token", base_token,
-                   "--table-id", table_id, "--as", "user"],
-                  payload={"name": name, "type": "text"})
-        fid = d.get("id")
-        print(f"  [新列] {name}（id={fid}）")
-    else:
-        print(f"  [列已存在] {name}")
-    cache[name] = fid or name
-    return cache[name]
+def _resolve_attachment_field(base_token, table_id):
+    """定位附件列的真实列名：候选名优先，其次退到任意 attachment 类型列；都没有返回 None"""
+    d = _lark(["+field-list", "--base-token", base_token, "--table-id", table_id])
+    fields = d.get("fields") or []
+    by_name = {f.get("name"): f for f in fields}
+    for nm in PIC_FIELD_CANDIDATES:
+        if nm in by_name:
+            return nm
+    for f in fields:
+        if f.get("type") == "attachment":
+            return f.get("name")
+    return None
 
 
 def read_orders_daily(base_token, orders_table_id, begin, end):
     """读「订单登记」→ {date: {库存SKU: 总件数}}；无库存SKU 的订单单独计数"""
-    out = os.path.join(tempfile.gettempdir(), "_mbsku_orders.ndjson")
-    if os.path.exists(out):
-        os.remove(out)
-    _lark(["+record-list", "--base-token", base_token, "--table-id", orders_table_id,
-           "--format", "ndjson", "--output", out, "--overwrite"])
     daily, no_sku = {}, Counter()
-    with open(out, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            d = json.loads(line)
-            f = d.get("fields") or d
-
-            def _sv(v):
-                if v is None:
-                    return ""
-                if isinstance(v, list):
-                    v = "".join(str(x.get("text", x) if isinstance(x, dict) else x) for x in v)
-                return str(v).strip()
-
-            dt = _sv(f.get("日期"))[:10]
-            if not dt or dt < begin or dt > end:
-                continue
-            sku = _sv(f.get("库存SKU"))
-            try:
-                qty = int(float(_sv(f.get("订单量")) or 1))
-            except ValueError:
-                qty = 1
-            if not sku:
-                no_sku[dt] += qty
-                continue
-            daily.setdefault(dt, Counter())
-            daily[dt][sku] += qty
-    try:
-        os.remove(out)
-        os.remove(out.replace(".ndjson", ".manifest.json"))
-    except OSError:
-        pass
+    for d in _record_list_all(base_token, orders_table_id):
+        fields = d.get("fields") or d
+        dt = _sv(fields.get("日期"))[:10]
+        if not dt or dt < begin or dt > end:
+            continue
+        sku = _sv(fields.get("库存SKU"))
+        try:
+            qty = int(float(_sv(fields.get("订单量")) or 1))
+        except ValueError:
+            qty = 1
+        if not sku:
+            no_sku[dt] += qty
+            continue
+        daily.setdefault(dt, Counter())[sku] += qty
     return daily, no_sku
 
 
 def read_stock_records(base_token, table_id):
     """读「马帮库存登记表」→ [(record_id, 库存SKU, fields_dict)]"""
-    out = os.path.join(tempfile.gettempdir(), "_mbsku_stock.ndjson")
-    if os.path.exists(out):
-        os.remove(out)
-    _lark(["+record-list", "--base-token", base_token, "--table-id", table_id,
-           "--format", "ndjson", "--output", out, "--overwrite"])
     res = []
-    with open(out, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            d = json.loads(line)
-            f = d.get("fields") or d
-            rid = d.get("record_id")
-
-            def _sv(v, _f=f):
-                if v is None:
-                    return ""
-                if isinstance(v, list):
-                    v = "".join(str(x.get("text", x) if isinstance(x, dict) else x) for x in v)
-                return str(v).strip()
-
-            if rid:
-                res.append((str(rid), _sv(f.get("库存SKU")), f))
-    try:
-        os.remove(out)
-        os.remove(out.replace(".ndjson", ".manifest.json"))
-    except OSError:
-        pass
+    for d in _record_list_all(base_token, table_id):
+        rid = d.get("record_id")
+        if rid:
+            fields = d.get("fields") or d
+            res.append((str(rid), _sv(fields.get("库存SKU")), fields))
     return res
 
 
 DATE_COL_RE = re.compile(r"^(\d{1,2})月(\d{1,2})日新订单量$")
 
 
-def _list_date_columns(base_token, table_id, year):
-    """field-list → {(month, day): 列名}（仅当年日期列）"""
+def _list_date_columns(base_token, table_id, ref_date):
+    """field-list → {(year, month, day): 列名}。列名不带年份，故按 ref_date 推断：
+    月日 ≤ ref_date 视为同年，否则视为上一年（约定表内不预建未来列）。"""
     d = _lark(["+field-list", "--base-token", base_token, "--table-id", table_id])
+    rm, rd = ref_date.month, ref_date.day
     cols = {}
     for f in d.get("fields") or []:
         m = DATE_COL_RE.match(f.get("name") or "")
         if m:
-            cols[(int(m.group(1)), int(m.group(2)))] = f["name"]
+            mo, dy = int(m.group(1)), int(m.group(2))
+            y = ref_date.year if (mo, dy) <= (rm, rd) else ref_date.year - 1
+            cols[(y, mo, dy)] = f["name"]
     return cols
 
 
-def _date_range(begin, end):
-    """[begin, end] 闭区间日期列表 → [(YYYY-MM-DD, (month, day))]"""
-    b = datetime.strptime(begin, "%Y-%m-%d")
-    e = datetime.strptime(end, "%Y-%m-%d")
-    out, cur = [], b
-    while cur <= e:
-        out.append((cur.strftime("%Y-%m-%d"), (cur.month, cur.day)))
+def _date_range(begin_d, end_d):
+    """[begin, end] 闭区间 → [date, ...]"""
+    out, cur = [], begin_d
+    while cur <= end_d:
+        out.append(cur)
         cur += timedelta(days=1)
     return out
 
 
 def run_daily(args):
     """马帮库存登记表日期列管理：
-    默认（不带 --begin/--date）：不删旧列、只建今天列（缺失时）、更新所有已存在日期列数据；
-    显式 --begin（或 --date）：删除 begin 之前的日期列 + 补建区间缺列 + 填充。
+    默认（不带 --begin/--date/--end）：不删旧列、只建今天列（缺失时）、更新全部已有日期列数据；
+    显式 --begin（或 --date）：删除早于该日的日期列 + 补建区间缺列 + 填充；
+      --end 必须与 --begin/--date 同用（单独使用直接报错，避免静默忽略）。
     填充口径：有订单的 SKU 写数量；无订单的 SKU 留空（重跑时清空残留旧值，含旧 "0" 与旧非零）；
-      总新增订单量 = 本次运行区间各日之和，同口径清空。"""
+      总新增订单量 = 表内所有存活日期列之和（与 --begin/默认模式无关），同口径清空。"""
     common.ensure_utf8_stdout()
     url = args.url or credentials.get().feishu_base_url()
     if not url:
@@ -254,41 +257,61 @@ def run_daily(args):
     table_id = resolve_table(base_token, args.table)
     orders_tid = resolve_table(base_token, args.orders_table)
 
-    today = time.strftime("%Y-%m-%d")
-    explicit = bool(args.begin or args.date)
-    begin = args.begin or args.date or today
-    end = args.end or args.date or today
-    if begin > end:
-        begin, end = end, begin
+    today_d = datetime.strptime(time.strftime(DATE_FMT), DATE_FMT).date()
+    today = today_d.strftime(DATE_FMT)
+    try:
+        d_date = _parse_day(args.date, "--date")
+        d_begin = _parse_day(args.begin, "--begin")
+        d_end = _parse_day(args.end, "--end")
+    except ValueError as e:
+        print(f"[错误] {e}")
+        return 1
+    if d_end and not (d_begin or d_date):
+        print("[错误] --end 必须与 --begin 或 --date 同用（单独 --end 不触发删列，已中止）")
+        return 1
+    explicit = bool(d_begin or d_date)
+    begin_d = d_begin or d_date or today_d
+    end_d = d_end or d_date or today_d
+    if begin_d > end_d:
+        begin_d, end_d = end_d, begin_d
+    begin = begin_d.strftime(DATE_FMT)
     print(f"[表格] 库存表={table_id} 订单表={orders_tid}")
-    print(f"[日期] {begin} ~ {end}（explicit={explicit}）")
+    print(f"[日期] {begin} ~ {end_d.strftime(DATE_FMT)}（explicit={explicit}）")
 
     stock_rows = read_stock_records(base_token, table_id)
     print(f"[库存] 马帮库存登记表 {len(stock_rows)} 条记录")
 
-    year = int(begin[:4])
-    existing = _list_date_columns(base_token, table_id, year)
+    # 列信息（含总列预检）——放在任何破坏性写入之前；失败直接中止，不误判为「列不存在」
+    total_col = "总新增订单量"
+    try:
+        existing = _list_date_columns(base_token, table_id, today_d)
+        total_fid = _field_id_by_name(base_token, table_id, total_col)
+    except Exception as e:
+        print(f"[错误] 读取「{args.table}」列信息失败（尚未做任何写入，可直接重试）: {str(e)[:200]}")
+        return 1
 
     # 删除清单：仅显式 --begin/--date 时删除 begin 之前的日期列
     del_cols = []
     if explicit:
-        del_cols = [nm for (mo, dy), nm in sorted(existing.items())
-                    if datetime(year, mo, dy).strftime("%Y-%m-%d") < begin]
+        del_cols = [nm for (y, mo, dy), nm in sorted(existing.items())
+                    if date(y, mo, dy) < begin_d]
 
     # 建列清单：显式=begin~end 区间缺列；默认=仅今天缺列
-    rng = _date_range(begin, end)
+    rng = _date_range(begin_d, end_d)
     if not explicit:
-        rng = [(today, (int(today[5:7]), int(today[8:10])))]
+        rng = [today_d]
 
     if not args.apply:
-        missing = [f"{mo}月{dy}日新订单量" for _, (mo, dy) in rng
-                   if (mo, dy) not in existing]
+        missing = [f"{d_.month}月{d_.day}日新订单量" for d_ in rng
+                   if (d_.year, d_.month, d_.day) not in existing]
+        survivors = {k: v for k, v in existing.items() if v not in del_cols}
+        for d_ in rng:
+            survivors[(d_.year, d_.month, d_.day)] = f"{d_.month}月{d_.day}日新订单量"
+        upd_dates = sorted(f"{k[1]}月{k[2]}日" for k in survivors)
         print(f"[dry-run] 将删除旧列 {len(del_cols)} 个: {del_cols or '无'}")
         print(f"[dry-run] 将新建列 {len(missing)} 个: {missing or '无'}")
-        upd_dates = sorted({f"{mo}月{dy}日" for _, (mo, dy) in rng} |
-                           {f"{mo}月{dy}日" for (mo, dy) in existing
-                            if datetime(year, mo, dy).strftime("%Y-%m-%d") >= begin})
-        print(f"[dry-run] 将更新数据列 {len(upd_dates)} 个: {upd_dates or '无'}")
+        print(f"[dry-run] 将更新数据列 {len(upd_dates)} 个（=全部存活列）: {upd_dates or '无'}")
+        print(f"[dry-run] 总列「{total_col}」：{'已存在' if total_fid else '不存在（将新建）'}")
         print("（dry-run 未写入；确认无误后加 --apply 执行）")
         return 0
 
@@ -298,21 +321,26 @@ def run_daily(args):
         print(f"  [删列] {nm}")
     if del_cols:
         time.sleep(0.5)
-        existing = _list_date_columns(base_token, table_id, year)
+        existing = _list_date_columns(base_token, table_id, today_d)
 
-    for _, (mo, dy) in rng:
-        col = f"{mo}月{dy}日新订单量"
-        if (mo, dy) not in existing:
+    for d_ in rng:
+        key = (d_.year, d_.month, d_.day)
+        if key not in existing:
+            col = f"{d_.month}月{d_.day}日新订单量"
             _lark(["+field-create", "--base-token", base_token, "--table-id", table_id,
                    "--as", "user"], payload={"name": col, "type": "text"})
             print(f"  [建列] {col}")
             time.sleep(0.3)
-            existing[(mo, dy)] = col
+            existing[key] = col
 
-    # 统计区间：覆盖所有目标日期列对应日期 ~ 今天（保证已有列更新数据完整）
-    all_dates = [datetime(year, mo, dy).strftime("%Y-%m-%d") for (mo, dy), _ in existing.items()]
-    all_dates += [d for d, _ in rng]
-    stats_begin = min(all_dates + [begin, today])[:10]
+    if not total_fid:
+        _lark(["+field-create", "--base-token", base_token, "--table-id", table_id,
+               "--as", "user"], payload={"name": total_col, "type": "text"})
+        print(f"  [建列] {total_col}")
+
+    # 统计区间：覆盖所有存活日期列 + 目标列 + today（保证已有列数据完整）
+    all_dates = [date(y, mo, dy) for (y, mo, dy) in existing] + list(rng)
+    stats_begin = min(all_dates + [begin_d, today_d]).strftime(DATE_FMT)
     daily, no_sku = read_orders_daily(base_token, orders_tid, stats_begin, today)
     print(f"[订单] 统计区间 {stats_begin}~{today}："
           f"{sum(sum(c.values()) for c in daily.values())} 件；"
@@ -320,11 +348,11 @@ def run_daily(args):
           ("、".join(f"{k}={v}" for k, v in sorted(no_sku.items())) if no_sku else "无"))
 
     # 更新/填充：目标列 = rng 列 + 存活的所有已存在日期列
-    targets = {(mo, dy): col for (mo, dy), col in existing.items()}
-    for _, (mo, dy) in rng:
-        targets[(mo, dy)] = f"{mo}月{dy}日新订单量"
-    for (mo, dy), col in sorted(targets.items()):
-        date_str = datetime(year, mo, dy).strftime("%Y-%m-%d")
+    targets = {(y, mo, dy): col for (y, mo, dy), col in existing.items()}
+    for d_ in rng:
+        targets[(d_.year, d_.month, d_.day)] = f"{d_.month}月{d_.day}日新订单量"
+    for key, col in sorted(targets.items()):
+        date_str = date(*key).strftime(DATE_FMT)
         counts = daily.get(date_str, Counter())
         updates, cleared = {}, 0
         for rid, sku, fields in stock_rows:
@@ -344,17 +372,14 @@ def run_daily(args):
                   payload={"update_records": dict(items[i:i + 200])})
             time.sleep(0.4)
         print(f"  [完成] {col}: 有单 {len(counts)} 款（{sum(counts.values())} 件）"
-              f"→ 写入/更新 {len(items) - cleared} 条，清空旧0 {cleared} 条")
+              f"→ 写入/更新 {len(items) - cleared} 条 · 清空 {cleared} 条 · "
+              f"一致 {len(stock_rows) - len(items)} 条")
 
-    # 总新增订单量列：各日期列之和（与日列同口径：0 值清空、留空不动）
-    total_col = "总新增订单量"
-    if not _field_id_by_name(base_token, table_id, total_col):
-        _lark(["+field-create", "--base-token", base_token, "--table-id", table_id,
-               "--as", "user"], payload={"name": total_col, "type": "text"})
-        print(f"  [建列] {total_col}")
+    # 总新增订单量列：表内所有存活日期列之和（与 --begin/默认模式无关）
+    total_dates = sorted(date(y, mo, dy).strftime(DATE_FMT) for (y, mo, dy) in existing)
     updates, cleared, ok_total = {}, 0, 0
     for rid, sku, fields in stock_rows:
-        want = sum(daily.get(d, Counter()).get(sku, 0) for d, _ in rng)
+        want = sum(daily.get(d, Counter()).get(sku, 0) for d in total_dates)
         cur = str(fields.get(total_col) or "").strip()
         if want:
             if cur != str(want):
@@ -370,7 +395,8 @@ def run_daily(args):
         _lark(["+record-batch-update", "--base-token", base_token,
                "--table-id", table_id],
               payload={"update_records": dict(items[i:i + 200])})
-    print(f"  [完成] {total_col}: 已更新 {len(items)} 条（一致 {ok_total} 条 / 清空 {cleared} 条）")
+    print(f"  [完成] {total_col}: 写入/更新 {len(items) - cleared} 条 · 清空 {cleared} 条 · "
+          f"一致 {ok_total} 条（日期列 {len(total_dates)} 个）")
     print("\n[完成] 全部日期列处理完毕")
     return 0
 
@@ -386,9 +412,21 @@ def run(args):
     table_id = resolve_table(base_token, args.table)
     print(f"[表格] base_token={base_token} table_id={table_id}（{args.table}）")
 
+    # 附件列预检（放在任何破坏性写入之前；字段查询失败不静默）
+    try:
+        pic_field = _resolve_attachment_field(base_token, table_id)
+    except Exception as e:
+        print(f"[错误] 读取「{args.table}」列信息失败（未改动任何记录）: {str(e)[:200]}")
+        return 1
+    if not pic_field:
+        print(f"[错误]「{args.table}」未找到图片附件列（候选：{'/'.join(PIC_FIELD_CANDIDATES)}），"
+              f"已中止，未改动任何记录。")
+        return 1
+    print(f"[图片列] {pic_field}")
+
     print("\n[拉取] 马帮库存 SKU 列表（stock.getStockList，aamz 域）...")
     stocks = fetch_stock_list(cred)
-    neg = [s for s in stocks if isinstance(s["stockQuantity"], (int, float)) and s["stockQuantity"] < 0]
+    neg = [s for s in stocks if (_to_num(s["stockQuantity"]) or 0) < 0]
     print(f"[数据] 共 {len(stocks)} 条库存 SKU；负库存 {len(neg)} 条")
     for s in stocks[:10]:
         print(f"  {s['stockSku']} | {s['nameCN']} | 库存={s['stockQuantity']} | {s['statusText']}")
@@ -412,6 +450,9 @@ def run(args):
     # 2) 写入新记录
     print(f"[写入] 创建 {len(stocks)} 条记录...")
     pairs = _create_records(base_token, table_id, stocks)
+    if len(pairs) != len(stocks):
+        print(f"[错误] 创建记录 {len(pairs)}/{len(stocks)} 条，数量不符已中止（请重跑本命令）")
+        return 1
     print(f"  创建成功 {len(pairs)} 条")
 
     # 3) 图片附件（并行下载，串行上传）
@@ -447,7 +488,7 @@ def run(args):
         try:
             _lark(["+record-upload-attachment", "--base-token", base_token,
                    "--table-id", table_id, "--record-id", rid,
-                   "--field-id", "图", "--file", path])
+                   "--field-id", pic_field, "--file", path])
             ok_img += 1
         except Exception as e:
             fail_img.append(f"{it['stockSku']}({str(e)[:40]})")

@@ -242,19 +242,19 @@ def build_parser():
 
 
     p = sub.add_parser("mabang-stock-register",
-                       help="拉取马帮全部库存 SKU → 全量重建飞书「马帮库存登记表」（含图片附件）")
+                       help="拉取马帮全部库存 SKU → 全量重建飞书「马帮库存登记表」（含附件列「图」）")
     p.add_argument("--url", default="", help="飞书多维表格地址（可选，默认读配置 feishu.base_url）")
     p.add_argument("--table", default="马帮库存登记表", help="目标表名（默认 马帮库存登记表）")
     p.add_argument("--apply", action="store_true", help="真正全量重建（默认 dry-run 预览）")
 
     p = sub.add_parser("mabang-stock-daily",
-                       help="「马帮库存登记表」日期列管理：默认只建今天列+更新所有已有日期列（--begin 显式时删旧列/补区间列）")
+                       help="「马帮库存登记表」日期列管理：默认只建今天列+更新全部已有日期列；--begin/--date 任一显式给出即进入区间模式（删早于该日的旧列+补建区间缺列，--end 需同用）")
     p.add_argument("--url", default="", help="飞书多维表格地址（可选，默认读配置 feishu.base_url）")
     p.add_argument("--table", default="马帮库存登记表", help="库存表名（默认 马帮库存登记表）")
     p.add_argument("--orders-table", default="订单登记", help="订单明细表名（默认 订单登记）")
-    p.add_argument("--date", default="", help="单天日期 YYYY-MM-DD（默认今天）")
-    p.add_argument("--begin", default="", help="开始日期 YYYY-MM-DD（回填区间用）")
-    p.add_argument("--end", default="", help="结束日期 YYYY-MM-DD")
+    p.add_argument("--date", default="", help="单天日期 YYYY-MM-DD（默认今天；显式给出即进入区间模式，会删除该日之前的旧日期列）")
+    p.add_argument("--begin", default="", help="区间开始 YYYY-MM-DD（显式给出即删除该日之前的旧日期列，并补建至 --end 的缺列）")
+    p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin/--date 同用，单独使用直接报错）")
     p.add_argument("--apply", action="store_true", help="真正建列并填充（默认 dry-run 预览）")
 
     p = sub.add_parser("mabang-process",

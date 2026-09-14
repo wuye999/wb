@@ -61,8 +61,8 @@
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
 | `questions-watch` | 买家提问实时监听（双模式：**front=前台AI** 打印提问/商品信息到控制台与日志、前台手动回复；**back=后台AI** 常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` |
-| `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新所有已有日期列**（有单写数量、无单即清空含残留旧值）；`--begin` 显式指定时删除之前旧列+补区间列；每次运行同步更新「**总新增订单量**」列（=当前日期列之和） | | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
-| `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/图片附件） | `--url` / `--table` / `--apply` |
+| `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
+| `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
 | `daily` | 每日任务 | `morning\|check`（+ 透传参数） |
 | `schedule` | 创建/删除 Windows 计划任务（⚠ 默认不创建，仅按需执行） | `--remove` |

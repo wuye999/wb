@@ -57,8 +57,8 @@ python wb.py mabang-process --apply                     # A 马帮处理一体�
 python wb.py feishu-register                            # B 飞书登记：拉取马帮最近500条全状态订单，按订单编号去重只登新增（URL 读配置 feishu.base_url）
 python wb.py feishu-register --scope all --date 2026-09-05 --apply   # 补录历史订单（指定日期/区间）
 python wb.py mabang-forecast --check                    # 上传 5-10 分钟后查预报结果
-python wb.py mabang-stock-daily --apply                 # 「马帮库存登记表」日期列管理：默认只建今天列+更新已有日期列+总新增订单量
-python wb.py mabang-stock-register --apply              # 全量重建「马帮库存登记表」（马帮全部库存SKU 库存/状态/图片附件）
+python wb.py mabang-stock-daily --apply                 # 「马帮库存登记表」日期列管理：默认只建今天列+更新全部已有日期列+总新增订单量（--begin/--date 显式时删旧列，--end 需同用）
+python wb.py mabang-stock-register --apply              # 全量重建「马帮库存登记表」（马帮全部库存SKU 库存/状态/附件列「图」；会清空各日列与总列）
 ```
 
 ## 文档
