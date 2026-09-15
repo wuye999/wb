@@ -54,8 +54,10 @@
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
 | `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
 | `dims-check` | 查询 WB 尺寸/重量偏差待验证商品列表（**只读**，不改数据；`tableListImprovable`），按映射表中文名 `--name` 筛选，`--type dims\|weight\|all` 选尺寸/重量/两者合并去重，供 `dimension --vc ... --dims ...` 单独测试尺寸 | `--type` / `--name` / `--shops` / `--limit` |
-| `discount` | 折扣改价**全量**（BCS，慢）：各店 >阈值→目标；**所有商品→50% 用 `--threshold -1`**；**默认不自动同步**，加 `--sync` 才前置同步 + 提交后同步复核；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--target` / `--shops` / `--sync` |
-| `discount-scan` | 折扣改价**快速**（**混合引擎**）：WB 实时列表按折扣从高到低找 >阈值 → 快照可定位价的商品用 **BCS 批量改**（一次≤300，提速），快照缺失/无价的商品自动改走 **WB 单条**并提示（不做 BCS 全量同步）→ 同接口回验；逐店逐商品（同 vc 各店折扣不同） | `--apply` / `--threshold`(默认50) / `--target`(默认50) / `--shops` / `--limit` |
+| `discount` | 折扣改价**WB 原生批量**（默认）：按折扣从高到低查询 >阈值商品，调用 WB 原生 upload/task 批量修改；支持 `--vc`、`--name`（中文名包含）、`--prefix`、`--shops` 灵活圈定；默认**不做写后验证**（WB 异步生效延迟）；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--all` / `--target` / `--name` / `--vc` / `--prefix` / `--shops` / `--limit` / `--chunk` / `--verify` |
+| `discount-wb` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
+| `discount-scan` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
+| `discount-bcs` | [旧版/按需保留] 走 BCS 接口全量改折扣（慢，默认不启用，需显式调用） | `--apply` / `--threshold` / `--target` / `--shops` / `--limit` / `--sync` |
 | `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**回收站数量以 `countByFilter(TRASH)` 实时计数为准**（`list(TRASH)` 为列表缓存可能滞后，不一致会提示）；一键清空后实时计数仍>0 为平台被拒删残留（有库存/在途/成都仓，订单完成后再清，非命令失败）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
 | `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
@@ -127,13 +129,15 @@ python wb.py import-shelve 他人映射表.xlsx --cn-stock "充电线:100" --app
 
 # 促销/折扣/清理/价格审核/订单/提问
 python wb.py promo-apply                   # 预览可报名活动
-python wb.py promo-apply --apply           # 执行报名
-python wb.py discount                      # 预览 >50% 商品
-python wb.py discount --apply              # 执行 >50%→50%（默认不自动同步/不写后验证，完成后仅提示）
-python wb.py discount --threshold -1 --target 10 --apply --sync   # 把所有在架商品折扣统一为 10%（含 0 折扣；阈值取负可选中全部商品；--sync 前置同步+提交后复核）
-python wb.py discount-scan                  # ⚡ 快速改折扣（混合引擎，默认 >50%→50%）：预览（BCS批量/WB回退分类）
-python wb.py discount-scan --apply          # ⚡ 执行：快照可定位价→BCS批量，缺失/无价→WB单条+提示
-python wb.py price-review                  # ⚠ 报名/改折扣后必跑：预览隔离区待审商品
+# 折扣修改（默认 WB 原生批量，支持多种维度过滤）
+python wb.py discount                      # 预览全店 >50% 商品（WB 原生从高到低快速查询）
+python wb.py discount --apply              # 执行全店 >50%→50%（WB 原生 upload/task 批量修改，默认不写后验证）
+python wb.py discount --name 笔记本电脑 --threshold 55 --target 50 # 各店独立筛选：笔记本电脑且折扣>55% 改为 50%
+python wb.py discount --name 笔记本电脑 --all --target 50         # 全量设置：所有店铺笔记本电脑无条件改 50%
+python wb.py discount --vc BCS-HAAJ-248364237 --target 48        # 单个 VC 精准改折扣
+python wb.py discount --vc BCS-XXX-1,BCS-XXX-2 --target 45       # 多个 VC 批量改折扣
+python wb.py discount --shops 9352 --limit 10 --apply            # 限定店铺与处理上限
+python wb.py discount-bcs --apply --sync                         # 【旧版】显式走 BCS 慢速改折扣
 python wb.py price-review --apply          # ⚠ 应用新价格（改折扣也会触发审核，不应用则新折扣不生效）
 python wb.py banned                        # 预览各店被阻止商品（WB 标记 banned）
 python wb.py banned --apply --yes          # 执行：被阻止商品移到回收站（自动复核）

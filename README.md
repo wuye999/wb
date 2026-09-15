@@ -40,7 +40,8 @@ python wb.py shops-mapping              # 刷新各店铺独立映射表（data/
 python wb.py mapping-rename --vc BCS-XXX-123 --cn "新中文名" # 货不对板纠偏/改名：全店单表与总表一键同步
 python wb.py price --name 充电宝 --apply --yes
 python wb.py dimension                        # 按价格表「尺寸」批量改全部店铺商品尺寸（dry-run 默认；也可 --dims "长*宽*高/毛重" 自定义，须配 --vc/--name/--prefix 圈定）
-python wb.py discount --apply           # >50% → 50%（默认不自动同步/不写后验证，仅提示；加 --sync 自动同步并合并映射表）
+python wb.py discount --apply           # >50% → 50%（BCS 批量；默认不自动同步/不写后验证，仅提示；加 --sync 自动同步并合并映射表）
+python wb.py discount-wb --apply        # WB 原生批量改折扣（从高到低查询 >50% 并原生批量修改；默认不写后验证）
 python wb.py promo-apply --apply        # 促销报名
 python wb.py price-review --apply       # ⚠ 报名/改折扣后必跑：应用新价格（改折扣也会触发价格审核）
 python wb.py dims-check --name 视黄醇面霜  # 只读：列出尺寸偏差待验证商品（--type weight/all 可看重量/合并）

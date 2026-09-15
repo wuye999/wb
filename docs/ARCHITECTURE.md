@@ -26,7 +26,8 @@
 │   ├── replicate.py           跨店复制上架：部分覆盖 vc → 缺失店铺（vendorCode 与源店一致；WB detail 经 BCS 代理 + card.json CDN）
 │   ├── import_shelve.py       他人映射表导入上架：按 WB原始nmId 差集 → 我方前缀优先生成新 vc 上架（复用 replicate 的 WB 数据获取/仓库/记录；支持他人 `BCS-{前缀}-ozon-card-{WB商品码}` 格式并保留 `ozon-card-` 尾段）
 │   ├── promo.py               促销报名
-│   ├── discount.py            折扣改价（>50%→50%）
+│   ├── discount.py            折扣改价（BCS 全量 >50%→50%）
+│   ├── discount_wb.py         WB 原生批量改折扣（从高到低查询 + upload/task 批量修改，默认不写后验证）
 │   ├── banned.py              查询并删除被阻止的商品（WB banned：tableListImprovable 查询 / moveNmsToTrash 移回收站 / count 复核）
 │   ├── clean.py               草稿箱 / 回收站清理（回收站 deleteAllSize 一键清空）
 │   ├── price_review.py        价格审核「应用新价格」（WB 隔离区 quarantine/goods）
@@ -141,7 +142,7 @@ wb.py import-shelve  ⑥a 他人映射表导入上架（按 WB原始nmId 差集�
 
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）
-wb.py discount-scan  ⑧ WB 实时（模式1，混合引擎）：list/goods/filter 按折扣从高到低找 >阈值 → 本地快照可定位价的商品经 BCS shopKeeper/price/batch 批量改（一次≤300）→ 快照缺失/无价回退 WB nm/upload/task 单条 + 提示 → 同一列表回验；不触发 BCS 全量同步
+wb.py discount-wb    ⑧ WB 原生批量（按需调用）：list/goods/filter 按折扣从高到低找 >阈值（降序提前截断）→ WB 原生 upload/task 批量改（分批提交）→ 默认不做写后验证（生效延迟）；日常自动化默认仍走 BCS discount
 wb.py discount       ⑧a BCS 全量（模式2，慢）：默认不自动同步 → 查（全量用 --threshold -1）→ 批量改 → 仅提示；加 --sync 才前置同步 + 提交后同步复核
 wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
 wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）；回收站统计以 countByFilter(TRASH) 实时计数为准（list(TRASH) 为列表缓存可能滞后）

@@ -19,7 +19,9 @@ from . import daily
 from . import dimension
 from . import dims_check
 from . import discount
+from . import discount_wb
 from . import discount_scan
+from . import discount_bcs
 from . import import_shelve
 from . import mapping
 from . import mapping_check
@@ -128,42 +130,45 @@ def build_parser():
     p.add_argument("--days-back", type=int, default=90, help="查询起始=N天前")
     p.add_argument("--sleep", type=float, default=1.0, help="活动间请求间隔秒")
 
-    p = sub.add_parser("discount", help="折扣改价：各店 >阈值→目标（全量统一用 --threshold -1 --target N）")
+    # WB 原生批量改折扣参数辅助函数
+    def _add_discount_wb_args(parser):
+        parser.add_argument("--apply", action="store_true", help="真正提交修改（默认 dry-run 预览）")
+        parser.add_argument("--threshold", type=int, default=None,
+                            help=f"折扣阈值：只处理折扣>该值的商品（默认 {config.DISCOUNT_THRESHOLD_DEF}；指定 --all 或指定 --vc 时默认不限阈值）")
+        parser.add_argument("--all", action="store_true",
+                            help="不限折扣阈值，处理指定条件下的所有在架商品（等价于 --threshold -1）")
+        parser.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF,
+                            help=f"目标折扣（默认 {config.DISCOUNT_TARGET_DEF}）")
+        parser.add_argument("--name", default="", help="商品价格表产品中文名包含匹配（如 笔记本电脑）")
+        parser.add_argument("--vc", default="", help="指定单个或多个 vendorCode（逗号分隔）")
+        parser.add_argument("--prefix", default="", help="vendorCode 4位前缀码包含匹配（如 DSGI）")
+        parser.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部凭证店铺）")
+        parser.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
+        parser.add_argument("--chunk", type=int, default=100, help="每批提交数量（默认 100，最大 300）")
+        parser.add_argument("--verify", action="store_true", help="执行后验证（默认关闭，因 WB 异步生效延迟）")
+
+    p = sub.add_parser("discount",
+                       help="折扣改价（WB 原生批量，从高到低查询，支持 --name/--vc/--shops 灵活筛选，默认不做写后验证）")
+    _add_discount_wb_args(p)
+
+    p = sub.add_parser("discount-wb",
+                       help="[别名] discount 别名，WB 原生批量改折扣")
+    _add_discount_wb_args(p)
+
+    p = sub.add_parser("discount-scan",
+                       help="[别名] discount 别名，WB 原生批量改折扣")
+    _add_discount_wb_args(p)
+
+    p = sub.add_parser("discount-bcs",
+                       help="[旧版] 走 BCS 接口全量改折扣（慢，默认不启用，仅供按需手动调用）")
     p.add_argument("--apply", action="store_true", help="真正提交（默认 dry-run）")
-    p.add_argument("--threshold", type=int, default=config.DISCOUNT_THRESHOLD_DEF, help="阈值：只处理折扣>该值的商品；要把所有在架商品（含0折扣）统一设为目标值，务必用 --threshold -1（负数）")
-    p.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣；注意若 --threshold >= --target，折扣已≤目标值的商品不会被处理（不会上调到目标）")
+    p.add_argument("--threshold", type=int, default=config.DISCOUNT_THRESHOLD_DEF,
+                   help="阈值：只处理折扣>该值的商品；全量设目标值用 --threshold -1")
+    p.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣")
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
     p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
     p.add_argument("--sync", action="store_true",
                    help="执行前同步 BCS 缓存 + 提交后同步复核（默认不自动同步/不写后验证，仅打印提示）")
-
-    p = sub.add_parser("dimension", help="批量修改尺寸：按商品价格表尺寸统一修改各店商品")
-    p.add_argument("--vc", default="", help="vendorCode 列表（逗号分隔）")
-    p.add_argument("--prefix", default="", help="商品价格表 vendorCode 前缀码")
-    p.add_argument("--name", default="", help="商品价格表产品中文名包含")
-    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部已 fetch 店铺）")
-    p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
-    p.add_argument("--dims", default="",
-                   help="自定义尺寸/毛重：'长*宽*高/毛重'（如 8*14*26/0.3），统一设给当前选定的 vc；提供则不再依赖价格表尺寸（未提供回退价格表）。使用 --dims 时必须配合 --vc/--name/--prefix 圈定")
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
-    p.add_argument("--sync", action="store_true",
-                   help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
-
-    p = sub.add_parser("dims-check",
-                       help="查询 WB 尺寸偏差待验证商品列表（只读，不改数据）；按映射表中文名筛选，供 dimension 单独测试尺寸")
-    p.add_argument("--name", default="", help="映射表中文名包含筛选（如 视黄醇面霜）")
-    p.add_argument("--type", choices=["dims", "weight", "all"], default="dims",
-                   help="dims=尺寸偏差 / weight=重量偏差 / all=两者合并去重")
-    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部 WB 店铺）")
-    p.add_argument("--limit", type=int, default=0, help="每店最多返回 N 条（0=全部）")
-
-    p = sub.add_parser("discount-scan",
-                       help="折扣快速改价（混合引擎：WB 实时列表 + BCS 批量改 >阈值→目标，快照缺失/无价的商品自动改走 WB 单条并提示）")
-    p.add_argument("--apply", action="store_true", help="真正提交（默认 dry-run）")
-    p.add_argument("--threshold", type=int, default=config.DISCOUNT_THRESHOLD_DEF, help="阈值（处理 > 该值）")
-    p.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣")
-    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
-    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
 
     p = sub.add_parser("banned", help="查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
@@ -326,14 +331,14 @@ def dispatch(args):
         return import_shelve.run(args)
     if cmd == "promo-apply":
         return promo.run(args)
-    if cmd == "discount":
-        return discount.run(args)
+    if cmd in ("discount", "discount-wb", "discount-scan"):
+        return discount_wb.run(args)
+    if cmd == "discount-bcs":
+        return discount_bcs.run(args)
     if cmd == "dimension":
         return dimension.run(args)
     if cmd == "dims-check":
         return dims_check.run(args)
-    if cmd == "discount-scan":
-        return discount_scan.run(args)
     if cmd == "banned":
         return banned.run(args)
     if cmd == "clean":

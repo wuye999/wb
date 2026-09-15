@@ -190,26 +190,35 @@ python wb.py promo-apply --shops 5272 --apply   # 只报主号7
 - 明细：`data/logs/报名结果_*.csv`。
 - ⚠ **报名后必跑价格审核**：参加活动会同步改折扣，改折扣降幅落 30-49.9% 的商品进 WB 隔离区（见第 10 节）→ 报名后执行 `python wb.py price-review`（dry-run 预览 → `--apply`），确保折扣生效。
 
-## 8. 折扣检查（>50% → 50%）
+## 8. 折扣调整（默认 WB 原生批量）
 
-打折有两种改法，按场景选用：
+系统默认改折扣命令已全面切换为 **WB 原生批量方案**（零 BCS 依赖，分片提交，极速且不污染原价）：
 
-**模式1 — 快速：仅把高于阈值的折扣改到目标（推荐日常用）**，混合引擎、**不做 BCS 全量同步**：
 ```bash
-python wb.py discount-scan                 # 预览 >50% 商品（WB 实时列表，从高到低，快）
-python wb.py discount-scan --apply         # 执行
-python wb.py discount-scan --threshold 47 --target 46 --apply   # 自定义
-```
-> 流程：WB 实时列表找 >阈值 → 本地快照能定位到价格的商品用 **BCS 批量改**（一次 ≤300，商品多时提速明显）→ 快照**缺失/无价**的商品自动改走 **WB 单条** `nm/upload/task`，并提示「该商品在本地快照/映射表中不存在或无价格，改用 WB 接口」→ 同一 WB 列表接口回验。按店铺逐商品处理（同 vendorCode 各店折扣不同），速度远快于模式2。
-> ⚠ 该命令不触发 BCS 同步，列表始终来自 WB 实时接口；BCS 批量需依赖**本地快照**提供当前价——若本地快照很久未更新，可先 `python wb.py fetch --no-sync` 刷新快照价格。
+# 1) 基础用法（全店 >50% → 50%）
+python wb.py discount                 # 预览全店 >50% 商品（WB 原生实时列表，从高到低，快）
+python wb.py discount --apply         # 执行批量修改（默认不做写后验证）
 
-**模式2 — 全量：所有商品（含 0 折扣）都改为目标折扣（不常用）**，走 BCS 全量同步（慢）：
-```bash
-python wb.py discount --threshold -1 --apply --sync   # 全部在架商品 → 50%（含 0 折扣）
+# 2) 按品类中文名筛选（如：笔记本电脑）
+python wb.py discount --name 笔记本电脑 --threshold 55 --target 50   # 各店独立筛选：笔记本电脑且折扣 >55% 改为 50%
+python wb.py discount --name 笔记本电脑 --all --target 50          # 全量设置：所有店铺的笔记本电脑无条件改 50%
+
+# 3) 单个或多个 VC 精准修改
+python wb.py discount --vc BCS-HAAJ-248364237 --target 48         # 单个 VC 调整
+python wb.py discount --vc BCS-XXX-1,BCS-XXX-2 --target 45        # 多个 VC 批量调整
+
+# 4) 限定店铺与批次控制
+python wb.py discount --shops 9352 --limit 20 --chunk 50 --apply  # 仅操作指定店铺，自定义分批
+
+# 5) 【旧版按需保留】走 BCS 慢速全量改折扣（默认不启用）
+python wb.py discount-bcs --threshold -1 --target 50 --apply --sync
 ```
-> ⚠ **阈值与目标相等的坑**：若把 `--threshold` 设为目标值（如 `--threshold 10 --target 10`），当前折扣已 ≤10% 的商品会被忽略、**不会上调到 10%**（命令会显示"执行成功"但只改了高折扣商品）。只要想"把所有商品统一到目标折扣"，就用 `--threshold -1`。
-- ✅ 成功：`[汇总] 共 N 条待改`；日志 `data/logs/折扣快速改_*.csv` / `折扣修改_*.csv`。
-- ⚠ **改折扣也会触发价格审核**：`discount-scan/discount --apply` 之后**必跑 `python wb.py price-review`**（先 dry-run 预览、有货再 `--apply`）——降幅落 30-49.9% 区间的商品会进 WB 隔离区，不「应用新价格」则新价不生效（详见第 10 节）。
+
+> 流程机制：
+> - **高折扣筛选模式**：WB 原生 `list/goods/filter`（`sort="discount", sortOrder=0`）从高到低查找 >阈值商品（首条 `<= threshold` 立即截断，性能极高）→ 本地快速匹配中文名/VC → WB 原生 `upload/task` 批量分批提交修改（默认每批 100 条）。
+> - **指定 VC / 全量模式**：直接通过本地映射池与快照定位目标商品的在架 `nmID` → 打包提交 WB 原生批量接口，无需在 WB 全量翻页，毫秒级响应。
+> - ⚠ **默认不做写后验证**：修改折扣后 WB 平台端需要一段时间才能异步生效入库，因此默认不做写后验证（避免因平台生效延迟产生误判或无意义等待）。
+> - ⚠ **改折扣后必跑价格审核**：`discount --apply` 之后**必跑 `python wb.py price-review`**（先 dry-run 预览、有货再 `--apply`）——降幅落 30-49.9% 区间的商品会进 WB 隔离区，不「应用新价格」则新价不生效（详见第 10 节）。
 
 ## 9. 清理草稿箱 / 回收站
 

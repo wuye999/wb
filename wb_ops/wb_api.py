@@ -31,6 +31,7 @@ def make_session(shop, root_version=None):
         "Accept": "*/*",
         "authorizev3": shop["authorizev3"],
         "wb-seller-lk": shop["wb_seller_lk"],
+        "seller-lk": shop["wb_seller_lk"],
         "Content-Type": "application/json",
         "Origin": "https://seller.wildberries.ru",
         "Referer": "https://seller.wildberries.ru/",
