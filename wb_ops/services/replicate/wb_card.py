@@ -3,46 +3,22 @@
 wb_ops Wildberries CDN 商品卡片 (card.json) 抓取与解析工具
 提供 CDN 分片路由、card.json 解析、颜色提取、包装尺寸/重量换算以及商品详情汇总。
 """
+import math
+import random
 import re
+import string
 import requests
-from wb_ops import common
+from wb_ops import common, config
 from wb_ops.storage.mapping_repo import MappingRepository
 
-_BASKET_TABLE = [
-    (143, "01"), (287, "02"), (431, "03"), (719, "04"), (1007, "05"), (1061, "06"),
-    (1115, "07"), (1169, "08"), (1313, "09"), (1601, "10"), (1655, "11"), (1919, "12"),
-    (2045, "13"), (2189, "14"), (2405, "15"), (2621, "16"), (2837, "17"), (3053, "18"),
-    (3269, "19"), (3485, "20"), (3701, "21"), (3917, "22"), (4133, "23"), (4349, "24"),
-    (4565, "25"), (4877, "26"), (5189, "27"), (5501, "28"), (5813, "29"), (6125, "30"),
-    (6437, "31"), (6749, "32"), (7061, "33"), (7373, "34"), (7685, "35"), (7997, "36"),
-    (8309, "37"), (8741, "38"), (9173, "39"), (9605, "40"), (10373, "41"), (11141, "42"),
-    (11909, "43"), (12677, "44"), (13445, "45"), (14213, "46"),
-]
 
-
-def basket_base(nm_id):
-    """nmId → basket CDN 基础路径（card.json 基于它）"""
-    n = int(nm_id)
-    vol, part = n // 100000, n // 1000
-    basket = "47"
-    for threshold, no in _BASKET_TABLE:
-        if vol <= threshold:
-            basket = no
-            break
-    return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{n}"
-
-
-def fetch_card_json(nm_id):
-    """basket CDN card.json → dict；失败返回 None。供 questions 客服与包装兜底使用。"""
-    url = f"{basket_base(nm_id)}/info/ru/card.json"
-    try:
-        resp = requests.get(url, headers={"User-Agent": common.UA}, timeout=30)
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except Exception:
-        return None
-
+from wb_ops.adapters.wb_client import (
+    _BASKET_TABLE,
+    basket_base,
+    fetch_card_json,
+    card_color_names,
+    fetch_product_info,
+)
 
 _own_map_cache = None
 
@@ -56,54 +32,6 @@ def _own_map():
         except Exception:
             _own_map_cache = {}
     return _own_map_cache
-
-
-def card_color_names(card):
-    """从 card.json 提取颜色名。供 questions 模块调用。"""
-    colors = card.get("colors") or []
-    nm_names = card.get("nm_colors_names")
-    if isinstance(nm_names, str):
-        nm_names = [nm_names]
-    names = []
-    for i, item in enumerate(colors):
-        if isinstance(item, dict):
-            n = item.get("name")
-        elif isinstance(nm_names, list) and i < len(nm_names):
-            n = nm_names[i]
-        else:
-            n = None
-        if n:
-            names.append(n)
-    return "、".join(names)
-
-
-def fetch_product_info(nm_id, vc="", own=None):
-    """整合商品信息：供 questions / questions_watch 模块调用。"""
-    info = {"title": "", "brand": "", "colors": "", "price": "", "description": "", "options": ""}
-    card = fetch_card_json(nm_id)
-    if card:
-        info["title"] = card.get("imt_name") or ""
-        desc = (card.get("description") or "").strip()
-        info["description"] = desc[:400] + ("…" if len(desc) > 400 else "")
-        opts_str = "；".join(
-            f"{o.get('name')}: {o.get('value')}" for o in (card.get("options") or [])
-            if o.get("name") and o.get("value"))
-        info["options"] = opts_str[:600] + ("…" if len(opts_str) > 600 else "")
-        info["colors"] = card_color_names(card)
-    row = (own if own is not None else _own_map()).get(vc or "")
-    if row:
-        price_v = None
-        sp = row.get("shop_price")
-        if sp not in (None, ""):
-            price_v = float(sp)
-        elif row.get("dp") is not None:
-            price_v = float(row["dp"])
-        if price_v is not None:
-            disc = common.to_int(row.get("discount")) if row.get("discount") not in (None, "") else 0
-            if disc:
-                price_v = price_v * (100 - disc) / 100
-            info["price"] = f"{price_v:.0f} CNY"
-    return info
 
 
 def parse_package_info(card_info):
@@ -150,3 +78,148 @@ def parse_package_info(card_info):
             elif ("Вес" in name or "Масса" in name) and not re.search(r"без\s*упаковк", name, re.I):
                 result["weight"] = weight(val)
     return result
+
+
+_pkg_cache = None
+
+
+def boss_pkg_map():
+    """商品价格表「尺寸」列 → {中文名: (L, W, H, weight)}（格式 `长*宽*高/毛重`，容错空格）。
+    兜底来源：映射表缺毛重/尺寸时，按中文名取我方商品价格表同名的包装数据。"""
+    global _pkg_cache
+    if _pkg_cache is not None:
+        return _pkg_cache
+    import openpyxl
+    out = {}
+    try:
+        wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
+        ws = wb["Sheet1"]
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            cn = str(r[2] or "").strip()
+            dim = str(r[4] or "").strip() if len(r) > 4 else ""
+            if not cn or not dim:
+                continue
+            m = re.match(r"^([\d.]+)\s*\*\s*([\d.]+)\s*\*\s*([\d.]+)\s*/\s*([\d.]+)$", dim)
+            if not m:
+                continue
+            out[cn] = (float(m.group(1)), float(m.group(2)),
+                       float(m.group(3)), float(m.group(4)))
+        wb.close()
+    except Exception:
+        pass
+    _pkg_cache = out
+    return out
+
+
+def extract_vc_prefix(vc):
+    """从现有 vendorCode 提取 4 位前缀码。
+    支持：
+      BCS-QQNN-1078999444 -> QQNN
+      BCS-QQNN-ozon-card-1078999444 -> QQNN
+      BCS-QQNN-WRLINWI/1078999444 -> QQNN
+    未提取到返回 None
+    """
+    s = str(vc or "").strip()
+    m = re.match(config.VC_PREFIX_RE, s)
+    if m:
+        return m.group(1).upper()
+    m = re.match(r"^BCS-([A-Za-z]{4})(?:-|$|/)", s)
+    if m:
+        return m.group(1).upper()
+    return None
+
+
+def random_prefix():
+    """生成 4 位大写字母随机前缀"""
+    return "".join(random.choices(string.ascii_uppercase, k=4))
+
+
+def resolve_vendor_prefix(cn, old_vc, cn2prefix=None):
+    """根据规则匹配并生成提交给新批量上品接口的 vendorCodePrefix（必须携带 BCS- 前缀）。"""
+    prefix = None
+    source = "随机"
+    if cn and cn2prefix and cn in cn2prefix:
+        p = str(cn2prefix[cn]).strip().upper()
+        if p:
+            prefix = p
+            source = "价格表"
+    if not prefix and old_vc:
+        p = extract_vc_prefix(old_vc)
+        if p:
+            prefix = p
+            source = "源vc"
+    if not prefix:
+        prefix = random_prefix()
+        source = "随机"
+
+    if not prefix.startswith("BCS-"):
+        prefix = f"BCS-{prefix}"
+    return prefix, source
+
+
+def resolve_replicate_package(vc, cn, nm_id, map_state, card_cache=None):
+    """
+    获取复制上架的包装尺寸与重量：
+    ★ 严格规则：绝不使用快照的尺寸数据！
+    1. 优先读取价格映射表 (map_state.get(vc)) 的 L, W, H, weight
+    2. 若缺失或 <= 0，查商品价格表 (boss_pkg_map) 兜底
+    3. 若仍缺失，查 card.json 兜底
+    返回: ((L, W, H, weight), None) 或 (None, err_msg)
+    其中 L, W, H 为整型 cm (ceil)，weight 为 float kg (round 3)
+    """
+    row = (map_state or {}).get(vc) or {}
+    length = row.get("L")
+    width = row.get("W")
+    height = row.get("H")
+    weight = row.get("weight")
+
+    def _valid(val):
+        try:
+            return float(val) > 0
+        except (TypeError, ValueError):
+            return False
+
+    # 2. 商品价格表兜底
+    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
+        bp = boss_pkg_map().get(cn or "")
+        if bp:
+            bl, bw, bh, bwgt = bp
+            if not _valid(length):
+                length = bl
+            if not _valid(width):
+                width = bw
+            if not _valid(height):
+                height = bh
+            if not _valid(weight):
+                weight = bwgt
+
+    # 3. card.json 兜底
+    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
+        card_info = None
+        if card_cache is not None and nm_id in card_cache:
+            card_info = card_cache[nm_id]
+        else:
+            card_info = fetch_card_json(nm_id)
+            if card_cache is not None:
+                card_cache[nm_id] = card_info
+        if card_info:
+            pkg = parse_package_info(card_info)
+            if not _valid(length):
+                length = pkg.get("length")
+            if not _valid(width):
+                width = pkg.get("width")
+            if not _valid(height):
+                height = pkg.get("height")
+            if not _valid(weight):
+                weight = pkg.get("weight")
+
+    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
+        return None, f"包装数据缺失（L={length} W={width} H={height} 重={weight}）"
+
+    return (
+        math.ceil(float(length)),
+        math.ceil(float(width)),
+        math.ceil(float(height)),
+        round(float(weight), 3)
+    ), None
+

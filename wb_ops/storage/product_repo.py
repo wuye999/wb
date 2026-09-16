@@ -81,6 +81,8 @@ class ProductSnapshotRepository:
 
 
 # 模块级便捷访问导出
+ProductRepository = ProductSnapshotRepository
 load_shop_products = ProductSnapshotRepository.load_shop_products
 save_shop_products = ProductSnapshotRepository.save_shop_products
 load_shop_rows = ProductSnapshotRepository.load_shop_rows
+

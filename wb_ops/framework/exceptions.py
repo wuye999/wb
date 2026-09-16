@@ -50,3 +50,23 @@ class StorageLockError(WBOpsError):
 class ValidationError(WBOpsError):
     """参数或数据格式校验不合规"""
     pass
+
+
+class NetworkError(WBOpsError):
+    """底层网络传输或连接失败"""
+    pass
+
+
+class BusinessValidationError(ValidationError):
+    """业务逻辑校验不通过"""
+    pass
+
+
+class DataConsistencyError(WBOpsError):
+    """数据一致性冲突或损坏"""
+    pass
+
+
+# 别名兼容
+WbOpsError = WBOpsError
+

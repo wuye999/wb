@@ -56,5 +56,68 @@ class CatalogService:
         """人工纠偏/修改商品中文名"""
         return mapping_sync.set_vc_override(vc=vc, new_cn=new_cn, reason=reason, file_path=file_path)
 
+    def post_write_merge(self, fetch: bool = True):
+        """写后自动全店同步/拉取并增量合并映射表"""
+        return mapping_sync.post_write_merge(fetch=fetch)
+
+    def print_write_hint(self):
+        """写后操作提示"""
+        from .. import common
+        return common.print_write_hint()
+
 
 catalog_svc = CatalogService()
+post_write_merge = catalog_svc.post_write_merge
+print_write_hint = catalog_svc.print_write_hint
+
+
+def run_fetch(args):
+    from .. import config
+    if getattr(args, "shop_id", None):
+        out = config.shop_json_path(args.shop_id)
+        catalog_svc.fetch_shop_products(args.shop_id, out, no_sync=getattr(args, "no_sync", False))
+    else:
+        catalog_svc.fetch_all_shops_products(no_sync=getattr(args, "no_sync", False))
+    return 0
+
+
+def run_mapping(args):
+    catalog_svc.generate_mapping_workbench(legacy=getattr(args, "legacy", False))
+    return 0
+
+
+def run_mapping_import(args):
+    catalog_svc.import_mapping(args.file)
+    return 0
+
+
+def run_mapping_check(args):
+    catalog_svc.check_mapping_integrity(tol=getattr(args, "tol", 5))
+    return 0
+
+
+def run_mismatch_check(args):
+    catalog_svc.check_mismatches(cn=getattr(args, "cn", ""), begin=getattr(args, "begin", ""), end=getattr(args, "end", ""), days=getattr(args, "days", 0))
+    return 0
+
+
+def run_review(args=None):
+    catalog_svc.run_review()
+    return 0
+
+
+def run_merge(args=None):
+    file_path = getattr(args, "file", None) if args else None
+    catalog_svc.run_merge(file_path)
+    return 0
+
+
+def run_mapping_rename(args):
+    return 0 if catalog_svc.set_vc_override(vc=getattr(args, "vc", ""), new_cn=getattr(args, "cn", ""), reason=getattr(args, "reason", "人工纠偏"), file_path=getattr(args, "file", "")) else 1
+
+
+def run_shops_mapping(args):
+    catalog_svc.sync_all_shops_mapping(shop_id=getattr(args, "shop_id", None), force=getattr(args, "force", False))
+    return 0
+
+

@@ -5,9 +5,10 @@ wb_ops 映射与品名归属仓储 (MappingRepository)
 """
 import os
 import re
-from typing import Dict, Any, Tuple, Callable
+from typing import Dict, List, Any, Tuple, Callable
 from .. import config
 from ..framework.safe_io import atomic_dump_json, safe_load_json
+
 
 
 class MappingRepository:
@@ -34,8 +35,65 @@ class MappingRepository:
         atomic_dump_json(config.VC_OVERRIDE_JSON, data, indent=2, use_lock=True)
 
     @staticmethod
+    def load_vc_excluded() -> Dict[str, Any]:
+
+        """加载全局排除清单 (vc_excluded.json)"""
+        return safe_load_json(config.VC_EXCLUDED_JSON, default={})
+
+    @staticmethod
+    def save_vc_excluded(data: Dict[str, Any]):
+        """原子保存全局排除清单"""
+        atomic_dump_json(config.VC_EXCLUDED_JSON, data, indent=2, use_lock=True)
+
+
+    @staticmethod
+    def _resolve_dp(formula, ws, row_idx):
+        """解析 D 列公式（如 =K57*2）：读目标单元格值 × 系数。失败返回 None"""
+        m = re.match(r'=([A-Z]+)(\d+)\s*\*\s*(\d+(?:\.\d+)?)', str(formula))
+        if m:
+            import openpyxl
+            col = openpyxl.utils.column_index_from_string(m.group(1))
+            target = ws.cell(row=int(m.group(2)), column=col).value
+            if isinstance(target, (int, float)):
+                return target * float(m.group(3))
+        return None
+
+    @classmethod
+    def load_boss(cls) -> List[Dict[str, Any]]:
+        """商品价格表 → [{idx, sku, cn, dp(双倍售价), img, floor, prefix}]
+        新表 7 列：图片/SKU/中文名/双倍售价/尺寸/最低售价/前缀码。
+        支持 D 列公式（=F{行}*2 等）；NOTEBOOK 为普通商品行（前缀 NBTB），与其他一致。"""
+        if not os.path.exists(config.BOSS_XLSX):
+            return []
+        import openpyxl
+        wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=False)
+        ws = wb["Sheet1"]
+        items = []
+        for row in ws.iter_rows(min_row=2):
+            sku = str(row[1].value).strip() if row[1].value else ""
+            cn = str(row[2].value).strip() if row[2].value else ""
+            if not sku and not cn:
+                continue
+            dp = row[3].value
+            if isinstance(dp, str) and dp.startswith("="):
+                dp = cls._resolve_dp(dp, ws, row[0].row)
+            prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
+            items.append({
+                "idx": len(items) + 1,
+                "sku": sku,
+                "cn": cn,
+                "dp": dp,
+                "img": str(row[0].value).strip() if row[0].value else "",
+                "floor": int(dp) if dp is not None else None,
+                "prefix": prefix,
+            })
+        wb.close()
+        return items
+
+    @staticmethod
     def load_prefix_map() -> Dict[str, Any]:
         """从商品价格表加载 4 位前缀码映射"""
+
         if not os.path.exists(config.BOSS_XLSX):
             return {}
         try:
@@ -158,4 +216,17 @@ class MappingRepository:
                 state[vc]["cn"] = ov["cn"]
 
         return state, excluded
+
+
+# 模块级便捷访问导出
+load_boss = MappingRepository.load_boss
+load_prefix_map = MappingRepository.load_prefix_map
+load_vc_known = MappingRepository.load_vc_known
+save_vc_known = MappingRepository.save_vc_known
+load_vc_override = MappingRepository.load_vc_override
+save_vc_override = MappingRepository.save_vc_override
+load_vc_excluded = MappingRepository.load_vc_excluded
+save_vc_excluded = MappingRepository.save_vc_excluded
+
+
 

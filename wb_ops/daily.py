@@ -79,3 +79,9 @@ def run(mode, extra=None):
     codes = [run_step(name, argv + extra) for name, argv in STEPS[mode]]
     log(f"===== {mode} 结束 成功={codes.count(0)}/{len(codes)} =====")
     return 0 if all(c == 0 for c in codes) else 1
+
+
+def run_daily_cmd(args):
+    """CLI daily 命令入口"""
+    return run(args.mode, getattr(args, "extra", []))
+

@@ -15,8 +15,8 @@ from wb_ops import config
 from wb_ops import credentials
 from wb_ops import common
 from wb_ops.storage.mapping_repo import MappingRepository
-from wb_ops.services.replicate import replicate
 from wb_ops.adapters import wb_client as wb_api
+
 
 QUESTIONS = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-ext-seller-portal/api/v2/questions"
 ANSWER = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-ext-seller-portal/api/v2/questions/answer"
@@ -73,7 +73,7 @@ def process_shop(shop, root_version, args, rows, cn_map, resolver=None):
         title = pinfo.get("name", "")
         brand = colors = price = description = options = ""
         if not no_detail and nm_id:
-            info = replicate.fetch_product_info(nm_id, vc=vc, own=cn_map)
+            info = wb_api.fetch_product_info(nm_id, vc=vc, own=cn_map)
             if info.get("title"):
                 title = info["title"]
             brand = info.get("brand", "")

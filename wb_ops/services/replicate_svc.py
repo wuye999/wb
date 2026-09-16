@@ -53,3 +53,44 @@ class ReplicationService:
 
 
 replicate_svc = ReplicationService()
+
+
+def run_price(args):
+    return replicate_svc.handle_ops("price", args)
+
+
+def run_stock(args):
+    return replicate_svc.handle_ops("stock", args)
+
+
+def run_trash(args):
+    return replicate_svc.handle_ops("trash", args)
+
+
+def run_replicate(args):
+    return replicate_svc.replicate_across_shops(args)
+
+
+def run_import_shelve(args):
+    return replicate_svc.import_external_shelve(args)
+
+
+def run_dimension(args):
+    return replicate_svc.manage_dimensions(args)
+
+
+def run_dims_check(args):
+    return replicate_svc.check_dimensions(args)
+
+
+def run_banned(args):
+    return replicate_svc.handle_banned_products(args)
+
+
+def run_clean(args):
+    return replicate_svc.clean_drafts_and_trash(args)
+
+
+def run_remote_wh(args):
+    return replicate_svc.delete_remote_warehouse_stocks(args)
+

@@ -131,8 +131,8 @@ def run(action, args):
     # 只有加 --sync 才同步在架商品并增量合并映射表；否则仅打印提示。
     if action in ("price", "stock", "trash"):
         if getattr(args, "sync", False):
-            from wb_ops.services.catalog import mapping_sync
-            mapping_sync.post_write_merge()  # fetch=True：全店同步+拉取+merge
+            from wb_ops.services.catalog_svc import catalog_svc
+            catalog_svc.post_write_merge()  # fetch=True：全店同步+拉取+merge
         else:
             common.print_write_hint()
 

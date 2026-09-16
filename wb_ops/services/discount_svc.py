@@ -331,3 +331,16 @@ def run_cli(args) -> int:
 
     discount_svc.execute_plan(plan, cred.shops)
     return 0
+
+
+def run_promo_apply(args):
+    return discount_svc.run_promo(args)
+
+
+def run_discount_bcs(args):
+    return discount_svc.run_bcs_discount(args)
+
+
+def run_price_review(args):
+    return discount_svc.run_price_review(args)
+

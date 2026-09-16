@@ -324,8 +324,8 @@ def run(args):
     if args.apply:
         # 清理后同步最新数据并增量合并映射表（已删/已清商品从映射表移除）——仅加 --sync 时自动执行
         if args.sync:
-            from wb_ops.services.catalog import mapping_sync
-            mapping_sync.post_write_merge()
+            from wb_ops.services.catalog_svc import catalog_svc
+            catalog_svc.post_write_merge()
         else:
             common.print_write_hint()
     else:

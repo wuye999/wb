@@ -22,45 +22,32 @@ from wb_ops.adapters import llm_client as ai_reply
 from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
+from wb_ops.framework.safe_io import safe_load_json, atomic_dump_json
 from wb_ops.storage.mapping_repo import MappingRepository
 from wb_ops.services.support import questions
-from wb_ops.services.replicate import replicate
 from wb_ops.adapters import wb_client as wb_api
 
 REPLIED_JSON = os.path.join(config.STATE_DIR, "questions_replied.json")
 SHOWN_JSON = os.path.join(config.STATE_DIR, "questions_front_shown.json")
 
 
-def _load_ids(path):
-    try:
-        return set(json.load(open(path, encoding="utf-8")))
-    except Exception:
-        return set()
-
-
-def _save_ids(path, s):
-    os.makedirs(config.STATE_DIR, exist_ok=True)
-    json.dump(sorted(s), open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-
-
 def load_replied():
-    from wb_ops.services.support_svc import CustomerSupportService
-    return CustomerSupportService.load_replied()
+    data = safe_load_json(REPLIED_JSON, default=[], use_lock=True)
+    return set(data) if isinstance(data, list) else set()
 
 
 def save_replied(s):
-    from wb_ops.services.support_svc import CustomerSupportService
-    CustomerSupportService.save_replied(s)
+    atomic_dump_json(REPLIED_JSON, sorted(list(s)), indent=2, use_lock=True)
 
 
 def load_shown():
-    from wb_ops.services.support_svc import CustomerSupportService
-    return CustomerSupportService.load_shown()
+    data = safe_load_json(SHOWN_JSON, default=[], use_lock=True)
+    return set(data) if isinstance(data, list) else set()
 
 
 def save_shown(s):
-    from wb_ops.services.support_svc import CustomerSupportService
-    CustomerSupportService.save_shown(s)
+    atomic_dump_json(SHOWN_JSON, sorted(list(s)), indent=2, use_lock=True)
+
 
 
 
@@ -73,7 +60,7 @@ def product_info_str(vc, nm_id, cn_map):
     parts = [f"中文名：{cn}"] if cn else []
 
     if nm_id:
-        info = replicate.fetch_product_info(nm_id, vc=vc, own=cn_map)
+        info = wb_api.fetch_product_info(nm_id, vc=vc, own=cn_map)
         if info.get("title"):
             parts.append(f"标题：{info['title']}")
         if info.get("brand"):

@@ -29,6 +29,7 @@ import requests
 from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
+from wb_ops.framework.safe_io import safe_load_json, atomic_dump_json
 from wb_ops.services.catalog import products
 from .wb_card import (
     _BASKET_TABLE,
@@ -38,7 +39,13 @@ from .wb_card import (
     fetch_product_info,
     parse_package_info,
     _own_map,
+    boss_pkg_map,
+    extract_vc_prefix,
+    random_prefix,
+    resolve_vendor_prefix,
+    resolve_replicate_package,
 )
+
 
 CARD_INTERVAL = 0.5        # card.json 请求间隔（秒）
 
@@ -76,91 +83,6 @@ def stock_for(cn, overrides=None):
     return DEFAULT_STOCK
 
 
-
-
-# ---------------- 商品价格表尺寸缓存 ----------------
-_pkg_cache = None
-
-
-def boss_pkg_map():
-    """商品价格表「尺寸」列 → {中文名: (L, W, H, weight)}（格式 `长*宽*高/毛重`，容错空格）。
-    兜底来源：映射表缺毛重/尺寸时，按中文名取我方商品价格表同名的包装数据。"""
-    global _pkg_cache
-    if _pkg_cache is not None:
-        return _pkg_cache
-    import openpyxl
-    out = {}
-    try:
-        wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
-        ws = wb["Sheet1"]
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            cn = str(r[2] or "").strip()
-            dim = str(r[4] or "").strip() if len(r) > 4 else ""
-            if not cn or not dim:
-                continue
-            m = re.match(r"^([\d.]+)\s*\*\s*([\d.]+)\s*\*\s*([\d.]+)\s*/\s*([\d.]+)$", dim)
-            if not m:
-                continue
-            out[cn] = (float(m.group(1)), float(m.group(2)),
-                       float(m.group(3)), float(m.group(4)))
-        wb.close()
-    except Exception:
-        pass
-    _pkg_cache = out
-    return out
-
-
-# ---------------- 供应商代码前缀处理 ----------------
-def extract_vc_prefix(vc):
-    """从现有 vendorCode 提取 4 位前缀码。
-    支持：
-      BCS-QQNN-1078999444 -> QQNN
-      BCS-QQNN-ozon-card-1078999444 -> QQNN
-      BCS-QQNN-WRLINWI/1078999444 -> QQNN
-    未提取到返回 None
-    """
-    s = str(vc or "").strip()
-    m = re.match(config.VC_PREFIX_RE, s)
-    if m:
-        return m.group(1).upper()
-    m = re.match(r"^BCS-([A-Za-z]{4})(?:-|$|/)", s)
-    if m:
-        return m.group(1).upper()
-    return None
-
-
-def random_prefix():
-    """生成 4 位大写字母随机前缀"""
-    return "".join(random.choices(string.ascii_uppercase, k=4))
-
-
-def resolve_vendor_prefix(cn, old_vc, cn2prefix=None):
-    """根据规则匹配并生成提交给新批量上品接口的 vendorCodePrefix（必须携带 BCS- 前缀）。
-    规则：
-    1. 能识别中文名 → 匹配商品价格表前缀码，拼接为 BCS-{前缀码}
-    2. 匹配不到 → 尝试从旧 vendorCode 提取 4 位前缀码，拼接为 BCS-{前缀码}
-    3. 仍没有 → 随机生成 4 位大写字母，拼接为 BCS-{4位字母}
-    返回: (prefix_with_bcs, prefix_source)
-    """
-    prefix = None
-    source = "随机"
-    if cn and cn2prefix and cn in cn2prefix:
-        p = str(cn2prefix[cn]).strip().upper()
-        if p:
-            prefix = p
-            source = "价格表"
-    if not prefix and old_vc:
-        p = extract_vc_prefix(old_vc)
-        if p:
-            prefix = p
-            source = "源vc"
-    if not prefix:
-        prefix = random_prefix()
-        source = "随机"
-
-    if not prefix.startswith("BCS-"):
-        prefix = f"BCS-{prefix}"
-    return prefix, source
 
 
 # ---------------- 覆盖计算 ----------------
@@ -222,89 +144,18 @@ def main_warehouse(sid, shops_data=None):
 
 
 
-def resolve_replicate_package(vc, cn, nm_id, map_state, card_cache=None):
-    """
-    获取复制上架的包装尺寸与重量：
-    ★ 严格规则：绝不使用快照的尺寸数据！
-    1. 优先读取价格映射表 (map_state.get(vc)) 的 L, W, H, weight
-    2. 若缺失或 <= 0，查商品价格表 (boss_pkg_map) 兜底
-    3. 若仍缺失，查 card.json 兜底
-    返回: ((L, W, H, weight), None) 或 (None, err_msg)
-    其中 L, W, H 为整型 cm (ceil)，weight 为 float kg (round 3)
-    """
-    row = (map_state or {}).get(vc) or {}
-    length = row.get("L")
-    width = row.get("W")
-    height = row.get("H")
-    weight = row.get("weight")
-
-    def _valid(val):
-        try:
-            return float(val) > 0
-        except (TypeError, ValueError):
-            return False
-
-    # 2. 商品价格表兜底
-    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
-        bp = boss_pkg_map().get(cn or "")
-        if bp:
-            bl, bw, bh, bwgt = bp
-            if not _valid(length):
-                length = bl
-            if not _valid(width):
-                width = bw
-            if not _valid(height):
-                height = bh
-            if not _valid(weight):
-                weight = bwgt
-
-    # 3. card.json 兜底
-    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
-        card_info = None
-        if card_cache is not None and nm_id in card_cache:
-            card_info = card_cache[nm_id]
-        else:
-            card_info = fetch_card_json(nm_id)
-            if card_cache is not None:
-                card_cache[nm_id] = card_info
-        if card_info:
-            pkg = parse_package_info(card_info)
-            if not _valid(length):
-                length = pkg.get("length")
-            if not _valid(width):
-                width = pkg.get("width")
-            if not _valid(height):
-                height = pkg.get("height")
-            if not _valid(weight):
-                weight = pkg.get("weight")
-
-    if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
-        return None, f"包装数据缺失（L={length} W={width} H={height} 重={weight}）"
-
-    return (
-        math.ceil(float(length)),
-        math.ceil(float(width)),
-        math.ceil(float(height)),
-        round(float(weight), 3)
-    ), None
-
-
 # ---------------- 查重（本地记录 + 实时 API 双防线） ----------------
 RECORDS_JSON = os.path.join(config.STATE_DIR, "复制上架记录.json")
 
 
 def _load_records():
     """本地提交记录 {vc: {店id字符串: 提交时间}}——防 BCS 缓存滞后窗口内重复提交"""
-    try:
-        return json.load(open(RECORDS_JSON, encoding="utf-8"))
-    except Exception:
-        return {}
+    return safe_load_json(RECORDS_JSON, default={})
 
 
 def _save_records(records):
-    os.makedirs(os.path.dirname(RECORDS_JSON), exist_ok=True)
-    with open(RECORDS_JSON, "w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False, indent=2)
+    atomic_dump_json(RECORDS_JSON, records, indent=2, use_lock=True)
+
 
 
 def vc_exists_in_shop(vc, sid, records=None):
@@ -597,8 +448,8 @@ def run(args):
             print(f"[验证] 各店在架 vc 数：{per_shop}")
         except Exception as e:
             print(f"[验证] 失败：{e}（可稍后手动 wb.py fetch 复核）")
-        from wb_ops.services.catalog import mapping_sync
-        mapping_sync.post_write_merge(fetch=False)
+        from wb_ops.services.catalog_svc import catalog_svc
+        catalog_svc.post_write_merge(fetch=False)
     elif ok > 0:
         common.print_write_hint()
     return 0

@@ -13,6 +13,8 @@ import re
 from wb_ops import config
 from wb_ops import credentials
 from wb_ops import common
+from wb_ops.framework.safe_io import atomic_dump_json
+
 
 
 def extract_sessions(md_text):
@@ -93,9 +95,14 @@ def run(md_path):
     if not updated:
         print("[错误] 没有更新任何店铺")
         return 1
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    atomic_dump_json(cfg_path, cfg, indent=2, use_lock=True)
     credentials.reload()
     print(f"credentials.json 已更新: {updated}")
     print("提示：cookie 抓取时间若已超过 2 天，请尽快用 wb.py promo-apply 验证")
     return 0
+
+
+def run_cookies_update(args):
+    """CLI cookies-update 入口"""
+    return run(getattr(args, "md_file", None))
+

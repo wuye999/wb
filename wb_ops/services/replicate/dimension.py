@@ -230,8 +230,8 @@ def run(args):
             products.fetch_all()
         except Exception as e:
             print(f"[同步] 失败：{e}（可稍后手动 wb.py fetch 复核）")
-        from wb_ops.services.catalog import mapping_sync
-        mapping_sync.post_write_merge(fetch=False)
+        from wb_ops.services.catalog_svc import catalog_svc
+        catalog_svc.post_write_merge(fetch=False)
     else:
         common.print_write_hint()
     return 0

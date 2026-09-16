@@ -67,3 +67,16 @@ class CustomerSupportService:
 
 
 support_svc = CustomerSupportService()
+
+
+def run_questions(args):
+    return support_svc.list_and_answer_questions(args)
+
+
+def run_questions_watch(args):
+    return support_svc.watch_and_auto_reply(args)
+
+
+def run_ai_test(args):
+    return support_svc.test_ai_dialog(args)
+

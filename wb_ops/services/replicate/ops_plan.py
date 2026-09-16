@@ -29,10 +29,10 @@ def load_shop_rows(sid):
 
 def load_state():
     """映射表状态 + 商品价格表商品（一次加载）"""
-    from wb_ops.services.catalog import mapping
     state, excluded = MappingRepository.load_mapping_state()
-    boss = mapping.load_boss()
+    boss = MappingRepository.load_boss()
     return state, excluded, boss
+
 
 
 def resolve_filters(args):

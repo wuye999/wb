@@ -169,3 +169,11 @@ remove_to_trash = client.remove_to_trash
 batch_push_products = client.batch_push_products
 sync_shop = client.sync_shop
 wait_sync_done = client.wait_sync_done
+
+
+def print_shops(args=None):
+    """打印全部店铺列表"""
+    for s in fetch_shop_list():
+        print(f"{s['id']} | {s['name']}")
+    return 0
+

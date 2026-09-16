@@ -9,6 +9,8 @@ import time
 import urllib.parse
 import requests
 from wb_ops import common
+from wb_ops.framework.safe_io import atomic_dump_json
+
 
 WWW_BASE = "https://www.mabangerp.com/index.php"
 AAMZ_BASE = "https://aamz.mabangerp.com/index.php"
@@ -72,8 +74,7 @@ def refresh_api_token(cred):
     mb = c.data.setdefault("mabang", {})
     mb["api_bearer"] = token
     mb["api_key"] = key
-    with open(c.path, "w", encoding="utf-8") as f:
-        json.dump(c.data, f, ensure_ascii=False, indent=2)
+    atomic_dump_json(c.path, c.data, indent=2, use_lock=True)
     c.reload()
     return token
 

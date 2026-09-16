@@ -39,70 +39,18 @@ from .mapping_excel import (
 
 
 
-# ---------------- 数据读取 ----------------
-def _resolve_dp(formula, ws, row_idx):
-    """解析 D 列公式（如 =K57*2）：读目标单元格值 × 系数。失败返回 None"""
-    m = re.match(r'=([A-Z]+)(\d+)\s*\*\s*(\d+(?:\.\d+)?)', str(formula))
-    if m:
-        col = openpyxl.utils.column_index_from_string(m.group(1))
-        target = ws.cell(row=int(m.group(2)), column=col).value
-        if isinstance(target, (int, float)):
-            return target * float(m.group(3))
-    return None
+from wb_ops.framework.safe_io import safe_load_json, atomic_dump_json
+from wb_ops.storage.mapping_repo import (
+    load_boss,
+    load_prefix_map,
+    load_vc_known,
+    save_vc_known,
+    load_vc_override,
+    save_vc_override,
+    load_vc_excluded,
+    save_vc_excluded,
+)
 
-
-def load_boss():
-    """商品价格表 → [{idx, sku, cn, dp(双倍售价), img, floor, prefix}]
-    新表 7 列：图片/SKU/中文名/双倍售价/尺寸/最低售价/前缀码。
-    支持 D 列公式（=F{行}*2 等）；NOTEBOOK 为普通商品行（前缀 NBTB），与其他一致。"""
-    wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=False)
-    ws = wb["Sheet1"]
-    items = []
-    for row in ws.iter_rows(min_row=2):
-        sku = str(row[1].value).strip() if row[1].value else ""
-        cn = str(row[2].value).strip() if row[2].value else ""
-        if not sku and not cn:
-            continue
-        dp = row[3].value
-        if isinstance(dp, str) and dp.startswith("="):
-            dp = _resolve_dp(dp, ws, row[0].row)
-        prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
-        items.append({
-            "idx": len(items) + 1,
-            "sku": sku,
-            "cn": cn,
-            "dp": dp,
-            "img": str(row[0].value).strip() if row[0].value else "",
-            "floor": int(dp) if dp is not None else None,
-            "prefix": prefix,
-        })
-    wb.close()
-    return items
-
-
-def load_prefix_map():
-    """商品价格表「vendorCode前缀码」列 → {prefix: {sku, cn, dp}}（含 NOTEBOOK 行，prefix 非空才登记）
-    重复前缀 → 控制台告警（保留首个，不覆盖）"""
-    wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=False)
-    ws = wb["Sheet1"]
-    pmap = {}
-    for row in ws.iter_rows(min_row=2):
-        sku = str(row[1].value).strip() if row[1].value else ""
-        cn = str(row[2].value).strip() if row[2].value else ""
-        if not sku and not cn:
-            continue
-        prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
-        if not prefix:
-            continue
-        dp = row[3].value
-        if isinstance(dp, str) and dp.startswith("="):
-            dp = _resolve_dp(dp, ws, row[0].row)
-        if prefix in pmap:
-            print(f"[告警] 前缀 {prefix} 重复登记：{pmap[prefix]['sku']} 与 {sku}，保留首个")
-            continue
-        pmap[prefix] = {"sku": sku, "cn": cn, "dp": dp}
-    wb.close()
-    return pmap
 
 
 def apply_latest_dp(result_list):
@@ -138,13 +86,11 @@ def init_global_vc_pool():
             "sku": st.get("sku") or "",
             "source": "历史映射表迁移",
         }
-    with open(config.VC_KNOWN_JSON, "w", encoding="utf-8") as f:
-        json.dump(known, f, ensure_ascii=False, indent=2)
+    save_vc_known(known)
     print(f"[全局归属池] 冷启动初始化：已从现有映射表迁移 {len(known)} 个商品归属到 {config.VC_KNOWN_JSON}")
 
     if excluded and not os.path.exists(config.VC_EXCLUDED_JSON):
-        with open(config.VC_EXCLUDED_JSON, "w", encoding="utf-8") as f:
-            json.dump(excluded, f, ensure_ascii=False, indent=2)
+        save_vc_excluded(excluded)
         print(f"[全局排除清单] 已迁移 {len(excluded)} 个排除记录到 {config.VC_EXCLUDED_JSON}")
 
 
@@ -152,253 +98,31 @@ def load_vc_registry():
     """加载全局 VC 归属池与纠偏记录。返回 (known, overrides, excluded)。
     优先级：overrides（人工改名纠偏） > known（已知归属） > excluded（排除清单）。"""
     init_global_vc_pool()
-    known = {}
-    if os.path.exists(config.VC_KNOWN_JSON):
-        try:
-            with open(config.VC_KNOWN_JSON, "r", encoding="utf-8") as f:
-                known = json.load(f)
-        except Exception as e:
-            print(f"[警告] 读取 {config.VC_KNOWN_JSON} 失败：{e}")
-
-    overrides = {}
-    if os.path.exists(config.VC_OVERRIDE_JSON):
-        try:
-            with open(config.VC_OVERRIDE_JSON, "r", encoding="utf-8") as f:
-                overrides = json.load(f)
-        except Exception as e:
-            print(f"[警告] 读取 {config.VC_OVERRIDE_JSON} 失败：{e}")
-
-    excluded = {}
-    if os.path.exists(config.VC_EXCLUDED_JSON):
-        try:
-            with open(config.VC_EXCLUDED_JSON, "r", encoding="utf-8") as f:
-                excluded = json.load(f)
-        except Exception as e:
-            print(f"[警告] 读取 {config.VC_EXCLUDED_JSON} 失败：{e}")
-
-    return known, overrides, excluded
+    return load_vc_known(), load_vc_override(), load_vc_excluded()
 
 
 def save_vc_registry(known=None, overrides=None, excluded=None):
     """保存全局 VC 归属、纠偏或排除记录"""
     os.makedirs(config.STATE_DIR, exist_ok=True)
     if known is not None:
-        with open(config.VC_KNOWN_JSON, "w", encoding="utf-8") as f:
-            json.dump(known, f, ensure_ascii=False, indent=2)
+        save_vc_known(known)
     if overrides is not None:
-        with open(config.VC_OVERRIDE_JSON, "w", encoding="utf-8") as f:
-            json.dump(overrides, f, ensure_ascii=False, indent=2)
+        save_vc_override(overrides)
     if excluded is not None:
-        with open(config.VC_EXCLUDED_JSON, "w", encoding="utf-8") as f:
-            json.dump(excluded, f, ensure_ascii=False, indent=2)
+        save_vc_excluded(excluded)
 
 
-SINGLE_SHOP_HEADERS = [
-    '产品中文名', 'vendorCode', '双倍售价', '本店售价(CNY)', '折扣%', 'club折扣%',
-    '本店库存', '本店nmId', '俄文标题', '主图链接',
-    '尺寸长(cm)', '尺寸宽(cm)', '尺寸高(cm)', '毛重(kg)',
-    '创建时间', '更新时间', '匹配类型'
-]
-SINGLE_SHOP_WIDTHS = [20, 24, 10, 12, 8, 10, 10, 14, 32, 14, 10, 10, 10, 10, 18, 18, 12]
+from .mapping_excel import (
+    SINGLE_SHOP_HEADERS,
+    SINGLE_SHOP_WIDTHS,
+    SINGLE_UNMAPPED_HEADERS,
+    SINGLE_UNMAPPED_WIDTHS,
+    build_single_shop_xlsx,
+    load_single_shop_rows,
+    list_active_shop_mappings,
+    stock_summary,
+)
 
-SINGLE_UNMAPPED_HEADERS = [
-    'vendorCode', '俄文标题', '本店售价(CNY)', '折扣%', '本店库存', '本店nmId', '主图链接', '创建时间'
-]
-SINGLE_UNMAPPED_WIDTHS = [24, 32, 12, 8, 10, 14, 14, 18]
-
-
-def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=None, prefix_map=None, out_path=None):
-    """构建单店铺映射表（包含该店真实在架商品、实际售价、实际库存、实际nmId等）。
-    包含 2 个 Sheet：
-      1. 在架映射明细（已归属中文名的商品）
-      2. 未映射在架商品（在架但未匹配到中文名的商品）
-    """
-    if rows is None:
-        p_json = config.shop_json_path(sid)
-        if not os.path.exists(p_json):
-            print(f"  [警告] 店铺 {sid} 无商品快照：{p_json}，跳过构建单店表")
-            return 0, 0
-        with open(p_json, "r", encoding="utf-8") as f:
-            d = json.load(f)
-            rows = d.get("rows", [])
-
-    if registry is None:
-        known, overrides, excluded = load_vc_registry()
-    else:
-        known, overrides, excluded = registry
-
-    if boss is None:
-        boss = load_boss()
-    boss_by_cn = {b["cn"]: b for b in boss if b.get("cn")}
-
-    if prefix_map is None:
-        prefix_map = load_prefix_map()
-
-    out_file = out_path or config.shop_mapping_xlsx(sid, shop_name)
-    os.makedirs(os.path.dirname(out_file), exist_ok=True)
-
-    alive_rows = [r for r in rows if not r.get("trashedAt")]
-
-    wb = openpyxl.Workbook()
-    ws1 = wb.active
-    ws1.title = "在架映射明细"
-    ws1.append(SINGLE_SHOP_HEADERS)
-
-    ws2 = wb.create_sheet("未映射在架商品")
-    ws2.append(SINGLE_UNMAPPED_HEADERS)
-
-    n_mapped, n_unmapped = 0, 0
-    known_updated = False
-    for r in alive_rows:
-        vc = r.get("vendorCode")
-        if not vc:
-            continue
-        sl = r.get("sizeList") or []
-        price = sl[0].get("price") if sl else None
-        disc = r.get("discount")
-        club = r.get("clubDiscount")
-        stock = stock_summary(r)
-        nm_id = r.get("nmId")
-        title = r.get("title") or ""
-        img = r.get("repImg") or ""
-        L = r.get("dimensionsLength")
-        W = r.get("dimensionsWidth")
-        H = r.get("dimensionsHeight")
-        weight = r.get("dimensionsWeightBrutto")
-        create_at = r.get("createAt")
-        update_at = r.get("updateAt")
-
-        cn = ""
-        dp = None
-        match_type = ""
-
-        # 匹配归属优先级：overrides > known > prefix_map
-        if vc in overrides:
-            cn = overrides[vc].get("cn") or ""
-            dp = overrides[vc].get("dp")
-            match_type = "人工纠偏"
-        elif vc in known:
-            cn = known[vc].get("cn") or ""
-            dp = known[vc].get("dp")
-            match_type = "已归属"
-            if L is None and known[vc].get("L"):
-                L, W, H, weight = known[vc].get("L"), known[vc].get("W"), known[vc].get("H"), known[vc].get("weight")
-        else:
-            m = re.match(config.VC_PREFIX_RE, vc or "")
-            if m:
-                pfx = m.group(1)
-                boss_row = prefix_map.get(pfx)
-                if boss_row:
-                    cn = boss_row.get("cn") or ""
-                    dp = boss_row.get("dp")
-                    match_type = "前缀自动"
-                    known[vc] = {"cn": cn, "dp": dp, "sku": boss_row.get("sku", ""), "source": "前缀自动"}
-                    known_updated = True
-
-        # 用 boss 最新售价覆盖双倍售价
-        if cn in boss_by_cn:
-            b = boss_by_cn[cn]
-            if b.get("dp") is not None:
-                dp = b["dp"]
-
-        if cn:
-            ws1.append([
-                cn, vc, dp, price, disc, club, stock, nm_id, title, img,
-                L, W, H, weight, create_at, update_at, match_type
-            ])
-            cur_row = ws1.max_row
-            if img:
-                ws1.cell(cur_row, 10).hyperlink = img
-            if nm_id:
-                ws1.cell(cur_row, 8).hyperlink = f"https://www.wildberries.ru/catalog/{nm_id}/detail.aspx?targetUrl=GP"
-            n_mapped += 1
-        else:
-            ws2.append([vc, title, price, disc, stock, nm_id, img, create_at])
-            cur_row = ws2.max_row
-            if img:
-                ws2.cell(cur_row, 7).hyperlink = img
-            if nm_id:
-                ws2.cell(cur_row, 6).hyperlink = f"https://www.wildberries.ru/catalog/{nm_id}/detail.aspx?targetUrl=GP"
-            n_unmapped += 1
-
-    for i, w in enumerate(SINGLE_SHOP_WIDTHS, 1):
-        ws1.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-    ws1.freeze_panes = "C2"
-
-    for i, w in enumerate(SINGLE_UNMAPPED_WIDTHS, 1):
-        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-    ws2.freeze_panes = "B2"
-
-    wb.save(out_file)
-    wb.close()
-
-    if known_updated:
-        save_vc_registry(known=known)
-
-    return n_mapped, n_unmapped
-
-
-def load_single_shop_rows(sid, shop_name=None):
-    """读取某店铺独立映射表 Excel，返回 {vc: row_dict} 与 [unmapped_vc]"""
-    p = config.shop_mapping_xlsx(sid, shop_name)
-    if not os.path.exists(p):
-        return {}, []
-    wb = openpyxl.load_workbook(p, data_only=True)
-    mapped = {}
-    if "在架映射明细" in wb.sheetnames:
-        ws = wb["在架映射明细"]
-        headers = [str(c.value or "") for c in ws[1]]
-        idx = {h: i for i, h in enumerate(headers)}
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            vc = r[idx.get("vendorCode", 1)]
-            if not vc:
-                continue
-            mapped[str(vc)] = {
-                "cn": r[idx.get("产品中文名", 0)] or "",
-                "vc": str(vc),
-                "dp": r[idx.get("双倍售价", 2)] if "双倍售价" in idx else None,
-                "price": r[idx.get("本店售价(CNY)", 3)] if "本店售价(CNY)" in idx else None,
-                "discount": r[idx.get("折扣%", 4)] if "折扣%" in idx else None,
-                "club": r[idx.get("club折扣%", 5)] if "club折扣%" in idx else None,
-                "stock": r[idx.get("本店库存", 6)] if "本店库存" in idx else None,
-                "nmId": r[idx.get("本店nmId", 7)] if "本店nmId" in idx else None,
-                "title": r[idx.get("俄文标题", 8)] if "俄文标题" in idx else "",
-                "img": r[idx.get("主图链接", 9)] if "主图链接" in idx else "",
-                "L": r[idx.get("尺寸长(cm)", 10)] if "尺寸长(cm)" in idx else None,
-                "W": r[idx.get("尺寸宽(cm)", 11)] if "尺寸宽(cm)" in idx else None,
-                "H": r[idx.get("尺寸高(cm)", 12)] if "尺寸高(cm)" in idx else None,
-                "weight": r[idx.get("毛重(kg)", 13)] if "毛重(kg)" in idx else None,
-                "createAt": r[idx.get("创建时间", 14)] if "创建时间" in idx else None,
-                "updateAt": r[idx.get("更新时间", 15)] if "更新时间" in idx else None,
-                "match_type": r[idx.get("匹配类型", 16)] if "匹配类型" in idx else "",
-            }
-    unmapped = []
-    if "未映射在架商品" in wb.sheetnames:
-        ws2 = wb["未映射在架商品"]
-        for r in ws2.iter_rows(min_row=2, values_only=True):
-            if r[0]:
-                unmapped.append(str(r[0]))
-    wb.close()
-    return mapped, unmapped
-
-
-def list_active_shop_mappings():
-    """扫描 data/shops/ 下所有活跃店铺映射表（排除 _archive/ 目录与临时文件）。
-    返回 [{'id': sid, 'name': name, 'path': filepath}, ...]"""
-    import glob
-    os.makedirs(config.SHOPS_DIR, exist_ok=True)
-    files = sorted(glob.glob(os.path.join(config.SHOPS_DIR, "shop_*.xlsx")))
-    active = []
-    for f in files:
-        base = os.path.basename(f)
-        if base.startswith("~$") or "_archive" in f:
-            continue
-        m = re.match(r"^shop_(\d+)(?:_(.+))?\.xlsx$", base)
-        if m:
-            sid = int(m.group(1))
-            name = m.group(2) or f"shop{sid}"
-            active.append({"id": sid, "name": name, "path": f})
-    return active
 
 
 def load_mapping_state():
@@ -411,8 +135,8 @@ def load_mapping_state():
 
 def load_bcs():
     """主店 JSON 在架商品，返回完整字段（附加 vc/wbnm/price/img 便捷字段）"""
-    d = json.load(open(config.shop_json_path(shop_id()), encoding="utf-8"))
-    rows = [r for r in d["rows"] if not r.get("trashedAt")]
+    d = safe_load_json(config.shop_json_path(shop_id()), default={})
+    rows = [r for r in d.get("rows", []) if not r.get("trashedAt")]
     out = []
     for r in rows:
         sl = r.get("sizeList") or []
@@ -433,17 +157,6 @@ def size_summary(r):
     return "; ".join(f"{s.get('chrtId')}({s.get('techSizeName') or s.get('name') or ''})@{s.get('price')}"
                      for s in (r.get("sizeList") or []))
 
-
-def stock_summary(r):
-    """库存数量：'999'；多规格/多仓库不同数量用逗号分隔（去掉 warehouseId 前缀）"""
-    seen, parts = set(), []
-    for s in (r.get("sizeList") or []):
-        for st in (s.get("stockList") or []):
-            am = st.get("amount")
-            if am is not None and am not in seen:
-                seen.add(am)
-                parts.append(str(am))
-    return ", ".join(parts)
 
 
 def price_of(r):

@@ -124,7 +124,8 @@
         ▼
 基础设施与适配层 (Adapters & Framework)
   ├── adapters/（wb_client 封装原生接口与归位后的 fetch_canceled_ids; bcs_client; mabang_client; llm_client; cookies）
-  └── framework/（safe_io 原子存储与 FileLock、exceptions 统一分层异常、registry 动态注册中枢、credentials 凭证加载器）
+  ├── framework/（safe_io 原子存储与 FileLock、exceptions 统一分层异常、registry 动态注册中枢）
+  └── credentials.py（统一凭证加载器，管理 data/credentials.json 安全读取与解析）
 ```
 
 ### 1. 核心设计原则与解耦成果

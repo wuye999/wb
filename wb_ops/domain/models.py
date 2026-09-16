@@ -112,3 +112,30 @@ class TaskResult:
     processed_count: int = 0
     error_message: str = ""
     shop_id: Optional[int] = None
+
+
+# 别名兼容
+ProductCard = Product
+
+
+class OrderStatus:
+    """订单标准状态枚举"""
+    NEW = "NEW"
+    WAITING_SHIPPED = "WAITING_SHIPPED"
+    SHIPPED = "SHIPPED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+@dataclass(slots=True, frozen=True)
+class CustomStockPlan:
+    """自定义库存调整规划模型"""
+    target_stock: int = 0
+    name_filter: str = ""
+    prefix_filter: str = ""
+    target_vcs: Optional[List[str]] = None
+    target_shops: Optional[List[int]] = None
+    is_apply: bool = False
+    skip_confirmation: bool = False
+    sync_after: bool = False
+

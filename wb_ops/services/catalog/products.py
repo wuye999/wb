@@ -12,6 +12,8 @@ from datetime import datetime
 
 from wb_ops.adapters import bcs_client as bcs
 from wb_ops import config
+from wb_ops.framework.safe_io import atomic_dump_json, safe_load_json
+
 def is_empty_product(r):
     """空商品三缺判定：价格+库存+名称全空（productType=ERROR 残留），不计入待审核。
     （原逻辑从「空商品处理/cleanup_empty_products.py」内联，去掉跨目录依赖）"""
@@ -69,8 +71,7 @@ def fetch_shop(shop_id, out_file, no_sync=False):
         "rows": rows,
     }
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    atomic_dump_json(out_file, result, indent=2, use_lock=True)
     print(f"已保存：{out_file}（{os.path.getsize(out_file) / 1024 / 1024:.2f} MB）")
     vcs = len({r.get("vendorCode") for r in rows})
     n_alive = sum(1 for r in rows if not r.get("trashedAt"))
@@ -102,8 +103,7 @@ def fetch_all(no_sync=False):
         if i < len(shops) - 1:
             time.sleep(1)
     os.makedirs(config.STATE_DIR, exist_ok=True)
-    with open(config.STATUS_JSON, "w", encoding="utf-8") as f:
-        json.dump(status, f, ensure_ascii=False, indent=2)
+    atomic_dump_json(config.STATUS_JSON, status, indent=2, use_lock=True)
     print(f"\n状态已保存：{config.STATUS_JSON}")
 
 
@@ -112,11 +112,9 @@ def load_all_shops():
     无任何店铺数据时抛 RuntimeError 提示先 fetch。"""
     shops_data = {}
     shops_meta = []
-    try:
-        meta = json.load(open(config.STATUS_JSON, encoding="utf-8"))
-        shops_meta = meta.get("shops", []) or []
-    except Exception:
-        pass
+    meta = safe_load_json(config.STATUS_JSON, default={})
+    shops_meta = meta.get("shops", []) or []
+
     if not shops_meta:  # 状态文件缺失 → 扫描磁盘推断
         for sid in shop_ids_from_disk():
             shops_meta.append({"id": sid, "name": f"shop{sid}"})

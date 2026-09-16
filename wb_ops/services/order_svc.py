@@ -46,3 +46,32 @@ class OrderService:
 
 
 order_svc = OrderService()
+
+
+def run_orders(args):
+    return order_svc.query_bcs_orders(args)
+
+
+def run_mabang_orders(args):
+    return order_svc.match_and_replace_skus(args)
+
+
+def run_mabang_forecast(args):
+    return order_svc.forecast_batches(args)
+
+
+def run_feishu_register(args):
+    return order_svc.register_to_feishu(args)
+
+
+def run_mabang_process(args):
+    return order_svc.process_pipeline(args)
+
+
+def run_mabang_stock_register(args):
+    return order_svc.register_stock(args)
+
+
+def run_mabang_stock_daily(args):
+    return order_svc.manage_stock_daily(args)
+
