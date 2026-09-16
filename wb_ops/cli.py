@@ -8,41 +8,9 @@ wb_ops 统一 CLI 入口（聚合「检查价格」+「促销折扣」全部功�
 import argparse
 import sys
 
-from . import common
+from wb_ops import common
+from wb_ops import config
 
-from . import bcs
-from . import banned
-from . import clean
-from . import config
-from . import cookies
-from . import daily
-from . import dimension
-from . import dims_check
-from . import discount
-from . import discount_wb
-from . import discount_scan
-from . import discount_bcs
-from . import import_shelve
-from . import mapping
-from . import mapping_check
-from . import mapping_sync
-from . import mabang
-from . import feishu_register
-from . import mabang_process
-from . import mabang_stock
-from . import order_pipeline
-from . import mismatch_check
-from . import ops
-from . import orders
-from . import price_review
-from . import products
-from . import promo
-from . import questions
-from . import questions_watch
-from . import ai_reply_test
-from . import replicate
-from . import remote_wh
-from . import schedule
 def build_parser():
     ap = argparse.ArgumentParser(prog="wb", description="Wildberries/BCS 卖家自动化统一入口")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -83,14 +51,36 @@ def build_parser():
     p.add_argument("--shop-id", type=int, default=None, help="指定店铺ID（默认全部活跃店铺）")
     p.add_argument("--force", action="store_true", help="强制全量重新构建")
 
+    def _add_ops_args(p, *, with_price=False, with_stock=False):
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--sku", help="商品价格表卖家SKU")
+        g.add_argument("--name", help="商品价格表产品中文名包含")
+        g.add_argument("--prefix", help="商品价格表 vendorCode 前缀码")
+        g.add_argument("--vc", help="vendorCode 列表（逗号分隔）")
+        g.add_argument("--all", action="store_true", help="全部映射商品（默认）")
+        p.add_argument("--shops", help="限定店铺ID（逗号分隔，默认全部已 fetch 店铺）")
+        p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+        p.add_argument("--yes", action="store_true", help="跳过不可逆操作确认")
+        p.add_argument("--sync", action="store_true",
+                       help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
+        if with_price:
+            p.add_argument("--price", type=int, help="目标价（默认 floor(商品价格表双倍售价)）")
+            p.add_argument("--discount", type=int, help="折扣 0-100（不传=不改）")
+            p.add_argument("--club-discount", type=int, help="club折扣 0-100（不传=不改）")
+            p.add_argument("--keep-price", action="store_true", help="价格保持当前值（只改折扣/俱乐部折扣）")
+            p.add_argument("--auto-review", action="store_true",
+                           help="改价后自动「应用新价格」（降价 30-49.9%% 进审查时，精确匹配刚改价商品）")
+        if with_stock:
+            p.add_argument("--amount", type=int, default=0, help="目标库存（默认 0）")
+
     p = sub.add_parser("price", help="改价/改折扣（dry-run 默认，--apply 执行）")
-    ops.add_ops_args(p, with_price=True)
+    _add_ops_args(p, with_price=True)
 
     p = sub.add_parser("stock", help="改库存")
-    ops.add_ops_args(p, with_stock=True)
+    _add_ops_args(p, with_stock=True)
 
     p = sub.add_parser("trash", help="下架（移回收站，不可逆）")
-    ops.add_ops_args(p)
+    _add_ops_args(p)
 
     p = sub.add_parser("replicate", help="跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）")
     p.add_argument("--vc", default="", help="指定 vendorCode（逗号分隔）")
@@ -169,6 +159,23 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
     p.add_argument("--sync", action="store_true",
                    help="执行前同步 BCS 缓存 + 提交后同步复核（默认不自动同步/不写后验证，仅打印提示）")
+    p = sub.add_parser("dimension", help="批量修改尺寸（按价格表或 --dims 自定义，dry-run 默认，--apply 执行）")
+    p.add_argument("--vc", default="", help="指定单个或多个 vendorCode（逗号分隔）")
+    p.add_argument("--prefix", default="", help="vendorCode 4位前缀码包含匹配")
+    p.add_argument("--name", default="", help="商品价格表产品中文名包含匹配")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
+    p.add_argument("--dims", default="", help="自定义尺寸 '长*宽*高/毛重'（例: 8*14*26/0.3）")
+    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+    p.add_argument("--sync", action="store_true",
+                   help="执行后同步并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
+
+    p = sub.add_parser("dims-check", help="查询 WB 包装尺寸/重量偏差待验证商品（只读）")
+    p.add_argument("--type", choices=["dims", "weight", "all"], default="dims",
+                   help="dims=尺寸偏差 / weight=重量偏差 / all=两者合并去重（默认 dims）")
+    p.add_argument("--name", default="", help="映射表中文名包含过滤")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--limit", type=int, default=0, help="每店最多查询 N 条（0=不限）")
 
     p = sub.add_parser("banned", help="查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
@@ -281,7 +288,13 @@ def build_parser():
     p = sub.add_parser("schedule", help="创建/删除 Windows 计划任务")
     p.add_argument("--remove", action="store_true", help="删除全部任务")
 
-    remote_wh.build_parser(sub)
+    p = sub.add_parser("remote-wh", help="成都仓库商品永久删除（dry-run 默认，--apply --yes 执行）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部 5 店成都仓）")
+    p.add_argument("--limit", type=int, default=0, help="（预留）每店最多处理 N 条，0=全部")
+    p.add_argument("--interval", type=float, default=0.3, help="删除请求间隔秒（默认 0.3）")
+    p.add_argument("--parallel", type=int, default=1, help="并发店铺数（默认 1=串行；--apply 时有效，店内仍串行）")
+    p.add_argument("--apply", action="store_true", help="真正执行删除（不可逆）")
+    p.add_argument("--yes", action="store_true", help="确认永久删除（后台运行必备）")
 
     return ap
 
@@ -289,93 +302,128 @@ def build_parser():
 def dispatch(args):
     cmd = args.cmd
     if cmd == "shops":
+        from wb_ops.adapters import bcs_client as bcs
         for s in bcs.fetch_shop_list():
             print(f"{s['id']} | {s['name']}")
         return 0
     if cmd == "fetch":
+        from .services.catalog_svc import catalog_svc
+        from . import config
         if args.shop_id:
             out = config.shop_json_path(args.shop_id)
-            products.fetch_shop(args.shop_id, out, no_sync=args.no_sync)
+            catalog_svc.fetch_shop_products(args.shop_id, out, no_sync=args.no_sync)
         else:
-            products.fetch_all(no_sync=args.no_sync)
+            catalog_svc.fetch_all_shops_products(no_sync=args.no_sync)
         return 0
     if cmd == "mapping":
-        mapping.run_mapping(legacy=args.legacy)
+        from .services.catalog_svc import catalog_svc
+        catalog_svc.generate_mapping_workbench(legacy=args.legacy)
         return 0
     if cmd == "mapping-import":
-        mapping.import_mapping(args.file)
+        from .services.catalog_svc import catalog_svc
+        catalog_svc.import_mapping(args.file)
         return 0
     if cmd == "mapping-check":
-        mapping_check.run(tol=args.tol)
+        from .services.catalog_svc import catalog_svc
+        catalog_svc.check_mapping_integrity(tol=args.tol)
         return 0
     if cmd == "mismatch-check":
-        mismatch_check.run(cn=args.cn, begin=args.begin, end=args.end, days=args.days)
+        from .services.catalog_svc import catalog_svc
+        catalog_svc.check_mismatches(cn=args.cn, begin=args.begin, end=args.end, days=args.days)
         return 0
     if cmd == "review":
-        mapping_sync.run_review()
+        from .services.catalog_svc import catalog_svc
+        catalog_svc.run_review()
         return 0
     if cmd == "merge":
-        mapping_sync.run_merge(args.file)
+        from .services.catalog_svc import catalog_svc
+        catalog_svc.run_merge(args.file)
         return 0
     if cmd == "mapping-rename":
-        return 0 if mapping_sync.set_vc_override(vc=args.vc, new_cn=args.cn, reason=args.reason, file_path=args.file) else 1
+        from .services.catalog_svc import catalog_svc
+        return 0 if catalog_svc.set_vc_override(vc=args.vc, new_cn=args.cn, reason=args.reason, file_path=args.file) else 1
     if cmd == "shops-mapping":
-        mapping_sync.sync_all_shops_mapping(shop_id=args.shop_id, force=args.force)
+        from .services.catalog_svc import catalog_svc
+        catalog_svc.sync_all_shops_mapping(shop_id=args.shop_id, force=args.force)
         return 0
     if cmd in ("price", "stock", "trash"):
-        ops.run(cmd, args)
-        return 0
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.handle_ops(cmd, args)
     if cmd == "replicate":
-        return replicate.run(args)
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.replicate_across_shops(args)
     if cmd == "import-shelve":
-        return import_shelve.run(args)
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.import_external_shelve(args)
     if cmd == "promo-apply":
-        return promo.run(args)
+        from .services.discount_svc import discount_svc
+        return discount_svc.run_promo(args)
     if cmd in ("discount", "discount-wb", "discount-scan"):
-        return discount_wb.run(args)
+        from .services.discount_svc import run_cli
+        return run_cli(args)
     if cmd == "discount-bcs":
-        return discount_bcs.run(args)
+        from .services.discount_svc import discount_svc
+        return discount_svc.run_bcs_discount(args)
     if cmd == "dimension":
-        return dimension.run(args)
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.manage_dimensions(args)
     if cmd == "dims-check":
-        return dims_check.run(args)
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.check_dimensions(args)
     if cmd == "banned":
-        return banned.run(args)
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.handle_banned_products(args)
     if cmd == "clean":
-        return clean.run(args)
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.clean_drafts_and_trash(args)
     if cmd == "price-review":
-        return price_review.run(args)
+        from .services.discount_svc import discount_svc
+        return discount_svc.run_price_review(args)
     if cmd == "orders":
-        return orders.run(args)
+        from .services.order_svc import order_svc
+        return order_svc.query_bcs_orders(args)
     if cmd == "questions":
-        return questions.run(args)
+        from .services.support_svc import support_svc
+        return support_svc.list_and_answer_questions(args)
     if cmd == "questions-watch":
-        return questions_watch.run(args)
+        from .services.support_svc import support_svc
+        return support_svc.watch_and_auto_reply(args)
     if cmd == "ai-test":
-        return ai_reply_test.run(args)
+        from .services.support_svc import support_svc
+        return support_svc.test_ai_dialog(args)
     if cmd == "mabang-orders":
-        return mabang.run(args)
+        from .services.order_svc import order_svc
+        return order_svc.match_and_replace_skus(args)
     if cmd == "mabang-forecast":
-        return mabang.run_forecast(args)
+        from .services.order_svc import order_svc
+        return order_svc.forecast_batches(args)
     if cmd == "feishu-register":
-        return feishu_register.run(args)
+        from .services.order_svc import order_svc
+        return order_svc.register_to_feishu(args)
     if cmd == "mabang-process":
-        return mabang_process.run(args)
+        from .services.order_svc import order_svc
+        return order_svc.process_pipeline(args)
 
     if cmd == "mabang-stock-register":
-        return mabang_stock.run(args)
+        from .services.order_svc import order_svc
+        return order_svc.register_stock(args)
 
     if cmd == "mabang-stock-daily":
-        return mabang_stock.run_daily(args)
+        from .services.order_svc import order_svc
+        return order_svc.manage_stock_daily(args)
 
     if cmd == "cookies-update":
+        from wb_ops.adapters import cookies
         return cookies.run(args.md_file)
     if cmd == "daily":
+        from wb_ops import daily
         return daily.run(args.mode, args.extra)
     if cmd == "schedule":
+        from wb_ops import schedule
         return schedule.run(args)
     if cmd == "remote-wh":
-        return remote_wh.run(args)
+        from .services.replicate_svc import replicate_svc
+        return replicate_svc.delete_remote_warehouse_stocks(args)
     return 0
 
 

@@ -10,33 +10,73 @@
 ├── wb.py                    ★ 统一入口（薄启动器 → wb_ops.cli.main）
 ├── wb_ops/                  ★ 核心库（Python 包）
 │   ├── __init__.py            版本号 + 公共导出
-│   ├── cli.py                 ★ 统一 CLI（argparse 子命令 → 分发到各业务模块）
+│   ├── cli.py                 ★ 统一 CLI 调度器（39 个子命令动态延迟分发）
 │   ├── config.py              非敏感配置：路径常量（BASE_DIR→data/）、默认阈值、VC_PREFIX_RE
-│   ├── credentials.py         ★ 统一凭证加载（读 data/credentials.json）
-│   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8
-│   ├── bcs.py                 BCS 云端 API 客户端（Bearer + X-Limit-Key）
-│   ├── wb_api.py              WB 卖家后台 API 客户端（cookie 三件套会话）
-│   ├── products.py            商品拉取 / 快照 / 同步 / 空商品判定
-│   ├── mapping.py             商品价格表解析 + 映射表构建（8-Sheet）
-│   ├── mapping_sync.py        多店 review / 增量 merge
-│   ├── mapping_check.py       映射表核查工作台（带图，可疑项标记）
-│   ├── mismatch_check.py      货不对板筛查工作台（看图勾选，导出 vc 下架；支持按映射表创建时间时间段筛选 --begin/--end/--days）
-│   ├── workbench.py           HTML 工作台渲染（合并 4 处重复模板）
-│   ├── ops.py                 一键操作：改价 / 库存 / 下架（两段式 dry-run；改价可 --auto-review 自动应用新价格）
-│   ├── replicate.py           跨店复制上架：部分覆盖 vc → 缺失店铺（vendorCode 与源店一致；WB detail 经 BCS 代理 + card.json CDN）
-│   ├── import_shelve.py       他人映射表导入上架：按 WB原始nmId 差集 → 我方前缀优先生成新 vc 上架（复用 replicate 的 WB 数据获取/仓库/记录；支持他人 `BCS-{前缀}-ozon-card-{WB商品码}` 格式并保留 `ozon-card-` 尾段）
-│   ├── promo.py               促销报名
-│   ├── discount.py            折扣改价（BCS 全量 >50%→50%）
-│   ├── discount_wb.py         WB 原生批量改折扣（从高到低查询 + upload/task 批量修改，默认不写后验证）
-│   ├── banned.py              查询并删除被阻止的商品（WB banned：tableListImprovable 查询 / moveNmsToTrash 移回收站 / count 复核）
-│   ├── clean.py               草稿箱 / 回收站清理（回收站 deleteAllSize 一键清空）
-│   ├── price_review.py        价格审核「应用新价格」（WB 隔离区 quarantine/goods）
-│   ├── orders.py              订单查询（BCS ozonOrder：同步/进度/列表/状态计数）
-│   ├── questions.py           买家未处理提问查询 + 回复（WB questions/answer）
-│   ├── cookies.py             从抓包 md 刷新凭证
+│   ├── credentials.py         ★ 统一凭证加载中枢（读 data/credentials.json）
+│   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8 / print_write_hint
 │   ├── daily.py               每日任务启动器（morning/check）
-│   └── schedule.py            Windows 计划任务管理
-├── data/                     ★ 统一数据目录
+│   ├── schedule.py            Windows 计划任务管理
+│   ├── framework/             ★ 架构基础设施层
+│   │   ├── safe_io.py         原子写入（atomic_dump_json, atomic_write_text）与跨进程互斥锁（FileLock）
+│   │   ├── exceptions.py      统一异常分层（AuthenticationError, RateLimitError 等）
+│   │   └── registry.py        命令与服务动态注册中心
+│   ├── domain/                ★ 领域模型层
+│   │   └── models.py          强类型业务实体（ProductCard, Shop, DiscountPlan, TaskResult, OrderStatus 等）
+│   ├── storage/               ★ 仓储持久化与数据防腐层
+│   │   ├── product_repo.py    ProductRepository：店铺快照存储与在架商品快速索引
+│   │   └── mapping_repo.py    MappingRepository：映射总表、已知归属池与解耦品名反查解析器（build_vc_resolver）
+│   ├── adapters/              ★ 外部系统通信适配层
+│   │   ├── wb_client.py       WB 卖家后台 API 客户端（会话维护、原生改价改折扣与 fetch_canceled_ids 归位）
+│   │   ├── bcs_client.py      BCS 云端 API 客户端（Bearer + X-Limit-Key 与退避重试）
+│   │   ├── mabang_client.py   马帮 ERP API 客户端（三域会话、订单替换、预报交运）
+│   │   ├── llm_client.py      大模型应答客户端（OpenAI/通义兼容接口）
+│   │   ├── task_runner.py     通用异步任务轮询引擎
+│   │   └── cookies.py         从抓包 md 刷新凭证
+│   └── services/              ★ 业务用例服务层（高内聚 5 大业务域 + 外观服务门面）
+│       ├── catalog_svc.py     商品目录、映射与核对工作台门面服务
+│       ├── discount_svc.py    折扣管理与批量改价门面服务
+│       ├── order_svc.py       订单履约、马帮对接与飞书登记门面服务
+│       ├── replicate_svc.py   商品搬家、跨店复制、库存与清理门面服务
+│       ├── support_svc.py     客服与智能应答门面服务
+│       ├── catalog/           商品目录、多店映射与工作台业务实现
+│       │   ├── mapping_excel.py 8-Sheet 聚合全景总表 Excel 生成器（独立拆分）
+│       │   ├── mapping.py     映射总表增量合并核心
+│       │   ├── mapping_sync.py 单店映射表生成与同步
+│       │   ├── mapping_check.py 映射核对检查
+│       │   ├── mismatch_check.py 货不对板筛查
+│       │   ├── products.py    快照拉取与店铺商品管理
+│       │   ├── workbench.py   工作台 HTML 渲染器
+│       │   └── keywords.py    关键词提取与分析
+│       ├── discount/          折扣调整与促销活动业务实现
+│       │   ├── promo.py       促销活动报名
+│       │   ├── price_review.py 价格审查隔离区释放
+│       │   └── discount_bcs.py BCS 模式折扣修改
+│       ├── order/             订单履约业务实现
+│       │   ├── mabang.py      马帮待处理订单匹配更换
+│       │   ├── mabang_process.py 马帮全链路自动化一体
+│       │   ├── mabang_stock.py 马帮库存表登记与管理
+│       │   ├── feishu_register.py 飞书订单去重登记
+│       │   ├── orders.py      WB 订单查询与同步
+│       │   └── order_pipeline.py 历史编排流水线
+│       ├── replicate/         搬家上架、库存改价与清理业务实现
+│       │   ├── ops.py         一键操作门面编排
+│       │   ├── ops_plan.py    改价/库存/下架计划构建器（无副作用独立拆分）
+│       │   ├── ops_executor.py 计划分批执行与日志追加记录（独立拆分）
+│       │   ├── wb_card.py     WB 原生商品卡片与尺寸解析器（独立拆分）
+│       │   ├── replicate.py   跨店复制上架
+│       │   ├── import_shelve.py 他人映射表导入上架
+│       │   ├── dimension.py   批量尺寸毛重修改
+│       │   ├── dims_check.py  偏差商品排查
+│       │   ├── clean.py       草稿箱/回收站清理
+│       │   ├── banned.py      被阻止商品移回收站
+│       │   └── remote_wh.py   远端成都仓库处理
+│       └── support/           客服提问监控与自动回复业务实现
+│           ├── questions.py   买家提问抓取与人工回复
+│           ├── questions_watch.py 后台 AI 智能问答常驻轮询
+│           └── ai_reply_test.py AI 回复效果测试
+├── tests/                    ★ 自动化测试套件
+│   └── test_all_commands.py   覆盖全部 39 个 CLI 命令的集成测试（100% PASS）
+├── data/                     ★ 统一数据目录（本地专属，不进 git）
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
 │   ├── 商品价格表.xlsx         唯一权威商品清单（用户维护）
 │   ├── 价格映射表.xlsx         聚合全景总表（8-Sheet，merge 自动重建）
@@ -47,7 +87,13 @@
 │   ├── har/                  抓包 md/har（cookies-update 输入）
 │   ├── workbench/            生成的工作台 *.html
 │   └── logs/                 运行日志 + 结果 CSV
-├── docs/                     ★ 文档（README/ARCHITECTURE/CLI/USAGE/CREDENTIALS）
+├── docs/                     ★ 文档系统
+│   ├── README.md             文档主索引与快速上手
+│   ├── ARCHITECTURE.md       架构设计、分层与业务规则
+│   ├── DEVELOPMENT_GUIDE.md  ★ 开发要求与代码格式规范（必读）
+│   ├── CLI.md                子命令全集与调用参考
+│   ├── USAGE.md              日常情景操作指南
+│   └── CREDENTIALS.md        鉴权、会话与凭证配置
 ├── api/                      BCS API 抓包/内部文档（含真实 token，本地参考，不随公开仓库分发）
 ├── _archive/                 废弃脚本 + 一次性数据 + 旧文档（可回滚）
 └── _scratch/                 ★ AI 临时工作区（写脚本/处理文件/中间产物；已 gitignore，不进公开仓库）
@@ -55,22 +101,53 @@
 
 ## 二、模块分层与依赖方向
 
+项目已完成分层架构升级（Lightweight Clean Architecture），消除中心辐射耦合、大文件单体及无锁并发风险：
+
 ```
-入口层   cli.py（子命令分发）
-          │ 调用
-          ▼
-业务层   mapping / mapping_sync / mapping_check / mismatch_check / ops
-         promo / discount / banned / clean / cookies / daily / schedule
-         price_review / orders / questions
-         mabang / feishu_register / order_pipeline
-          │ 依赖
-          ▼
-支撑层   bcs / wb_api / products / workbench / keywords
-         common / credentials / config
+表现与调度层 (Presentation)
+  └── cli.py（动态按需延迟加载路由，39 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+        │ 动态调度 (Command DTO)
+        ▼
+业务用例服务层 (Services)
+  ├── 领域外观门面: catalog_svc / discount_svc / order_svc / replicate_svc / support_svc
+  └── 领域业务实现: services/{catalog, discount, order, replicate, support}/*.py
+        │ 编排调用
+        ▼
+领域模型层 (Domain)
+  └── domain/models.py（ProductCard, Shop, DiscountPlan, TaskResult, OrderStatus 等强类型实体与枚举）
+        ▲ 转换实体
+        │
+仓储持久化与数据防腐层 (Storage)
+  ├── storage/mapping_repo.py（MappingRepository: 映射总表、全局归属池、单店表与解耦的 build_vc_resolver 品名反查器）
+  └── storage/product_repo.py（ProductRepository: 快照持久化、在架商品多维快速索引、缓存失效）
+        │ 数据交互
+        ▼
+基础设施与适配层 (Adapters & Framework)
+  ├── adapters/（wb_client 封装原生接口与归位后的 fetch_canceled_ids; bcs_client; mabang_client; llm_client; cookies）
+  └── framework/（safe_io 原子存储与 FileLock、exceptions 统一分层异常、registry 动态注册中枢、credentials 凭证加载器）
 ```
 
-**规则**：业务模块之间**不互相 import**，只依赖支撑层。`cli.py` 只做解析与分发，不含业务逻辑。
-（唯一例外：`mapping_sync` 复用 `mapping` 与 `workbench` 的公共函数，这是有意的组合关系。）
+### 1. 核心设计原则与解耦成果
+
+1. **严格依赖单向流动**：
+   - 表现层 → 服务层 → 仓储与适配器层 → 领域实体与基础设施层。
+   - 严禁任何反向依赖（Domain/Framework 不得感知上层业务）。
+   - 详细开发约束与编码格式规范请参考专篇文档：**[DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md)**。
+2. **跨域品名反查彻底解耦（Catalog.Mapping 沉降）**：
+   - 彻底消除了原 `replicate` 与 `support` 对 `catalog.mapping` 私有实现函数的直接引用。
+   - 所有品名反查逻辑统一收口在 `MappingRepository.build_vc_resolver()`，通过仓储层对外提供轻量、统一、只读的反查闭包函数。
+   - 安全写入提示 `print_write_hint()` 已统一下沉至 `wb_ops.common`，跨模块零侵入共享。
+3. **平台原生 API 放置偏差解耦**：
+   - 原放置在 `services/replicate/` 的 WB 原生取消订单查询接口 `fetch_canceled_ids`，已正确归位至外部适配层 `wb_ops/adapters/wb_client.py`，`order` 域直接调用适配器，消除不合理的跨业务域引用。
+4. **单体大文件拆分（Anti-Monolith Pattern）**：
+   - **一键操作（ops）拆分**：将原庞大的单体模块重构为计划构建器 `services/replicate/ops_plan.py`（纯函数构造调价/库存/下架 Plan，无副作用）、批量执行引擎 `services/replicate/ops_executor.py`（负责分批 API 交互与 CSV 审计追加）以及薄门面 `ops.py`。
+   - **映射全景总表拆分**：将近千行的 8-Sheet 复杂 Excel 格式渲染剥离至 `services/catalog/mapping_excel.py`，让 `mapping.py` 专注增量合并算法。
+   - **马帮底层通信抽离**：将三域名 Cookie 会话维持、底层请求封装抽取为 `adapters/mabang_client.py`，业务脚本 `mabang.py` 仅关注订单状态转换。
+   - **商品卡片解析抽离**：将复杂的 WB 原生商品解析与包装尺寸提取抽象为 `services/replicate/wb_card.py`。
+5. **数据原子安全与无锁化保护**：
+   - 关键快照、凭证写入一律使用临时文件 + `os.replace` 原子覆写（`safe_io.atomic_dump_json`），并在全局池修改时配合 `FileLock` 跨进程互斥锁，从根本上杜绝断电或并发写造成的文件损坏。
+
+
 
 ## 三、两套鉴权体系
 
@@ -78,7 +155,9 @@
 | ------ | -------------------------------------------------------- | --------------------------------------------------------- |
 | 域名     | wb.bcserp.com/prod-api                                   | seller.wildberries.ru / discounts-prices / seller-content |
 | 凭证     | Bearer JWT + X-Limit-Key + Cookie(Admin-Token/Limit-Key) | authorizev3 + wb-seller-lk + Cookie（cfidsw-wb 等）          |
-| 模块     | bcs.py                                                   | wb\_api.py                                                |
+| 模块     | adapters/bcs_client.py                                   | adapters/wb_client.py                                     |
+| 失效表现   | 401（token 过期）/ 405（缺 Limit-Key）                          | 403（cfidsw-wb 过期）                                         |
+| 存储     | credentials.json `bcs` 段                                 | credentials.json `wb` 段                                   |
 | 失效表现   | 401（token 过期）/ 405（缺 Limit-Key）                          | 403（cfidsw-wb 过期）                                         |
 | 存储     | credentials.json `bcs` 段                                 | credentials.json `wb` 段                                   |
 
@@ -186,6 +265,7 @@ wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传
 | 2026-08-17 | BASE\_DIR 相对化；ops\_result.csv 追加；mapping-check、trash 两阶段（先清库存再下架）                                                                  |
 | 2026-08-18 | 检查价格 + 促销折扣整合为 wb\_ops 包，统一凭证 credentials.json、统一入口 wb.py、统一文档 docs/，清理废弃脚本                                               |
 | 2026-09-12 | **单店独立映射表与多店解耦架构重构**：将原本单一映射表拆分为各店铺独立的单店映射表（`data/shops/shop_{id}_{name}.xlsx`），引入全局 VC 归属与纠偏池（`data/state/vc_known.json`, `vc_override.json`），`merge` 采用各活跃店 Outer Join 机制自动聚合 8-Sheet 全景总表，支持店铺一键归档解耦（`_archive/`）与 VC 级联纠偏更名（`mapping-rename`） |
+| 2026-09-15 | **轻量整洁架构升级与深度解耦**：全面落地 5 层分层架构（domain/adapters/storage/services/framework），消除跨域私有依赖；彻底消除跨域品名反查耦合（沉降至 MappingRepository.build_vc_resolver）；WB 取消订单 API 归位至 wb_client；拆分 4 大单体脚本（抽取 wb_card、ops_plan、ops_executor、mabang_client、mapping_excel）；建立全量自动化测试套件 tests/test_all_commands.py 覆盖全部 39 个 CLI 命令（100% PASS）；发布 DEVELOPMENT_GUIDE.md 明确后续开发规范与格式要求。 |
 
 ## 九、外部依赖与运行环境
 

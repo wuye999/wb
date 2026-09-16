@@ -12,7 +12,7 @@ BCS 三件套（token/limit_key/cookie_extra）+ WB 5 店 cookie 全在这里，
 """
 import json
 
-from . import config
+from wb_ops import config
 DEFAULT_ROOT_VERSION = "v1.108.1"
 
 

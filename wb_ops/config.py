@@ -71,6 +71,8 @@ def is_shop_archived(shop_id):
 # ---------------- 业务常量 ----------------
 # 主店（映射表主数据源）：None = 取店铺列表第一个（bcs.fetch_shop_list 顺序）；也可显式指定某个店铺 ID
 MAIN_SHOP = None
+DEFAULT_SHOP_ID = MAIN_SHOP
+
 
 # vendorCode 标准格式：BCS-{4位前缀}-{WB原始nmId}（中段=商品前缀，商品价格表「vendorCode前缀码」列登记）。
 # 兼容他人表 `ozon-card-` 尾段：BCS-{前缀}-ozon-card-{WB原始nmId}。

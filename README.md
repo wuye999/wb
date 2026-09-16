@@ -67,11 +67,12 @@ python wb.py mabang-stock-register --apply              # 全量重建「马帮�
 | 文档                                           | 内容                     |
 | -------------------------------------------- | ---------------------- |
 | [docs/README.md](docs/README.md)             | 文档索引 + AI 上手           |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 业务规则 / 数据流 |
-| [docs/CLI.md](docs/CLI.md)                   | 命令参考 + Python 库调用      |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 解耦实践 / 业务规则 / 数据流 |
+| [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程） |
+| [docs/CLI.md](docs/CLI.md)                   | 39 个命令全集参考 + Python 库调用 |
 | [docs/USAGE.md](docs/USAGE.md)               | 日常情景使用流程               |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md)   | 鉴权与凭证                  |
 
 ## 目录
 
-- `wb_ops/` 核心库 ｜ `wb.py` 统一入口 ｜ `data/` 数据与凭证（本地专属，不进 git） ｜ `docs/` 文档 ｜ `_scratch/` AI 临时工作区 ｜ `api/`、`_archive/` 本地参考（含账号信息，不随公开仓库分发）
+- `wb_ops/` 核心库（5 层分层整洁架构） ｜ `wb.py` 统一入口 ｜ `tests/` 自动化测试套件 ｜ `data/` 数据与凭证（本地专属，不进 git） ｜ `docs/` 文档 ｜ `_scratch/` AI 临时工作区 ｜ `api/`、`_archive/` 本地参考（含账号信息，不随公开仓库分发）

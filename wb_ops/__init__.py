@@ -1,23 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-wb_ops —— Wildberries/BCS 卖家自动化库（统一入口）
+wb_ops —— Wildberries/BCS 卖家自动化库（轻量分层整洁架构）
 
-把原「检查价格」+「促销折扣」两套脚本整合为一个职责清晰的 Python 包。
-
-模块分层：
-  入口层   cli.py            统一 CLI（子命令聚合）
-  业务层   mapping / mapping_sync / mapping_check / ops
-           promo / discount / clean / cookies / daily / schedule
-           price_review / orders / questions
-  支撑层   bcs / wb_api / products / workbench / keywords
-           common / credentials / config
-
-对外统一入口：仓库根目录的 wb.py（或 python -m wb_ops <子命令>）。
-详细说明见 docs/ 下的 ARCHITECTURE.md / CLI.md / USAGE.md / CREDENTIALS.md。
+分层结构：
+  表现与调度层: cli.py, daily.py, schedule.py
+  业务用例服务层: services/ (catalog_svc, discount_svc, order_svc, replicate_svc, support_svc)
+  领域模型层: domain/ (Product, Shop, DiscountPlan, TaskResult)
+  仓储持久化层: storage/ (product_repo, mapping_repo)
+  外部适配层: adapters/ (wb_client, bcs_client, llm_client, task_runner, cookies)
+  核心框架基础设施: framework/ (safe_io, exceptions, registry)
 """
 
-__version__ = "2.0.0"
-__all__ = ["config", "credentials", "common", "bcs", "wb_api", "keywords",
-           "products", "mapping", "mapping_sync", "mapping_check", "mismatch_check", "workbench",
-           "ops", "promo", "discount", "discount_wb", "discount_scan", "discount_bcs", "clean", "cookies", "daily", "schedule",
-           "price_review", "orders", "questions", "ai_reply", "questions_watch", "cli"]
+__version__ = "2.1.0"
+__all__ = [
+    "config",
+    "credentials",
+    "common",
+    "daily",
+    "schedule",
+    "cli",
+    "framework",
+    "domain",
+    "storage",
+    "adapters",
+    "services",
+]

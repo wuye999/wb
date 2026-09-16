@@ -47,24 +47,23 @@
 筛选参数（互斥，不传 = 全部）：`--sku` / `--name` / `--prefix` / `--vc` / `--all`
 通用参数：`--shops 5272,5280`（限店铺） / `--apply`（执行） / `--yes`（跳过不可逆确认） / `--sync`（执行后自动同步在架商品并合并映射表，见「一、通用约定」第 12 条）
 
-### 促销 / 折扣 / 清理 / 运维
+### 促销 / 折扣 / 清理 / 客服 / 运维
 
 | 子命令 | 用途 | 关键参数 |
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
-| `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
-| `dims-check` | 查询 WB 尺寸/重量偏差待验证商品列表（**只读**，不改数据；`tableListImprovable`），按映射表中文名 `--name` 筛选，`--type dims\|weight\|all` 选尺寸/重量/两者合并去重，供 `dimension --vc ... --dims ...` 单独测试尺寸 | `--type` / `--name` / `--shops` / `--limit` |
 | `discount` | 折扣改价**WB 原生批量**（默认）：按折扣从高到低查询 >阈值商品，调用 WB 原生 upload/task 批量修改；支持 `--vc`、`--name`（中文名包含）、`--prefix`、`--shops` 灵活圈定；默认**不做写后验证**（WB 异步生效延迟）；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--all` / `--target` / `--name` / `--vc` / `--prefix` / `--shops` / `--limit` / `--chunk` / `--verify` |
 | `discount-wb` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
 | `discount-scan` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
 | `discount-bcs` | [旧版/按需保留] 走 BCS 接口全量改折扣（慢，默认不启用，需显式调用） | `--apply` / `--threshold` / `--target` / `--shops` / `--limit` / `--sync` |
-| `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**回收站数量以 `countByFilter(TRASH)` 实时计数为准**（`list(TRASH)` 为列表缓存可能滞后，不一致会提示）；一键清空后实时计数仍>0 为平台被拒删残留（有库存/在途/成都仓，订单完成后再清，非命令失败）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
 | `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
+| `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
+| `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**回收站数量以 `countByFilter(TRASH)` 实时计数为准**（`list(TRASH)` 为列表缓存可能滞后，不一致会提示）；一键清空后实时计数仍>0 为平台被拒删残留（有库存/在途/成都仓，订单完成后再清，非命令失败）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
 | `questions-watch` | 买家提问实时监听（双模式：**front=前台AI** 打印提问/商品信息到控制台与日志、前台手动回复；**back=后台AI** 常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` |
-| `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
-| `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
+| `ai-test` | 离线对照测试 AI 客服回复效果（读取本地问答数据集测试 prompt，不调外网） | `--qa <json文件路径>` |
+| `remote-wh` | 成都仓库（国内仓）商品永久删除（dry-run 默认；`--apply --yes` 真正执行） | `--shops` / `--interval` / `--parallel` / `--apply` / `--yes` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
 | `daily` | 每日任务 | `morning\|check`（+ 透传参数） |
 | `schedule` | 创建/删除 Windows 计划任务（⚠ 默认不创建，仅按需执行） | `--remove` |
@@ -77,8 +76,10 @@
 | `mabang-forecast` | 预报批次全链路（幂等状态机）：①生成批次（`order_label` 含「已预报」跳过）→②**依次上传**（逐批 getForecastConfig 模板 + `wb_automark=1` 自动发货 + 单批次号）→③等待→④物流交运「莫斯科仓-七库海外仓」（已选择跳过）；`--check` 只查批次状态 | `--apply` / `--check` / `--wait S` / `--upload-waiting` / `--days` |
 | `mabang-process` | **马帮订单处理一体（零飞书依赖）**：匹配商品→预报单生成→依次上传（自动发货）→物流交运；过滤/幂等机制与 mabang-orders+mabang-forecast 一致；末尾自动登记飞书（URL 读配置 feishu.base_url，--url 可覆盖） | `--days` / `--page-size` / `--wait` / `--url` / `--table` / `--apply` |
 | `feishu-register` | 新订单登记到飞书多维表格「订单登记」（数据源=**orderalllist 最近 500 条全状态订单**，按订单编号去重只登记新增）：VC→中文名→下单店 wb编号→库存SKU（马帮实际匹配值）→WB链接；`--scope all --date/--begin/--end` 补录历史全部状态订单（orderalllist 忽略服务端日期过滤，本地按 paidTime 筛） | `--url`(可选，默认读配置 feishu.base_url) / `--table`(默认 订单登记) / `--scope latest\|pending\|all`(默认 latest) / `--date` / `--begin` / `--end` / `--apply` |
-| `orders-pipeline` | **【已停用】** 编排命令（功能拆分为 mabang-process 与 feishu-register 两个独立命令）：①登记飞书→②匹配更换→③预报批次/上传/交运→④归属统计+重建汇总；每步独立 CSV 报告，失败即中止 | `--url` / `--table`(默认 订单登记) / `--days`(默认1) |
+| `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
+| `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
 
+> 注：原 `orders-pipeline` 历史编排流水线已被 `mabang-process` 与 `feishu-register` 两大独立命令完全替代。
 > 马帮凭证/店铺映射在 `data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）；接口明细见 `api/BCS_API完整文档_核对版.md` 第八章。飞书鉴权走 `lark-cli` 用户身份，无需另配凭证。
 
 ## 三、示例
@@ -158,6 +159,9 @@ python wb.py questions --reply "..." --question-id <id>    # 回复单条
 python wb.py questions-watch                # 前台AI：常驻监听，新提问打印到控制台与 data/logs/questions_front_*.log，前台手动回复（默认）
 python wb.py questions-watch --once         # 前台AI跑一轮（展示，不提交）
 python wb.py questions-watch --mode back --apply --interval 90   # 后台AI：常驻轮询 + LLM 自动提交（需配 ai.api_key）
+python wb.py ai-test                            # 离线运行客服问答效果对比评测（不联网）
+python wb.py remote-wh                          # 预览成都仓库（国内仓）待删除商品
+python wb.py remote-wh --apply --yes            # 执行永久删除成都仓库商品（不可逆确认）
 
 # 运维
 python wb.py cookies-update data/har/副号234_cookies.md
@@ -186,22 +190,37 @@ python wb.py schedule --remove             # 【按需】删除全部任务
 
 ## 六、Python 库调用（import 方式）
 
+在新架构下，系统按照整洁分层对外暴露领域服务门面（`services/*_svc.py`）与仓储层（`storage/*_repo.py`）：
+
 ```python
-import wb_ops.ops as ops
-import wb_ops.mapping as mapping
+from wb_ops.storage.mapping_repo import MappingRepository
+from wb_ops.services.replicate import ops
+from wb_ops.services import (
+    catalog_svc,
+    discount_svc,
+    order_svc,
+    replicate_svc,
+    support_svc,
+)
 
-# 映射表状态
-state, excluded = mapping.load_mapping_state()   # {vc:{cn,dp}} + {vc:原因}
-boss = mapping.load_boss()                       # 商品价格表商品列表
+# 1. 仓储层读取映射状态、前缀与构建反查器
+state, excluded = MappingRepository.load_mapping_state()   # {vc: {cn, dp}} + {vc: 排除原因}
+prefix_map = MappingRepository.load_prefix_map()           # 前缀码映射
+vc_resolver = MappingRepository.build_vc_resolver()        # 解耦的反查闭包: vc -> 中文名
 
-# 一键操作（两段式安全模式）
+# 2. 一键操作（两段式安全模式：构建计划 -> 预览 -> 批量执行）
 state, _, boss = ops.load_state()
-shops = ops.get_shops()                          # [店id]
+shops = ops.get_shops()                                   # [店id]
+# 构造改价计划（ops_plan 纯函数无副作用）
 plans = ops.plan_price(['BCS-XXX-1'], shops, state, boss, manual=130, discount=20, club=None, keep_price=False)
-ops.dry_run(plans, 'price')                      # 先预览
-ops.run_apply(plans, 'price')                    # 执行（也可在 CLI 里 --apply）
+ops.dry_run(plans, 'price')                               # dry-run 预览
+ops.run_apply(plans, 'price')                             # 提交执行（自动分批、退避并追加日志）
 
-# 促销/折扣/清理 模块都暴露 run(args) 入口，args 为 argparse.Namespace
+# 3. 领域服务门面标准调用
+# 各领域服务均对外暴露标准 run 接口（接受 argparse.Namespace 或领域参数）：
+# replicate_svc.run_price(args)
+# discount_svc.run_discount(args)
+# order_svc.run_mabang_process(args)
 ```
 
 > 每个模块内部函数签名在源码 docstring 中都有说明；CLI 是这些函数的薄封装。

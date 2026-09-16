@@ -9,8 +9,8 @@ import os
 import subprocess
 import sys
 
-from . import config
-from . import daily
+from wb_ops import config
+from wb_ops import daily
 BASE = config.REPO_ROOT
 PYW = daily.PYW
 SCRIPT = os.path.join(BASE, "wb.py")

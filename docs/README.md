@@ -34,8 +34,9 @@
 
 | 文档 | 读它解决什么问题 |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 模块怎么分层、每个文件干什么、数据怎么流转、核心业务规则 |
-| [CLI.md](CLI.md) | 每个子命令的参数、示例、退出码；Python 库调用方式 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 模块分层、职责设计、解耦成果与数据流转规则 |
+| [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范：分层依赖、单文件拆分标准、类型与并发规范、新功能 6 步扩展流程 |
+| [CLI.md](CLI.md) | 39 个子命令全集参数、示例、退出码；Python 库调用方式 |
 | [USAGE.md](USAGE.md) | 按情景分步操作（初始化/刷新凭证/上新/改价/促销/折扣/清理/每日自动） |
 | [CREDENTIALS.md](CREDENTIALS.md) | 两套鉴权、凭证结构、如何刷新、失效表现、安全 |
 

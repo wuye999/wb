@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-from . import config
+from wb_ops import config
 BASE = config.REPO_ROOT
 LOG_DIR = config.LOG_DIR
 WB_PY = os.path.join(config.REPO_ROOT, "wb.py")
