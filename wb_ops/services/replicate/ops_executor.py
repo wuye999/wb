@@ -14,7 +14,6 @@ from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
 from wb_ops.adapters import wb_client as wb_api
-from wb_ops.services.discount import price_review
 from .ops_plan import price_limit_violations, price_review_items, PRICE_HALF_LIMIT_NOTE
 
 RED = "\033[91m"

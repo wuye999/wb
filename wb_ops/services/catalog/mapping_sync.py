@@ -11,6 +11,7 @@ import re
 
 from wb_ops import config
 from wb_ops import common
+from wb_ops.framework.safe_io import safe_load_json
 from wb_ops.services.catalog import mapping
 from wb_ops.services.catalog import products
 from wb_ops.services.catalog import workbench
@@ -209,22 +210,25 @@ def set_vc_override(vc=None, new_cn=None, reason="人工纠偏", file_path=None)
     known, overrides, excluded = mapping.load_vc_registry()
     updated = []
     if file_path and os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            items = json.load(f)
-            for it in items:
-                v = it.get("vc")
-                c = it.get("cn")
-                r = it.get("reason") or reason
-                if v and c:
-                    overrides[v] = {"cn": c, "reason": r, "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    if v in known:
-                        known[v]["cn"] = c
-                    updated.append(v)
+        items = safe_load_json(file_path, default=[])
+        for it in items:
+            v = str(it.get("vc") or "").strip()
+            c = str(it.get("cn") or "").strip()
+            r = str(it.get("reason") or reason).strip()
+            if v and c:
+                overrides[v] = {"cn": c, "reason": r, "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                if v in known:
+                    known[v]["cn"] = c
+                updated.append(v)
     elif vc and new_cn:
-        overrides[vc] = {"cn": new_cn, "reason": reason, "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-        if vc in known:
-            known[vc]["cn"] = new_cn
-        updated.append(vc)
+        v = str(vc or "").strip()
+        c = str(new_cn or "").strip()
+        r = str(reason or "人工纠偏").strip()
+        if v and c:
+            overrides[v] = {"cn": c, "reason": r, "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            if v in known:
+                known[v]["cn"] = c
+            updated.append(v)
     else:
         print("[错误] 未指定 --vc 和 --cn，或未指定有效 --file")
         return False
@@ -257,8 +261,7 @@ def merge(review_file=None, sync_shops=True):
     # 1. 处理审核文件
     um = []
     if review_file and os.path.exists(review_file):
-        with open(review_file, "r", encoding="utf-8") as f:
-            um = json.load(f)
+        um = safe_load_json(review_file, default=[])
         n_map, n_excl = 0, 0
         for x in um:
             act = x.get("action")
@@ -364,7 +367,7 @@ def merge(review_file=None, sync_shops=True):
             first_sid = active_shops[0]["id"]
             p_json = config.shop_json_path(first_sid)
             if os.path.exists(p_json):
-                d = json.load(open(p_json, encoding="utf-8"))
+                d = safe_load_json(p_json, default={})
                 rows = [r for r in d.get("rows", []) if not r.get("trashedAt")]
                 for r in rows:
                     sl = r.get("sizeList") or []

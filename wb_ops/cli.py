@@ -38,7 +38,7 @@ def build_parser():
 
     sub.add_parser("review", help="多店铺待审核工作台")
 
-    p = sub.add_parser("merge", help="增量合并审核 → 映射表（file 可选）")
+    p = sub.add_parser("merge", aliases=["mapping-merge"], help="增量合并审核 → 映射表（file 可选）")
     p.add_argument("file", nargs="?", default=None, help="本次审核结果 JSON（可选）")
 
     p = sub.add_parser("mapping-rename", help="纠偏/修改商品中文名（自动级联更新全部店铺单表与聚合总表）")
@@ -47,7 +47,7 @@ def build_parser():
     p.add_argument("--reason", default="人工纠偏", help="改名原因说明")
     p.add_argument("--file", default="", help="批量改名 JSON 文件路径（含 [{'vc': ..., 'cn': ...}]）")
 
-    p = sub.add_parser("shops-mapping", help="刷新/生成各店铺独立映射表（data/shops/shop_*.xlsx）")
+    p = sub.add_parser("shops-mapping", aliases=["mapping-sync"], help="刷新/生成各店铺独立映射表（data/shops/shop_*.xlsx）")
     p.add_argument("--shop-id", type=int, default=None, help="指定店铺ID（默认全部活跃店铺）")
     p.add_argument("--force", action="store_true", help="强制全量重新构建")
 
@@ -269,7 +269,7 @@ def build_parser():
     p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin/--date 同用，单独使用直接报错）")
     p.add_argument("--apply", action="store_true", help="真正建列并填充（默认 dry-run 预览）")
 
-    p = sub.add_parser("mabang-process",
+    p = sub.add_parser("mabang-process", aliases=["order-pipeline"],
                        help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运（零飞书依赖）")
     p.add_argument("--days", type=int, default=1, help="查询最近 N 天待处理订单（默认 1）")
     p.add_argument("--page-size", type=int, default=100, help="订单列表分页大小（默认 100）")

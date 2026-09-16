@@ -169,45 +169,55 @@ class MappingRepository:
         state, excluded = {}, {}
         if not os.path.exists(config.MAPPING_XLSX):
             return state, excluded
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(config.MAPPING_XLSX, data_only=True)
-            if "映射总表" in wb.sheetnames:
-                ws = wb["映射总表"]
-                headers = [str(c.value or "") for c in ws[1]]
-                if "vendorCode" in headers:
-                    i_cn, i_vc = headers.index("产品中文名"), headers.index("vendorCode")
-                    i_dp = headers.index("双倍售价") if "双倍售价" in headers else None
-                    i_sp = next((i for i, h in enumerate(headers)
-                                 if re.match(r"^店铺\d+价格\(CNY\)$", h)), None)
-                    i_disc = headers.index("折扣%") if "折扣%" in headers else None
-                    i_nm = headers.index("WB商品码") if "WB商品码" in headers else None
-                    i_l = headers.index("尺寸长(cm)") if "尺寸长(cm)" in headers else None
-                    i_w = headers.index("尺寸宽(cm)") if "尺寸宽(cm)" in headers else None
-                    i_h = headers.index("尺寸高(cm)") if "尺寸高(cm)" in headers else None
-                    i_wt = headers.index("毛重(kg)") if "毛重(kg)" in headers else None
-                    for r in ws.iter_rows(min_row=2, values_only=True):
-                        vc = r[i_vc]
-                        if vc:
-                            state[vc] = {
-                                "cn": r[i_cn] or "",
-                                "dp": r[i_dp] if i_dp is not None else None,
-                                "shop_price": r[i_sp] if i_sp is not None else None,
-                                "discount": r[i_disc] if i_disc is not None else None,
-                                "nmId": (r[i_nm] if i_nm is not None else None),
-                                "L": (r[i_l] if i_l is not None else None),
-                                "W": (r[i_w] if i_w is not None else None),
-                                "H": (r[i_h] if i_h is not None else None),
-                                "weight": (r[i_wt] if i_wt is not None else None),
-                            }
-            if "已排除清单" in wb.sheetnames:
-                ws2 = wb["已排除清单"]
-                for r in ws2.iter_rows(min_row=2, values_only=True):
-                    if r[0]:
-                        excluded[r[0]] = r[1] or "非货盘商品（人工排除）"
-            wb.close()
-        except Exception:
-            pass
+        import sys
+        import time
+        retries = 3
+        for attempt in range(retries):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(config.MAPPING_XLSX, data_only=True)
+                if "映射总表" in wb.sheetnames:
+                    ws = wb["映射总表"]
+                    headers = [str(c.value or "") for c in ws[1]]
+                    if "vendorCode" in headers:
+                        i_cn, i_vc = headers.index("产品中文名"), headers.index("vendorCode")
+                        i_dp = headers.index("双倍售价") if "双倍售价" in headers else None
+                        i_sp = next((i for i, h in enumerate(headers)
+                                     if re.match(r"^店铺\d+价格\(CNY\)$", h)), None)
+                        i_disc = headers.index("折扣%") if "折扣%" in headers else None
+                        i_nm = headers.index("WB商品码") if "WB商品码" in headers else None
+                        i_l = headers.index("尺寸长(cm)") if "尺寸长(cm)" in headers else None
+                        i_w = headers.index("尺寸宽(cm)") if "尺寸宽(cm)" in headers else None
+                        i_h = headers.index("尺寸高(cm)") if "尺寸高(cm)" in headers else None
+                        i_wt = headers.index("毛重(kg)") if "毛重(kg)" in headers else None
+                        for r in ws.iter_rows(min_row=2, values_only=True):
+                            vc = r[i_vc]
+                            if vc:
+                                state[vc] = {
+                                    "cn": r[i_cn] or "",
+                                    "dp": r[i_dp] if i_dp is not None else None,
+                                    "shop_price": r[i_sp] if i_sp is not None else None,
+                                    "discount": r[i_disc] if i_disc is not None else None,
+                                    "nmId": (r[i_nm] if i_nm is not None else None),
+                                    "L": (r[i_l] if i_l is not None else None),
+                                    "W": (r[i_w] if i_w is not None else None),
+                                    "H": (r[i_h] if i_h is not None else None),
+                                    "weight": (r[i_wt] if i_wt is not None else None),
+                                }
+                if "已排除清单" in wb.sheetnames:
+                    ws2 = wb["已排除清单"]
+                    for r in ws2.iter_rows(min_row=2, values_only=True):
+                        if r[0]:
+                            excluded[r[0]] = r[1] or "非货盘商品（人工排除）"
+                wb.close()
+                break
+            except (PermissionError, OSError) as e:
+                if attempt == retries - 1:
+                    print(f"[警告] 读取映射表 {config.MAPPING_XLSX} 失败（文件可能被占用）: {e}", file=sys.stderr)
+                time.sleep(0.1 * (attempt + 1))
+            except Exception as e:
+                print(f"[警告] 读取映射表 {config.MAPPING_XLSX} 发生异常: {e}", file=sys.stderr)
+                break
 
         # 自动应用全局纠偏更正（高优先级）
         overrides = cls.load_vc_override()
@@ -227,6 +237,8 @@ load_vc_override = MappingRepository.load_vc_override
 save_vc_override = MappingRepository.save_vc_override
 load_vc_excluded = MappingRepository.load_vc_excluded
 save_vc_excluded = MappingRepository.save_vc_excluded
+load_mapping_state = MappingRepository.load_mapping_state
+build_vc_resolver = MappingRepository.build_vc_resolver
 
 
 

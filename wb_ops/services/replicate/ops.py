@@ -10,7 +10,7 @@ import sys
 from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
-from wb_ops.services.catalog import products
+from wb_ops.storage.product_repo import ProductSnapshotRepository
 
 # 重新导出常量与核心函数，保持 100% 向后兼容
 from .ops_plan import (
@@ -46,7 +46,7 @@ _shop_warehouses_cache = {}
 
 def get_shops():
     """扫描 data/products/ 下 shop{id}_products_all.json → [店id]"""
-    return products.shop_ids_from_disk()
+    return ProductSnapshotRepository.shop_ids_from_disk()
 
 
 def _shop_warehouses(sid):

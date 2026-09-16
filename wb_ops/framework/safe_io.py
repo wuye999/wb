@@ -12,40 +12,65 @@ import sys
 import json
 import time
 import tempfile
+import threading
+import collections
 from .exceptions import StorageLockError
+
+_local_locks = threading.local()
+
+
+def _get_held_locks():
+    if not hasattr(_local_locks, "held"):
+        _local_locks.held = collections.defaultdict(int)
+    return _local_locks.held
 
 
 class FileLock:
-    """基于文件系统原子 mkdir 的跨进程排他锁 (纯标准库，跨 Windows/Linux)"""
+    """基于文件系统原子 mkdir 的跨进程排他锁 (纯标准库，支持可重入与死锁自愈)"""
     def __init__(self, target_filepath: str, timeout: float = 10.0, stale_after: float = 300.0):
         self.target = os.path.abspath(target_filepath)
-        self.lock_dir = self.target + ".__lock__"
+        self.lock_dir = os.path.normcase(os.path.abspath(self.target + ".__lock__"))
         self.timeout = timeout
         self.stale_after = stale_after
         self.acquired = False
 
     def acquire(self):
+        held = _get_held_locks()
+        if held[self.lock_dir] > 0:
+            held[self.lock_dir] += 1
+            self.acquired = True
+            return self
+
         start_time = time.time()
         while True:
             try:
                 os.mkdir(self.lock_dir)
+                held[self.lock_dir] = 1
                 self.acquired = True
                 try:
                     meta_path = os.path.join(self.lock_dir, "meta.txt")
                     with open(meta_path, "w", encoding="utf-8") as f:
-                        f.write(f"{time.time()}|{os.getpid()}\n")
+                        f.write(f"{time.time()}|{os.getpid()}|{threading.get_ident()}\n")
                 except Exception:
                     pass
                 return self
             except FileExistsError:
                 try:
                     meta_path = os.path.join(self.lock_dir, "meta.txt")
-                    if os.path.exists(meta_path):
-                        mtime = os.path.getmtime(meta_path)
-                        if time.time() - mtime > self.stale_after:
-                            os.remove(meta_path)
+                    mtime = os.path.getmtime(meta_path) if os.path.exists(meta_path) else (
+                        os.path.getmtime(self.lock_dir) if os.path.exists(self.lock_dir) else time.time()
+                    )
+                    if time.time() - mtime > self.stale_after:
+                        if os.path.exists(meta_path):
+                            try:
+                                os.remove(meta_path)
+                            except Exception:
+                                pass
+                        try:
                             os.rmdir(self.lock_dir)
-                            continue
+                        except Exception:
+                            pass
+                        continue
                 except Exception:
                     pass
 
@@ -55,15 +80,28 @@ class FileLock:
 
     def release(self):
         if self.acquired:
-            try:
-                meta_path = os.path.join(self.lock_dir, "meta.txt")
-                if os.path.exists(meta_path):
-                    os.remove(meta_path)
-                os.rmdir(self.lock_dir)
-            except Exception:
-                pass
-            finally:
-                self.acquired = False
+            held = _get_held_locks()
+            if held[self.lock_dir] > 0:
+                held[self.lock_dir] -= 1
+                if held[self.lock_dir] == 0:
+                    del held[self.lock_dir]
+                    try:
+                        meta_path = os.path.join(self.lock_dir, "meta.txt")
+                        if os.path.exists(meta_path):
+                            try:
+                                os.remove(meta_path)
+                            except Exception:
+                                pass
+                        for _ in range(5):
+                            try:
+                                if os.path.exists(self.lock_dir):
+                                    os.rmdir(self.lock_dir)
+                                break
+                            except OSError:
+                                time.sleep(0.02)
+                    except Exception:
+                        pass
+            self.acquired = False
 
     def __enter__(self):
         return self.acquire()

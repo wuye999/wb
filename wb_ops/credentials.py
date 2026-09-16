@@ -13,6 +13,7 @@ BCS 三件套（token/limit_key/cookie_extra）+ WB 5 店 cookie 全在这里，
 import json
 
 from wb_ops import config
+from wb_ops.framework.safe_io import safe_load_json
 DEFAULT_ROOT_VERSION = "v1.108.1"
 
 
@@ -24,8 +25,7 @@ class Credentials:
         self.reload()
 
     def reload(self):
-        with open(self.path, encoding="utf-8") as f:
-            self.data = json.load(f)
+        self.data = safe_load_json(self.path, default={})
         self.bcs = self.data.get("bcs") or {}
         self.wb = self.data.get("wb") or {}
         # 只保留三件套齐全的店铺

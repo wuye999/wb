@@ -20,7 +20,7 @@ from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
 from wb_ops.services.replicate import ops
-from wb_ops.services.catalog import products
+from wb_ops.services.catalog_svc import catalog_svc
 from .import_shelve import boss_pkg_map
 
 RED = "\033[91m"
@@ -227,10 +227,9 @@ def run(args):
     if ok > 0 and getattr(args, "sync", False):
         print("\n[写后验证] 触发全店同步 + 拉取（~1.5 分钟）...")
         try:
-            products.fetch_all()
+            catalog_svc.fetch_all_shops_products()
         except Exception as e:
             print(f"[同步] 失败：{e}（可稍后手动 wb.py fetch 复核）")
-        from wb_ops.services.catalog_svc import catalog_svc
         catalog_svc.post_write_merge(fetch=False)
     else:
         common.print_write_hint()

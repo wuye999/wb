@@ -167,6 +167,43 @@ class TestAllCommands(unittest.TestCase):
         res = self._run_cmd(["questions-watch", "--once", "--shops", "9352"], expect_code=0)
         self.assertIn("--once", res.stdout)
 
+    # ---------------- 9. 别名路由与并发安全 ----------------
+    def test_28_cli_aliases(self):
+        res1 = self._run_cmd(["mapping-merge", "--help"], expect_code=0)
+        self.assertIn("merge", res1.stdout)
+        res2 = self._run_cmd(["mapping-sync", "--help"], expect_code=0)
+        self.assertIn("shops-mapping", res2.stdout)
+        res3 = self._run_cmd(["order-pipeline", "--help"], expect_code=0)
+        self.assertIn("mabang-process", res3.stdout)
+
+    def test_29_mapping_rename(self):
+        try:
+            res = self._run_cmd(["mapping-rename", "--vc", "BCS-TEST-TEST12345", "--cn", "单元测试商品-纠偏", "--reason", "自动化验证"], expect_code=0)
+            self.assertIn("BCS-TEST-TEST12345", res.stdout)
+            self.assertIn("单元测试商品-纠偏", res.stdout)
+        finally:
+            try:
+                from wb_ops.storage.mapping_repo import MappingRepository
+                ov = MappingRepository.load_vc_override()
+                if "BCS-TEST-TEST12345" in ov:
+                    del ov["BCS-TEST-TEST12345"]
+                    MappingRepository.save_vc_override(ov)
+            except Exception:
+                pass
+
+    def test_30_safe_io_concurrency(self):
+        from wb_ops.framework.safe_io import FileLock, atomic_dump_json, safe_load_json
+        test_path = os.path.join(BASE_DIR, "data", "state", ".test_ci_lock.json")
+        try:
+            with FileLock(test_path, timeout=5.0):
+                # 测试重入锁与原子读写事务
+                atomic_dump_json(test_path, {"test_run": True, "count": 1}, use_lock=True)
+                d = safe_load_json(test_path, use_lock=True)
+                self.assertEqual(d.get("count"), 1)
+        finally:
+            if os.path.exists(test_path):
+                os.remove(test_path)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

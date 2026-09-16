@@ -30,13 +30,12 @@ from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
 from wb_ops.framework.safe_io import safe_load_json, atomic_dump_json
-from wb_ops.services.catalog import products
+from wb_ops.services.catalog_svc import catalog_svc
 from .wb_card import (
     _BASKET_TABLE,
     basket_base as _basket_base,
     fetch_card_json,
     card_color_names as _card_color_names,
-    fetch_product_info,
     parse_package_info,
     _own_map,
     boss_pkg_map,
@@ -178,14 +177,14 @@ def ensure_snapshots(args):
         print("[前置同步] 未加 --sync，跳过同步，使用本地快照（覆盖/差集判断可能滞后；需最新请加 --sync）")
         return
     print("[前置同步] 刷新全部店铺快照（WB→BCS 同步 + 拉取，约 2 分钟）...")
-    products.fetch_all()
+    catalog_svc.fetch_all_shops_products()
 
 
 def run(args):
     from wb_ops.storage.mapping_repo import MappingRepository
     overrides = parse_cn_stock(getattr(args, "cn_stock", "") or "")
     ensure_snapshots(args)
-    shops_data, _ = products.load_all_shops()
+    shops_data, _ = catalog_svc.load_all_shops()
     vc_shops, vc_rows, all_shop_ids = build_coverage(shops_data)
     sid_main = config.MAIN_SHOP or bcs.get_main_shop()
 
@@ -438,8 +437,8 @@ def run(args):
     if ok > 0 and getattr(args, "sync", False) and not args.no_verify:
         print("\n[写后验证] 触发全店同步 + 拉取（~1.5 分钟）...")
         try:
-            products.fetch_all()
-            shops_data2, _ = products.load_all_shops()
+            catalog_svc.fetch_all_shops_products()
+            shops_data2, _ = catalog_svc.load_all_shops()
             vc_shops2, _, _ = build_coverage(shops_data2)
             before_full = sum(1 for s in vc_shops.values() if len(s) == len(all_shop_ids))
             after_full = sum(1 for s in vc_shops2.values() if len(s) == len(all_shop_ids))
@@ -448,7 +447,6 @@ def run(args):
             print(f"[验证] 各店在架 vc 数：{per_shop}")
         except Exception as e:
             print(f"[验证] 失败：{e}（可稍后手动 wb.py fetch 复核）")
-        from wb_ops.services.catalog_svc import catalog_svc
         catalog_svc.post_write_merge(fetch=False)
     elif ok > 0:
         common.print_write_hint()

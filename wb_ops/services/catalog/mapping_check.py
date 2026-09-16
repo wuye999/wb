@@ -16,6 +16,7 @@ from html import escape
 import openpyxl
 
 from wb_ops import config
+from wb_ops.framework.safe_io import safe_load_json
 from wb_ops.services.catalog import mapping
 PRICE_DEV_TOL = 5  # 价格偏差阈值（元）
 
@@ -68,7 +69,7 @@ def load_union_prices():
             sid = int(os.path.basename(p).replace("shop", "").replace("_products_all.json", ""))
         except ValueError:
             continue
-        d = json.load(open(p, encoding="utf-8"))
+        d = safe_load_json(p, default={})
         for r in d.get("rows", []):
             if r.get("trashedAt"):
                 continue

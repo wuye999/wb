@@ -24,6 +24,10 @@ class CatalogService:
         """拉取全部店铺商品数据快照"""
         return products.fetch_all(no_sync=no_sync)
 
+    def load_all_shops(self):
+        """读取全部店铺在架商品快照及元数据"""
+        return products.load_all_shops()
+
     def generate_mapping_workbench(self, legacy: bool = False):
         """生成统一核对工作台（5 店并集，一页两区）"""
         return mapping.run_mapping(legacy=legacy)
@@ -69,6 +73,7 @@ class CatalogService:
 catalog_svc = CatalogService()
 post_write_merge = catalog_svc.post_write_merge
 print_write_hint = catalog_svc.print_write_hint
+load_all_shops = catalog_svc.load_all_shops
 
 
 def run_fetch(args):

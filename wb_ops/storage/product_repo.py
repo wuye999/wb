@@ -79,10 +79,24 @@ class ProductSnapshotRepository:
         cls._cache[sid_str] = rows
         return rows
 
+    @classmethod
+    def shop_ids_from_disk(cls) -> List[int]:
+        """扫描磁盘上所有店铺商品快照文件获取店铺 ID 列表"""
+        import glob
+        ids = []
+        for p in sorted(glob.glob(config.shop_json_path("*"))):
+            try:
+                sid = int(os.path.basename(p).replace("shop", "").replace("_products_all.json", ""))
+                ids.append(sid)
+            except ValueError:
+                continue
+        return ids
+
 
 # 模块级便捷访问导出
 ProductRepository = ProductSnapshotRepository
 load_shop_products = ProductSnapshotRepository.load_shop_products
 save_shop_products = ProductSnapshotRepository.save_shop_products
 load_shop_rows = ProductSnapshotRepository.load_shop_rows
+shop_ids_from_disk = ProductSnapshotRepository.shop_ids_from_disk
 

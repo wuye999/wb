@@ -121,7 +121,7 @@ def load_all_shops():
     for s in shops_meta:
         p = config.shop_json_path(s["id"])
         if os.path.exists(p):
-            d = json.load(open(p, encoding="utf-8"))
+            d = safe_load_json(p, default={})
             shops_data[s["id"]] = [r for r in d.get("rows", []) if not r.get("trashedAt")]
     if not shops_data:
         raise RuntimeError("未找到店铺 JSON，请先运行 fetch（wb.py fetch）")

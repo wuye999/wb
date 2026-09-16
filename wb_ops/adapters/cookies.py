@@ -13,7 +13,7 @@ import re
 from wb_ops import config
 from wb_ops import credentials
 from wb_ops import common
-from wb_ops.framework.safe_io import atomic_dump_json
+from wb_ops.framework.safe_io import atomic_dump_json, safe_load_json
 
 
 
@@ -67,8 +67,7 @@ def run(md_path):
     print(f"从 {os.path.basename(md_path)} 提取到 {len(sessions)} 组会话")
 
     cfg_path = config.CREDENTIALS_JSON
-    with open(cfg_path, encoding="utf-8") as f:
-        cfg = json.load(f)
+    cfg = safe_load_json(cfg_path, default={})
 
     sid_map = build_sid_map(cfg)
     if not sid_map:

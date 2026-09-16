@@ -17,7 +17,6 @@ from wb_ops.adapters.wb_client import (
     basket_base,
     fetch_card_json,
     card_color_names,
-    fetch_product_info,
 )
 
 _own_map_cache = None

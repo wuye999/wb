@@ -26,7 +26,8 @@ import openpyxl
 from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
-from wb_ops.services.catalog import products
+from wb_ops.services.catalog_svc import catalog_svc
+from wb_ops.storage.mapping_repo import MappingRepository
 from wb_ops.services.replicate import replicate
 
 # 本地提交记录（与 replicate 共用文件；键 = 原始WB码 k，跨账号防重稳定）
@@ -61,8 +62,7 @@ def diff_foreign(foreign):
     """他人表 - 我方快照与映射表 → 候选清单 [(item, prefix, prefix_from)]。
     核心逻辑：使用供应商代码里的「原始WB商品码」进行去重与差集比对，防止重复上架。
     """
-    from wb_ops.services.catalog import mapping
-    shops_data, _ = products.load_all_shops()
+    shops_data, _ = catalog_svc.load_all_shops()
     _, _, all_shop_ids = replicate.build_coverage(shops_data)
 
     # 收集我方已有商品的原始 WB 码集合（从 vendorCode 提取末段数字）
@@ -78,7 +78,7 @@ def diff_foreign(foreign):
 
     # 2. 我方价格映射表中的全部 vendorCode
     try:
-        mapping_state, _ = mapping.load_mapping_state()
+        mapping_state, _ = MappingRepository.load_mapping_state()
         for vc in mapping_state.keys():
             orig = nm_of(vc)
             if orig:
@@ -87,7 +87,7 @@ def diff_foreign(foreign):
         pass
 
     # 我方商品价格表前缀码映射：{中文名: 前缀}
-    pmap = mapping.load_prefix_map()
+    pmap = MappingRepository.load_prefix_map()
     cn2prefix = {}
     for prefix, info in pmap.items():
         cn2prefix.setdefault(info.get("cn") or "", prefix)
@@ -160,7 +160,7 @@ def run(args):
 
     # ---- 执行 ----
     print(f"\n开始执行：{len(plans)} 个商品 ...")
-    shops_data, _ = products.load_all_shops()
+    shops_data, _ = catalog_svc.load_all_shops()
     warehouses = {}
     for sid in target_shops:
         wh = replicate.main_warehouse(sid, shops_data)
@@ -332,16 +332,14 @@ def run(args):
     if ok > 0 and getattr(args, "sync", False) and not args.no_verify:
         print("\n[写后验证] 触发全店同步 + 拉取（~1.5 分钟）...")
         try:
-            products.fetch_all()
-            shops_data2, _ = products.load_all_shops()
+            catalog_svc.fetch_all_shops_products()
+            shops_data2, _ = catalog_svc.load_all_shops()
             vc_shops2, _, _ = replicate.build_coverage(shops_data2)
             per_shop = {sid: len([1 for s in vc_shops2.values() if sid in s]) for sid in all_shop_ids}
             print(f"[验证] 各店在架 vc 数：{per_shop}")
         except Exception as e:
             print(f"[验证] 失败：{e}（可稍后手动 wb.py fetch 复核）")
-        from wb_ops.services.catalog_svc import catalog_svc
         catalog_svc.post_write_merge(fetch=False)
     elif ok > 0:
-        from wb_ops.services.catalog_svc import catalog_svc
         catalog_svc.print_write_hint()
     return 0

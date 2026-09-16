@@ -172,12 +172,8 @@ def load_shops_union():
       union: {vc: {'vc','title','price','img','per_shop':{sid:{'price','stock'}},'shops':[sid]}}
       过滤 trashedAt / 无价格（含空商品三缺）；同 vc 跨店合并，代表价取主店优先否则最小 sid 店。"""
     union = {}
-    shops_meta = []
-    try:
-        meta = json.load(open(config.STATUS_JSON, encoding="utf-8"))
-        shops_meta = meta.get("shops", []) or []
-    except Exception:
-        shops_meta = []
+    meta = safe_load_json(config.STATUS_JSON, default={})
+    shops_meta = meta.get("shops", []) or []
     if not shops_meta:  # 状态文件缺失 → 扫描目录推断店铺
         for p in sorted(glob.glob(config.shop_json_path("*"))):
             try:
@@ -191,7 +187,7 @@ def load_shops_union():
         p = config.shop_json_path(sid)
         if not os.path.exists(p):
             continue
-        d = json.load(open(p, encoding="utf-8"))
+        d = safe_load_json(p, default={})
         for r in d.get("rows", []):
             if r.get("trashedAt"):
                 continue
@@ -375,7 +371,7 @@ def run_mapping(legacy=False):
 
 def import_mapping(import_file, auto=False):
     """导入核对结果 JSON → 生成映射表 xlsx（旧格式，单店初建）。"""
-    result = json.load(open(import_file, encoding="utf-8"))
+    result = safe_load_json(import_file, default=[])
     if isinstance(result, dict) and "rows" in result:
         result = result["rows"]
     bcs_data = load_bcs()
