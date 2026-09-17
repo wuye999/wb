@@ -10,22 +10,18 @@ wb_ops 马帮库存登记：拉取马帮全部库存 SKU → 全量重建飞书�
 """
 import json
 import os
-import re
 import shutil
 import tempfile
 import time
 from datetime import date, datetime, timedelta
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
-import requests
 
 from wb_ops import common
 from wb_ops import credentials
-from wb_ops.services.order import mabang
+from wb_ops.adapters import mabang_client as mbc   # 马帮 HTTP 原语（唯一实现，勿经服务层转发模块调用）
 from .feishu_register import _lark, resolve_base, resolve_table
 
-STOCK_LIST_URL = "https://aamz.mabangerp.com/index.php"
 
 DATE_FMT = "%Y-%m-%d"
 # 图片附件列候选名（本表实际列名为「图」，其余为兼容）
@@ -61,34 +57,11 @@ def _parse_day(s, flag):
 
 
 def fetch_stock_list(cred):
-    """拉取马帮全部库存 SKU → list[dict{stockSku,nameCN,stockQuantity,statusText,stockPicture}]"""
-    form = {"searchKey": "Stock_stockSku", "operate": "likeStart", "orderBys[]": "",
-            "Stock_stockSku": "", "Stock_nameCN": "", "Stock_nameEN": "",
-            "Stock_defaultRetailNameCn": "", "StockPlus_financial": "",
-            "search-content": "库存SKU", "searchValue": "", "status": "3",
-            "parentCategoryId": "", "categoryId": "", "third_category_id": "",
-            "parentBrandId": "", "list-brandId": "", "labelId": "", "buyerId": "",
-            "developerIdM": "", "dev_assistant": "", "artDesignerId": "", "salesId": "",
-            "defaultStockWarehouseDetailId": "", "livenessType": "", "isNewType": "",
-            "stock_type": "", "isMachining": "", "showstart": "1", "isCloud": "",
-            "isGift": "", "exceptionDeclaration": "", "singleWarehouseType": "",
-            "isGoogsExpireManageSearch": "", "page": "", "rowsPerPage": "",
-            "stockOrderby": "a.stockQuantity desc"}
-    r = requests.post(STOCK_LIST_URL, params={"mod": "stock.getStockList"},
-                      headers=mabang._aamz_headers(cred), data=form, timeout=120)
-    r.raise_for_status()
-    text = r.text.lstrip("﻿")
-    d = json.loads(text)
-    if not d.get("success"):
-        raise RuntimeError(f"stock.getStockList 返回失败: {str(d)[:150]}")
-    out = []
-    for it in d.get("stockData") or []:
-        out.append({"stockSku": it.get("stockSku") or "",
-                    "nameCN": it.get("nameCN") or "",
-                    "stockQuantity": it.get("stockQuantity"),
-                    "statusText": it.get("statusText") or "",
-                    "stockPicture": it.get("stockPicture") or ""})
-    return out
+    """[薄转发] 拉取马帮全部库存 SKU（HTTP 细节已下沉 adapters/mabang_client.fetch_stock_list）
+
+    返回 list[dict{stockSku,nameCN,stockQuantity,statusText,stockPicture}]。
+    """
+    return mbc.fetch_stock_list(cred)
 
 
 def _record_list_all(base_token, table_id):
@@ -192,7 +165,7 @@ from .mabang_stock_daily import (
 
 def run(args):
     common.ensure_utf8_stdout()
-    cred = mabang._mabang_cred()
+    cred = mbc.get_mabang_cred()
     url = args.url or credentials.get().feishu_base_url()
     if not url:
         print("[错误] 未提供 --url 且配置 feishu.base_url 缺失")
@@ -253,12 +226,10 @@ def run(args):
     def _dl(pair):
         rid, it = pair
         try:
-            r = requests.get(it["stockPicture"], timeout=30)
-            r.raise_for_status()
             path = os.path.join(tmpdir, f"{rid}.jpg")
-            with open(path, "wb") as f:
-                f.write(r.content)
-            return rid, path
+            if mbc.download_file(it["stockPicture"], path):
+                return rid, path
+            return rid, None
         except Exception:
             return rid, None
 

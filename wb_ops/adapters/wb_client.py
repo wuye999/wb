@@ -103,7 +103,36 @@ class WBClient:
         page_size: int = 100,
         max_pages: int = 200,
     ) -> List[Dict[str, Any]]:
-        """从高到低分页拉取折扣商品，遇到首条 <= threshold 提前截断。"""
+        """从高到低分页拉取折扣商品，遇到首条 <= threshold 提前截断（返回折扣 > threshold）。"""
+        return self._fetch_discount_goods(threshold, limit, page_size, max_pages, sort_order=0)
+
+    def fetch_discount_goods_asc(
+        self,
+        threshold: int,
+        limit: int = 0,
+        page_size: int = 100,
+        max_pages: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """从低到高分页拉取折扣商品（sortOrder=1），遇到首条 >= threshold 提前截断（返回折扣 < threshold）。
+
+        用于「折扣 < N」侧筛选：降序接口在首条 ≤ threshold 时即截断，永远覆盖不到低折扣区间。
+        实测来源：抓包 `api/网络请求/wb折扣从小到大排序api.har`（body 仅 sortOrder 由 0 改 1）。
+        """
+        return self._fetch_discount_goods(threshold, limit, page_size, max_pages, sort_order=1)
+
+    def _fetch_discount_goods(
+        self,
+        threshold: int,
+        limit: int = 0,
+        page_size: int = 100,
+        max_pages: int = 200,
+        sort_order: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """按折扣排序分页拉取（sortOrder=0 降序取 >threshold / 1 升序取 <threshold）。
+
+        提前截断：首条不满足条件即停（降序 = 首条 ≤ threshold；升序 = 首条 ≥ threshold）。
+        """
+        ascending = sort_order == 1
         items: List[Dict[str, Any]] = []
         offset = 0
         pages = 0
@@ -117,7 +146,7 @@ class WBClient:
                 "filterWithLeftovers": False,
                 "filterWithoutCompetitivePrice": False,
                 "sort": "discount",
-                "sortOrder": 0,
+                "sortOrder": sort_order,
             }
             res = request(self.session, "POST", self.DISC_LIST, json=body)
             goods = (res.get("data") or {}).get("listGoods") or []
@@ -126,13 +155,19 @@ class WBClient:
                 break
 
             first_d = goods[0].get("discount")
-            if threshold >= 0 and first_d is not None and int(first_d) <= threshold:
-                break
+            if threshold >= 0 and first_d is not None:
+                if (ascending and int(first_d) >= threshold) or (not ascending and int(first_d) <= threshold):
+                    break
 
             for g in goods:
                 disc = g.get("discount")
-                if threshold >= 0 and (disc is None or int(disc) <= threshold):
-                    continue
+                if threshold >= 0:
+                    if disc is None:
+                        continue
+                    if ascending and int(disc) >= threshold:
+                        continue
+                    if not ascending and int(disc) <= threshold:
+                        continue
                 items.append(g)
                 if limit and len(items) >= limit:
                     break

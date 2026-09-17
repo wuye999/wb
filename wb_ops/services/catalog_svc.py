@@ -29,7 +29,7 @@ class CatalogService:
         return products.load_all_shops()
 
     def generate_mapping_workbench(self, legacy: bool = False):
-        """生成统一核对工作台（5 店并集，一页两区）"""
+        """生成统一核对工作台（全部活跃店铺并集，一页两区）"""
         return mapping.run_mapping(legacy=legacy)
 
     def import_mapping(self, file_path: str):

@@ -2,18 +2,14 @@
 """
 wb_ops 客服与智能应答用例服务 (CustomerSupportService)
 统一管理买家提问拉取、自动轮询监控、大模型生成回复与提交。
+
+注：提问「已回复 / 已展示」状态文件的读写唯一实现位于 services/support/questions_watch.py
+（该状态的写入方就是轮询进程），本模块不再重复实现，避免两处状态逻辑漂移。
 """
-import os
-import time
-import datetime
-from typing import List, Dict, Any, Optional, Set
+from typing import Any, Optional
 
-from .. import config, common, credentials
-from ..framework.safe_io import atomic_dump_json, safe_load_json
+from .. import common, credentials
 from ..adapters.llm_client import LLMClient
-
-REPLIED_JSON = os.path.join(config.STATE_DIR, "questions_replied.json")
-SHOWN_JSON = os.path.join(config.STATE_DIR, "questions_front_shown.json")
 
 
 class CustomerSupportService:
@@ -27,24 +23,6 @@ class CustomerSupportService:
             model=cred.ai_model,
             max_tokens=cred.ai_max_tokens,
         )
-
-    @staticmethod
-    def load_replied() -> Set[str]:
-        data = safe_load_json(REPLIED_JSON, default=[], use_lock=True)
-        return set(data) if isinstance(data, list) else set()
-
-    @staticmethod
-    def save_replied(ids: Set[str]):
-        atomic_dump_json(REPLIED_JSON, sorted(list(ids)), indent=2, use_lock=True)
-
-    @staticmethod
-    def load_shown() -> Set[str]:
-        data = safe_load_json(SHOWN_JSON, default=[], use_lock=True)
-        return set(data) if isinstance(data, list) else set()
-
-    @staticmethod
-    def save_shown(ids: Set[str]):
-        atomic_dump_json(SHOWN_JSON, sorted(list(ids)), indent=2, use_lock=True)
 
     def generate_ai_reply(self, question: str, product_info: str) -> Optional[str]:
         """调用大模型为提问生成专业回复"""
@@ -65,6 +43,11 @@ class CustomerSupportService:
         from .support import ai_reply_test
         return ai_reply_test.run(args)
 
+    def list_pending_appeals(self, args: Any) -> int:
+        """运行 WB 平台投诉单查询（只读：未处理 + 剩余天数筛选）"""
+        from .support import complaints
+        return complaints.run(args)
+
 
 support_svc = CustomerSupportService()
 
@@ -79,4 +62,8 @@ def run_questions_watch(args):
 
 def run_ai_test(args):
     return support_svc.test_ai_dialog(args)
+
+
+def run_appeals(args):
+    return support_svc.list_pending_appeals(args)
 

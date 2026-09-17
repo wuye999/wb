@@ -10,7 +10,7 @@
 ├── wb.py                    ★ 统一入口（薄启动器 → wb_ops.cli.main）
 ├── wb_ops/                  ★ 核心库（Python 包）
 │   ├── __init__.py            版本号 + 公共导出
-│   ├── cli.py                 ★ 统一 CLI 调度器（39 个子命令动态延迟分发）
+│   ├── cli.py                 ★ 统一 CLI 调度器（40 个子命令动态延迟分发）
 │   ├── config.py              非敏感配置：路径常量（BASE_DIR→data/）、默认阈值、VC_PREFIX_RE
 │   ├── credentials.py         ★ 统一凭证加载中枢（读 data/credentials.json）
 │   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8 / print_write_hint
@@ -18,6 +18,7 @@
 │   ├── schedule.py            Windows 计划任务管理
 │   ├── framework/             ★ 架构基础设施层
 │   │   ├── safe_io.py         原子写入（atomic_dump_json, atomic_write_text）与跨进程互斥锁（FileLock）
+│   │   ├── cli_args.py        CLI 参数定义公共件（ops 参数唯一实现，argparse-only）
 │   │   ├── exceptions.py      统一异常分层（AuthenticationError, RateLimitError 等）
 │   │   └── registry.py        命令与服务动态注册中心
 │   ├── domain/                ★ 领域模型层
@@ -29,6 +30,7 @@
 │   │   ├── wb_client.py       WB 卖家后台 API 客户端（会话维护、原生改价改折扣与 fetch_canceled_ids 归位）
 │   │   ├── bcs_client.py      BCS 云端 API 客户端（Bearer + X-Limit-Key 与退避重试）
 │   │   ├── mabang_client.py   马帮 ERP API 客户端（三域会话、订单替换、预报交运）
+│   │   ├── callcenter_client.py WB 客服沟通投诉单（callcenter）只读适配器（列表游标翻页 + 详情）
 │   │   ├── llm_client.py      大模型应答客户端（OpenAI/通义兼容接口）
 │   │   ├── task_runner.py     通用异步任务轮询引擎
 │   │   └── cookies.py         从抓包 md 刷新凭证
@@ -57,7 +59,6 @@
 │       │   ├── mabang_stock.py 马帮库存表登记与管理
 │       │   ├── feishu_register.py 飞书订单去重登记
 │       │   ├── orders.py      WB 订单查询与同步
-│       │   └── order_pipeline.py 历史编排流水线
 │       ├── replicate/         搬家上架、库存改价与清理业务实现
 │       │   ├── ops.py         一键操作门面编排
 │       │   ├── ops_plan.py    改价/库存/下架计划构建器（无副作用独立拆分）
@@ -73,9 +74,11 @@
 │       └── support/           客服提问监控与自动回复业务实现
 │           ├── questions.py   买家提问抓取与人工回复
 │           ├── questions_watch.py 后台 AI 智能问答常驻轮询
-│           └── ai_reply_test.py AI 回复效果测试
+│           ├── ai_reply_test.py AI 回复效果测试
+│           └── complaints.py  WB 平台投诉单查询（未处理/剩余天数 → 去重商品编号）
 ├── tests/                    ★ 自动化测试套件
-│   └── test_all_commands.py   覆盖全部 39 个 CLI 命令的集成测试（100% PASS）
+│   ├── test_all_commands.py   覆盖全部 40 个 CLI 命令 / 40 个用例的集成测试（100% PASS，全量约 5 分钟）
+│   └── run_tests.py           按需测试选择器（--changed / --cmd / --help-smoke，日常只跑改动相关）
 ├── data/                     ★ 统一数据目录（本地专属，不进 git）
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
 │   ├── 商品价格表.xlsx         唯一权威商品清单（用户维护）
@@ -91,6 +94,7 @@
 │   ├── README.md             文档主索引与快速上手
 │   ├── ARCHITECTURE.md       架构设计、分层与业务规则
 │   ├── DEVELOPMENT_GUIDE.md  ★ 开发要求与代码格式规范（必读）
+│   ├── REUSE_GUIDE.md        ★ 开发复用指南：依赖/函数速查 + 代码模板 + 按需测试速查
 │   ├── CLI.md                子命令全集与调用参考
 │   ├── USAGE.md              日常情景操作指南
 │   └── CREDENTIALS.md        鉴权、会话与凭证配置
@@ -105,7 +109,7 @@
 
 ```
 表现与调度层 (Presentation)
-  └── cli.py（动态按需延迟加载路由，39 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+  └── cli.py（动态按需延迟加载路由，40 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
         │ 动态调度 (Command DTO)
         ▼
 业务用例服务层 (Services)
@@ -124,7 +128,7 @@
         ▼
 基础设施与适配层 (Adapters & Framework)
   ├── adapters/（wb_client 封装原生接口与归位后的 fetch_canceled_ids; bcs_client; mabang_client; llm_client; cookies）
-  ├── framework/（safe_io 原子存储与 FileLock、exceptions 统一分层异常、registry 动态注册中枢）
+  ├── framework/（safe_io 原子存储与 FileLock、cli_args 参数定义、exceptions 统一分层异常、registry 动态注册中枢）
   └── credentials.py（统一凭证加载器，管理 data/credentials.json 安全读取与解析）
 ```
 
@@ -193,7 +197,7 @@
 5. **价格下限**：目标价 ≤ 原价÷2 时 WB 静默拒绝（返回 200 不生效）→ ops 自动剔除。
 6. **0 值商品是正常数据**（WB 延迟/受限）：照常修改并显式报告，复查仍 0 不反复操作。
 7. **删除/下架不可逆**：默认 dry-run，需 `--apply`；trash/库存归零还需 `--yes`。
-8. **5 店串行执行**（勿并行，实测并行触发限速慢 5 倍）；批量 ≤300/批、间隔 0.15-0.6s。
+8. **店铺串行执行**（勿并行，实测并行触发限速慢 5 倍）；批量 ≤300/批、间隔 0.15-0.6s。
 9. **下架两阶段**：先清库存为 0，再移回收站；清库存失败仍下架但显式报告。
 10. **vendorCode 中段 4 字母**命中商品价格表前缀码 → 免人工审核自动补录（兼容 `BCS-{前缀}-{nm}`、`BCS-{前缀}-ozon-card-{nm}` 与 `BCS-{前缀}-{标识}/{nm}` 如 `BCS-QQNN-WRLINWI/1078999444`）。
 11. **改折扣同样触发价格审核**（实测 2026-08-20）：WB 按「新价相对原价降幅」判定，改价**或改折扣**降幅落入 30–49.9% → 进隔离区（quarantine），**必须** **`price-review --apply`「应用新价格」才生效**；>50% 直接被拒。因此**每次** **`promo-apply`** **/** **`discount --apply`** **之后必跑一次** **`price-review`**（dry-run 预览 → 有货再 `--apply`）。
@@ -227,14 +231,17 @@ wb.py discount       ⑧a BCS 全量（模式2，慢）：默认不自动同步 
 wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
 wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）；回收站统计以 countByFilter(TRASH) 实时计数为准（list(TRASH) 为列表缓存可能滞后）
 wb.py banned         ⑨b 查询被阻止商品（tableListImprovable 分页）→ dry-run → --apply moveNmsToTrash 移回收站 → count/列表自动复核
+wb.py appeals        ⑨c 只读投诉单：callcenter v1/appeals 列表（游标倒序翻页）→ 筛 status_id=1(等待回复) + decide_counter=N → v3/appeals/{id} 取 brands[].products[].nmid → 本地真源反查供应商代码（店快照→映射表，未收录即标注）→ 明细表 + 去重 nmId 行 + 去重 vendorCode 行 + CSV（不写平台）
 wb.py daily          ⑩ morning=报名+改价（含价格审核）/ check=只改价（含价格审核）（可手动跑，或仅在主动运行 wb.py schedule 后由计划任务 9:00/11/15/19 点触发；默认不建计划任务）
 ```
 
-### 每日新订单处理链路（2026-09-07 新增，`orders-pipeline` 编排）
+### 每日新订单处理链路（2026-09-07 新增；原 `orders-pipeline` 编排已于 2026-09-17 由 `mabang-process` + `feishu-register` 取代，对应 order_pipeline.py 已删除）
 
 ```
 wb.py mabang-orders   ① VC→映射表中文名→价格表库存SKU → replaceOrderItem 强制更换（先匹配）
-wb.py feishu-register ② 登记飞书「订单登记」（订单编号去重；库存SKU=匹配后实际值；排除已取消订单）
+wb.py feishu-register ② 登记飞书「订单登记」（数据源=orderalllist 最近500 + 待处理订单两路合并，
+                        订单编号去重；只匹配未进预报/上传/交运的单也登记；
+                        库存SKU=本地商品价格表「库存SKU」列（查不到留空）；中文名=本地映射表；排除已取消订单）
 wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传 → 等待 150s → 物流交运（已选跳过）
                       ④ 归属统计（店铺×中文名单量 CSV）
 ```
@@ -267,6 +274,11 @@ wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传
 | 2026-08-18 | 检查价格 + 促销折扣整合为 wb\_ops 包，统一凭证 credentials.json、统一入口 wb.py、统一文档 docs/，清理废弃脚本                                               |
 | 2026-09-12 | **单店独立映射表与多店解耦架构重构**：将原本单一映射表拆分为各店铺独立的单店映射表（`data/shops/shop_{id}_{name}.xlsx`），引入全局 VC 归属与纠偏池（`data/state/vc_known.json`, `vc_override.json`），`merge` 采用各活跃店 Outer Join 机制自动聚合 8-Sheet 全景总表，支持店铺一键归档解耦（`_archive/`）与 VC 级联纠偏更名（`mapping-rename`） |
 | 2026-09-15 | **轻量整洁架构升级与深度解耦**：全面落地 5 层分层架构（domain/adapters/storage/services/framework），消除跨域私有依赖；彻底消除跨域品名反查耦合（沉降至 MappingRepository.build_vc_resolver）；WB 取消订单 API 归位至 wb_client；拆分 4 大单体脚本（抽取 wb_card、ops_plan、ops_executor、mabang_client、mapping_excel）；建立全量自动化测试套件 tests/test_all_commands.py 覆盖全部 39 个 CLI 命令（100% PASS）；发布 DEVELOPMENT_GUIDE.md 明确后续开发规范与格式要求。 |
+| 2026-09-16 | **新增 `appeals` 只读投诉单查询**：接入 WB callcenter 子系统（列表 `v1/supplier/appeals` 游标倒序翻页 + 详情 `v3/supplier/appeals/{id}`），按「未处理=等待回复 status_id=1」＋「剩余天数（decide_counter）恰好=N」筛选，输出控制台明细表 + 英文逗号分隔的去重商品编号（nmId）+ CSV；新增 `adapters/callcenter_client.py` 与 `services/support/complaints.py`，CLI 命令数 39 → 40。 |
+| 2026-09-16 | **开发体验补齐**：新增 `docs/REUSE_GUIDE.md`（能做 X 用哪个模块/函数速查 + 代码模板 + 复用铁律 + 一键重扫公共 API）；新增 `tests/run_tests.py` 按需测试选择器（`--changed` 自动选档 / `--cmd` 定向 / `--help-smoke` 秒级回归），门禁从「每次全量」改为「只跑改动相关」，全量仅在跨层改动或发版时执行。 |
+| 2026-09-16 | **改折扣支持双侧区间**：`wb.py discount` 新增 `--below N`（折扣<N 侧，与 `--threshold` 并集去重）；适配层新增 `WBClient.fetch_discount_goods_asc()` 走 WB 折扣**升序**列表（`sortOrder=1`，抓包已验证）——原降序实现「首条 ≤ threshold 即截断」无法覆盖低折扣区间，故不能再靠本地快照兜底。 |
+| 2026-09-17 | **结构审查整改（可移植性/去重/分层/卫生/测试覆盖）**：① 账号写死治理 —— 代码与文档里的「5 店 / 旧店铺ID」改为中性或动态文案，`replicate.KNOWN_WAREHOUSES` 改由数据文件 `data/state/known_warehouses.json` 驱动；② 真重复实现合并 —— ops 参数定义下沉 `framework/cli_args.py`（cli 与 ops 共用，保持启动零业务依赖）、`products.shop_ids_from_disk` 转发仓储、`support_svc` 删除与 `questions_watch` 重复的状态读写；③ 清理死代码/遗留 shim —— 删除 `order_pipeline.py`（零引用）、`replicate.fetch_wb_detail` 弃用桩、`llm_client` 兼容函数、CLI `--detail-source` 弃用参数；④ 分层修正 —— `order/mabang_stock.py` 内直接 requests 调用下沉到 `adapters/mabang_client`（`fetch_stock_list`/`download_file`），services 内已无原生 HTTP；⑤ 运维卫生 —— `ops_result.csv` 按月自动归档到 `data/logs/archive/`、技能去掉仓库镜像副本（唯一份在 `~/.workbuddy/skills/`）；⑥ 测试补全 —— 新增 9 个只读用例，**40 个命令全部有专属用例**（共 41 用例）。 |
+| 2026-09-17 | **飞书登记口径修正（用户规则）**：① 数据源由单一 orderalllist 改为 **orderalllist 最近500 + 待处理订单（tabId=7）两路合并去重**（只做了匹配、未进预报/上传/交运流程的订单只出现在待处理列表，仅按 orderalllist 会漏登；`--no-pending` 可关闭）；② **库存SKU 改为以本地商品价格表「库存SKU」列（第 8 列）为准，查不到一律留空**，不再回写马帮系统匹配值（消除 `BCS-xxx-40-56`、`ETPB-PINK` 等非法/错位值）；③ 商品中文名一律取本地映射表（查不到留空但**仍登记**）；④ 登记日志把「真排除」与「字段留空」分开计数，避免把仍登记的单误读成被排除。 |
 
 ## 九、外部依赖与运行环境
 

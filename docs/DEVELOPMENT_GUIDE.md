@@ -2,6 +2,8 @@
 
 > 本文档面向所有参与 `wb_ops` 项目的开发者、维护者及 AI 编码助手，明确系统未来的**架构设计准则、代码编写规范、文件体积控制、并发安全要求与标准化扩展流程**。
 > 所有代码提交必须严格遵循本文档约定，保持系统整洁高可用与高可维护性。
+>
+> 🔎 **写代码前先查 [REUSE_GUIDE.md](REUSE_GUIDE.md)**：现有依赖/模块/函数速查表、可抄代码模板、复用铁律、按需测试速查——避免通读源码找轮子、避免另立风格。
 
 ---
 
@@ -202,7 +204,9 @@
 
 步骤 6: 自动化测试集成 (Tests)
    └── 在 tests/test_all_commands.py 中添加该子命令的自动化测试用例（默认测试 dry-run 行为），
-   └── 执行全量测试套件验证 100% 通过后，方可完成提交。
+   └── 在 tests/run_tests.py 的 PATH_HINTS 中登记「改动文件 → 命令」映射，
+   └── 执行 python tests/run_tests.py --cmd <新命令>（含导入检查与该命令 --help 冒烟）全绿后提交；
+   └── 仅在跨层/架构级改动时才需全量：python -m unittest tests/test_all_commands.py。
 ```
 
 ---
@@ -210,13 +214,28 @@
 ## 七、测试覆盖与质量把关规范
 
 1. **测试套件要求**：
-   - 仓库核心测试套件为 `tests/test_all_commands.py`。
-   - 目前已实现对系统全部 39 个 CLI 命令的自动化覆盖验证。
-2. **提交前门禁**：
-   - 任何涉及代码结构的修改，必须在根目录下运行以下命令，确保所有测试用例全量通过：
+   - 仓库核心测试套件为 `tests/test_all_commands.py`，配套轻量选择器 `tests/run_tests.py`。
+   - 目前已实现对系统全部 40 个 CLI 命令的自动化覆盖验证（**每个命令都有专属用例**：2026-09-17 补齐了 import-shelve / ai-test / feishu-register / mabang-stock-register / mabang-stock-daily / cookies-update / daily / schedule 及 discount 两个别名的只读用例，合计 41 个用例）。
+2. **提交前门禁：按需测试，不做无谓全量**（全量会真连平台，约 5 分钟）：
+   - **日常只跑改动相关**（推荐首选）：在根目录运行
      ```bash
-     python -m unittest tests/test_all_commands.py
+     python tests/run_tests.py --changed
      ```
-   - 严禁带失败测试提交代码。
+     选择器用 git 探测改动文件并自动选档：业务模块改动 → 只跑该模块对应命令的用例；`cli.py`/`registry.py`/`domain/` 等注册与声明类改动 → 只跑「改动模块导入检查 + 全命令 `--help` 冒烟」（秒级）；跨层共享件（`framework/`、`common.py`、`config.py`、`credentials.py`、`storage/`）或未登记文件 → 自动回退全量。
+   - **指定命令**（新增/修改某命令时必跑，这是唯一覆盖新命令真实行为的入口）：
+     ```bash
+     python tests/run_tests.py --cmd appeals,discount
+     ```
+   - **最快回归**（只验证注册与参数解析没坏）：`python tests/run_tests.py --help-smoke`
+   - **全量时机**：跨层/架构级改动、发版、或选择器判定为全量时：
+     ```bash
+     python -m unittest tests/test_all_commands.py    # 或 python tests/run_tests.py
+     ```
+   - 严禁带失败测试提交代码；`--plan` 可先看将要执行哪些用例而不真正执行。
 3. **测试安全保护**：
    - 自动化测试中的写操作命令，严禁附带 `--apply`，必须保证测试过程为安全只读（dry-run），绝不污染线上真实店铺数据。
+4. **新增命令的同步义务（缺一不可）**：
+   - `tests/test_all_commands.py`：命令名加入 `subcommands` 列表、同步 `assertEqual` 计数（当前 40）、新增只读用例；
+   - `tests/run_tests.py`：在 `PATH_HINTS` 中补「改动文件 → 命令」映射（否则该文件改动会被判定为全量）；
+   - 文档：`docs/CLI.md`、`docs/USAGE.md`、`docs/REUSE_GUIDE.md`、以及各处「40 个命令」计数。
+5. **复用优先**：动手写新功能前先查 **[REUSE_GUIDE.md](REUSE_GUIDE.md)**（可用依赖/函数速查、代码模板、决策表），避免重新造轮子或另立代码风格。

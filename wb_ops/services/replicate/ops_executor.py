@@ -4,6 +4,7 @@ wb_ops 批量操作执行器 (ops_executor)
 负责分批调用 BCS 接口提交改价、改库存、下架操作，自动处理编码转换、日志记录与审核触发。
 """
 import csv
+import glob
 import os
 import shutil
 import time
@@ -26,6 +27,8 @@ STOCK_CHUNK = 200
 BATCH_SLEEP = 0.15
 SHOP_SLEEP = 0.6
 RESULT_CSV = config.RESULT_CSV
+ARCHIVE_DIR = os.path.join(os.path.dirname(RESULT_CSV), "archive")
+ARCHIVE_MAX_MB = 50            # 同月明细超过该体积也强制归档（防单月暴涨）
 
 
 def _auto_review_shop(sid, items):
@@ -86,6 +89,36 @@ def _normalize_csv_encoding():
     with open(RESULT_CSV, "w", encoding="utf-8-sig", newline="") as f:
         f.write("\n".join(lines) + ("\n" if lines else ""))
     print(f"  ⚠ ops_result.csv 非 UTF-8 编码（可能被 Excel 另存过），已备份 {RESULT_CSV}.bak 并转码为 UTF-8-SIG")
+
+
+def _rotate_result_csv_if_needed():
+    """按「月」归档 ops_result.csv，避免追加写无限增长（实测 2026-09 单月已达 7 万行 / 4.7MB）。
+
+    规则：
+      ① 现有文件最后修改时间不在当前月份 → 移入 `data/logs/archive/ops_result_YYYY-MM.csv`；
+      ② 同月文件超过 ARCHIVE_MAX_MB 时 → 移入 `.../ops_result_YYYY-MM-partN.csv`。
+    只「移动」不删除，归档文件仍可直接用 Excel 打开，便于追溯；归档动作会打印一行提示。
+    """
+    if not os.path.exists(RESULT_CSV) or os.path.getsize(RESULT_CSV) == 0:
+        return
+    mtime = datetime.fromtimestamp(os.path.getmtime(RESULT_CSV))
+    now = datetime.now()
+    month_tag = mtime.strftime("%Y-%m")
+    oversized = os.path.getsize(RESULT_CSV) > ARCHIVE_MAX_MB * 1024 * 1024
+    if mtime.strftime("%Y-%m") == now.strftime("%Y-%m") and not oversized:
+        return
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    base = os.path.join(ARCHIVE_DIR, f"ops_result_{month_tag}.csv")
+    if oversized:
+        base = os.path.join(ARCHIVE_DIR, f"ops_result_{month_tag}-part"
+                            f"{len(glob.glob(os.path.join(ARCHIVE_DIR, f'ops_result_{month_tag}-part*.csv')))+1}.csv")
+    dst = base
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        dst = base[:-4] + f"-{n}.csv"
+    shutil.move(RESULT_CSV, dst)
+    print(f"  [归档] ops_result.csv（{mtime:%Y-%m-%d} 前写入）已移入 {dst}，本次将新建当次明细文件")
 
 
 def _endpoint(body):
@@ -222,6 +255,7 @@ def run_apply(plans, action, auto_review=False):
             time.sleep(SHOP_SLEEP)
 
     _normalize_csv_encoding()
+    _rotate_result_csv_if_needed()
     need_header = not (os.path.exists(RESULT_CSV) and os.path.getsize(RESULT_CSV) > 0)
     os.makedirs(os.path.dirname(RESULT_CSV), exist_ok=True)
     with open(RESULT_CSV, "a", encoding="utf-8-sig", newline="") as f:

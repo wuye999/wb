@@ -29,16 +29,12 @@ def is_empty_product(r):
 
 
 def shop_ids_from_disk():
-    """扫描 data/products/ 下 shop*_products_all.json → [店id]（离线，与 fetch 状态一致）"""
-    import glob
-    ids = []
-    for p in sorted(glob.glob(config.shop_json_path("*"))):
-        try:
-            sid = int(os.path.basename(p).replace("shop", "").replace("_products_all.json", ""))
-            ids.append(sid)
-        except ValueError:
-            continue
-    return ids
+    """扫描 data/products/ 下 shop*_products_all.json → [店id]（离线，与 fetch 状态一致）
+
+    [薄转发] 唯一实现已下沉到 storage.product_repo.ProductSnapshotRepository。
+    """
+    from wb_ops.storage.product_repo import ProductSnapshotRepository
+    return ProductSnapshotRepository.shop_ids_from_disk()
 
 
 def fetch_shop(shop_id, out_file, no_sync=False):

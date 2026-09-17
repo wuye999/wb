@@ -45,13 +45,20 @@ class DiscountService:
             conds.append(f"VC={','.join(plan.target_vcs[:3])}{'...' if len(plan.target_vcs) > 3 else ''}")
         if plan.prefix_filter:
             conds.append(f"前缀码='{plan.prefix_filter}'")
-        if plan.is_all or plan.threshold < 0:
+        if plan.is_all or (plan.threshold < 0 and plan.below < 0):
             conds.append("全部折扣")
         else:
-            conds.append(f"原折扣 >{plan.threshold}%")
+            parts = []
+            if plan.threshold >= 0:
+                parts.append(f">{plan.threshold}%")
+            if plan.below >= 0:
+                parts.append(f"<{plan.below}%")
+            conds.append("原折扣 " + " 或 ".join(parts))
         cond_str = " | ".join(conds) if conds else f"原折扣 >{plan.threshold}%"
         dry_str = "  [dry-run 预览]" if not plan.is_apply else ""
         print(f"筛选条件: {cond_str} → 目标: {plan.target_discount}%{dry_str}")
+        if plan.below >= 0:
+            print("  说明: 「<below」侧走 WB 折扣升序列表接口（list/goods/filter sortOrder=1），与降序侧并集去重")
         print("模式: WB 原生批量（upload/task） | 默认写后验证: 关闭（生效存在延迟）\n")
 
         all_rows: List[Dict[str, Any]] = []
@@ -67,7 +74,8 @@ class DiscountService:
             client = WBClient(shop_dict)
             matched_items: List[Dict[str, Any]] = []
 
-            # 判断采集策略：若指定了 VC 或指定了 --all 且有本地快照，先走快照定位，否则走 WB 降序
+            # 判断采集策略：若指定了 VC 或指定了 --all 且有本地快照，先走快照定位，否则走 WB 原生列表
+            # （含 --below 的低折扣侧由 WB 折扣升序接口覆盖，见下方 fetch_discount_goods_asc）
             use_snapshot_direct = bool(plan.target_vcs or (plan.is_all and plan.name_filter))
             
             if use_snapshot_direct and self.product_repo.exists(sid):
@@ -85,9 +93,8 @@ class DiscountService:
                     if not self._matches_filters(vc, cn, title, plan):
                         continue
                     disc = common.to_int(r.get("discount"))
-                    if not plan.is_all and plan.threshold >= 0:
-                        if disc is None or disc <= plan.threshold:
-                            continue
+                    if not plan.is_all and (r.get("discount") is None or not self._disc_matched(disc, plan)):
+                        continue
                     if disc == plan.target_discount:
                         continue
                     matched_items.append({
@@ -102,16 +109,24 @@ class DiscountService:
                     if plan.limit and len(matched_items) >= plan.limit:
                         break
             else:
-                # 走 WB 原生降序扫描
+                # 走 WB 原生列表：降序取「>threshold」侧；含 --below 时再取升序「<below」侧，并集去重
                 wb_goods = client.fetch_discount_goods_desc(
                     threshold=-1 if plan.is_all else plan.threshold,
                     limit=plan.limit,
                 )
+                if plan.below >= 0 and not plan.is_all:
+                    wb_goods = wb_goods + client.fetch_discount_goods_asc(
+                        threshold=plan.below, limit=plan.limit,
+                    )
+                seen_nm: set = set()
                 for g in wb_goods:
+                    nm_key = g.get("nmID")
+                    if nm_key in seen_nm:
+                        continue
+                    seen_nm.add(nm_key)
                     disc = common.to_int(g.get("discount"))
-                    if not plan.is_all and plan.threshold >= 0:
-                        if disc is None or disc <= plan.threshold:
-                            continue
+                    if not plan.is_all and (g.get("discount") is None or not self._disc_matched(disc, plan)):
+                        continue
                     if disc == plan.target_discount:
                         continue
                     vc = g.get("vendorCode") or ""
@@ -260,6 +275,25 @@ class DiscountService:
         return price_review.run(args)
 
     @staticmethod
+    def _disc_matched(disc: int, plan: DiscountPlan) -> bool:
+        """折扣区间判定（--threshold 与 --below 取并集）。
+
+        Args:
+            disc: 商品当前折扣（已转 int）。
+            plan: 折扣规划（is_all / threshold / below）。
+
+        Returns:
+            是否命中待改条件：is_all=True 恒真；否则「> threshold」或「< below」（各自 >=0 才启用）。
+        """
+        if plan.is_all:
+            return True
+        if plan.threshold >= 0 and disc > plan.threshold:
+            return True
+        if plan.below >= 0 and disc < plan.below:
+            return True
+        return False
+
+    @staticmethod
     def _matches_filters(vc: str, cn: str, title: str, plan: DiscountPlan) -> bool:
         v_upper = (vc or "").upper()
         if plan.target_vcs and v_upper not in plan.target_vcs:
@@ -299,10 +333,12 @@ def run_cli(args) -> int:
 
     target_vcs = [x.strip() for x in (args.vc or "").split(",") if x.strip()] or None
     is_all = getattr(args, "all", False)
+    below = common.to_int(getattr(args, "below", -1), default=-1)
 
     if args.threshold is not None:
         threshold = args.threshold
-    elif is_all or target_vcs:
+    elif is_all or target_vcs or below >= 0:
+        # --all / --vc：不限阈值；或只给了 --below → 关闭「>threshold」侧，仅按「<below」命中
         threshold = -1
     else:
         threshold = config.DISCOUNT_THRESHOLD_DEF
@@ -312,11 +348,12 @@ def run_cli(args) -> int:
         try:
             target_shops = [int(s.strip()) for s in args.shops.split(",") if s.strip()]
         except ValueError:
-            print("[错误] --shops 参数格式不正确（示例: --shops 9352,9353）", file=sys.stderr)
+            print("[错误] --shops 参数格式不正确（示例: --shops <店铺ID>,<店铺ID>，可用 wb.py shops 查看）", file=sys.stderr)
             return 1
 
     plan = DiscountPlan(
         threshold=threshold,
+        below=below,
         target_discount=getattr(args, "target", config.DISCOUNT_TARGET_DEF),
         name_filter=(getattr(args, "name", "") or "").strip(),
         prefix_filter=(getattr(args, "prefix", "") or "").strip(),

@@ -8,7 +8,7 @@ wb_ops 统一凭证管理
   "wb":  { "root_version": "v1.108.1", "shops": [ {shop_name, shop_id, authorizev3, wb_seller_lk, cookie}, ... ] }
 }
 
-BCS 三件套（token/limit_key/cookie_extra）+ WB 5 店 cookie 全在这里，换凭证只改一个文件。
+BCS 三件套（token/limit_key/cookie_extra）+ WB 全部店铺 cookie 全在这里，换凭证只改一个文件。
 """
 import json
 

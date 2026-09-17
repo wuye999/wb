@@ -73,7 +73,7 @@ def run_step(name, argv):
 
 
 def run(mode, extra=None):
-    """执行 daily 任务。mode ∈ {morning, check}；extra 为透传参数列表（如 --shops 5272）"""
+    """执行 daily 任务。mode ∈ {morning, check}；extra 为透传参数列表（如 --shops <店铺ID>）"""
     extra = extra or []
     log(f"===== {mode} 开始 =====")
     codes = [run_step(name, argv + extra) for name, argv in STEPS[mode]]

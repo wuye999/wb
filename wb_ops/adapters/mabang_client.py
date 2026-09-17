@@ -271,6 +271,49 @@ def search_stock(cred, sku, warehouse_id, page_size=20):
     return None
 
 
+def fetch_stock_list(cred, timeout=120):
+    """拉取马帮全部库存 SKU（aamz 域）→ [{stockSku,nameCN,stockQuantity,statusText,stockPicture}]
+
+    抓包来源：`api/网络请求/马帮获取库存SKU的库存.har`（page/rowsPerPage 留空 = 一次返回全量）。
+    """
+    form = {"searchKey": "Stock_stockSku", "operate": "likeStart", "orderBys[]": "",
+            "Stock_stockSku": "", "Stock_nameCN": "", "Stock_nameEN": "",
+            "Stock_defaultRetailNameCn": "", "StockPlus_financial": "",
+            "search-content": "库存SKU", "searchValue": "", "status": "3",
+            "parentCategoryId": "", "categoryId": "", "third_category_id": "",
+            "parentBrandId": "", "list-brandId": "", "labelId": "", "buyerId": "",
+            "developerIdM": "", "dev_assistant": "", "artDesignerId": "", "salesId": "",
+            "defaultStockWarehouseDetailId": "", "livenessType": "", "isNewType": "",
+            "stock_type": "", "isMachining": "", "showstart": "1", "isCloud": "",
+            "isGift": "", "exceptionDeclaration": "", "singleWarehouseType": "",
+            "isGoogsExpireManageSearch": "", "page": "", "rowsPerPage": "",
+            "stockOrderby": "a.stockQuantity desc"}
+    r = requests.post(AAMZ_BASE, params={"mod": "stock.getStockList"},
+                      headers=aamz_headers(cred), data=form, timeout=timeout)
+    r.raise_for_status()
+    d = json.loads(r.text.lstrip("\ufeff"))
+    if not d.get("success"):
+        raise RuntimeError(f"stock.getStockList 返回失败: {str(d)[:150]}")
+    return [{"stockSku": it.get("stockSku") or "",
+             "nameCN": it.get("nameCN") or "",
+             "stockQuantity": it.get("stockQuantity"),
+             "statusText": it.get("statusText") or "",
+             "stockPicture": it.get("stockPicture") or ""}
+            for it in (d.get("stockData") or [])]
+
+
+def download_file(url, out_path, timeout=30):
+    """下载远端文件到本地路径（图片附件上传用）。成功返回 True，失败返回 False（不抛异常）。"""
+    try:
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        with open(out_path, "wb") as f:
+            f.write(r.content)
+        return True
+    except Exception:
+        return False
+
+
 def replace_order_item(cred, order_item_id, stock_id, warehouse_id):
     """更换订单商品（replaceOrderItem）"""
     body = {"orderItemId": str(order_item_id), "stockId": int(stock_id),

@@ -2,7 +2,7 @@
 """
 wb_ops 商品价格表 ↔ 店铺商品映射表构建（原 build_mapping.py 的数据逻辑）
 
-数据职责：商品价格表解析、前缀映射、5 店并集分类、8-Sheet 映射表生成。
+数据职责：商品价格表解析、前缀映射、全部活跃店铺并集分类、8-Sheet 映射表生成。
 HTML 工作台渲染已抽到 workbench.py。
 """
 import glob
@@ -167,7 +167,7 @@ def price_of(r):
 
 # ---------------- 候选计算 ----------------
 def load_shops_union():
-    """5 店在架并集，按 vendorCode 去重合并（自包含读 JSON，避免循环 import）。
+    """全部活跃店铺在架并集，按 vendorCode 去重合并（自包含读 JSON，避免循环 import）。
     返回 (union, shops_meta)：
       union: {vc: {'vc','title','price','img','per_shop':{sid:{'price','stock'}},'shops':[sid]}}
       过滤 trashedAt / 无价格（含空商品三缺）；同 vc 跨店合并，代表价取主店优先否则最小 sid 店。"""
@@ -211,7 +211,7 @@ def load_shops_union():
 
 
 def classify_union(union, boss, prefix_map, known):
-    """5 店并集 → 四分类（互斥，零重复）：
+    """全部活跃店铺并集 → 四分类（互斥，零重复）：
       cand_vcs:    价格命中候选池（代表价 ∈ 某商品 floor/floor+1）→ 上半区勾选
       auto_items:  前缀命中（中段 4 字母在商品价格表前缀码）→ merge 自动补录
       normal_items: 其余未归属 vc → 下半区卡片选归属
@@ -333,7 +333,7 @@ def auto_match(result_list, bcs):
 
 # ---------------- 入口逻辑（供 cli 调用） ----------------
 def run_mapping(legacy=False):
-    """生成核对工作台。legacy=True 仅主店候选；否则 5 店并集一页两区。"""
+    """生成核对工作台。legacy=True 仅主店候选；否则全部活跃店铺并集一页两区。"""
     boss = load_boss()
 
     if legacy:
@@ -362,7 +362,7 @@ def run_mapping(legacy=False):
     n_union = len(union)
     n_sum = len(cand_vcs) + len(normal_items) + len(auto_items)
     ident = "✓" if n_union - skipped == n_sum else "✗"
-    print(f"5 店并集 {n_union} · 已知(映射表)跳过 {skipped} · 候选池 {len(cand_vcs)} · 未归属新 vc {len(normal_items)}"
+    print(f"{len(shops_meta)} 店并集 {n_union} · 已知(映射表)跳过 {skipped} · 候选池 {len(cand_vcs)} · 未归属新 vc {len(normal_items)}"
           f" · 前缀自动 {len(auto_items)}")
     print(f"  恒等式 |union|-|known|==cand+normal+auto：{n_union}-{skipped}={n_sum} {ident}")
     print(f"  商品价格表商品 {len(boss)} → 冲突组 {n_conf} · 普通 {n_single} · 待核查 {n_todo} · 下半区卡片 {n_normal}")

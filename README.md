@@ -1,6 +1,6 @@
 # Wildberries / BCS 卖家自动化（wb_ops）
 
-统一管理多店铺（本仓库默认 5 家：主号7/主号8/副号2/副号3/副号4）的商品**映射、改价、库存、下架、促销报名、折扣改价、清理**与**每日自动运营**。
+统一管理多店铺（店铺数量与 ID 由 data/credentials.json 决定，作者当前环境 3 家：袁州1/2/3）的商品**映射、改价、库存、下架、促销报名、折扣改价、清理**与**每日自动运营**。
 
 ## ⚠ 环境适配（换账号 / 换电脑必读）
 
@@ -8,7 +8,7 @@
 
 | 项目 | 原作者环境示例 | 你需要改成 |
 |---|---|---|
-| 店铺 ID / 名称 | 5272(主号7)、5273(主号8)、5276(副号2)、5280(副号3)、5281(副号4) | 你自己的店铺 ID / 名称 |
+| 店铺 ID / 名称 | 作者环境示例：9352(袁州1)、9353(袁州2)、9356(袁州3) | 你自己的店铺 ID / 名称（wb.py shops 可查） |
 | Python 路径 | `C:\Users\madokka\.workbuddy\binaries\python\envs\default\Scripts\python.exe` | 你自己的 venv Python 路径 |
 | 仓库位置 | 任意目录（本仓库根目录下即可） | 你自己的目录（相对路径，脚本自动识别） |
 
@@ -52,10 +52,11 @@ python wb.py price-review --apply       # 价格审核：应用新价格
 python wb.py orders                     # 订单查询（同步+查询今天）
 # ▸ 写操作（改价/库存/下架/折扣/清理/上架/改尺寸）默认都不同步、不写后验证、不合并映射表；执行完成即结束，严禁擅自补跑 fetch+merge，仅在极低频全局盘点或用户显式要求时才跑。
 python wb.py questions                  # 买家未处理提问查询
+python wb.py appeals --days 5           # WB 平台投诉单：未处理(等待回复) + 剩余天数=5 → 明细 + 去重商品编号行 + CSV
 
 # ▸ 每日新订单处理（2026-09-10 拆分为两个独立脚本；先 A 后 B 保证库存SKU 正确）
 python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→物流交运（零飞书依赖）
-python wb.py feishu-register                            # B 飞书登记：拉取马帮最近500条全状态订单，按订单编号去重只登新增（URL 读配置 feishu.base_url）
+python wb.py feishu-register                            # B 飞书登记：orderalllist 最近500条 + 待处理订单（两路合并）去重只登新增；只匹配未进预报/上传/交运的单也登记，库存SKU 取本地价格表（查不到留空）
 python wb.py feishu-register --scope all --date 2026-09-05 --apply   # 补录历史订单（指定日期/区间）
 python wb.py mabang-forecast --check                    # 上传 5-10 分钟后查预报结果
 python wb.py mabang-stock-daily --apply                 # 「马帮库存登记表」日期列管理：默认只建今天列+更新全部已有日期列+总新增订单量（--begin/--date 显式时删旧列，--end 需同用）
@@ -68,11 +69,12 @@ python wb.py mabang-stock-register --apply              # 全量重建「马帮�
 | -------------------------------------------- | ---------------------- |
 | [docs/README.md](docs/README.md)             | 文档索引 + AI 上手           |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 解耦实践 / 业务规则 / 数据流 |
-| [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程） |
-| [docs/CLI.md](docs/CLI.md)                   | 39 个命令全集参考 + Python 库调用 |
+| [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程/按需测试门禁） |
+| [docs/REUSE_GUIDE.md](docs/REUSE_GUIDE.md)   | ★ 开发复用指南：能做 X 用哪个模块/函数 + 代码模板（写新功能前先读） |
+| [docs/CLI.md](docs/CLI.md)                   | 40 个命令全集参考 + Python 库调用 |
 | [docs/USAGE.md](docs/USAGE.md)               | 日常情景使用流程               |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md)   | 鉴权与凭证                  |
 
 ## 目录
 
-- `wb_ops/` 核心库（5 层分层整洁架构） ｜ `wb.py` 统一入口 ｜ `tests/` 自动化测试套件 ｜ `data/` 数据与凭证（本地专属，不进 git） ｜ `docs/` 文档 ｜ `_scratch/` AI 临时工作区 ｜ `api/`、`_archive/` 本地参考（含账号信息，不随公开仓库分发）
+- `wb_ops/` 核心库（5 层分层整洁架构） ｜ `wb.py` 统一入口 ｜ `tests/` 自动化测试套件（`test_all_commands.py` 全量 + `run_tests.py` 按需选择器） ｜ `data/` 数据与凭证（本地专属，不进 git） ｜ `docs/` 文档 ｜ `_scratch/` AI 临时工作区 ｜ `api/`、`_archive/` 本地参考（含账号信息，不随公开仓库分发）

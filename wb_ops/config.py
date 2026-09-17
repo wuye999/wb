@@ -21,7 +21,7 @@ SHOPS_DIR = os.path.join(DATA_DIR, "shops")           # 各店铺独立映射表
 SHOPS_ARCHIVE_DIR = os.path.join(SHOPS_DIR, "_archive")  # 归档/停用店铺目录
 
 # ---------------- 文件路径 ----------------
-CREDENTIALS_JSON = os.path.join(DATA_DIR, "credentials.json")   # 统一凭证（BCS + WB 5 店）
+CREDENTIALS_JSON = os.path.join(DATA_DIR, "credentials.json")   # 统一凭证（BCS + WB 全部店铺）
 AI_TEST_QA = os.path.join(DATA_DIR, "ai_test_qa.json")   # AI 客服测试数据集（真人问答对照）
 BOSS_XLSX = os.path.join(DATA_DIR, "商品价格表.xlsx")            # 唯一权威商品清单（用户维护）
 MAPPING_XLSX = os.path.join(DATA_DIR, "价格映射表.xlsx")  # 唯一状态源（merge 自动重建）

@@ -15,11 +15,11 @@
   "wb": {
     "root_version": "v1.108.1",
     "shops": [
-      { "shopName": "主号7", "shopId": 5272,
+      { "shopName": "袁州1", "shopId": 9352,
         "authorizev3": "<用户级 JWT>",
         "wb_seller_lk": "<店铺级 JWT，含 Z-Sid>",
         "cookie": "_wbauid=...; x-supplier-id-external=...; cfidsw-wb=..." }
-      // ... 每家店一项（作者环境共 5 店：5272/5273/5276/5280/5281；换成你自己的店铺）
+      // ... 每家店一项（作者环境共 3 店：9352/9353/9356；换成你自己的店铺）
     ]
   },
   "ai": {

@@ -245,7 +245,7 @@ refresh();
     return len(conflict_groups), len(single_groups), len(todo)
 
 
-# ---------------- 统一核对工作台（5 店并集，一页两区） ----------------
+# ---------------- 统一核对工作台（全部活跃店铺并集，一页两区） ----------------
 def render_unified_html(conflict_groups, single_groups, todo, normal_items, shops_meta, stats=None):
     stats = stats or {}
     conflict_html = [_conflict_group_html(g) for g in conflict_groups]
@@ -254,11 +254,13 @@ def render_unified_html(conflict_groups, single_groups, todo, normal_items, shop
     boss_opts = _boss_opts_html([b for g in conflict_groups + single_groups for b in g["bosses"]] + todo)
     cards_html = [_review_card_html(i, x, boss_opts) for i, x in enumerate(normal_items, 1)]
 
-    shops_txt = ",".join(map(str, stats.get("shops") or [])) or "5 店"
+    shop_ids = stats.get("shops") or [s.get("id") for s in (shops_meta or [])]
+    shops_txt = ",".join(map(str, shop_ids)) or "全部店铺"
+    shop_n = len(shop_ids)
     html = '''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8"><title>价格映射核对工作台（5 店统一）</title>
+<meta charset="UTF-8"><title>价格映射核对工作台（[[SHOPSN]] 店统一）</title>
 <style>
 body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f0f2f5;color:#2c3e50}
 .bar{position:sticky;top:0;background:#fff;padding:10px 16px;border-bottom:2px solid #3498db;z-index:9;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
@@ -300,7 +302,7 @@ button.ghost{background:#fff;color:#3498db}
 </style></head>
 <body>
 <div class="bar">
-  <b>价格映射核对工作台（5 店统一）</b>
+  <b>价格映射核对工作台（[[SHOPSN]] 店统一｜店铺 [[SHOPS]]）</b>
   <span class="stats">店铺 [[SHOPS]] · 商品价格表商品 <b id="total"></b> · 候选池 <b>[[CAND]]</b> · 已归属 <b id="picked"></b>
     | 未归属新 vc <b>[[NORMAL]]</b> · 已映射 <b id="mapped"></b> · 已排除 <b id="excl"></b></span>
   <button onclick="exportJson()">导出核对结果 JSON</button>
@@ -309,9 +311,9 @@ button.ghost{background:#fff;color:#3498db}
 </div>
 <div class="wrap">
 <div class="hint" style="color:#2c3e50">
-  <b>本工作台一次覆盖 5 店全部在架商品（按 vendorCode 去重），核对一次、合并一次即可。</b><br>
+  <b>本工作台一次覆盖 [[SHOPSN]] 店全部在架商品（按 vendorCode 去重），核对一次、合并一次即可。</b><br>
   上半区（一~三）：每个商品价格表商品勾选<b>实际对应的店铺候选</b>（看图片/俄文名/价格，可多选=同款多变体）；待核查可手工填 vendorCode。<br>
-  下半区（四）：5 店在架但<b>价格未匹配到任何商品价格表商品</b>的 vendorCode——请为每个选择归属商品价格表商品（补录）或 🚫 非货盘（排除）。<br>
+  下半区（四）：[[SHOPSN]] 店在架但<b>价格未匹配到任何商品价格表商品</b>的 vendorCode——请为每个选择归属商品价格表商品（补录）或 🚫 非货盘（排除）。<br>
   核对完点「导出核对结果 JSON」→ 内容保存为 <b>统一审核.json</b> 发我 → <code>python wb.py merge 统一审核.json</code> 即完成。
 </div>
 <h3>一、待核查（价格带无候选，可手工填 vendorCode）</h3>
@@ -397,7 +399,7 @@ refresh();
     html = html.replace("CONFLICT_PLACEHOLDER", "\n".join(conflict_html) if conflict_html else '<div class="hint">无</div>')
     html = html.replace("SINGLE_PLACEHOLDER", "\n".join(single_html) if single_html else '<div class="hint">无</div>')
     html = html.replace("CARDS_PLACEHOLDER", "\n".join(cards_html) if cards_html else '<div class="hint">无</div>')
-    html = html.replace("[[SHOPS]]", shops_txt).replace("[[CAND]]", str(stats.get("cand", 0)))\
+    html = html.replace("[[SHOPS]]", shops_txt).replace("[[SHOPSN]]", str(shop_n)).replace("[[CAND]]", str(stats.get("cand", 0)))\
                .replace("[[NORMAL]]", str(stats.get("normal", 0)))
     data_json = {
         "bossCount": len([b for g in conflict_groups + single_groups for b in g["bosses"]]) + len(todo),

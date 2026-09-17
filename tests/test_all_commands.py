@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 wb_ops 全量命令与核心业务综合自动化测试套件
+
+⚠ 日常不必全量跑（本套件真连平台，约 5 分钟）。按需测试请用选择器：
+    python tests/run_tests.py --changed      # 只跑本次改动相关（推荐）
+    python tests/run_tests.py --cmd appeals  # 只跑指定命令（新增/改命令时必跑）
+    python tests/run_tests.py --help-smoke   # 最快回归：改动模块导入检查 + 全命令 --help
+全量（跨层改动 / 发版）：
+    python -m unittest tests/test_all_commands.py
 """
 import os
 import subprocess
 import sys
+import time
 import unittest
 
 PYTHON = sys.executable
@@ -32,7 +40,7 @@ class TestAllCommands(unittest.TestCase):
             )
         return res
 
-    # ---------------- 1. 全部 39 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 40 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
@@ -40,12 +48,12 @@ class TestAllCommands(unittest.TestCase):
             "price", "stock", "trash", "replicate", "import-shelve",
             "promo-apply", "discount", "discount-wb", "discount-scan", "discount-bcs",
             "dimension", "dims-check", "banned", "clean", "price-review",
-            "orders", "questions", "questions-watch", "ai-test", "mabang-orders",
+            "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
             "mabang-forecast", "feishu-register", "mabang-stock-register",
             "mabang-stock-daily", "mabang-process", "cookies-update",
             "daily", "schedule", "remote-wh"
         ]
-        self.assertEqual(len(subcommands), 39)
+        self.assertEqual(len(subcommands), 40)
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -67,6 +75,12 @@ class TestAllCommands(unittest.TestCase):
         res = self._run_cmd(["discount", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
         self.assertIn("BCS-HAAJ-248364237", res.stdout)
+
+    def test_04b_discount_below(self):
+        res = self._run_cmd(["discount", "--threshold", "55", "--below", "40", "--target", "50",
+                             "--shops", "9352", "--limit", "5"], expect_code=0)
+        self.assertIn("或", res.stdout)
+        self.assertIn("<40", res.stdout)
 
     def test_05_discount_aliases(self):
         res1 = self._run_cmd(["discount-wb", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
@@ -167,6 +181,11 @@ class TestAllCommands(unittest.TestCase):
         res = self._run_cmd(["questions-watch", "--once", "--shops", "9352"], expect_code=0)
         self.assertIn("--once", res.stdout)
 
+    def test_27b_appeals(self):
+        res = self._run_cmd(["appeals", "--no-cn", "--shops", "9352", "--limit", "1"], expect_code=0)
+        self.assertIn("店铺 1 个", res.stdout)
+        self.assertIn("供应商代码", res.stdout)
+
     # ---------------- 9. 别名路由与并发安全 ----------------
     def test_28_cli_aliases(self):
         res1 = self._run_cmd(["mapping-merge", "--help"], expect_code=0)
@@ -203,6 +222,74 @@ class TestAllCommands(unittest.TestCase):
         finally:
             if os.path.exists(test_path):
                 os.remove(test_path)
+
+
+    # ---------------- 10. 补测：原缺测命令的只读路径 ----------------
+    # 说明：本段全部为「只读/无副作用」路径 —— 参数校验、缺失文件报错、dry-run 预览、只读预览。
+    #      绝不触发任何写平台/写飞书/写系统的动作（所有写操作命令均不带 --apply）。
+    def test_31_import_shelve_argcheck(self):
+        # 缺位置参数 → argparse 直接报错退出（不进入业务逻辑，不触发 ensure_snapshots/网络）
+        res = self._run_cmd(["import-shelve"], expect_code=2)
+        self.assertIn("usage", (res.stdout + res.stderr).lower())
+
+    def test_32_discount_aliases_below(self):
+        # 两个别名命令走 dry-run，并覆盖新增的双侧区间参数（--below 走 WB 升序接口）
+        for alias in ("discount-wb", "discount-scan"):
+            with self.subTest(alias=alias):
+                res = self._run_cmd([alias, "--threshold", "55", "--below", "40", "--target", "50",
+                                     "--shops", "9352", "--limit", "1"], expect_code=0)
+                self.assertIn("dry-run", res.stdout)
+                self.assertIn("<40", res.stdout)
+
+    def test_33_ai_test_missing_qa(self):
+        # 数据集文件不存在 → 明确报错退出（不调用 LLM，不产生费用）
+        res = self._run_cmd(["ai-test", "--qa", os.path.join(BASE_DIR, "_scratch", "__no_such_qa__.json")],
+                            expect_code=1)
+        self.assertIn("[错误]", res.stdout + res.stderr)
+
+    def test_34_feishu_register_dry_run(self):
+        # scope=latest：默认合并「待处理订单」数据源（覆盖只匹配未进预报/上传/交运的单）
+        res = self._run_cmd(["feishu-register", "--scope", "latest"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertIn("[合并]", res.stdout)
+        self.assertIn("真排除", res.stdout)
+
+    def test_34b_feishu_register_no_pending(self):
+        # --no-pending：关闭合并（只按 orderalllist 登记）
+        res = self._run_cmd(["feishu-register", "--scope", "latest", "--no-pending"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertNotIn("[合并]", res.stdout)
+
+    def test_35_mabang_stock_register_dry_run(self):
+        res = self._run_cmd(["mabang-stock-register"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+
+    def test_36_mabang_stock_daily_end_only(self):
+        # --end 单独使用必须报错中止（避免静默删列）
+        res = self._run_cmd(["mabang-stock-daily", "--end", "2026-09-20"], expect_code=1)
+        self.assertIn("--end", res.stdout)
+
+    def test_37_cookies_update_missing_file(self):
+        res = self._run_cmd(["cookies-update", "__no_such_cookies__.md"], expect_code=1)
+        self.assertIn("[错误]", res.stdout + res.stderr)
+
+    def test_38_daily_safe_scope(self):
+        # 用不存在的店铺 ID 限定，使各步骤「无匹配店铺」空转（不产生任何写操作）；
+        # daily 的输出落当日日志 data/logs/daily_YYYYMMDD.log，故断言日志内容
+        res = self._run_cmd(["daily", "check", "--shops", "0"], expect_code=0)
+        self.assertEqual(res.stdout.strip(), "")  # 步骤输出被重定向进日志
+        log_path = os.path.join(BASE_DIR, "data", "logs", "daily_" + time.strftime("%Y%m%d") + ".log")
+        self.assertTrue(os.path.exists(log_path), f"未生成当日日志: {log_path}")
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            blob = f.read()
+        self.assertIn("[改折扣]", blob)
+        self.assertIn("店铺 0 个", blob)
+
+    def test_39_schedule_plan(self):
+        res = self._run_cmd(["schedule", "--plan"], expect_code=0)
+        self.assertIn("[dry-run]", res.stdout)
+        self.assertIn("WB_Daily_Morning", res.stdout)
+        self.assertIn("schtasks", res.stdout)
 
 
 if __name__ == "__main__":

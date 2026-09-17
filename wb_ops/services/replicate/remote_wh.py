@@ -5,7 +5,7 @@ wb_ops 远程仓（成都仓库）商品查询与删除
 接口（抓包来源：api/网络请求/成都仓库货品查询和删除.md）：
 - 仓库列表: BCS  GET /system/wbWarehouses/list?shopId=-1
      → 一次返回全部店铺仓库；返回的 id 与 marketplace 的 storeId/warehouseId 同一体系
-     → 成都仓库 name=="成都仓库"（officeId=3006477），5 店各一个
+     → 成都仓库 name=="成都仓库"（officeId=3006477），每个活跃店铺各一个
 - 查询:     GET marketplace.wildberries.ru/ns/marketplace-app/marketplace-remote-wh/api/v3/portal/stocks
      ?order=asc&stores={storeId}  → data.next 游标分页 + data.stocks[]
 - 删除:     DELETE 同 URL，body {"warehouseId":storeId,"chrtId":xxx}
@@ -216,7 +216,7 @@ def run(args):
 
 def build_parser(sub):
     p = sub.add_parser("remote-wh", help="成都仓库商品永久删除（dry-run 默认，--apply --yes 执行）")
-    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部 5 店成都仓）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部店铺的成都仓）")
     p.add_argument("--limit", type=int, default=0, help="（预留）每店最多处理 N 条，0=全部")
     p.add_argument("--interval", type=float, default=0.3, help="删除请求间隔秒（默认 0.3）")
     p.add_argument("--parallel", type=int, default=1, help="并发店铺数（默认 1=串行；--apply 时有效，店内仍串行）")

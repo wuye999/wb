@@ -4,7 +4,7 @@ wb_ops LLM 大模型客户端适配器 (LLMClient)
 封装 OpenAI 兼容协议的大模型（DeepSeek / SenseNova / Qwen）对话生成接口。
 """
 import requests
-from typing import Dict, Any, Optional
+from typing import Optional
 
 DEFAULT_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
@@ -60,14 +60,3 @@ class LLMClient:
             return content.strip() or None
         except Exception:
             return None
-
-
-def generate_reply(question: str, product_info: str, cfg: Dict[str, Any]) -> Optional[str]:
-    """向后兼容函数"""
-    client = LLMClient(
-        api_key=(cfg or {}).get("api_key") or "",
-        base_url=(cfg or {}).get("base_url") or DEFAULT_URL,
-        model=(cfg or {}).get("model") or DEFAULT_MODEL,
-        max_tokens=int((cfg or {}).get("max_tokens") or 1000),
-    )
-    return client.generate_reply(question, product_info)

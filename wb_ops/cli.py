@@ -10,6 +10,7 @@ import sys
 
 from wb_ops import common
 from wb_ops import config
+from wb_ops.framework import cli_args
 
 def build_parser():
     ap = argparse.ArgumentParser(prog="wb", description="Wildberries/BCS 卖家自动化统一入口")
@@ -21,7 +22,7 @@ def build_parser():
     p.add_argument("--shop-id", type=int, default=None, help="店铺ID（默认全部）")
     p.add_argument("--no-sync", action="store_true", help="跳过 BCS 同步，直接拉取上次数据")
 
-    p = sub.add_parser("mapping", help="生成统一核对工作台（5 店并集，一页两区）")
+    p = sub.add_parser("mapping", help="生成统一核对工作台（全部活跃店铺并集，一页两区）")
     p.add_argument("--legacy", action="store_true", help="旧模式：仅主店候选")
 
     p = sub.add_parser("mapping-import", help="导入核对结果 → 生成映射表（旧格式）")
@@ -52,26 +53,8 @@ def build_parser():
     p.add_argument("--force", action="store_true", help="强制全量重新构建")
 
     def _add_ops_args(p, *, with_price=False, with_stock=False):
-        g = p.add_mutually_exclusive_group()
-        g.add_argument("--sku", help="商品价格表卖家SKU")
-        g.add_argument("--name", help="商品价格表产品中文名包含")
-        g.add_argument("--prefix", help="商品价格表 vendorCode 前缀码")
-        g.add_argument("--vc", help="vendorCode 列表（逗号分隔）")
-        g.add_argument("--all", action="store_true", help="全部映射商品（默认）")
-        p.add_argument("--shops", help="限定店铺ID（逗号分隔，默认全部已 fetch 店铺）")
-        p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
-        p.add_argument("--yes", action="store_true", help="跳过不可逆操作确认")
-        p.add_argument("--sync", action="store_true",
-                       help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
-        if with_price:
-            p.add_argument("--price", type=int, help="目标价（默认 floor(商品价格表双倍售价)）")
-            p.add_argument("--discount", type=int, help="折扣 0-100（不传=不改）")
-            p.add_argument("--club-discount", type=int, help="club折扣 0-100（不传=不改）")
-            p.add_argument("--keep-price", action="store_true", help="价格保持当前值（只改折扣/俱乐部折扣）")
-            p.add_argument("--auto-review", action="store_true",
-                           help="改价后自动「应用新价格」（降价 30-49.9%% 进审查时，精确匹配刚改价商品）")
-        if with_stock:
-            p.add_argument("--amount", type=int, default=0, help="目标库存（默认 0）")
+        # 唯一实现下沉到 framework.cli_args（argparse-only，保证本模块启动零业务依赖）
+        cli_args.add_ops_args(p, with_price=with_price, with_stock=with_stock)
 
     p = sub.add_parser("price", help="改价/改折扣（dry-run 默认，--apply 执行）")
     _add_ops_args(p, with_price=True)
@@ -94,9 +77,6 @@ def build_parser():
                    help="启动前同步全部店铺 + 上架后复核并合并映射表（默认不自动同步/不写后验证，仅打印提示；用本地快照判断可能滞后，需最新务必加 --sync）")
     p.add_argument("--interval", type=float, default=1.0, help="批次上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
-    p.add_argument("--detail-source", default="synthetic",
-                   choices=["auto", "bcs", "synthetic"],
-                   help="[已弃用/兼容保留] 新版批量上品接口已由 BCS 后端自动抓取 WB 数据")
 
     p = sub.add_parser("import-shelve", help="他人映射表导入上架：他人有我方无的商品（按真实 WB商品码 匹配）上架到我的店铺")
     p.add_argument("xlsx", help="他人映射表 xlsx 路径（同项目「映射总表」格式）")
@@ -109,9 +89,6 @@ def build_parser():
                    help="启动前同步全部店铺 + 上架后复核并合并映射表（默认不自动同步/不写后验证，仅打印提示；用本地快照判断可能滞后，需最新务必加 --sync）")
     p.add_argument("--interval", type=float, default=1.0, help="批次上架请求间隔秒")
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
-    p.add_argument("--detail-source", default="synthetic",
-                   choices=["auto", "bcs", "synthetic"],
-                   help="[已弃用/兼容保留] 新版批量上品接口已由 BCS 后端自动抓取 WB 数据")
 
     p = sub.add_parser("promo-apply", help="促销报名（cookie 会话，applyAll）")
     p.add_argument("--apply", action="store_true", help="真正报名（默认 dry-run 预览）")
@@ -127,6 +104,8 @@ def build_parser():
                             help=f"折扣阈值：只处理折扣>该值的商品（默认 {config.DISCOUNT_THRESHOLD_DEF}；指定 --all 或指定 --vc 时默认不限阈值）")
         parser.add_argument("--all", action="store_true",
                             help="不限折扣阈值，处理指定条件下的所有在架商品（等价于 --threshold -1）")
+        parser.add_argument("--below", type=int, default=-1,
+                            help="额外命中折扣 <N 的商品（与 --threshold 取并集，走 WB 折扣升序列表接口；例 --threshold 55 --below 40 = 折扣>55%% 或 <40%%；-1=不启用）")
         parser.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF,
                             help=f"目标折扣（默认 {config.DISCOUNT_TARGET_DEF}）")
         parser.add_argument("--name", default="", help="商品价格表产品中文名包含匹配（如 笔记本电脑）")
@@ -222,6 +201,15 @@ def build_parser():
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
     p.add_argument("--once", action="store_true", help="只跑一轮就退出（测试用）")
 
+    p = sub.add_parser("appeals", help="查询 WB 平台投诉单（只读；未处理/剩余天数筛选，输出去重商品编号与供应商代码）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部已填 cookie 店铺）")
+    p.add_argument("--days", type=int, default=0,
+                   help="仅命中剩余天数恰好=N 的未处理投诉（decide_counter，0=不筛选，默认）")
+    p.add_argument("--type", default="in", choices=["in", "out"], help="投诉方向：in=发往本店（默认）/ out=本店发出")
+    p.add_argument("--limit", type=int, default=0, help="每店最多拉取 N 条投诉列表（0=不限，翻页到底）")
+    p.add_argument("--no-cn", action="store_true",
+                   help="不解析商品中文名（供应商代码仍会解析；本地真源查不到的商品标注「本地真源未收录」）")
+
     p = sub.add_parser("ai-test", help="离线用 data/ai_test_qa.json 对照测试 AI 客服回复（不联网）")
     p.add_argument("--qa", default=config.AI_TEST_QA, help="测试数据集 json（默认 data/ai_test_qa.json）")
 
@@ -250,6 +238,9 @@ def build_parser():
     p.add_argument("--days", type=int, default=1, help="查询最近 N 天订单（--scope pending 用，默认 1）")
     p.add_argument("--page-size", type=int, default=100, help="订单列表每页条数")
     p.add_argument("--apply", action="store_true", help="真正写入（默认 dry-run 只列出将登记订单）")
+    p.add_argument("--no-pending", action="store_true",
+                   help="不合并「待处理订单」数据源（默认 scope=latest 会合并 orderalllist + 待处理订单，"
+                        "让只匹配但未进预报/上传/交运流程的订单也能登记）")
 
 
 
@@ -270,12 +261,14 @@ def build_parser():
     p.add_argument("--apply", action="store_true", help="真正建列并填充（默认 dry-run 预览）")
 
     p = sub.add_parser("mabang-process", aliases=["order-pipeline"],
-                       help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运（零飞书依赖）")
+                       help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运→飞书登记（登记含只匹配未进预报流程的订单）")
     p.add_argument("--days", type=int, default=1, help="查询最近 N 天待处理订单（默认 1）")
     p.add_argument("--page-size", type=int, default=100, help="订单列表分页大小（默认 100）")
     p.add_argument("--wait", type=int, default=0, help="上传批次后等待秒数（默认 0 不额外等待）")
     p.add_argument("--url", default="", help="飞书表格地址（可选，默认读配置 feishu.base_url）")
     p.add_argument("--table", default="订单登记", help="飞书订单登记表名（默认 订单登记）")
+    p.add_argument("--no-pending", action="store_true",
+                   help="飞书登记时不合并「待处理订单」数据源（默认合并，覆盖只匹配未进预报/上传/交运的订单）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run 预览）")
 
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
@@ -283,13 +276,15 @@ def build_parser():
 
     p = sub.add_parser("daily", help="每日任务（morning=报名+改价 / check=只改价）")
     p.add_argument("mode", choices=["morning", "check"])
-    p.add_argument("extra", nargs=argparse.REMAINDER, help="透传给子步骤（如 --shops 5272）")
+    p.add_argument("extra", nargs=argparse.REMAINDER, help="透传给子步骤（如 --shops <店铺ID>）")
 
-    p = sub.add_parser("schedule", help="创建/删除 Windows 计划任务")
+    p = sub.add_parser("schedule", help="创建/删除 Windows 计划任务（--plan 只预览不执行）")
     p.add_argument("--remove", action="store_true", help="删除全部任务")
+    p.add_argument("--plan", action="store_true",
+                   help="只打印将要创建/删除的任务定义（不调用 schtasks，只读预览）")
 
     p = sub.add_parser("remote-wh", help="成都仓库商品永久删除（dry-run 默认，--apply --yes 执行）")
-    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部 5 店成都仓）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部店铺的成都仓）")
     p.add_argument("--limit", type=int, default=0, help="（预留）每店最多处理 N 条，0=全部")
     p.add_argument("--interval", type=float, default=0.3, help="删除请求间隔秒（默认 0.3）")
     p.add_argument("--parallel", type=int, default=1, help="并发店铺数（默认 1=串行；--apply 时有效，店内仍串行）")

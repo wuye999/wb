@@ -62,7 +62,7 @@ def load_mapping_rows():
 
 
 def load_union_prices():
-    """5 店并集价格 → {vc: {sid: price}}（用于跨店一致性检测）"""
+    """全部活跃店铺并集价格 → {vc: {sid: price}}（用于跨店一致性检测）"""
     out = {}
     for p in sorted(glob.glob(config.shop_json_path("*"))):
         try:
@@ -396,8 +396,9 @@ def run(tol=PRICE_DEV_TOL):
     if not rows:
         raise RuntimeError("映射表为空，请先 wb.py merge")
     print(f"  映射条目: {len(rows)}")
-    print("读取 5 店价格（跨店一致性检测）...")
     union_prices = load_union_prices()
+    sid_n = len({sid for m in union_prices.values() for sid in m})
+    print(f"读取 {sid_n} 店价格（跨店一致性检测）...")
     print("  分析可疑项 ...")
     rows, issues = analyze(rows, union_prices, None)
     total, groups, suspect, by_type = render_html(rows, issues)

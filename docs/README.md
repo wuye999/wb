@@ -9,7 +9,7 @@
 
 | 内容 | 原作者示例 | 说明 |
 |---|---|---|
-| 店铺 ID / 名称 | 5272(主号7) / 5273(主号8) / 5276(副号2) / 5280(副号3) / 5281(副号4) | 换成你自己的店铺；`wb.py shops` 可实时查出 |
+| 店铺 ID / 名称 | 作者环境示例：9352(袁州1) / 9353(袁州2) / 9356(袁州3) | 换成你自己的店铺；`wb.py shops` 可实时查出 |
 | Python 路径 | `C:\Users\madokka\.workbuddy\binaries\python\envs\default\Scripts\python.exe` | 换成你的 venv Python；下文命令统一用 `python` 表示 |
 | 仓库位置 | 任意目录（脚本按包位置自动识别，相对路径） | 把本目录放到你想放的位置即可 |
 
@@ -35,8 +35,9 @@
 | 文档 | 读它解决什么问题 |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 模块分层、职责设计、解耦成果与数据流转规则 |
-| [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范：分层依赖、单文件拆分标准、类型与并发规范、新功能 6 步扩展流程 |
-| [CLI.md](CLI.md) | 39 个子命令全集参数、示例、退出码；Python 库调用方式 |
+| [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范：分层依赖、单文件拆分标准、类型与并发规范、新功能 6 步扩展流程、按需测试门禁 |
+| [REUSE_GUIDE.md](REUSE_GUIDE.md) | ★ 开发复用指南：**能做 X 用哪个模块/函数**速查表、可抄代码模板、复用铁律、一键重扫公共 API |
+| [CLI.md](CLI.md) | 40 个子命令全集参数、示例、退出码；Python 库调用方式 |
 | [USAGE.md](USAGE.md) | 按情景分步操作（初始化/刷新凭证/上新/改价/促销/折扣/清理/每日自动） |
 | [CREDENTIALS.md](CREDENTIALS.md) | 两套鉴权、凭证结构、如何刷新、失效表现、安全 |
 
@@ -60,7 +61,7 @@
    ```
    python wb.py shops
    ```
-   应返回你的店铺列表（本文档作者环境为 5 家：主号7/主号8/副号2/副号3/副号4，你的是你自己的）。
+   应返回你的店铺列表（数量与 ID 由 credentials.json 决定；作者环境为 3 家）。
 2. **看状态**：`data/logs/daily_*.log` 最近一次结果；`data/credentials.json` 是否各店三件套齐全。
 3. **查一下就能动手的命令**（都在**仓库根目录**下执行）：
    ```bash
@@ -72,5 +73,6 @@
    > ⚠ **严禁频繁同步与写后验证（默认关闭）**：写操作（改价 price/库存 stock/下架 trash/折扣 discount/清理 clean/上架 replicate/改尺寸 dimension 等）默认**不做 BCS 同步、不做写后验证、不自动合并映射表**，执行完成在控制台打印一行提示后**直接结束**。写后验证必须依赖全量同步，不同步拉取的快照是未修改前的旧数据；而 BCS 全量同步耗时长且极易触发风控。日常业务中**绝不要顺手执行同步与合并**；只有在极低频的全局盘点或用户明确手动要求时才执行。
    > 例外：`banned`（WB 快通道自动复核，`--no-verify` 关闭）与 `discount-scan`（同接口回验）内置轻量复核，非慢的 BCS 全量同步，默认保留。
 4. **任何异常**：先看 `data/logs/`，别重复盲跑；遇到 401/403 去读 [CREDENTIALS.md](CREDENTIALS.md)。
+5. **要开发/改功能**：先读 [REUSE_GUIDE.md](REUSE_GUIDE.md)（复用清单 + 模板）→ 按 [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) 6 步落地 → 测试只跑改动相关：`python tests/run_tests.py --changed`（新增命令用 `--cmd <命令>`；全量 `python -m unittest tests/test_all_commands.py` 仅跨层改动/发版时跑）。
 
 > 完整命令参考与成功/失败判据见 [CLI.md](CLI.md) 和 [USAGE.md](USAGE.md)。

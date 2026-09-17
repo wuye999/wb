@@ -5,7 +5,7 @@ wb_ops 核心领域模型与数据契约 (Domain Models & DTOs)
 定义标准不可变数据实体，屏蔽异构平台字段命名分歧。
 """
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 
 @dataclass(slots=True, frozen=True)
@@ -90,8 +90,16 @@ class Shop:
 
 @dataclass(slots=True, frozen=True)
 class DiscountPlan:
-    """折扣批量修改规划输入模型"""
+    """折扣批量修改规划输入模型
+
+    threshold/below 为「折扣区间」双侧条件，取并集：
+      - threshold >= 0 → 命中「折扣 > threshold」
+      - below >= 0     → 命中「折扣 < below」
+      - 两者都为 -1 或 is_all=True → 不限折扣
+    例：threshold=55, below=40 → 「>55% 或 <40%」。
+    """
     threshold: int = 50
+    below: int = -1
     target_discount: int = 50
     name_filter: str = ""
     prefix_filter: str = ""
@@ -138,4 +146,75 @@ class CustomStockPlan:
     is_apply: bool = False
     skip_confirmation: bool = False
     sync_after: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class ComplaintProduct:
+    """投诉单关联商品（来源：投诉详情 brands[].products[]）"""
+    nm_id: int
+    name: str = ""
+    brand: str = ""
+    image_url: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class Complaint:
+    """WB 平台投诉单（callcenter supplier/appeals）
+
+    decide_counter 为界面「剩余天数」，仅在 is_decide_allowed 为真时由平台下发，
+    缺失时保持 None（不可与 0 混淆）。
+    """
+    appeal_id: int
+    shop_id: int
+    shop_name: str
+    cro_company: str = ""
+    theme_name: str = ""
+    parent_theme_name: str = ""
+    create_date: str = ""
+    status_id: int = 0
+    status: str = ""
+    is_read: bool = False
+    is_closed: bool = False
+    is_decide_allowed: bool = False
+    decide_counter: Optional[int] = None
+    products: Tuple[ComplaintProduct, ...] = field(default_factory=tuple)
+    raw_data: Optional[Dict[str, Any]] = field(default=None, repr=False)
+
+    @property
+    def is_pending(self) -> bool:
+        """是否为「未处理」投诉（等待回复）"""
+        return self.status_id == 1
+
+    @classmethod
+    def from_list_dict(
+        cls,
+        shop_id: int,
+        shop_name: str,
+        data: Dict[str, Any],
+        products: Tuple[ComplaintProduct, ...] = (),
+    ) -> "Complaint":
+        """从列表接口（v1/supplier/appeals）的单条数据构建实体"""
+        counter: Optional[int] = None
+        if data.get("is_decide_allowed") and data.get("decide_counter") is not None:
+            try:
+                counter = int(data["decide_counter"])
+            except (TypeError, ValueError):
+                counter = None
+        return cls(
+            appeal_id=int(data.get("id") or 0),
+            shop_id=int(shop_id or 0),
+            shop_name=str(shop_name or ""),
+            cro_company=str(data.get("cro_company") or ""),
+            theme_name=str(data.get("theme_name") or ""),
+            parent_theme_name=str(data.get("parent_theme_name") or ""),
+            create_date=str(data.get("create_date") or ""),
+            status_id=int(data.get("status_id") or 0),
+            status=str(data.get("status") or ""),
+            is_read=bool(data.get("is_read", False)),
+            is_closed=bool(data.get("is_closed", False)),
+            is_decide_allowed=bool(data.get("is_decide_allowed", False)),
+            decide_counter=counter,
+            products=tuple(products),
+            raw_data=data,
+        )
 

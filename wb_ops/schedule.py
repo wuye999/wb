@@ -53,6 +53,21 @@ def remove_all():
         print(f"  {name} -> {'OK' if code == 0 else 'FAIL'}")
 
 
+def print_plan(remove: bool = False) -> None:
+    """只读预览：打印将要创建（或删除）的任务定义，不调用 schtasks。"""
+    action = "删除" if remove else "创建"
+    print(f"[dry-run] 计划任务预览（将{action} {len(TASKS)} 个任务；未调用 schtasks）")
+    for name, st, param in TASKS:
+        if remove:
+            print(f"  schtasks /Delete /F /TN {name}")
+        else:
+            print(f"  {name}  {st}  ->  \"{PYW}\" \"{SCRIPT}\" {param}")
+    print("（确认无误后直接运行 wb.py schedule 创建；--remove 删除）")
+
+
 def run(args):
+    if getattr(args, "plan", False):
+        print_plan(remove=getattr(args, "remove", False))
+        return 0
     (remove_all if args.remove else create_all)()
     return 0

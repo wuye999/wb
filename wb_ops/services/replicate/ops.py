@@ -138,23 +138,6 @@ def run(action, args):
 
 
 def add_ops_args(p, *, with_price=False, with_stock=False):
-    g = p.add_mutually_exclusive_group()
-    g.add_argument("--sku", help="商品价格表卖家SKU")
-    g.add_argument("--name", help="商品价格表产品中文名包含")
-    g.add_argument("--prefix", help="商品价格表 vendorCode 前缀码")
-    g.add_argument("--vc", help="vendorCode 列表（逗号分隔）")
-    g.add_argument("--all", action="store_true", help="全部映射商品（默认）")
-    p.add_argument("--shops", help="限定店铺ID（逗号分隔，默认全部已 fetch 店铺）")
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
-    p.add_argument("--yes", action="store_true", help="跳过不可逆操作确认")
-    p.add_argument("--sync", action="store_true",
-                   help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
-    if with_price:
-        p.add_argument("--price", type=int, help="目标价（默认 floor(商品价格表双倍售价)）")
-        p.add_argument("--discount", type=int, help="折扣 0-100（不传=不改）")
-        p.add_argument("--club-discount", type=int, help="club折扣 0-100（不传=不改）")
-        p.add_argument("--keep-price", action="store_true", help="价格保持当前值（只改折扣/俱乐部折扣）")
-        p.add_argument("--auto-review", action="store_true",
-                       help="改价后自动「应用新价格」（降价 30-49.9%% 进审查时，精确匹配刚改价商品）")
-    if with_stock:
-        p.add_argument("--amount", type=int, default=0, help="目标库存（默认 0）")
+    """[薄转发] 参数定义唯一实现已下沉到 framework.cli_args（argparse-only，cli 与 service 共用）。"""
+    from wb_ops.framework.cli_args import add_ops_args as _impl
+    return _impl(p, with_price=with_price, with_stock=with_stock)

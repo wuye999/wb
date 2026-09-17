@@ -23,6 +23,7 @@ import re
 import string
 import time
 from datetime import datetime
+from typing import Dict
 
 import requests
 
@@ -51,11 +52,6 @@ CARD_INTERVAL = 0.5        # card.json 请求间隔（秒）
 DEFAULT_STOCK = 999        # 上架默认库存
 BATCH_SIZE = 50            # 新版批量上品单次最大商品数
 RE_REGION = re.compile(r"подольск|электросталь|хоругвино|колчанино|восток|север|юг", re.I)
-
-
-def fetch_wb_detail(nm_id):
-    """[已弃用] 旧版 WB detail 抓取桩函数（新版批量上品接口由 BCS 后端自动抓取，已无需本地抓取）"""
-    return None
 
 
 def parse_cn_stock(s):
@@ -118,24 +114,41 @@ def pick_source(vc, vc_rows, sid_main):
 
 # ---------------- 目标仓库 ----------------
 _warehouse_cache = {}
-# 最后兜底：当前账号 5 店实测主仓库（2026-08-20；快照与仓库 API 均失效时使用，换账号需更新）
-KNOWN_WAREHOUSES = {5272: 1947728, 5273: 1947984, 5276: 1948249, 5280: 1948377, 5281: 1948455}
+# 账号级兜底仓库表：从 data/state/known_warehouses.json 读取（{"店铺ID": 仓库ID}），
+# 仅在「默认仓库 API 与仓库列表 API 都拿不到」时才使用；换账号只需更新该数据文件，代码不再写死。
+KNOWN_WAREHOUSES_JSON = os.path.join(config.STATE_DIR, "known_warehouses.json")
+
+
+def load_known_warehouses() -> Dict[int, int]:
+    """读取账号级兜底仓库表（缺失/损坏返回空 dict）。只接受纯数字键值。"""
+    if not os.path.exists(KNOWN_WAREHOUSES_JSON):
+        return {}
+    data = safe_load_json(KNOWN_WAREHOUSES_JSON, default={})
+    if not isinstance(data, dict):
+        return {}
+    out: Dict[int, int] = {}
+    for k, v in data.items():
+        try:
+            out[int(k)] = int(v)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def main_warehouse(sid, shops_data=None):
-    """店铺主仓库：默认仓库（莫斯科，config.DEFAULT_WAREHOUSE_NAME）→ 俄罗斯地区仓 → KNOWN_WAREHOUSES 兜底。
-    成都仓库（国内仓，name="成都仓库"）不参与选择。失败返回 None。"""
+    """店铺主仓库：默认仓库（莫斯科，config.DEFAULT_WAREHOUSE_NAME）→ 俄罗斯地区仓 → 兜底表。"""
     if sid in _warehouse_cache:
         return _warehouse_cache[sid]
     # 1. 默认仓库（莫斯科）
     wh_id = bcs.default_warehouse_id(sid)
-    # 2. 俄罗斯其他地区仓兜底（莫斯科之外，如 подольск 等）
+    # 2. 俄罗斯其他地区仓兜底（莫斯科之外，如 подольск 等；成都仓库=国内仓不参与）
     if wh_id is None:
         whs = bcs.fetch_warehouses(sid)
-        wh_id = next((w["id"] for w in whs if RE_REGION.search(w.get("name") or "")), None)
-    # 3. 硬编码兜底（仓库 API 空返回时）
+        wh_id = next((w["id"] for w in whs if RE_REGION.search(w.get("name") or "")
+                      and "成都" not in (w.get("name") or "")), None)
+    # 3. 数据文件兜底（两个 API 都空返回时）
     if wh_id is None:
-        wh_id = KNOWN_WAREHOUSES.get(sid)
+        wh_id = load_known_warehouses().get(sid)
     _warehouse_cache[sid] = wh_id
     return wh_id
 
