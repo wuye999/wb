@@ -3,10 +3,14 @@
 wb_ops 马帮订单登记到飞书多维表格「订单登记」（原 爆品登记）
 
 流程：
-  1. 查询马帮待处理订单（复用 mabang.py：目标店铺 shop_map 过滤）
-  2. 逐单构建登记记录：
+  1. 拉取登记数据源（scope=latest 时**两路合并**）：
+       orderalllist 最近 500 条全状态订单 + 待处理订单（order.oTc tabId=7，最近 --days 天）
+       —— 合并目的：只做了匹配、未进预报/上传/交运流程的订单（如 NO_SKU）只出现在「待处理」，
+          orderalllist 拉不到；--no-pending 可关闭该合并
+  2. 逐单构建登记记录（**一律以本地数据为准**）：
        订单编号=平台单号（去重键）；日期=付款时间；店铺=shop_map 映射（袁州N(935x)）
-       BCS编号=vendorCode；商品中文名=映射表反查（NO_VC 留空）
+       BCS编号=vendorCode；商品中文名=本地映射表反查（查不到留空，仍登记）
+       库存SKU=本地商品价格表「库存SKU」列（第 8 列）；查不到一律留空（不回写马帮系统匹配值）
        wb编号=下单店铺快照 vendorCode→nmId（≠映射表主店码）；商品链接=WB 详情页
        订单量=订单摘要件数（解析不到默认 1）
   3. 按「订单编号」去重：已登记的不重复登记
@@ -139,6 +143,29 @@ def parse_qty(p):
     return int(t) if (t or "").isdigit() else 1
 
 
+def _merge_pending(orders, cred, args):
+    """把「待处理订单」（order.oTc tabId=7，最近 args.days 天）并入登记范围，按平台单号去重。
+
+    为什么需要（2026-09-17 用户规则）：只做了匹配、未进预报/上传/交运流程的订单
+    （如 NO_SKU=价格表缺库存SKU）只存在于「待处理」tab，orderalllist 拉不到 →
+    只按 orderalllist 登记会漏登这些订单（实测 419539845 / 419490094 缺失）。
+    这些订单的「库存SKU」允许留空，商品中文名以本地映射表（vc→中文名）为准。
+    """
+    def _key(o):
+        return str(o.get("platformOrderId") or o.get("id") or "")
+
+    try:
+        pend = mabang.fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
+    except Exception as e:
+        print(f"  [警告] 待处理订单拉取失败（本次仅用 orderalllist 登记）: {str(e)[:120]}")
+        return orders
+    seen = {_key(o) for o in orders}
+    extra = [o for o in pend if _key(o) and _key(o) not in seen]
+    print(f"[合并] 待处理订单（最近 {args.days} 天）{len(pend)} 单；"
+          f"其中 orderalllist 未覆盖 {len(extra)} 单已并入登记范围")
+    return orders + extra
+
+
 def build_records(args):
     """查询订单 → 目标店铺全量（含 NO_VC）→ 登记记录；返回 (records, skip_stats, cred)"""
     cred = mabang._mabang_cred()
@@ -165,16 +192,18 @@ def build_records(args):
               f"（无付款时间 {no_paid} 单不计）")
         orders = in_range
     elif args.scope == "latest":
-        # 默认：最近 500 条全状态订单（最新在前），按订单编号去重后只登记新增
+        # 默认：最近 500 条全状态订单（最新在前）+「待处理订单」两路合并（见 _merge_pending）
         print("\n[查询] 最近 500 条全状态订单（orderalllist，最新在前）...")
         orders = mabang.fetch_all_orders(cred, page_size=500, max_pages=1)
+        if not getattr(args, "no_pending", False):
+            orders = _merge_pending(orders, cred, args)
     else:
         print(f"\n[查询] 待处理订单（最近 {args.days} 天）...")
         orders = mabang.fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
     if not orders:
-        return [], {"空": 0}, cred
+        return [], {"空": 0}, {}, cred
 
-    vc2cn, _cn2sku = mabang.load_local_mapping()
+    vc2cn, cn2sku = mabang.load_local_mapping()
 
     # 各店快照 vendorCode→nmId（wb编号=下单店铺自己的码）
     shop_ids = {}
@@ -208,7 +237,7 @@ def build_records(args):
         except Exception as e:
             print(f"  [警告] 店{sid} 取消单查询失败（跳过排除）: {e}")
 
-    records, skip = [], {}
+    records, skip, notice = [], {}, {}
     for o in orders:
         p = mabang.parse_order(o)
         if p["shop"] not in shop_map:
@@ -222,9 +251,10 @@ def build_records(args):
             continue
         cn = vc2cn.get(p["vc"])
         if p["vc"] and cn is None:
-            skip["VC不在映射表"] = skip.get("VC不在映射表", 0) + 1
+            # 仍会登记（用户规则：以本地数据为准，查不到就留空），仅计数提示
+            notice["VC不在映射表(仍登记·中文名留空)"] = notice.get("VC不在映射表(仍登记·中文名留空)", 0) + 1
         elif not p["vc"]:
-            skip["无BCS编号"] = skip.get("无BCS编号", 0) + 1
+            notice["无BCS编号(仍登记)"] = notice.get("无BCS编号(仍登记)", 0) + 1
         wb_code = ""
         if p["vc"]:
             wb_code = str(snaps.get(p["shop"], {}).get(p["vc"]) or "")
@@ -241,15 +271,17 @@ def build_records(args):
             "店铺": [shop_label],
             "BCS编号": p["vc"] or None,
             "商品中文名": (cn or None) if p["vc"] else None,
-            # 库存SKU = 马帮订单列表实际选择的库存SKU（order_ellipsis_title）
-            "库存SKU": (p["matched_sku"] or None) or None,
+            # 库存SKU：以本地商品价格表「库存SKU」列为准（用户规则 2026-09-17）；
+            # 本地查不到（含只匹配未走完预报/上传/交运流程的单）→ 留空，
+            # 不再回写马帮系统的匹配值（避免 BCS-FSCH-982897107 / BCS-xxx-40-56 这类非法值）
+            "库存SKU": (cn2sku.get(cn) or None) if cn else None,
             "wb编号": wb_code or None,
             "商品链接": (f"https://www.wildberries.ru/catalog/{wb_code}/detail.aspx"
                         if wb_code else None),
             "订单量": parse_qty(p),
         }
         records.append(rec)
-    return records, skip, cred
+    return records, skip, notice, cred
 
 
 CSV_FIELDS = ["订单编号", "日期", "店铺", "BCS编号", "商品中文名", "库存SKU", "wb编号", "订单量", "结果"]
@@ -282,7 +314,7 @@ def run(args):
     table_id = resolve_table(base_token, args.table)
     print(f"[表格] base_token={base_token} table_id={table_id}（{args.table}）")
 
-    records, skip, _cred = build_records(args)
+    records, skip, notice, _cred = build_records(args)
     if not records:
         print("[完成] 无可登记订单")
         return 0
@@ -292,9 +324,10 @@ def run(args):
     todo = [r for r in records if str(r["订单编号"]) not in existing]
     dup = len(records) - len(todo)
     print(f"[圈定] 目标店铺订单 {len(records)} 单：将登记 {len(todo)} 单，"
-          f"已登记跳过 {dup} 单；排除: " +
-          (" / ".join(f"{k}={v}" for k, v in sorted(skip.items())) or "无"))
-    # 供编排层（orders-pipeline）读取本次新登记订单
+          f"已登记跳过 {dup} 单；真排除: " +
+          (" / ".join(f"{k}={v}" for k, v in sorted(skip.items())) or "无") +
+          ("；字段留空: " + " / ".join(f"{k}={v}" for k, v in sorted(notice.items())) if notice else ""))
+    # 供调用方（如 mabang-process / 人工）读取本次新登记订单
     args.registered_new = todo if args.apply else []
     for r in todo[:15]:
         print(f"  {r['订单编号']} | {r['店铺'][0] if r['店铺'] else '-'} | "

@@ -4,7 +4,8 @@ wb_ops 马帮订单处理一体脚本：
 匹配商品 → 生成预报单 → 依次上传预报单（自动发货）→ 物流交运 → 自动登记飞书
 过滤机制与既有流程一致：shop_map 店铺过滤 / 取消单排除（WB 门户）/
 NO_SKU（价格表缺库存SKU）只匹配不预报 / 幂等跳过（已预报、已交运）
-飞书登记：数据源=orderalllist 最近 500 条全状态订单，按订单编号去重只登新增；
+飞书登记：数据源=orderalllist 最近 500 条全状态订单 + 待处理订单（两路合并去重），按订单编号去重只登新增；
+    只做了匹配、未进预报/上传/交运流程的订单（如 NO_SKU）也会登记（库存SKU 可留空，中文名以本地映射表为准）；--no-pending 可关闭该合并
 URL 从 credentials.json 的 feishu.base_url 读取（--url 可覆盖）
 """
 import time
@@ -55,6 +56,7 @@ def run(args):
     ns_reg = SimpleNamespace(url=url, table=args.table, days=args.days,
                              page_size=args.page_size, scope="latest",
                              date="", begin="", end="", apply=args.apply,
+                             no_pending=getattr(args, "no_pending", False),
                              registered_new=[])
     try:
         code = feishu_register.run(ns_reg)
