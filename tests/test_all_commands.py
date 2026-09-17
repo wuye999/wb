@@ -82,6 +82,51 @@ class TestAllCommands(unittest.TestCase):
         self.assertIn("或", res.stdout)
         self.assertIn("<40", res.stdout)
 
+    def test_04c_discount_upload_two_phase(self):
+        """WB 改折扣两阶段提交（离线 mock，不触网/不写平台）。
+
+        依据抓包 `api/网络请求/wb批量修改折扣+降价提示.har`：`upload/task` 必须
+        先 `checkChange=true` 预检（只回弹窗标记、无 id），再 `checkChange=false`
+        真正提交（回 `data.id`）。旧实现 URL 写死 checkChange=true，导致只做了预检、
+        taskId 恒为 None，平台侧根本没落库。
+        """
+        from unittest import mock
+        from wb_ops.adapters import wb_client as wc
+
+        calls = []
+
+        def fake_request(session, method, url, **kwargs):
+            calls.append((method, url, kwargs.get("json")))
+            if url.endswith("checkChange=true"):
+                return {"data": {"priceModal": False, "quarantineModal": True}, "error": False, "errorText": ""}
+            return {"data": {"id": 164469388, "alreadyExists": False}, "error": False, "errorText": ""}
+
+        payload = [{"vendorCode": "BCS-QQNN-579331069", "nmID": 1579005260,
+                    "discount": 49, "currencyIsoCode": "CNY"}]
+        shop = {"shopId": 9352, "shopName": "袁州1", "cookie": "", "authorizev3": "t", "wb_seller_lk": "t"}
+        client = wc.WBClient(shop, root_version="v1.113.3")
+
+        with mock.patch.object(wc, "request", side_effect=fake_request):
+            res = client.upload_batch_discount(payload)
+
+        self.assertEqual([c[1].split("?")[-1] for c in calls],
+                         ["checkChange=true", "checkChange=false"])
+        self.assertEqual(calls[0][2], {"data": payload})
+        self.assertEqual(calls[1][2], {"data": payload})
+        self.assertTrue(res.success)
+        self.assertEqual(res.task_id, 164469388)   # 有任务号 = 真落库
+        self.assertTrue(res.quarantine_modal)
+        self.assertFalse(res.price_modal)
+
+        # precheck=False 时只提交一次，且仍必须带 checkChange=false
+        calls.clear()
+        with mock.patch.object(wc, "request", side_effect=fake_request):
+            res2 = client.upload_batch_discount(payload, precheck=False)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0][1].endswith("checkChange=false"))
+        self.assertEqual(res2.task_id, 164469388)
+        self.assertFalse(res2.quarantine_modal)
+
     def test_05_discount_aliases(self):
         res1 = self._run_cmd(["discount-wb", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
         res2 = self._run_cmd(["discount-scan", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)

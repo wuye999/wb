@@ -226,9 +226,9 @@ wb.py import-shelve  ⑥a 他人映射表导入上架（按 WB原始nmId 差集�
 
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）
-wb.py discount-wb    ⑧ WB 原生批量（按需调用）：list/goods/filter 按折扣从高到低找 >阈值（降序提前截断）→ WB 原生 upload/task 批量改（分批提交）→ 默认不做写后验证（生效延迟）；日常自动化默认仍走 BCS discount
+wb.py discount-wb    ⑧ WB 原生批量（按需调用）：list/goods/filter 按折扣排序找目标（降序取 >阈值；`--below N` 走升序取 <阈值；只给 `--below` 时不再拉降序侧）→ **两阶段提交** `upload/task?checkChange=true`（预检，仅回 price/quarantine 弹窗标记）→ `?checkChange=false`（真正落库，回 `data.id` 任务号）→ 默认不做写后验证（生效延迟）；日常自动化默认仍走 BCS discount
 wb.py discount       ⑧a BCS 全量（模式2，慢）：默认不自动同步 → 查（全量用 --threshold -1）→ 批量改 → 仅提示；加 --sync 才前置同步 + 提交后同步复核
-wb.py price-review   ⑧b ⚠ 报名/改折扣后必跑：查隔离区（quarantine/goods）待审商品 → 应用新价格（改折扣同样触发审核，不应用则新折扣不生效）
+wb.py price-review   ⑧b ⚠ 改折扣后**必跑且须 `--apply`**：查隔离区（quarantine/goods）待审商品 → 应用新价格；0%→49% 这类降幅落 30-49.9% 的商品会进隔离区，不「应用新价格」折扣不生效（实测隔离区会逐个列出对应 nmID）
 wb.py clean          ⑨ 草稿箱删除（nmUuid）+ 回收站删除（nmId，失败归零库存）；回收站统计以 countByFilter(TRASH) 实时计数为准（list(TRASH) 为列表缓存可能滞后）
 wb.py banned         ⑨b 查询被阻止商品（tableListImprovable 分页）→ dry-run → --apply moveNmsToTrash 移回收站 → count/列表自动复核
 wb.py appeals        ⑨c 只读投诉单：callcenter v1/appeals 列表（游标倒序翻页）→ 筛 status_id=1(等待回复) + decide_counter=N → v3/appeals/{id} 取 brands[].products[].nmid → 本地真源反查供应商代码（店快照→映射表，未收录即标注）→ 明细表 + 去重 nmId 行 + 去重 vendorCode 行 + CSV（不写平台）
@@ -278,7 +278,8 @@ wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传
 | 2026-09-16 | **开发体验补齐**：新增 `docs/REUSE_GUIDE.md`（能做 X 用哪个模块/函数速查 + 代码模板 + 复用铁律 + 一键重扫公共 API）；新增 `tests/run_tests.py` 按需测试选择器（`--changed` 自动选档 / `--cmd` 定向 / `--help-smoke` 秒级回归），门禁从「每次全量」改为「只跑改动相关」，全量仅在跨层改动或发版时执行。 |
 | 2026-09-16 | **改折扣支持双侧区间**：`wb.py discount` 新增 `--below N`（折扣<N 侧，与 `--threshold` 并集去重）；适配层新增 `WBClient.fetch_discount_goods_asc()` 走 WB 折扣**升序**列表（`sortOrder=1`，抓包已验证）——原降序实现「首条 ≤ threshold 即截断」无法覆盖低折扣区间，故不能再靠本地快照兜底。 |
 | 2026-09-17 | **结构审查整改（可移植性/去重/分层/卫生/测试覆盖）**：① 账号写死治理 —— 代码与文档里的「5 店 / 旧店铺ID」改为中性或动态文案，`replicate.KNOWN_WAREHOUSES` 改由数据文件 `data/state/known_warehouses.json` 驱动；② 真重复实现合并 —— ops 参数定义下沉 `framework/cli_args.py`（cli 与 ops 共用，保持启动零业务依赖）、`products.shop_ids_from_disk` 转发仓储、`support_svc` 删除与 `questions_watch` 重复的状态读写；③ 清理死代码/遗留 shim —— 删除 `order_pipeline.py`（零引用）、`replicate.fetch_wb_detail` 弃用桩、`llm_client` 兼容函数、CLI `--detail-source` 弃用参数；④ 分层修正 —— `order/mabang_stock.py` 内直接 requests 调用下沉到 `adapters/mabang_client`（`fetch_stock_list`/`download_file`），services 内已无原生 HTTP；⑤ 运维卫生 —— `ops_result.csv` 按月自动归档到 `data/logs/archive/`、技能去掉仓库镜像副本（唯一份在 `~/.workbuddy/skills/`）；⑥ 测试补全 —— 新增 9 个只读用例，**40 个命令全部有专属用例**（共 41 用例）。 |
-| 2026-09-17 | **飞书登记口径修正（用户规则）**：① 数据源由单一 orderalllist 改为 **orderalllist 最近500 + 待处理订单（tabId=7）两路合并去重**（只做了匹配、未进预报/上传/交运流程的订单只出现在待处理列表，仅按 orderalllist 会漏登；`--no-pending` 可关闭）；② **库存SKU 改为以本地商品价格表「库存SKU」列（第 8 列）为准，查不到一律留空**，不再回写马帮系统匹配值（消除 `BCS-xxx-40-56`、`ETPB-PINK` 等非法/错位值）；③ 商品中文名一律取本地映射表（查不到留空但**仍登记**）；④ 登记日志把「真排除」与「字段留空」分开计数，避免把仍登记的单误读成被排除。 |
+| 2026-09-17 | **改折扣两阶段提交修复（抓包驱动）**：据 `api/网络请求/wb批量修改折扣+降价提示.har` 确认 `upload/task` 必须**两步**——`?checkChange=true` 只做预检（仅回 `priceModal`/`quarantineModal` 弹窗标记，**无任务号、不落库**），`?checkChange=false` 才真正提交并回 `data.id`。旧实现 URL 写死 `checkChange=true`，导致 taskId 恒为 None、平台侧从未落库（表现为「改折扣没生效」）。适配层 `upload_batch_discount` 改为「预检 → 自动确认 → 提交」，新增 `precheck_batch_discount` 与 `DiscountUploadResult`（透出弹窗标记与真实任务号）；同时修两处逻辑/性能缺陷：① 只给 `--below` 时不再拉降序侧（`threshold=-1` 会翻遍全量目录，单次 12+ 分钟 → 修复后 42 秒）；② `_disc_matched` 在「两侧阈值均未启用」（`--vc` 精确定向）时放行，原先恒判不匹配导致 `discount --vc` 永远输出「无匹配」。新增离线用例 `test_04c_discount_upload_two_phase`（mock 断言 checkChange 两次调用顺序与任务号）。 |
+① 数据源由单一 orderalllist 改为 **orderalllist 最近500 + 待处理订单（tabId=7）两路合并去重**（只做了匹配、未进预报/上传/交运流程的订单只出现在待处理列表，仅按 orderalllist 会漏登；`--no-pending` 可关闭）；② **库存SKU 改为以本地商品价格表「库存SKU」列（第 8 列）为准，查不到一律留空**，不再回写马帮系统匹配值（消除 `BCS-xxx-40-56`、`ETPB-PINK` 等非法/错位值）；③ 商品中文名一律取本地映射表（查不到留空但**仍登记**）；④ 登记日志把「真排除」与「字段留空」分开计数，避免把仍登记的单误读成被排除。 |
 
 ## 九、外部依赖与运行环境
 

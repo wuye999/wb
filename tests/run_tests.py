@@ -269,6 +269,11 @@ def run_help_smoke(commands):
 def run_selected(methods):
     """按方法名加载并运行指定用例"""
     import importlib.util
+    # 本脚本启动时 sys.path[0] 是 tests/ 而非仓库根；测试用例若在进程内直接
+    # import wb_ops（如 test_04c 离线 mock 用例）会 ModuleNotFoundError。
+    # 对齐全量入口 `python -m unittest`（cwd=仓库根）的行为，先注入仓库根。
+    if BASE_DIR not in sys.path:
+        sys.path.insert(0, BASE_DIR)
     spec = importlib.util.spec_from_file_location(TEST_MODULE, TESTS_FILE)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[TEST_MODULE] = mod

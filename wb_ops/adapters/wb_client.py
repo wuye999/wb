@@ -8,7 +8,7 @@ import requests
 from typing import List, Dict, Any, Optional
 from .. import credentials
 from .. import common
-from ..domain.models import TaskResult
+from ..domain.models import DiscountUploadResult
 from ..framework.exceptions import AuthenticationError, PlatformApiError
 
 RETRY_SLEEPS = [1, 3, 8]
@@ -88,7 +88,12 @@ class WBClient:
     """Wildberries 官方 Web 接口封装"""
 
     DISC_LIST = "https://discounts-prices.wildberries.ru/ns/dp-api/discounts-prices/suppliers/api/v1/list/goods/filter"
-    DISC_UPLOAD = "https://discounts-prices.wildberries.ru/ns/dp-api/discounts-prices/suppliers/api/v1/upload/task?checkChange=true"
+    DISC_UPLOAD = "https://discounts-prices.wildberries.ru/ns/dp-api/discounts-prices/suppliers/api/v1/upload/task"
+
+    @classmethod
+    def _disc_upload_url(cls, check_change: bool) -> str:
+        """upload/task 的 URL 构造：checkChange=true（预检）/ false（真正提交）。"""
+        return f"{cls.DISC_UPLOAD}?checkChange={'true' if check_change else 'false'}"
 
     def __init__(self, shop_dict: Dict[str, Any], root_version: Optional[str] = None):
         self.shop_dict = shop_dict
@@ -182,39 +187,110 @@ class WBClient:
 
         return items
 
-    def upload_batch_discount(self, data_payload: List[Dict[str, Any]]) -> TaskResult:
-        """分批提交 WB 原生改折扣任务。"""
+    def precheck_batch_discount(self, data_payload: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """提交前预检（checkChange=true）：判定是否触发「降价提示 / 隔离区提示」弹窗。
+
+        Returns:
+            {"priceModal": bool, "quarantineModal": bool, "error": bool, "errorText": str}；
+            网络/解析异常直接抛出，由调用方决定是否降级提交。
+        """
+        res = request(self.session, "POST", self._disc_upload_url(check_change=True),
+                      json={"data": data_payload})
+        r_data = res.get("data") or {}
+        return {
+            "priceModal": bool(r_data.get("priceModal")),
+            "quarantineModal": bool(r_data.get("quarantineModal")),
+            "error": bool(res.get("error")),
+            "errorText": res.get("errorText") or "",
+        }
+
+    def upload_batch_discount(
+        self,
+        data_payload: List[Dict[str, Any]],
+        precheck: bool = True,
+    ) -> DiscountUploadResult:
+        """分批提交 WB 原生改折扣任务（两阶段：checkChange=true 预检 → checkChange=false 提交）。
+
+        实测（2026-09-17 抓包 `api/网络请求/wb批量修改折扣+降价提示.har`）：
+        1. `POST .../upload/task?checkChange=true` 只做**预检不落库**，仅返回
+           `{"data":{"priceModal":bool,"quarantineModal":bool}}`（无 id）；降幅较大时
+           WB 会要求先弹「降价提示 / 隔离区提示」，用户确认后才提交。
+        2. `POST .../upload/task?checkChange=false` 才是**真正提交**，返回
+           `{"data":{"id":<taskId>,"alreadyExists":bool}}`。
+
+        ⚠ 旧实现 URL 写死 `checkChange=true`，导致每次都停在预检阶段（响应里没有 id、
+        taskId 恒为 None），平台侧实际未落库 —— 这也是「改折扣没生效」的根因。
+
+        Args:
+            data_payload: 待提交记录列表（vendorCode / nmID / discount / currencyIsoCode）。
+            precheck: 是否先做预检（默认 True）。预检异常时降级直连提交，不阻断业务。
+
+        Returns:
+            DiscountUploadResult：含 task_id（真实提交的任务号）、是否已存在、
+            以及预检返回的 price/quarantine 弹窗标记。
+        """
         if not data_payload:
-            return TaskResult(success=True, processed_count=0, shop_id=self.shop_id)
+            return DiscountUploadResult(success=True, processed_count=0, shop_id=self.shop_id)
+
+        price_modal = False
+        quarantine_modal = False
+
+        if precheck:
+            try:
+                pre = self.precheck_batch_discount(data_payload)
+                price_modal = pre["priceModal"]
+                quarantine_modal = pre["quarantineModal"]
+                if pre.get("error"):
+                    return DiscountUploadResult(
+                        success=False,
+                        processed_count=0,
+                        error_message=pre.get("errorText") or "WB 预检返回未知错误",
+                        shop_id=self.shop_id,
+                        price_modal=price_modal,
+                        quarantine_modal=quarantine_modal,
+                    )
+            except Exception as e:
+                # 预检失败不阻断：预检仅是弹窗判定，降级直连提交（与平台「成功返回即生效」一致）
+                print(f"    [预检降级] {e}（跳过预检，直接提交）")
 
         try:
-            res = request(self.session, "POST", self.DISC_UPLOAD, json={"data": data_payload})
+            res = request(self.session, "POST", self._disc_upload_url(check_change=False),
+                          json={"data": data_payload})
             err = res.get("error")
             err_text = res.get("errorText") or ""
             r_data = res.get("data") or {}
             task_id = r_data.get("id")
+            already_exists = bool(r_data.get("alreadyExists"))
 
             if err:
-                return TaskResult(
+                return DiscountUploadResult(
                     task_id=task_id,
                     success=False,
                     processed_count=0,
                     error_message=err_text or "WB 返回未知错误",
                     shop_id=self.shop_id,
+                    already_exists=already_exists,
+                    price_modal=price_modal,
+                    quarantine_modal=quarantine_modal,
                 )
 
-            return TaskResult(
+            return DiscountUploadResult(
                 task_id=task_id,
                 success=True,
                 processed_count=len(data_payload),
                 shop_id=self.shop_id,
+                already_exists=already_exists,
+                price_modal=price_modal,
+                quarantine_modal=quarantine_modal,
             )
         except Exception as e:
-            return TaskResult(
+            return DiscountUploadResult(
                 success=False,
                 processed_count=0,
                 error_message=str(e),
                 shop_id=self.shop_id,
+                price_modal=price_modal,
+                quarantine_modal=quarantine_modal,
             )
 
 

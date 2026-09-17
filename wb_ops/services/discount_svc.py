@@ -12,7 +12,7 @@ import datetime
 from typing import List, Dict, Any, Optional
 
 from .. import config, common, credentials
-from ..domain.models import DiscountPlan, Product, TaskResult
+from ..domain.models import DiscountPlan, Product
 from ..storage.product_repo import ProductSnapshotRepository
 from ..storage.mapping_repo import MappingRepository
 from ..adapters.wb_client import WBClient
@@ -65,6 +65,9 @@ class DiscountService:
         total_matched = 0
         total_applied = 0
         total_failed = 0
+        quarantine_batches = 0
+        price_modal_batches = 0
+        task_ids: List[str] = []
 
         for shop_dict in active_shops:
             sid = shop_dict.get("shopId") or shop_dict.get("shop_id")
@@ -110,10 +113,14 @@ class DiscountService:
                         break
             else:
                 # 走 WB 原生列表：降序取「>threshold」侧；含 --below 时再取升序「<below」侧，并集去重
-                wb_goods = client.fetch_discount_goods_desc(
-                    threshold=-1 if plan.is_all else plan.threshold,
-                    limit=plan.limit,
-                )
+                # ⚠ 只给 --below 时 threshold 为 -1（高折扣侧已关闭）→ 绝不能再拉降序侧：
+                #   降序接口靠「首条 ≤ threshold 截断」，threshold=-1 永不截断会翻遍全量目录（实测 12+ 分钟）
+                wb_goods: List[Dict[str, Any]] = []
+                if plan.is_all or plan.threshold >= 0:
+                    wb_goods = client.fetch_discount_goods_desc(
+                        threshold=-1 if plan.is_all else plan.threshold,
+                        limit=plan.limit,
+                    )
                 if plan.below >= 0 and not plan.is_all:
                     wb_goods = wb_goods + client.fetch_discount_goods_asc(
                         threshold=plan.below, limit=plan.limit,
@@ -199,7 +206,15 @@ class DiscountService:
                 task_res = client.upload_batch_discount(payload)
                 if task_res.success:
                     shop_ok += len(chunk)
-                    print(f"    [批次 {i}/{len(chunks)}] 提交 {len(chunk)} 条 -> 成功(taskId={task_res.task_id})")
+                    modal_tag = self._modal_tag(task_res)
+                    if getattr(task_res, "quarantine_modal", False):
+                        quarantine_batches += 1
+                    if getattr(task_res, "price_modal", False):
+                        price_modal_batches += 1
+                    if task_res.task_id:
+                        task_ids.append(str(task_res.task_id))
+                    print(f"    [批次 {i}/{len(chunks)}] 提交 {len(chunk)} 条 -> 成功"
+                          f"(taskId={task_res.task_id}{modal_tag})")
                     for x in chunk:
                         all_rows.append({
                             "shop_id": sid,
@@ -247,6 +262,12 @@ class DiscountService:
             print("（确认无误后加 --apply 参数执行真正修改）\n")
         else:
             print(f"[完成] 共匹配 {total_matched} 条 | 成功 {total_applied} 条 | 失败/异常 {total_failed} 条")
+            if task_ids:
+                show = ",".join(task_ids[:5]) + ("..." if len(task_ids) > 5 else "")
+                print(f"[任务号] 已落库 {len(task_ids)} 个提交任务: {show}")
+            if price_modal_batches or quarantine_batches:
+                print(f"[预检] 降价提示 {price_modal_batches} 批 · 隔离区提示 {quarantine_batches} 批"
+                      f"（已自动确认并完成提交，无需人工点确认）")
             if log_path:
                 print(f"[日志] 明细已保存至: {log_path}\n")
             print("[重要提示] WB 平台降价/改折扣若使新价降幅落入 30-49.9%，商品将进入隔离区。")
@@ -283,9 +304,16 @@ class DiscountService:
             plan: 折扣规划（is_all / threshold / below）。
 
         Returns:
-            是否命中待改条件：is_all=True 恒真；否则「> threshold」或「< below」（各自 >=0 才启用）。
+            是否命中待改条件：is_all=True 恒真；两侧阈值均未启用（如 --vc 精确定向，
+            run_cli 会置 threshold=-1）同样视为「全部折扣」；否则「> threshold」或
+            「< below」（各自 >=0 才启用）。
         """
         if plan.is_all:
+            return True
+        if plan.threshold < 0 and plan.below < 0:
+            # 与 execute_plan 的条件展示（「全部折扣」）保持一致：
+            # --vc 精确定向时 threshold=-1、below=-1，若不在此放行会导致
+            # 任何折扣值都判为不匹配 → 命令恒输出「无匹配」（实测 2026-09-17）。
             return True
         if plan.threshold >= 0 and disc > plan.threshold:
             return True
@@ -305,6 +333,16 @@ class DiscountService:
             if nl not in (cn or "").lower() and nl not in (title or "").lower():
                 return False
         return True
+
+    @staticmethod
+    def _modal_tag(task_res: Any) -> str:
+        """把预检弹窗标记格式化为日志后缀（无弹窗返回空串）。"""
+        tags = []
+        if getattr(task_res, "price_modal", False):
+            tags.append("降价提示")
+        if getattr(task_res, "quarantine_modal", False):
+            tags.append("隔离区提示")
+        return f" · 预检: {'/'.join(tags)}" if tags else ""
 
     @staticmethod
     def _write_csv(rows: List[Dict[str, Any]]) -> str:

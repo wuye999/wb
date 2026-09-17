@@ -122,6 +122,20 @@ class TaskResult:
     shop_id: Optional[int] = None
 
 
+@dataclass(slots=True, frozen=True)
+class DiscountUploadResult(TaskResult):
+    """WB 改折扣提交结果（两阶段提交的预检弹窗标记 + 任务号）。
+
+    WB `upload/task` 为两阶段：`checkChange=true` 只做预检，返回是否需要弹窗
+    （priceModal=降价提示 / quarantineModal=隔离区提示，实测 2026-09-17 抓包
+    `api/网络请求/wb批量修改折扣+降价提示.har`），真正落库必须再以
+    `checkChange=false` 提交并拿到 `data.id`。
+    """
+    already_exists: bool = False
+    price_modal: bool = False
+    quarantine_modal: bool = False
+
+
 # 别名兼容
 ProductCard = Product
 
