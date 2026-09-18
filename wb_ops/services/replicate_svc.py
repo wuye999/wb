@@ -7,6 +7,8 @@ from typing import Any
 from .replicate import (
     replicate,
     import_shelve,
+    shelve_new,
+    shelve_old,
     clean,
     remote_wh,
     dimension,
@@ -18,6 +20,14 @@ from .replicate import (
 
 class ReplicationService:
     """商品搬家、库存与运维服务"""
+
+    def shelve_batch_new(self, args: Any) -> int:
+        """新版批量上品用例"""
+        return shelve_new.run(args)
+
+    def shelve_legacy_old(self, args: Any) -> int:
+        """旧版上品建卡用例"""
+        return shelve_old.run(args)
 
     def replicate_across_shops(self, args: Any) -> int:
         """跨店复制上架用例"""
@@ -93,4 +103,13 @@ def run_clean(args):
 
 def run_remote_wh(args):
     return replicate_svc.delete_remote_warehouse_stocks(args)
+
+
+def run_shelve(args):
+    return replicate_svc.shelve_batch_new(args)
+
+
+def run_shelve_old(args):
+    return replicate_svc.shelve_legacy_old(args)
+
 

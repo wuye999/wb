@@ -1,4 +1,4 @@
-﻿# wb_ops · 开发要求与代码格式规范（DEVELOPMENT_GUIDE.md）
+# wb_ops · 开发要求与代码格式规范（DEVELOPMENT_GUIDE.md）
 
 > 本文档面向所有参与 `wb_ops` 项目的开发者、维护者及 AI 编码助手，明确系统未来的**架构设计准则、代码编写规范、文件体积控制、并发安全要求与标准化扩展流程**。
 > 所有代码提交必须严格遵循本文档约定，保持系统整洁高可用与高可维护性。
@@ -205,37 +205,48 @@
 步骤 6: 自动化测试集成 (Tests)
    └── 在 tests/test_all_commands.py 中添加该子命令的自动化测试用例（默认测试 dry-run 行为），
    └── 在 tests/run_tests.py 的 PATH_HINTS 中登记「改动文件 → 命令」映射，
-   └── 执行 python tests/run_tests.py --cmd <新命令>（含导入检查与该命令 --help 冒烟）全绿后提交；
-   └── 仅在跨层/架构级改动时才需全量：python -m unittest tests/test_all_commands.py。
+   └── 执行 python tests/run_tests.py --cmd <新命令>（仅测该新增命令，无需全量测试）通过后即可提交。
 ```
 
 ---
 
 ## 七、测试覆盖与质量把关规范
 
-1. **测试套件要求**：
-   - 仓库核心测试套件为 `tests/test_all_commands.py`，配套轻量选择器 `tests/run_tests.py`。
-   - 目前已实现对系统全部 40 个 CLI 命令的自动化覆盖验证（**每个命令都有专属用例**：2026-09-17 补齐了 import-shelve / ai-test / feishu-register / mabang-stock-register / mabang-stock-daily / cookies-update / daily / schedule 及 discount 两个别名的只读用例，合计 41 个用例）。
-2. **提交前门禁：按需测试，不做无谓全量**（全量会真连平台，约 5 分钟）：
-   - **日常只跑改动相关**（推荐首选）：在根目录运行
+1. **核心铁律：新增或修改功能时，无需进行全量测试，只需测新增或修改的功能**：
+   - 严禁在日常开发、新增命令或修复 bug 时盲目执行全量测试（全量测试耗时约 5 分钟且包含真实网络调用）。
+   - 任何改动仅需定向测试新增或修改的功能，保证改动范围内的功能逻辑正确即可。
+
+2. **日常测试方法**：
+   - **定向测试指定功能（首选推荐）**：新增/修改某命令时，只需定向运行对应命令的用例：
      ```bash
-     python tests/run_tests.py --changed
+     python tests/run_tests.py --cmd <命令名>
+     # 示例：修改了上架相关功能
+     python tests/run_tests.py --cmd shelve,shelve-old
      ```
-     选择器用 git 探测改动文件并自动选档：业务模块改动 → 只跑该模块对应命令的用例；`cli.py`/`registry.py`/`domain/` 等注册与声明类改动 → 只跑「改动模块导入检查 + 全命令 `--help` 冒烟」（秒级）；跨层共享件（`framework/`、`common.py`、`config.py`、`credentials.py`、`storage/`）或未登记文件 → 自动回退全量。
-   - **指定命令**（新增/修改某命令时必跑，这是唯一覆盖新命令真实行为的入口）：
+   - **自动探测改动测试（默认行为）**：
      ```bash
-     python tests/run_tests.py --cmd appeals,discount
+     python tests/run_tests.py
+     # 或显式：python tests/run_tests.py --changed
      ```
-   - **最快回归**（只验证注册与参数解析没坏）：`python tests/run_tests.py --help-smoke`
-   - **全量时机**：跨层/架构级改动、发版、或选择器判定为全量时：
+     选择器自动通过 git 探测改动文件，只跑改动模块对应命令的用例；若改动涉及底层通用工具，只做秒级语法与导入冒烟，绝不自动回退全量测试。
+   - **最快参数与语法冒烟**（验证命令注册与参数解析无误）：
      ```bash
-     python -m unittest tests/test_all_commands.py    # 或 python tests/run_tests.py
+     python tests/run_tests.py --help-smoke
      ```
-   - 严禁带失败测试提交代码；`--plan` 可先看将要执行哪些用例而不真正执行。
+   - **预览用例清单（不真正执行）**：
+     ```bash
+     python tests/run_tests.py --plan
+     ```
+   - **全量测试（仅限人工显式手动触发）**：
+     日常开发和功能改动**严禁跑全量**。仅在重大版本发布且人工显式指定 `--all` 时才使用：
+     ```bash
+     python tests/run_tests.py --all  # 仅人工特殊场景显式触发
+     ```
+   - 严禁带失败测试提交代码。
 3. **测试安全保护**：
    - 自动化测试中的写操作命令，严禁附带 `--apply`，必须保证测试过程为安全只读（dry-run），绝不污染线上真实店铺数据。
 4. **新增命令的同步义务（缺一不可）**：
-   - `tests/test_all_commands.py`：命令名加入 `subcommands` 列表、同步 `assertEqual` 计数（当前 40）、新增只读用例；
+   - `tests/test_all_commands.py`：命令名加入 `subcommands` 列表、同步 `assertEqual` 计数（当前 42）、新增只读用例；
    - `tests/run_tests.py`：在 `PATH_HINTS` 中补「改动文件 → 命令」映射（否则该文件改动会被判定为全量）；
-   - 文档：`docs/CLI.md`、`docs/USAGE.md`、`docs/REUSE_GUIDE.md`、以及各处「40 个命令」计数。
+   - 文档：`docs/CLI.md`、`docs/USAGE.md`、`docs/REUSE_GUIDE.md`、以及各处「42 个命令」计数。
 5. **复用优先**：动手写新功能前先查 **[REUSE_GUIDE.md](REUSE_GUIDE.md)**（可用依赖/函数速查、代码模板、决策表），避免重新造轮子或另立代码风格。

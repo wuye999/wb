@@ -291,6 +291,33 @@ def build_parser():
     p.add_argument("--apply", action="store_true", help="真正执行删除（不可逆）")
     p.add_argument("--yes", action="store_true", help="确认永久删除（后台运行必备）")
 
+    def _add_shelve_args(parser):
+        parser.add_argument("nms", nargs="*", help="WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）")
+        parser.add_argument("--nm", default="", help="WB 商品码（逗号分隔多个，兼容命令行参数传参）")
+        parser.add_argument("--vc", default="", help="完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）")
+        parser.add_argument("--prefix", default="", help="4位前缀码（如 ABCD 或 BCS-ABCD）")
+        parser.add_argument("--price", type=float, default=None, help="指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导")
+        parser.add_argument("--dims", default="", help="自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）")
+        parser.add_argument("--length", type=int, default=None, help="包装长 (cm)")
+        parser.add_argument("--width", type=int, default=None, help="包装宽 (cm)")
+        parser.add_argument("--height", type=int, default=None, help="包装高 (cm)")
+        parser.add_argument("--weight", type=float, default=None, help="包装毛重 (kg)")
+        parser.add_argument("--shops", default="", help="目标店铺 ID（逗号分隔，如 9352,9353；默认上架到全部活跃店铺）")
+        parser.add_argument("--stock", type=int, default=999, help="上架库存量（默认 999）")
+        parser.add_argument("--cn", default="", help="商品中文名（辅助匹配价格与包装规格）")
+        parser.add_argument("--file", default="", help="批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）")
+        parser.add_argument("--cn-stock", default="", help="按中文名指定库存（'中文名:库存,...'）")
+        parser.add_argument("--interval", type=float, default=1.0, help="批次/商品请求间隔秒（默认 1.0）")
+        parser.add_argument("--apply", action="store_true", help="真正调用平台接口执行（默认仅 dry-run 预览）")
+        parser.add_argument("--sync", action="store_true", help="执行完成后触发全量同步并合并映射表")
+        parser.add_argument("--no-verify", action="store_true", help="跳过写后验证")
+
+    p = sub.add_parser("shelve", help="新版批量上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）")
+    _add_shelve_args(p)
+
+    p = sub.add_parser("shelve-old", help="旧版上架建卡：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡）")
+    _add_shelve_args(p)
+
     return ap
 
 

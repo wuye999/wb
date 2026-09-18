@@ -24,6 +24,7 @@ class TestAllCommands(unittest.TestCase):
 
     def _run_cmd(self, args, expect_code=0):
         cmd = [PYTHON, WB_SCRIPT] + args
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         res = subprocess.run(
             cmd,
             cwd=BASE_DIR,
@@ -31,6 +32,7 @@ class TestAllCommands(unittest.TestCase):
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
         )
         if expect_code is not None:
             self.assertEqual(
@@ -39,6 +41,7 @@ class TestAllCommands(unittest.TestCase):
                 f"Command failed: {' '.join(args)}\nStderr: {res.stderr}\nStdout: {res.stdout}",
             )
         return res
+
 
     # ---------------- 1. 全部 40 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
@@ -51,9 +54,9 @@ class TestAllCommands(unittest.TestCase):
             "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
             "mabang-forecast", "feishu-register", "mabang-stock-register",
             "mabang-stock-daily", "mabang-process", "cookies-update",
-            "daily", "schedule", "remote-wh"
+            "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 40)
+        self.assertEqual(len(subcommands), 42)
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -336,6 +339,74 @@ class TestAllCommands(unittest.TestCase):
         self.assertIn("WB_Daily_Morning", res.stdout)
         self.assertIn("schtasks", res.stdout)
 
+    def test_40_shelve_dry_run(self):
+        # 支持单品/多品、指定前缀码与尺寸重量等灵活参数
+        res = self._run_cmd(["shelve", "248364237", "388854754", "--price", "59", "--prefix", "ABCD", "--dims", "10*20*30/0.5"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertIn("248364237", res.stdout)
+        self.assertIn("388854754", res.stdout)
+
+    def test_41_shelve_old_dry_run(self):
+        # 支持指定任意自定义完整 vendorCode
+        res = self._run_cmd(["shelve-old", "248364237", "--price", "59", "--vc", "BCS-CUSTOM-SPECIAL-12345", "--dims", "10*20*30/0.5"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertIn("BCS-CUSTOM-SPECIAL-12345", res.stdout)
+
+    def test_42_shelve_backend_interchangeable(self):
+        # 验证 replicate 与 import_shelve 可平滑无缝将 shelve_backend 切换为 shelve_old
+        from wb_ops.services.replicate import replicate, import_shelve
+        from wb_ops.services.replicate import shelve_new, shelve_old
+        self.assertTrue(hasattr(shelve_new, "execute_shelve"))
+        self.assertTrue(hasattr(shelve_old, "execute_shelve"))
+        # 验证两者签名与关键参数完全对称
+        import inspect
+        sig_new = inspect.signature(shelve_new.execute_shelve)
+        sig_old = inspect.signature(shelve_old.execute_shelve)
+        self.assertEqual(list(sig_new.parameters.keys()), list(sig_old.parameters.keys()))
+
+    def test_43_legacy_payload_images_subject_id(self):
+        # 验证旧接口 build_legacy_payload 在无外部图片与合成 detail 时，仍能保证图片非空且 subjectId 提取正确
+        from wb_ops.domain.models import ShelveItem
+        from wb_ops.services.replicate.shelve_old import build_legacy_payload
+        from wb_ops.services.replicate.shelve_common import fetch_card_json
+        item = ShelveItem(
+            nm_id=248364237,
+            price=99.0,
+            vendor_code="BCS-CUSTOM-PAYLOAD-TEST",
+            length=10, width=20, height=30, weight=0.5
+        )
+        card = fetch_card_json(248364237) or {"imt_name": "测试商品", "imt_id": 1, "data": {"subject_id": 2290}}
+        payload, err = build_legacy_payload(item, [9352], {9352: 1929635}, card, None)
+        self.assertIsNone(err)
+        self.assertIsNotNone(payload)
+        sdata = payload["shopDatas"][0]
+        self.assertTrue(len(sdata["images"]) > 0, "图片链接不得为空")
+        self.assertTrue(len(sdata["mainImage"]) > 0, "主图链接不得为空")
+        self.assertGreater(sdata["subjectId"], 0, "类目ID必须大于0")
+        self.assertEqual(sdata["vendorCode"], "BCS-CUSTOM-PAYLOAD-TEST")
+
+    def test_44_legacy_payload_missing_warehouse(self):
+        # 验证仓库配置缺失时返回明确错误而非崩溃抛出 KeyError
+        from wb_ops.domain.models import ShelveItem
+        from wb_ops.services.replicate.shelve_old import build_legacy_payload
+        item = ShelveItem(nm_id=248364237, price=99.0, vendor_code="BCS-TEST-VC")
+        card = {"data": {"subject_id": 100}}
+        payload, err = build_legacy_payload(item, [99999], {}, card, None)
+        self.assertIsNone(payload)
+        self.assertIn("缺少对应发货仓库配置", err)
+
+    def test_45_shelve_old_csv_file_support(self):
+        # 验证 shelve-old 直接读取订单筛选 CSV 文件并进行预览
+        csv_file = r"C:\Users\Admin\Desktop\筛选非我店订单_20260917.csv"
+        if os.path.exists(csv_file):
+            res = self._run_cmd(["shelve-old", "--file", csv_file, "--shops", "9352,9353,9356"], expect_code=0)
+            self.assertIn("dry-run", res.stdout)
+            self.assertIn("1378756362", res.stdout)
+            self.assertIn("BCS-DZJF-209792332", res.stdout)
+            self.assertIn("原始VC", res.stdout)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+

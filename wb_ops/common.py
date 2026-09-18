@@ -36,7 +36,11 @@ def to_int(v, default=0):
 def ensure_utf8_stdout():
     """Windows 控制台强制 UTF-8 输出（避免中文乱码）。库环境下无 reconfigure 时静默跳过。"""
     try:
-        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 

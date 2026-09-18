@@ -32,6 +32,13 @@ from wb_ops import common
 from wb_ops import config
 from wb_ops.framework.safe_io import safe_load_json, atomic_dump_json
 from wb_ops.services.catalog_svc import catalog_svc
+from wb_ops.domain.models import ShelveItem
+# 上架底层实现解耦：可在 shelve_new（新批量推送接口）与 shelve_old（旧版建卡接口）之间自由切换
+from . import shelve_new as shelve_backend
+# from . import shelve_old as shelve_backend
+
+
+
 from .wb_card import (
     _BASKET_TABLE,
     basket_base as _basket_base,
@@ -376,92 +383,73 @@ def run(args):
             "vendorCodePrefix": prefix,
             "prefix_src": prefix_src,
             "stock": stock_for(cn, overrides),
+            "title": src_row.get("title") or "",
+            "main_image": src_row.get("repImg") or "",
+            "images": src_row.get("images") or "",
+            "subjectId": src_row.get("subjectId"),
+            "card_info": card_cache.get(int(nm_id)),
         })
 
-    # 2) 按目标店铺与库存分组，每组按 BATCH_SIZE (50) 分片推送到新批量上品接口
-    groups = {}
-    for it in valid_items:
-        key = (tuple(sorted(it["targets"])), it["stock"])
-        groups.setdefault(key, []).append(it)
+    # 2) 转换为标准 ShelveItem 领域实体，委托给上架底层接口统一执行
+    shelve_items = [
+        ShelveItem(
+            nm_id=it["sku"],
+            price=float(it["price_str"]),
+            vendor_code=it["vc"],
+            prefix=it["vendorCodePrefix"],
+            length=it["packageLength"],
+            width=it["packageWidth"],
+            height=it["packageHeight"],
+            weight=it["weightBrut"],
+            stock=it["stock"],
+            target_shops=it["targets"],
+            cn=it["cn"],
+            title=it["title"],
+            main_image=it["main_image"],
+            images=it["images"],
+            extra={
+                "src_sid": it["src_sid"],
+                "prefix_src": it["prefix_src"],
+                "subjectId": it["subjectId"],
+                "card_info": it["card_info"],
+            },
+        )
+        for it in valid_items
+    ]
 
-    total_chunks = sum((len(items) + BATCH_SIZE - 1) // BATCH_SIZE for items in groups.values())
-    curr_chunk = 0
-
-    for (target_tuple, stock_qty), items in groups.items():
-        shop_configs = [
-            {"id": sid, "warehouseId": warehouses[sid], "warehouseQuantity": stock_qty}
-            for sid in target_tuple
+    def replicate_row_formatter(row_data):
+        it = row_data["item"]
+        p_val = float(it.price or 0.0)
+        p_str = str(int(p_val)) if p_val.is_integer() else f"{p_val:.2f}"
+        return [
+            row_data["time"],
+            it.vendor_code or "-",
+            it.cn or "-",
+            str(it.nm_id),
+            it.extra.get("src_sid", "-"),
+            row_data["targets_str"],
+            it.prefix or "-",
+            p_str,
+            row_data["status"],
+            row_data["msg"],
         ]
-        target_str = ",".join(map(str, target_tuple))
 
-        for chunk_idx in range(0, len(items), BATCH_SIZE):
-            curr_chunk += 1
-            chunk = items[chunk_idx:chunk_idx + BATCH_SIZE]
-            sku_prices = [
-                {
-                    "sku": it["sku"],
-                    "price": it["price_str"],
-                    "packageLength": it["packageLength"],
-                    "packageWidth": it["packageWidth"],
-                    "packageHeight": it["packageHeight"],
-                    "weightBrut": it["weightBrut"],
-                    "vendorCodePrefix": it["vendorCodePrefix"],
-                }
-                for it in chunk
-            ]
-
-            print(f"\n[批次 {curr_chunk}/{total_chunks}] 推送 {len(chunk)} 个商品 → 店[{target_str}]（库存={stock_qty}）...")
-            try:
-                resp = bcs.batch_push_products(shop_configs, sku_prices, mode=1, carry_brand=1)
-                now = datetime.now().strftime("%H:%M:%S")
-                if resp.get("code") == 200:
-                    task_id = (resp.get("data") or {}).get("taskId") or "已提交"
-                    print(f"  ✓ 批次提交成功 (taskId={task_id})")
-                    for it in chunk:
-                        ok += 1
-                        writer.writerow([now, it["vc"], it["cn"], it["sku"], it["src_sid"],
-                                         target_str, it["vendorCodePrefix"], it["price_str"], "成功", f"taskId={task_id}"])
-                        for sid in it["targets"]:
-                            records.setdefault(it["vc"], {})[str(sid)] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    _save_records(records)
-                else:
-                    msg = resp.get("msg") or f"code={resp.get('code')}"
-                    print(f"  ✗ 批次提交失败: {msg}")
-                    for it in chunk:
-                        fail += 1
-                        writer.writerow([now, it["vc"], it["cn"], it["sku"], it["src_sid"],
-                                         target_str, it["vendorCodePrefix"], it["price_str"], "失败", msg])
-            except Exception as e:
-                now = datetime.now().strftime("%H:%M:%S")
-                print(f"  ✗ 批次请求异常: {e}")
-                for it in chunk:
-                    fail += 1
-                    writer.writerow([now, it["vc"], it["cn"], it["sku"], it["src_sid"],
-                                     target_str, it["vendorCodePrefix"], it["price_str"], "失败", str(e)])
-
-            if curr_chunk < total_chunks:
-                time.sleep(getattr(args, "interval", 1.0))
-
+    res = shelve_backend.execute_shelve(
+        shelve_items,
+        apply=True,
+        interval=getattr(args, "interval", 1.0),
+        sync=getattr(args, "sync", False),
+        no_verify=getattr(args, "no_verify", False),
+        overrides=overrides,
+        csv_prefix="复制上架",
+        writer=writer,
+        csv_path=csv_path,
+        row_formatter=replicate_row_formatter,
+        check_exists=False,
+    )
     csv_file.close()
-    print(f"\n[汇总] 计划 {len(plans)} | 成功 {ok} | 跳过 {skip} | 失败 {fail}（{time.time() - t0:.0f}s）")
+    print(f"\n[汇总] 计划 {len(plans)} | 成功 {res['ok']} | 跳过 {skip + res['skip']} | 失败 {fail + res['fail']}（耗时 {time.time() - t0:.0f}s）")
     print(f"明细：{csv_path}")
-
-    # ---- 写后验证：仅加 --sync 时 fetch 同步复核覆盖率（否则只打印提示，不自动做）----
-    if ok > 0 and getattr(args, "sync", False) and not args.no_verify:
-        print("\n[写后验证] 触发全店同步 + 拉取（~1.5 分钟）...")
-        try:
-            catalog_svc.fetch_all_shops_products()
-            shops_data2, _ = catalog_svc.load_all_shops()
-            vc_shops2, _, _ = build_coverage(shops_data2)
-            before_full = sum(1 for s in vc_shops.values() if len(s) == len(all_shop_ids))
-            after_full = sum(1 for s in vc_shops2.values() if len(s) == len(all_shop_ids))
-            per_shop = {sid: len([1 for s in vc_shops2.values() if sid in s]) for sid in all_shop_ids}
-            print(f"[验证] 全店覆盖 vc 数：{before_full} → {after_full}")
-            print(f"[验证] 各店在架 vc 数：{per_shop}")
-        except Exception as e:
-            print(f"[验证] 失败：{e}（可稍后手动 wb.py fetch 复核）")
-        catalog_svc.post_write_merge(fetch=False)
-    elif ok > 0:
-        common.print_write_hint()
     return 0
+
 

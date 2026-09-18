@@ -10,7 +10,7 @@
 ├── wb.py                    ★ 统一入口（薄启动器 → wb_ops.cli.main）
 ├── wb_ops/                  ★ 核心库（Python 包）
 │   ├── __init__.py            版本号 + 公共导出
-│   ├── cli.py                 ★ 统一 CLI 调度器（40 个子命令动态延迟分发）
+│   ├── cli.py                 ★ 统一 CLI 调度器（42 个子命令动态延迟分发）
 │   ├── config.py              非敏感配置：路径常量（BASE_DIR→data/）、默认阈值、VC_PREFIX_RE
 │   ├── credentials.py         ★ 统一凭证加载中枢（读 data/credentials.json）
 │   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8 / print_write_hint
@@ -66,6 +66,9 @@
 │       │   ├── wb_card.py     WB 原生商品卡片与尺寸解析器（独立拆分）
 │       │   ├── replicate.py   跨店复制上架
 │       │   ├── import_shelve.py 他人映射表导入上架
+│       │   ├── shelve_new.py  新版批量上架（POST /products/batch/push）
+│       │   ├── shelve_old.py  旧版上品建卡（POST /system/wbCollection/wb/new）
+│       │   ├── shelve_common.py 上架公共解析/查重/降级提取器
 │       │   ├── dimension.py   批量尺寸毛重修改
 │       │   ├── dims_check.py  偏差商品排查
 │       │   ├── clean.py       草稿箱/回收站清理
@@ -77,7 +80,7 @@
 │           ├── ai_reply_test.py AI 回复效果测试
 │           └── complaints.py  WB 平台投诉单查询（未处理/剩余天数 → 去重商品编号）
 ├── tests/                    ★ 自动化测试套件
-│   ├── test_all_commands.py   覆盖全部 40 个 CLI 命令 / 40 个用例的集成测试（100% PASS，全量约 5 分钟）
+│   ├── test_all_commands.py   覆盖全部 42 个 CLI 命令 / 43 个用例的集成测试（100% PASS，全量约 5 分钟）
 │   └── run_tests.py           按需测试选择器（--changed / --cmd / --help-smoke，日常只跑改动相关）
 ├── data/                     ★ 统一数据目录（本地专属，不进 git）
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
@@ -109,7 +112,7 @@
 
 ```
 表现与调度层 (Presentation)
-  └── cli.py（动态按需延迟加载路由，40 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+  └── cli.py（动态按需延迟加载路由，42 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
         │ 动态调度 (Command DTO)
         ▼
 业务用例服务层 (Services)
@@ -222,6 +225,8 @@ wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-
 wb.py dimension         ⑤a 按商品价格表「尺寸」列批量改尺寸 → POST shopKeeper/dimension/batch → 写 CSV → 结束（不同步/不做写后验证）
 wb.py replicate      ⑥ 跨店复制上架（vc×多店，基于本地快照；单批50个批量推送）→ 上架成功即结束（默认不同步/不自动 merge）
 wb.py import-shelve  ⑥a 他人映射表导入上架（按 WB原始nmId 差集与我方前缀码）→ 一次请求多店上架 → 结束（默认不同步/不自动 merge）
+wb.py shelve         ⑥b 新版批量上架（指定/智能解析 nm/vc/前缀/价格/尺寸/店铺，分批 50 推送）→ 成功即结束
+wb.py shelve-old     ⑥c 旧版上品建卡（指定/智能解析 nm/任意自定义vc/俄文标题/主图建卡，单品多店推送）→ 成功即结束
 （★ 铁律：写操作默认禁止写后验证与同步合并）：写后验证必须依赖全量同步，不同步拉取的快照是未修改前的旧数据；而频繁全量同步耗时极长且极易触发限流风控。改价/库存/下架/折扣/清理/上架/尺寸等操作执行完毕即代表完成，默认严禁自行执行 fetch、merge 或自写脚本验证，除非用户显式手动要求。
 
 （促销线）

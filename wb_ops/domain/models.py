@@ -232,3 +232,23 @@ class Complaint:
             raw_data=data,
         )
 
+
+@dataclass
+class ShelveItem:
+    """上架商品数据载荷领域实体"""
+    nm_id: int                                   # WB 商品码 (sku)
+    price: Optional[float] = None                # 售价 (CNY)
+    vendor_code: Optional[str] = None            # 完整 vendorCode (如 BCS-ABCD-123456 或自定义)
+    prefix: Optional[str] = None                 # 4位前缀码 (如 ABCD 或 BCS-ABCD)
+    length: Optional[int] = None                 # 包装长 (cm)
+    width: Optional[int] = None                  # 包装宽 (cm)
+    height: Optional[int] = None                 # 包装高 (cm)
+    weight: Optional[float] = None               # 包装毛重 (kg)
+    stock: int = 999                             # 仓库库存
+    target_shops: Optional[List[int]] = None     # 目标店铺列表 (None=全部)
+    cn: str = ""                                 # 中文名 (可选，用于辅助匹配/日志)
+    title: str = ""                              # 俄文标题 (可选，旧接口需要)
+    main_image: str = ""                         # 主图链接 (可选，旧接口需要)
+    images: str = ""                             # 附图分号拼接 (可选，旧接口需要)
+    extra: Dict[str, Any] = field(default_factory=dict)
+

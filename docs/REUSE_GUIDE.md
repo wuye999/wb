@@ -43,7 +43,7 @@
 ## 二、5 分钟上手
 
 ```bash
-python wb.py --help                      # 40 个命令一览（或看 docs/CLI.md）
+python wb.py --help                      # 42 个命令一览（或看 docs/CLI.md）
 python wb.py shops                       # 验证凭证链路（BCS 通）
 python tests/run_tests.py --changed      # 只跑「本次改动相关」的测试（见第六节）
 ```
@@ -168,7 +168,7 @@ python tests/run_tests.py --changed      # 只跑「本次改动相关」的测�
 | `catalog_svc.py` | `run_fetch` `run_mapping` `run_mapping_import` `run_mapping_check` `run_mismatch_check` `run_review` `run_merge` `run_mapping_rename` `run_shops_mapping` | `catalog/`：`products.py`（快照）`mapping.py`（增量合并）`mapping_sync.py`（单店表/纠偏）`mapping_excel.py`（8-Sheet 生成）`mapping_check.py` `mismatch_check.py` `workbench.py`（HTML）`keywords.py` |
 | `discount_svc.py` | `run_cli`（discount/discount-wb/discount-scan）`run_promo_apply` `run_discount_bcs` `run_price_review` | `discount/`：`promo.py`（报名）`price_review.py`（隔离区审核）`discount_bcs.py`（BCS 慢速改折扣） |
 | `order_svc.py` | `run_orders` `run_mabang_orders` `run_mabang_forecast` `run_feishu_register` `run_mabang_process` `run_mabang_stock_register` `run_mabang_stock_daily` | `order/`：`orders.py` `mabang.py` `mabang_process.py` `mabang_stock.py` `mabang_stock_daily.py` `feishu_register.py` |
-| `replicate_svc.py` | `run_price` `run_stock` `run_trash` `run_replicate` `run_import_shelve` `run_dimension` `run_dims_check` `run_banned` `run_clean` `run_remote_wh` | `replicate/`：`ops.py`（薄门面）+ `ops_plan.py`（**计划构造，无副作用**）+ `ops_executor.py`（**分批执行/审计**）+ `dimension.py` `dims_check.py` `banned.py` `clean.py` `replicate.py` `import_shelve.py` `foreign_table.py` `wb_card.py` `remote_wh.py` |
+| `replicate_svc.py` | `run_price` `run_stock` `run_trash` `run_replicate` `run_import_shelve` `run_dimension` `run_dims_check` `run_banned` `run_clean` `run_remote_wh` `run_shelve` `run_shelve_old` | `replicate/`：`ops.py`（薄门面）+ `ops_plan.py`（**计划构造，无副作用**）+ `ops_executor.py`（**分批执行/审计**）+ `dimension.py` `dims_check.py` `banned.py` `clean.py` `replicate.py` `import_shelve.py` `foreign_table.py` `wb_card.py` `remote_wh.py` `shelve_new.py`（新版批量接口） `shelve_old.py`（旧版上品建卡） `shelve_common.py`（上架公共解析） |
 | `support_svc.py` | `run_questions` `run_questions_watch` `run_ai_test` `run_appeals`；类方法 `generate_ai_reply` / `load_replied` / `save_replied` / `load_shown` / `save_shown` | `support/`：`questions.py` `questions_watch.py` `ai_reply_test.py` `complaints.py` |
 
 > 门面里对外函数统一「薄转发」写法：`def run_xxx(args): return xxx_svc.method(args)`；领域实现内部 `run(args)` 返回 `0/1/130`。
@@ -358,28 +358,27 @@ registry.register("xxx", "wb_ops.services.<域>_svc", "run_xxx")
 
 ---
 
-## 六、测试：只测「改动/新增」的部分（不必每次全量）
+## 六、测试铁律：新增或者修改功能时，无需进行全量测试，只需要测新增或者修改的功能即可
 
-> 全量套件 `tests/test_all_commands.py` 会真连平台、跑 40 个命令，**约 5 分钟**；日常没必要全跑。
-> 新增了轻量选择器 `tests/run_tests.py`：
+> 全量套件会真连平台、耗时长（约 5 分钟），日常开发与功能改动严禁盲目跑全量。
+> 本项目使用轻量选择器 `tests/run_tests.py`：
 
 | 命令 | 跑什么 | 典型耗时 |
 | --- | --- | --- |
-| `python tests/run_tests.py --changed` | **日常首选**：用 git 探测本次改动文件 → 映射到相关命令与用例（未能映射的按跨层处理=全量） | 20s ~ 5min |
-| `python tests/run_tests.py --cmd appeals,discount` | 只跑指定命令：相关用例 + 这些命令的 `--help` 解析冒烟 | 10s~1min |
-| `python tests/run_tests.py --help-smoke` | 只跑全部命令的 `--help`（最快回归：命令注册/参数解析没坏） | ~20s |
-| `python tests/run_tests.py -k appeals` | 关键字透传给 unittest（`-k`） | 取决于匹配 |
-| `python tests/run_tests.py --list` | 打印「命令 ↔ 用例」映射表，确认某命令有哪些覆盖 | 即时 |
-| `python tests/run_tests.py --plan` | 只打印将要执行的用例，不执行（配合上面任一模式） | 即时 |
-| `python tests/run_tests.py` | **全量**（= `python -m unittest tests/test_all_commands.py`）：发版 / 跨层重构 / 改 `cli.py`+`framework` 时跑 | ~5min |
+| `python tests/run_tests.py --cmd <命令>` | **首选推荐**：只测指定新增/修改的命令（相关用例 + `--help` 冒烟） | 5s ~ 30s |
+| `python tests/run_tests.py`（或 `--changed`） | **默认行为**：自动 git 探测改动文件，只跑受影响命令的用例（通用文件改动只做轻量导入冒烟，绝不跑全量） | 秒级 ~ 30s |
+| `python tests/run_tests.py --help-smoke` | 最快回归：只验证全部命令注册与参数解析（不跑任何业务用例） | ~20s |
+| `python tests/run_tests.py -k <关键字>` | 关键字透传给 unittest（`-k`） | 取决于匹配 |
+| `python tests/run_tests.py --list` | 打印「命令 ↔ 用例」映射表 | 即时 |
+| `python tests/run_tests.py --plan` | 仅预览将要执行的用例，不真正执行 | 即时 |
+| `python tests/run_tests.py --all` | **【仅限人工显式指定】** 全量测试（发版前人工特殊确认时才用，开发改动严禁跑） | ~5min |
 
-**门禁规则（与 DEVELOPMENT_GUIDE 第七节一致）**
+**门禁规则**
 
-- 日常改动：`--changed`（或 `--cmd <本次涉及的命令>`）**全绿**即可提交。
-- 新增命令：必须 `--cmd <新命令>` 全绿，且 `--help-smoke` 全绿（证明注册与参数解析无回归）。
-- 跨层改动（`cli.py`、`framework/`、`common.py`、`config.py`、`credentials.py`、`storage/`）：跑**全量**。
-- 测试永远是**只读**的：新写用例禁止带 `--apply`。
-- 修改了测试文件本身或新增命令时，记得同步两处：`tests/test_all_commands.py`（命令列表 + 计数）与 `tests/run_tests.py`（`PATH_HINTS` 文件→命令映射）。
+- **新增/修改功能**：只需运行 `python tests/run_tests.py --cmd <本次涉及命令>` 或 `python tests/run_tests.py`，相关用例通过即可，**无需进行全量测试**。
+- **跨层/通用改动**：只需跑语法与导入冒烟（`--help-smoke`），不要盲目全量。
+- **测试安全性**：测试永远是**只读**的：新写用例禁止带 `--apply`。
+- 修改了测试文件本身或新增命令时，记得同步两处：`tests/test_all_commands.py` 与 `tests/run_tests.py`（`PATH_HINTS` 文件→命令映射）。
 
 ---
 

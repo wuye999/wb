@@ -37,7 +37,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 模块分层、职责设计、解耦成果与数据流转规则 |
 | [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范：分层依赖、单文件拆分标准、类型与并发规范、新功能 6 步扩展流程、按需测试门禁 |
 | [REUSE_GUIDE.md](REUSE_GUIDE.md) | ★ 开发复用指南：**能做 X 用哪个模块/函数**速查表、可抄代码模板、复用铁律、一键重扫公共 API |
-| [CLI.md](CLI.md) | 40 个子命令全集参数、示例、退出码；Python 库调用方式 |
+| [CLI.md](CLI.md) | 42 个子命令全集参数、示例、退出码；Python 库调用方式 |
 | [USAGE.md](USAGE.md) | 按情景分步操作（初始化/刷新凭证/上新/改价/促销/折扣/清理/每日自动） |
 | [CREDENTIALS.md](CREDENTIALS.md) | 两套鉴权、凭证结构、如何刷新、失效表现、安全 |
 
@@ -73,6 +73,6 @@
    > ⚠ **严禁频繁同步与写后验证（默认关闭）**：写操作（改价 price/库存 stock/下架 trash/折扣 discount/清理 clean/上架 replicate/改尺寸 dimension 等）默认**不做 BCS 同步、不做写后验证、不自动合并映射表**，执行完成在控制台打印一行提示后**直接结束**。写后验证必须依赖全量同步，不同步拉取的快照是未修改前的旧数据；而 BCS 全量同步耗时长且极易触发风控。日常业务中**绝不要顺手执行同步与合并**；只有在极低频的全局盘点或用户明确手动要求时才执行。
    > 例外：`banned`（WB 快通道自动复核，`--no-verify` 关闭）与 `discount-scan`（同接口回验）内置轻量复核，非慢的 BCS 全量同步，默认保留。
 4. **任何异常**：先看 `data/logs/`，别重复盲跑；遇到 401/403 去读 [CREDENTIALS.md](CREDENTIALS.md)。
-5. **要开发/改功能**：先读 [REUSE_GUIDE.md](REUSE_GUIDE.md)（复用清单 + 模板）→ 按 [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) 6 步落地 → 测试只跑改动相关：`python tests/run_tests.py --changed`（新增命令用 `--cmd <命令>`；全量 `python -m unittest tests/test_all_commands.py` 仅跨层改动/发版时跑）。
+5. **要开发/改功能**：先读 [REUSE_GUIDE.md](REUSE_GUIDE.md)（复用清单 + 模板）→ 按 [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) 6 步落地 → **测试铁律**：新增或修改功能时无需进行全量测试，只需测新增或修改的功能：`python tests/run_tests.py --cmd <命令>` 或 `python tests/run_tests.py`（严禁盲目跑全量测试）。
 
 > 完整命令参考与成功/失败判据见 [CLI.md](CLI.md) 和 [USAGE.md](USAGE.md)。

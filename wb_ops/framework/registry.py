@@ -77,4 +77,6 @@ registry.register("cookies-update", "wb_ops.adapters.cookies", "run_cookies_upda
 registry.register("daily", "wb_ops.daily", "run_daily_cmd")
 registry.register("schedule", "wb_ops.schedule", "run")
 registry.register("remote-wh", "wb_ops.services.replicate_svc", "run_remote_wh")
+registry.register("shelve", "wb_ops.services.replicate_svc", "run_shelve")
+registry.register("shelve-old", "wb_ops.services.replicate_svc", "run_shelve_old")
 

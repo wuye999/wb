@@ -1,25 +1,19 @@
 # -*- coding: utf-8 -*-
-"""wb_ops 测试选择器：只跑「本次改动 / 指定命令」相关用例，避免每次都全量（全量约 5 分钟、真连平台）。
+"""wb_ops 测试选择器：只跑「新增或修改功能」相关用例，严禁盲目全量测试。
+
+【核心原则】
+- 新增或者修改功能时，无需进行全量测试，只需要测新增或者修改的功能即可！
+- 默认执行（无参数）自动探测 git 改动，仅对改动涉及的命令运行测试。
+- 绝不因修改了通用/共享文件而自动触发全量测试（全量测试必须显式传入 --all 才会执行）。
 
 用法（均在仓库根目录执行，解释器用 venv python）：
-    python tests/run_tests.py                    # 全量（等价 python -m unittest tests/test_all_commands.py）
-    python tests/run_tests.py --changed          # 日常首选：git 探测改动文件 → 自动选档
-    python tests/run_tests.py --cmd appeals,discount
+    python tests/run_tests.py                    # 默认只测改动功能（自动 git 探测，不跑全量）
+    python tests/run_tests.py --cmd <命令>        # 新增/修改功能推荐：只测指定命令（如 --cmd shelve,shelve-old）
     python tests/run_tests.py --help-smoke       # 最快回归：改动模块导入检查 + 全部命令 --help 冒烟
-    python tests/run_tests.py -k appeals         # 关键字透传给 unittest（-k）
+    python tests/run_tests.py -k <关键字>         # 关键字过滤（透传 unittest -k）
     python tests/run_tests.py --list             # 打印「命令 ↔ 用例」映射
-    python tests/run_tests.py --plan --changed   # 只打印将要执行的用例，不执行
-
-三档判定（--changed 时自动选，避免过度测试也避免漏测）：
-- **全量**：改了跨层共享件（framework/、common.py、config.py、credentials.py、storage/、测试自身）或未登记文件；
-- **冒烟**：只改了 cli.py / registry.py / domain/ 等「注册与声明类」文件 → 跑改动模块导入检查 + 全部命令 --help 解析（秒级~20s），不连平台；
-- **定向**：只改了某业务模块 → 只跑该模块对应命令的用例 + 这些命令的 --help 冒烟。
-
-设计原则：
-- **不重复维护用例清单**：用例仍在 tests/test_all_commands.py；本脚本用 ast 解析出命令清单与用例名，
-  「命令 → 用例」按名称归一化包含匹配（去掉 -/_ 后），个别覆盖不到的用 EXTRA 手工补；
-- 命令清单取自测试文件 test_01 的 subcommands，保证与门禁口径一致；
-- ⚠ **新增命令时必须显式跑 `--cmd <新命令>`**（这是唯一能覆盖新命令真实行为的入口，--changed 只会给冒烟档）。
+    python tests/run_tests.py --plan             # 只打印将要执行的用例，不真正执行
+    python tests/run_tests.py --all              # 【注意：仅在发版等极特殊情况显式指定】全量测试（含真实平台调用，耗时约 5 分钟）
 """
 import argparse
 import ast
@@ -28,6 +22,13 @@ import re
 import subprocess
 import sys
 import unittest
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS_FILE = os.path.join(BASE_DIR, "tests", "test_all_commands.py")
@@ -44,11 +45,12 @@ DISCOUNT_CMDS = ["discount", "promo-apply", "discount-bcs", "price-review"]
 ORDER_CMDS = ["orders", "mabang-orders", "mabang-forecast", "feishu-register",
               "mabang-stock-register", "mabang-stock-daily", "mabang-process"]
 REPLICATE_CMDS = ["price", "stock", "trash", "replicate", "import-shelve", "dimension",
-                  "dims-check", "banned", "clean", "remote-wh"]
+                  "dims-check", "banned", "clean", "remote-wh", "shelve", "shelve-old"]
 SUPPORT_CMDS = ["questions", "questions-watch", "ai-test", "appeals"]
 
 PATH_HINTS = [
     # 注册与声明类：只影响解析/注册/新增模型 → 冒烟即可
+    ("wb.py", ["SMOKE"]),
     ("wb_ops/cli.py", ["SMOKE"]),
     ("wb_ops/framework/cli_args.py", ["SMOKE"]),
     ("wb_ops/framework/registry.py", ["SMOKE"]),
@@ -62,10 +64,13 @@ PATH_HINTS = [
     ("wb_ops/services/replicate/banned.py", ["banned"]),
     ("wb_ops/services/replicate/clean.py", ["clean"]),
     ("wb_ops/services/replicate/remote_wh.py", ["remote-wh"]),
+    ("wb_ops/services/replicate/shelve_new.py", ["shelve"]),
+    ("wb_ops/services/replicate/shelve_old.py", ["shelve-old"]),
+    ("wb_ops/services/replicate/shelve_common.py", ["shelve", "shelve-old", "replicate", "import-shelve"]),
     ("wb_ops/services/replicate/replicate.py", ["replicate"]),
     ("wb_ops/services/replicate/import_shelve.py", ["import-shelve"]),
     ("wb_ops/services/replicate/foreign_table.py", ["import-shelve"]),
-    ("wb_ops/services/replicate/wb_card.py", ["replicate", "import-shelve"]),
+    ("wb_ops/services/replicate/wb_card.py", ["replicate", "import-shelve", "shelve", "shelve-old"]),
     ("wb_ops/services/replicate/ops", ["price", "stock", "trash"]),
     ("wb_ops/services/replicate/", REPLICATE_CMDS),
     ("wb_ops/services/discount/discount_bcs.py", ["discount-bcs"]),
@@ -103,15 +108,15 @@ PATH_HINTS = [
     # 调度
     ("wb_ops/daily.py", ["daily"]),
     ("wb_ops/schedule.py", ["schedule"]),
-    # 跨层共享件与未登记文件 → 全量
-    ("wb_ops/framework/", ["ALL"]),
-    ("wb_ops/common.py", ["ALL"]),
-    ("wb_ops/config.py", ["ALL"]),
-    ("wb_ops/credentials.py", ["ALL"]),
-    ("wb_ops/storage/", ["ALL"]),
+    # 跨层共享件与通用工具：只做语法与导入冒烟，不自动升级为全量
+    ("wb_ops/framework/", ["SMOKE"]),
+    ("wb_ops/common.py", ["SMOKE"]),
+    ("wb_ops/config.py", ["SMOKE"]),
+    ("wb_ops/credentials.py", ["SMOKE"]),
+    ("wb_ops/storage/", ["SMOKE"]),
     ("tests/test_all_commands.py", ["SMOKE"]),
     ("tests/run_tests.py", ["SMOKE"]),
-    ("tests/", ["ALL"]),
+    ("tests/", ["SMOKE"]),
 ]
 
 # 纯文档/数据/临时产物改动不影响运行逻辑，不触发任何测试
@@ -158,15 +163,19 @@ def load_test_meta():
 
 
 def select_tests(commands, methods):
-    """命令 → 用例（归一化包含匹配 + EXTRA 补充）"""
-    picked = {}
+    """命令 → 用例（归一化最长匹配 + EXTRA 补充，避免 stock 误配 mabang-stock、shelve 误配 import-shelve）"""
+    picked = {cmd: [] for cmd in commands}
+    for m in methods:
+        norm_m = _norm(m)
+        matching_cmds = [c for c in commands if _norm(c) in norm_m]
+        if matching_cmds:
+            best_cmd = max(matching_cmds, key=lambda c: len(_norm(c)))
+            picked[best_cmd].append(m)
     for cmd in commands:
-        key = _norm(cmd)
-        hits = [m for m in methods if key in _norm(m)]
         for extra in EXTRA.get(cmd, []):
-            if extra in methods and extra not in hits:
-                hits.append(extra)
-        picked[cmd] = sorted(set(hits))
+            if extra in methods and extra not in picked[cmd]:
+                picked[cmd].append(extra)
+        picked[cmd] = sorted(set(picked[cmd]))
     return picked
 
 
@@ -194,22 +203,22 @@ def changed_paths():
 
 
 def classify(paths):
-    """改动文件 → (命令集合, 是否需全量, 是否需冒烟, 未登记文件)"""
-    cmds, need_all, need_smoke, unknown = set(), False, False, []
+    """改动文件 → (命令集合, 是否需冒烟, 未登记文件)
+    铁律：任何改动均不自动升级为全量测试，只测相关命令或跑轻量语法/导入冒烟。
+    """
+    cmds, need_smoke, unknown = set(), False, []
     for p in paths:
         for frag, val in PATH_HINTS:
             if p.startswith(frag):
-                if val == ["ALL"]:
-                    need_all = True
-                elif val == ["SMOKE"]:
+                if val == ["SMOKE"]:
                     need_smoke = True
                 else:
                     cmds.update(val)
                 break
         else:
             unknown.append(p)
-            need_all = True
-    return cmds, need_all, need_smoke, unknown
+            need_smoke = True
+    return cmds, need_smoke, unknown
 
 
 def run_import_check(paths):
@@ -290,19 +299,25 @@ def run_selected(methods):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="wb_ops 测试选择器（只跑改动/指定命令相关用例）")
-    ap.add_argument("--cmd", default="", help="指定命令名（逗号分隔）：跑相关用例 + 这些命令的 --help 冒烟")
-    ap.add_argument("--changed", action="store_true", help="用 git 探测本次改动 → 自动选档")
+    ap = argparse.ArgumentParser(description="wb_ops 测试选择器（只跑新增/修改功能相关用例，无需全量测试）")
+    ap.add_argument("--cmd", default="", help="指定命令名（逗号分隔）：只跑该命令用例 + 这些命令的 --help 冒烟")
+    ap.add_argument("--changed", action="store_true", help="用 git 探测本次改动 → 自动只跑改动相关命令（默认行为）")
     ap.add_argument("--help-smoke", action="store_true", help="改动模块导入检查 + 全部命令 --help 冒烟（最快回归）")
     ap.add_argument("-k", "--keyword", default="", help="关键字过滤（透传 unittest -k）")
     ap.add_argument("--list", action="store_true", help="打印「命令 ↔ 用例」映射表")
     ap.add_argument("--plan", action="store_true", help="只打印将要执行的用例，不执行")
-    ap.add_argument("--all", action="store_true", help="强制全量（无参数时默认即全量）")
+    ap.add_argument("--all", action="store_true", help="【显式手动】全量测试（极耗时且真连平台，开发/修改功能时无需使用）")
     args = ap.parse_args()
 
     commands, methods = load_test_meta()
     mapping = select_tests(commands, methods)
-    full_mode = not (args.cmd or args.changed or args.help_smoke or args.keyword or args.list)
+
+    # 1. 显式全量模式（只有传了 --all 才会执行）
+    if args.all:
+        if args.plan:
+            print(f"[计划] 显式指定全量：{len(methods)} 个用例 {FULL_HINT}")
+            return 0
+        return run_selected(methods)
 
     if args.list:
         print(f"命令 {len(commands)} 个 / 用例 {len(methods)} 个\n")
@@ -314,20 +329,25 @@ def main():
     if args.keyword and not (args.cmd or args.changed or args.help_smoke):
         return run_keyword(args.keyword)
 
+    # 2. 默认模式：未显式指定过滤时，默认只跑改动相关（--changed），绝不自动全量
+    if not (args.cmd or args.changed or args.help_smoke):
+        args.changed = True
+
     # ---------- 收集目标 ----------
-    picked, paths, need_all, need_smoke = set(), [], False, bool(args.help_smoke)
+    picked, paths, need_smoke = set(), [], bool(args.help_smoke)
     if args.changed:
         paths = changed_paths()
         if paths is None:
-            need_all = True
+            print("[提示] git 状态无法获取，默认执行导入检查与命令冒烟")
+            need_smoke = True
         else:
-            p_cmds, need_all, need_smoke_flag, unknown = classify(paths)
+            p_cmds, need_smoke_flag, unknown = classify(paths)
             picked |= p_cmds
             need_smoke = need_smoke or need_smoke_flag
             if unknown:
-                print(f"[提示] 未登记映射的改动文件（按全量处理）：{', '.join(unknown)}")
+                print(f"[提示] 未登记映射的文件改动（执行语法与导入冒烟）：{', '.join(unknown)}")
             if not paths:
-                print("\n[结果] 本次改动均为文档/数据类，无需跑测试（跳过）")
+                print("\n[结果] 当前工作区无相关代码改动，无需执行测试（跳过）")
                 return 0
     if args.cmd:
         picked |= {c.strip() for c in args.cmd.split(",") if c.strip()}
@@ -336,30 +356,20 @@ def main():
     if unknown_cmds:
         print(f"[警告] 未知命令（不在测试清单内，仅跑其 --help）: {', '.join(unknown_cmds)}")
 
-    if not full_mode and not args.all and need_all:
-        print("[判定] 改动涉及跨层共享件/未登记文件 → 执行全量测试")
-
-    # ---------- 档 1：全量 ----------
-    if full_mode or args.all or need_all:
-        if args.plan:
-            print(f"[计划] 全量：{len(methods)} 个用例 {FULL_HINT}")
-            return 0
-        return run_selected(methods)
-
     if not picked and not need_smoke:
-        print("[错误] 没有可执行的命令（用 --cmd/--changed/--help-smoke，或直接全量）")
-        return 1
+        print("[提示] 无改动命令或未指定命令，无需跑测试")
+        return 0
 
-    # ---------- 档 2/3：冒烟 + 定向 ----------
+    # ---------- 冒烟 + 定向执行（只跑新增/修改功能） ----------
     targets = sorted({m for c in picked for m in mapping.get(c, [])})
-    print(f"[选中命令] {', '.join(sorted(picked)) or '（无）'}")
+    print(f"[选中命令] {', '.join(sorted(picked)) or '（仅改动模块冒烟）'}")
     for c in sorted(picked):
         hits = mapping.get(c) or []
         print(f"  {c:24s} → {', '.join(hits) if hits else '（无专属用例 → 仅 --help 冒烟）'}")
     smoke_desc = f"改动模块导入检查 + 全部 {len(commands)} 个命令" if need_smoke else "选中命令的 --help 冒烟"
     print(f"[冒烟范围] {smoke_desc}")
     if not picked:
-        # 只改了 cli/registry/domain 这类文件：全命令冒烟即可
+        # 仅底层通用文件改动：全命令冒烟即可，不跑任何重型用例
         targets = []
         picked = set(commands)
     smoke_scope = list(commands) if need_smoke else sorted(picked)

@@ -24,6 +24,7 @@
 - **严禁在写操作后擅自执行同步、合并或写后验证**：在执行改价（`price`）、改库存（`stock`）、改折扣（`discount`）、下架（`trash`）、清理（`clean`）、改尺寸（`dimension`）等写操作后，**严禁顺手执行 `fetch`、`merge` 或自写脚本查询接口进行写后验证**！
   - **核心原因**：写后验证必须依赖 BCS 全量同步，若不同步拉取的快照只是未修改前的旧数据；而触发 BCS 全量同步耗时长（~40-50s/店），频繁全量同步极易导致平台风控限流。平台侧写操作提交成功即生效。
   - **规范行为**：所有写操作执行完毕后立即结束。绝对不要自行补跑 `fetch` 或 `merge`，除非用户在指令中明确提出要同步/合并。
+- **严禁执行全量测试，只测新增或修改的功能**：新增或者修改功能时，**无需进行全量测试**，只需要测新增或者修改的功能（使用 `python tests/run_tests.py --cmd <命令>` 或 `python tests/run_tests.py`）。全量测试会真连平台并耗时约 5 分钟，日常开发与修改功能严禁触发全量测试。
 - 确需改代码时，请先征得作者同意，由作者改好后通过 `git pull` 下发，**不要在本地直接改代码**（否则会分叉、`git pull` 冲突）。
 
 ## 快速开始
@@ -48,6 +49,8 @@ python wb.py dims-check --name 视黄醇面霜  # 只读：列出尺寸偏差待
 python wb.py clean --target all --apply # 清理（默认不自动同步，仅提示；加 --sync 自动同步并合并映射表）
 python wb.py replicate                  # 跨店复制上架（部分覆盖→补齐缺失店铺）
 python wb.py import-shelve 他人表.xlsx  # 他人映射表导入上架（他人有我方无）
+python wb.py shelve <nmId> --price 59   # 新版批量上架（输入 WB 商品码直接上架）
+python wb.py shelve-old <nmId> --price 59 # 旧版上品建卡（支持自定义完整 VC）
 python wb.py price-review --apply       # 价格审核：应用新价格
 python wb.py orders                     # 订单查询（同步+查询今天）
 # ▸ 写操作（改价/库存/下架/折扣/清理/上架/改尺寸）默认都不同步、不写后验证、不合并映射表；执行完成即结束，严禁擅自补跑 fetch+merge，仅在极低频全局盘点或用户显式要求时才跑。
@@ -71,7 +74,7 @@ python wb.py mabang-stock-register --apply              # 全量重建「马帮�
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 解耦实践 / 业务规则 / 数据流 |
 | [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程/按需测试门禁） |
 | [docs/REUSE_GUIDE.md](docs/REUSE_GUIDE.md)   | ★ 开发复用指南：能做 X 用哪个模块/函数 + 代码模板（写新功能前先读） |
-| [docs/CLI.md](docs/CLI.md)                   | 40 个命令全集参考 + Python 库调用 |
+| [docs/CLI.md](docs/CLI.md)                   | 42 个命令全集参考 + Python 库调用 |
 | [docs/USAGE.md](docs/USAGE.md)               | 日常情景使用流程               |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md)   | 鉴权与凭证                  |
 

@@ -179,6 +179,48 @@ python wb.py import-shelve 他人映射表.xlsx --cn-stock "充电线:100" --app
 - 明细：`data/logs/导入上架_*.csv`。
 - ⚠ 他人表须为同项目生成的映射表格式（含「映射总表」Sheet）；中文名命中我价格表 → 上架后 merge 可前缀自动归属，未命中的沿用他人 vc（后续按普通新商品走核对流程）。
 
+## 6d. WB商品码批量上架（shelve）——输入 WB 商品码批量上架（新版批量接口）
+
+场景：输入 1 个或多个 WB 商品码（nmId），自动提取包装尺寸重量、商品名称、推导前缀码或由用户指定价格/前缀/尺寸/完整 VC，分批上架到指定或全部店铺（走 BCS 新版批量上品接口 `POST /products/batch/push`）。
+
+> ⚠ **默认不自动同步**：写操作执行完成即结束。加 **`--sync`** 才会先同步+拉取全部店铺。
+
+```bash
+# 1) 单品或多品预览（自动补齐尺寸重量、中文名与前缀码）
+python wb.py shelve 248364237 --price 59                                    # 单品预览
+python wb.py shelve 248364237 388854754 --price 66 --apply                 # 多商品批量执行
+
+# 2) 手动指定 4 位前缀码与尺寸重量
+python wb.py shelve 248364237 --prefix ABCD --dims "10*20*30/0.5" --apply   # 指定前缀与包装规格
+
+# 3) 手动指定完整自定义 VC 与目标店铺
+python wb.py shelve 248364237 --vc BCS-CUSTOM-12345 --shops 9352 --apply    # 指定完整 VC
+
+# 4) 从文件读取多商品码批量上架
+python wb.py shelve --file 商品码清单.txt --price 55 --apply                   # 从 txt 文件读取批量上架
+```
+- 📌 **智能补齐（优先级链）**：未指定的字段按「CLI 参数 → 本地映射总表 → 本地商品价格表 → WB CDN card.json / BCS 详情代理」自动推导补齐。
+- 📌 **分批推送**：新版批量上品接口单批次最多 50 个商品推送，自动分批并异步轮询上架任务状态。
+- 📌 **防重复记录**：上架记录写入 `data/state/复制上架记录.json`，支持 nmId 与 vc 双向索引查重。
+
+## 6e. WB商品码旧版上架建卡（shelve-old）——输入 WB 商品码批量建卡（旧版建卡接口）
+
+场景：新版批量接口异常或需要更精细控制建卡内容时，使用旧版上品建卡接口（`POST /system/wbCollection/wb/new`）。原生支持任意自定义完整 VC、原汁原味俄文标题、主图与规格建卡。
+
+```bash
+# 1) 旧版建卡接口基础使用
+python wb.py shelve-old 248364237 --price 59 --apply                       # 旧版建卡接口单品上架
+python wb.py shelve-old 248364237 388854754 --price 66 --apply             # 旧版多品上架
+
+# 2) 自定义完整 VC（不受 4 位前缀命名规则约束）
+python wb.py shelve-old 248364237 --vc BCS-SPECIAL-MYVC --apply            # 旧版原生透传任意自定义 VC
+
+# 3) 批量指定多店铺与文件输入
+python wb.py shelve-old --file 商品清单.txt --shops 9352,9353 --apply       # 指定多店铺与从文件导入
+```
+- 📌 **底层差异**：旧版接口为单品多店同步建卡模式，自动将 `shopDatas[0].nmId` 置空防覆盖，并携带完整的商品卡片信息。
+- 📌 **统一接口**：`shelve_old` 与 `shelve_new` 对外暴露完全一致的 `execute_shelve` 与 `shelve_product` 函数，上层调用无感切换。
+
 ## 7. 促销报名（每日 9:00 自动）
 
 ```bash
@@ -391,8 +433,7 @@ python wb.py appeals --no-cn         # 不解析中文名（供应商代码仍�
 - **只维护**：`data/商品价格表.xlsx`（映射表由 merge 自动更新）。
 - **不要手动改**：`data/价格映射表.xlsx`（永远用 merge 重建）。
 - **审核文件用完即弃**：合并后归档。
-- **fetch 必须完整**：某店拉取失败时 merge 会跳过「消失即移除」，先补拉再 merge。
-- **改代码后只跑改动相关的测试**：`python tests/run_tests.py --changed`（新增/改某命令用 `--cmd <命令>`；`--help-smoke` 秒级回归；全量 `python -m unittest tests/test_all_commands.py` 仅跨层改动/发版时跑）。详见 [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) 第七节与 [REUSE_GUIDE.md](REUSE_GUIDE.md) 第六节。
+- **新增或修改功能时无需进行全量测试**：只测新增或修改的功能 `python tests/run_tests.py --cmd <命令>` 或 `python tests/run_tests.py`（严禁盲目跑全量测试）。详见 [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) 第七节与 [REUSE_GUIDE.md](REUSE_GUIDE.md) 第六节。
 - **日志与产物维护**：`data/logs/ops_result.csv`（写操作明细）**按月自动归档** —— 写操作执行前若发现文件属于上个月、或当月体积 >50MB，会自动移入 `data/logs/archive/ops_result_YYYY-MM[-partN].csv`（只移动不删除，可直接用 Excel 打开）；`data/logs/` 下的其它 CSV/日志（如 `尺寸修改_*.csv`、`daily_*.log`）可自行按日期清理，建议保留最近 30 天 + `archive/`。新增 `/logs/archive/` 目录无需维护。
 - **技能（Skill）位置**：唯一份在**用户级目录** `~/.workbuddy/skills/`（如 `wb-dimension-align`，脚本在其 `scripts/` 下）；仓库内**不再保留镜像副本**，避免两份漂移（历史 `data/skill/` 已删除，`data/wb-dimension-align.7z` 为旧归档，可自行清理）。
 - **加列/改结构用 Excel**，避免 openpyxl 重存破坏商品价格表公式。
@@ -406,4 +447,5 @@ python wb.py appeals --no-cn         # 不解析中文名（供应商代码仍�
 2. `ls data/logs/daily_*.log` → 看最近一次结果。
 3. 要做什么就查什么（改价→`price`、折扣→`discount`、报名→`promo-apply`、清理→`clean`），**一律先 dry-run**（不加 `--apply`），确认清单再 `--apply`。
 4. **写操作后执行完毕即结束，严禁擅自执行 fetch、merge 或自写脚本做写后验证**（写后验证依赖同步，不同步拉取的快照是旧数据，而全量同步极慢且极易触发限流风控；接口成功返回即代表生效）。
-5. 遇 401/403 → 读 [CREDENTIALS.md](CREDENTIALS.md)；遇其他异常 → 看 `data/logs/`，不重复盲跑。
+5. **开发/修改代码后测试铁律**：新增或者修改功能时，**无需进行全量测试**，只需要测新增或者修改的功能（使用 `python tests/run_tests.py --cmd <命令>` 或 `python tests/run_tests.py`），**严禁跑全量测试**。
+6. 遇 401/403 → 读 [CREDENTIALS.md](CREDENTIALS.md)；遇其他异常 → 看 `data/logs/`，不重复盲跑。
