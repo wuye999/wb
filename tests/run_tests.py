@@ -110,6 +110,8 @@ PATH_HINTS = [
     ("wb_ops/schedule.py", ["schedule"]),
     # 跨层共享件与通用工具：只做语法与导入冒烟，不自动升级为全量
     ("wb_ops/framework/", ["SMOKE"]),
+    # 跨层共享常量（VC_PREFIX_RE / 路径 / 阈值）：只做导入冒烟，不自动升级为全量
+    ("wb_ops/config.py", ["SMOKE"]),
     ("wb_ops/common.py", ["SMOKE"]),
     ("wb_ops/config.py", ["SMOKE"]),
     ("wb_ops/credentials.py", ["SMOKE"]),

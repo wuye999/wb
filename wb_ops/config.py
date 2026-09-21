@@ -77,7 +77,10 @@ DEFAULT_SHOP_ID = MAIN_SHOP
 # vendorCode 标准格式：BCS-{4位前缀}-{WB原始nmId}（中段=商品前缀，商品价格表「vendorCode前缀码」列登记）。
 # 兼容他人表 `ozon-card-` 尾段：BCS-{前缀}-ozon-card-{WB原始nmId}。
 # 兼容新供应商代码格式：BCS-{4位前缀}-{中间标识}/{WB原始nmId}（如 BCS-QQNN-WRLINWI/1078999444）。
-VC_PREFIX_RE = r"^BCS-([A-Z]{4})-(?:(?:ozon-card-)?\d+|[^/]+/\d+)$"
+# 兼容「多变体序号」尾段：BCS-{4位前缀}-{WB原始nmId}-{序号}（如 BCS-FZMG-334862442-2、BCS-ZZMX-191868961-15）；
+#   这类卡此前因正则要求「数字结尾 / 含斜杠」而匹配失败，导致前缀自动补录、纠偏池、前缀兜底三处全部落空 → 永久留在「未映射商品」。
+#   ⚠ 命名仍需以 BCS-{4位}-{数字} 为主；本兼容只为收编历史/平台侧产生的带序号尾段。
+VC_PREFIX_RE = r"^BCS-([A-Z]{4})-(?:(?:ozon-card-)?\d+|[^/]+/\d+)(?:-\d+)*$"
 
 # 改折扣默认阈值/目标（>50% → 50%）
 DISCOUNT_THRESHOLD_DEF = 50

@@ -16,6 +16,7 @@ from ..domain.models import DiscountPlan, Product
 from ..storage.product_repo import ProductSnapshotRepository
 from ..storage.mapping_repo import MappingRepository
 from ..adapters.wb_client import WBClient
+from ..adapters import wb_client as wb_api
 
 
 class DiscountService:
@@ -294,6 +295,46 @@ class DiscountService:
         """运行价格审查"""
         from .discount import price_review
         return price_review.run(args)
+
+    def apply_new_prices_by_nmids(self, shop: Dict[str, Any], nm_ids: List[Any]) -> Dict[str, Any]:
+        """按 nmID 精确「应用新价格」（隔离区审核）。
+
+        改价降价 30-49.9% 的商品会进 WB 价格审查（隔离区），**只有「应用新价格」才真正生效**。
+        本方法只审核 nm_ids 命中的待审项，不触碰历史遗留待审商品。
+
+        这是 replicate 域「改价后自动审核」（`price --auto-review`）的跨域入口 —— 按
+        REUSE_GUIDE 铁律 3，跨域只能经本门面调用，禁止直接 import discount 域的私有实现。
+
+        Args:
+            shop: WB 店铺凭证 dict（含 shopId/shopName/cookie/authorizev3/wb_seller_lk）。
+            nm_ids: 本次改价中降价落 30-49.9% 的 WB 商品码（nmID）列表。
+
+        Returns:
+            {"matched": 隔离区命中的数量, "applied": 成功应用的数量, "note": 人类可读说明}。
+            调用方负责打印 note（服务层不打印，便于上层统一加 `[自动审核]` 前缀）。
+
+        Raises:
+            common.CookieExpiredError: 该店 cookie 失效（由上层捕获降级跳过）。
+        """
+        from .discount import price_review
+        wanted = [n for n in nm_ids if n is not None]
+        if not wanted:
+            return {"matched": 0, "applied": 0, "note": "无降价 30-49.9% 的商品，无需审核"}
+
+        session = wb_api.make_session(shop)
+        quarantine = price_review.fetch_all_quarantine(session)
+        nm_to_id = {it.get("nmID"): it.get("id") for it in quarantine if it.get("nmID")}
+        matched = [(n, nm_to_id[n]) for n in wanted if n in nm_to_id]
+        if not matched:
+            return {"matched": 0, "applied": 0,
+                    "note": f"降价 30-49.9% 的 {len(wanted)} 个商品未在隔离区列表（可能尚未进入审查），跳过"}
+
+        d = price_review.apply_prices(session, [qid for _, qid in matched])
+        if d.get("error"):
+            return {"matched": len(matched), "applied": 0,
+                    "note": f"应用新价格 {len(matched)} 个失败: {d.get('errorText') or 'error'}"}
+        return {"matched": len(matched), "applied": len(matched),
+                "note": f"应用新价格 {len(matched)} 个 nmID={[n for n, _ in matched]} ✓成功"}
 
     @staticmethod
     def _disc_matched(disc: int, plan: DiscountPlan) -> bool:

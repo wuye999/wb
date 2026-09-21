@@ -62,6 +62,50 @@ class TestAllCommands(unittest.TestCase):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
                 self.assertIn("usage: wb", res.stdout)
 
+    def test_01b_vc_prefix_tail_format_mapping(self):
+        """vendorCode 前缀正则须容忍「多变体序号」尾段（离线，纯正则断言）。
+
+        背景：形如 `BCS-FZMG-334862442-2` / `BCS-ZZMX-191868961-15` 的卡（前缀后多一段 `-N`）
+        此前不匹配 `config.VC_PREFIX_RE`（旧式要求「数字结尾 / 含斜杠」），导致
+        `mapping.py` 前缀自动补录、`mapping_excel.py` 前缀兜底、`mapping_repo` 名称解析兜底
+        **三处全部落空** → 每店恒定 55 条永久留在「未映射商品」（2026-09-21 实测：
+        ZZMX 15 / FZMG 10 / GYDX 10 / MQXJ 10 / PPYD 10，三店完全同一批）。
+        """
+        import re
+        from wb_ops import config
+
+        rx = config.VC_PREFIX_RE
+        # 兼容的合法格式（含新增的带序号尾段）
+        valid = [
+            ("BCS-CYQX-12345678", "CYQX"),                       # 标准
+            ("BCS-CYQX-ozon-card-12345678", "CYQX"),             # 他人表 ozon-card 尾段
+            ("BCS-QQNN-WRLINWI/1078999444", "QQNN"),             # 新供应商代码格式
+            ("BCS-FZMG-334862442-2", "FZMG"),                    # ★ 多变体序号尾段（本次放宽）
+            ("BCS-ZZMX-191868961-15", "ZZMX"),                   # ★
+        ]
+        for vc, expect in valid:
+            with self.subTest(vc=vc):
+                m = re.match(rx, vc)
+                self.assertIsNotNone(m, f"应匹配成功: {vc}")
+                self.assertEqual(m.group(1), expect)
+
+        # 仍必须拒绝的非法格式（防止放宽后误收）
+        invalid = [
+            "BCS-qqnn-12345678",          # 小写前缀
+            "BCS-1234-12345678",          # 数字前缀
+            "BCS-QQN-12345678",           # 3 位前缀
+            "BCS-QQNNN-12345678",         # 5 位前缀
+            "BCS-QQNN-12345a",            # 数字尾段后跟字母
+            "BCS-QQNN-12345-x",           # 序号尾段非数字
+            "BCS-QQNN-",                  # 无尾段
+            "ABC-QQNN-12345678",          # 非 BCS 开头
+            "BCS-QQNN-abc-1",             # 首个尾段非数字
+            "",
+        ]
+        for vc in invalid:
+            with self.subTest(vc=vc):
+                self.assertIsNone(re.match(rx, vc), f"应不匹配: {vc}")
+
     # ---------------- 2. 账号与基础数据 ----------------
     def test_02_shops_list(self):
         res = self._run_cmd(["shops"], expect_code=0)
@@ -152,6 +196,67 @@ class TestAllCommands(unittest.TestCase):
     def test_09_price_dry_run(self):
         res = self._run_cmd(["price", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
+
+    def test_09b_price_auto_quarantine_apply(self):
+        """改价自动审核：隔离区按 nmID 精确匹配 + 跨域走 discount_svc 门面（离线 mock，不触网）。
+
+        回归护栏：`ops_executor._auto_review_shop` 曾直接引用 discount 域私有模块
+        `price_review` 却从未 import —— NameError 被 except Exception 吞掉，表现为
+        「[自动审核] 店铺 X 失败: name 'price_review' is not defined」，自动审核**静默失效**
+        （2026-09-21 实测）。现改为经 `discount_svc.apply_new_prices_by_nmids` 门面调用
+        （REUSE_GUIDE 铁律 3：跨域只能经 `*_svc.py` 门面）。
+
+        ⚠ 用例名刻意不含 review 字样：run_tests 选择器按「归一化子串 + 最长匹配」分派，
+        `review` 与 `price` 等长时会把用例判给排在前面的 `review`，导致 `--cmd price` 漏测。
+        """
+        from unittest import mock
+        from wb_ops.adapters import wb_client as wc
+        from wb_ops.services.discount import price_review
+        from wb_ops.services.discount_svc import discount_svc
+        from wb_ops.services.replicate import ops_executor as oe
+
+        quarantined = [{"id": 111, "nmID": 1001, "oldPrice": 198, "newPrice": 115},
+                       {"id": 222, "nmID": 1002, "oldPrice": 158, "newPrice": 95},
+                       {"id": 333, "nmID": 9999, "oldPrice": 100, "newPrice": 70}]  # 历史遗留待审
+        posted = {}
+
+        def fake_apply(session, ids):
+            posted["ids"] = ids
+            return {"error": False, "errorText": ""}
+
+        shop = {"shopId": 9352, "shopName": "袁州1", "cookie": "",
+                "authorizev3": "t", "wb_seller_lk": "t"}
+
+        with mock.patch.object(wc, "make_session", return_value=object()), \
+                mock.patch.object(price_review, "fetch_all_quarantine", return_value=quarantined), \
+                mock.patch.object(price_review, "apply_prices", side_effect=fake_apply):
+
+            # ① 门面：只审核 nm_ids 命中的待审项，不误审历史遗留（9999）
+            r = discount_svc.apply_new_prices_by_nmids(shop, [1001, 1002])
+            self.assertEqual(r["matched"], 2)
+            self.assertEqual(r["applied"], 2)
+            self.assertEqual(posted["ids"], [111, 222])
+
+            # ② 调用方：改价后自动审核（原先此处恒 NameError → 返回 0，价格不生效）
+            posted.clear()
+            items = [{"nmID": 1001, "vc": "BCS-AAAA-1", "price": 115, "cur_price": 198.0},
+                     {"nmID": 1002, "vc": "BCS-AAAA-2", "price": 95, "cur_price": 158.0},
+                     {"nmID": 7777, "vc": "BCS-AAAA-3", "price": 500, "cur_price": 510.0}]  # 非 30-49.9%
+            fake_cred = mock.Mock()
+            fake_cred.wb_shop.return_value = shop
+            with mock.patch.object(oe.credentials, "get", return_value=fake_cred):
+                applied = oe._auto_review_shop(9352, items)
+            self.assertEqual(applied, 2)          # 只审降价落 30-49.9% 的 2 个
+            self.assertEqual(posted["ids"], [111, 222])
+
+            # ③ 隔离区尚未生成（改价后平台异步入审查）→ 不报错、返回 0
+            posted.clear()
+            with mock.patch.object(price_review, "fetch_all_quarantine", return_value=[]):
+                fake_cred2 = mock.Mock()
+                fake_cred2.wb_shop.return_value = shop
+                with mock.patch.object(oe.credentials, "get", return_value=fake_cred2):
+                    self.assertEqual(oe._auto_review_shop(9352, items), 0)
+            self.assertEqual(posted, {})
 
     def test_10_stock_dry_run(self):
         res = self._run_cmd(["stock", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)

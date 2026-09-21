@@ -14,7 +14,6 @@ from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
-from wb_ops.adapters import wb_client as wb_api
 from .ops_plan import price_limit_violations, price_review_items, PRICE_HALF_LIMIT_NOTE
 
 RED = "\033[91m"
@@ -32,8 +31,12 @@ ARCHIVE_MAX_MB = 50            # 同月明细超过该体积也强制归档（�
 
 
 def _auto_review_shop(sid, items):
-    """改价后自动审核：按 nmID 匹配「降价 30-49.9%」的商品，调隔离区审核接口应用新价格。
-    返回成功审核数。"""
+    """改价后自动审核：按 nmID 匹配「降价 30-49.9%」的商品，应用新价格。
+    返回成功审核数。
+
+    ⚠ 跨域调用走 discount_svc 门面（REUSE_GUIDE 铁律 3：严禁直接 import 其他领域的
+    私有实现）。此处懒加载门面，与 ops.py 引用 catalog_svc 的写法保持一致。
+    """
     review_items = price_review_items(items)
     if not review_items:
         return 0
@@ -41,25 +44,11 @@ def _auto_review_shop(sid, items):
     if not shop:
         print(f"  [自动审核] 店铺 {sid} 无 WB 凭证，跳过")
         return 0
+    from wb_ops.services.discount_svc import discount_svc
     try:
-        session = wb_api.make_session(shop)
-        quarantine = price_review.fetch_all_quarantine(session)
-        nm_to_id = {it.get("nmID"): it.get("id") for it in quarantine if it.get("nmID")}
-        ids = []
-        matched_nm = []
-        for it in review_items:
-            qid = nm_to_id.get(it.get("nmID"))
-            if qid:
-                ids.append(qid)
-                matched_nm.append(it["nmID"])
-        if not ids:
-            print(f"  [自动审核] 降价 30-49.9% 的 {len(review_items)} 个商品未在隔离区列表（可能尚未进入审查），跳过")
-            return 0
-        d = price_review.apply_prices(session, ids)
-        ok = not d.get("error")
-        print(f"  [自动审核] 应用新价格 {len(ids)} 个 nmID={matched_nm}"
-              + (" ✓成功" if ok else f" ✗失败:{d.get('errorText')}"))
-        return len(ids) if ok else 0
+        r = discount_svc.apply_new_prices_by_nmids(shop, [it.get("nmID") for it in review_items])
+        print(f"  [自动审核] {r['note']}")
+        return r["applied"]
     except common.CookieExpiredError as e:
         print(f"  [自动审核] 店铺 {sid} cookie 失效，跳过: {e}")
         return 0
