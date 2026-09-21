@@ -31,7 +31,7 @@
 | `review` | 无 | 其余 4 店新商品待审核（前缀命中自动补录） | `data/workbench/多店铺待审核.html` |
 | `merge` | `[审核.json]`（可选） | 增量合并：自动同步刷新活跃店铺单店表并做 Outer Join 聚合成全景总表 | `data/shops/shop_*.xlsx` + `data/价格映射表.xlsx` |
 | `shops-mapping` | `--shop-id N` / `--force` | 刷新或生成指定店铺（或全部活跃店铺）的独立映射表 | `data/shops/shop_{id}_{name}.xlsx` |
-| `mapping-rename` | `--vc VC --cn "新中文名"` / `--file 纠偏.json` | 纠偏/修改商品中文名：自动写入全局纠偏池并级联同步全部店铺单表与聚合总表 | `data/state/vc_override.json` + 全部单店表 + `data/价格映射表.xlsx` |
+| `mapping-rename` | `--vc VC --cn "新中文名"` / `--file 纠偏.json` | 纠偏/修改商品中文名：**同时写入纠偏池与已知池两层**（`vc_override.json` + `vc_known.json`）并级联同步全部店铺单表与聚合总表 | `data/state/vc_override.json` + `data/state/vc_known.json` + 全部单店表 + `data/价格映射表.xlsx` |
 
 ### 一键操作（ops）
 

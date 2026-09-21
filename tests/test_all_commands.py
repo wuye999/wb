@@ -244,17 +244,26 @@ class TestAllCommands(unittest.TestCase):
         self.assertIn("mabang-process", res3.stdout)
 
     def test_29_mapping_rename(self):
+        from wb_ops.storage.mapping_repo import MappingRepository
         try:
             res = self._run_cmd(["mapping-rename", "--vc", "BCS-TEST-TEST12345", "--cn", "单元测试商品-纠偏", "--reason", "自动化验证"], expect_code=0)
             self.assertIn("BCS-TEST-TEST12345", res.stdout)
             self.assertIn("单元测试商品-纠偏", res.stdout)
+            # 2026-09-21：纠偏须同步写入全局已知池（vc_known.json），
+            # 避免「前缀码匹配不到的怪 vc」其名字仅存于 vc_override.json 而随文件丢失失效
+            self.assertIn("已知池同步", res.stdout)
+            known = MappingRepository.load_vc_known()
+            self.assertEqual((known.get("BCS-TEST-TEST12345") or {}).get("cn"), "单元测试商品-纠偏")
         finally:
             try:
-                from wb_ops.storage.mapping_repo import MappingRepository
                 ov = MappingRepository.load_vc_override()
                 if "BCS-TEST-TEST12345" in ov:
                     del ov["BCS-TEST-TEST12345"]
                     MappingRepository.save_vc_override(ov)
+                kn = MappingRepository.load_vc_known()
+                if "BCS-TEST-TEST12345" in kn:
+                    del kn["BCS-TEST-TEST12345"]
+                    MappingRepository.save_vc_known(kn)
             except Exception:
                 pass
 

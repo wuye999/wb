@@ -204,11 +204,47 @@ def sync_all_shops_mapping(shop_id=None, force=False):
         print(f"  店 {sid} ({sname})：在架归属 {m} 个 · 未映射 {u} 个 → {os.path.basename(config.shop_mapping_xlsx(sid, sname))}")
 
 
+def _sync_known_on_rename(known, vc, new_cn, boss_by_cn, ts):
+    """改名纠偏时把新名同步写入全局已知池（vc_known.json）。
+
+    背景（2026-09-21 修复）：原实现为 `if v in known: known[v]["cn"] = c`，
+    只有 vc 已存在于已知池时才回写，导致**前缀码匹配不到的「怪 vc」**（随机前缀、
+    含 `/` 的旧格式等）其名字仅存于 vc_override.json —— 一旦该文件丢失即失效，
+    且单店表/总表下次重建时会掉进「未映射商品」。现改为无条件 upsert。
+
+    - 已存在：只更新 `cn`，保留原 `dp/sku/尺寸/source` 等字段（不覆盖 provenance）；
+    - 不存在：新建条目，`dp/sku` 按新中文名从商品价格表补齐（查不到留 None/""）。
+
+    Returns:
+        "new" 表示新建条目，"updated" 表示更新已有条目。
+    """
+    entry = known.get(vc)
+    if isinstance(entry, dict):
+        entry["cn"] = new_cn
+        return "updated"
+    b = boss_by_cn.get(new_cn) or {}
+    known[vc] = {
+        "cn": new_cn,
+        "dp": b.get("dp"),
+        "sku": b.get("sku") or "",
+        "source": "人工纠偏",
+        "cnUpdatedAt": ts,
+    }
+    return "new"
+
+
 def set_vc_override(vc=None, new_cn=None, reason="人工纠偏", file_path=None):
-    """设置 VC 中文名纠偏改名，并自动级联更新所有单店表与总表。"""
+    """设置 VC 中文名纠偏改名，同步写入全局已知池，并自动级联更新所有单店表与总表。
+
+    ⚠ 纠偏结果**同时**写入 vc_known.json 与 vc_override.json（2026-09-21 起）：
+    两层都带上新名后，单层文件丢失不会导致纠偏失效；分发到各店 xlsx 与聚合总表
+    仍走下方 merge(None) 级联（重建时按 registry 解析，已知池命中即带上新名）。
+    """
     from datetime import datetime
     known, overrides, excluded = mapping.load_vc_registry()
-    updated = []
+    boss_by_cn = {b["cn"]: b for b in mapping.load_boss() if b.get("cn")}
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    updated, n_new = [], 0
     if file_path and os.path.exists(file_path):
         items = safe_load_json(file_path, default=[])
         for it in items:
@@ -216,18 +252,18 @@ def set_vc_override(vc=None, new_cn=None, reason="人工纠偏", file_path=None)
             c = str(it.get("cn") or "").strip()
             r = str(it.get("reason") or reason).strip()
             if v and c:
-                overrides[v] = {"cn": c, "reason": r, "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                if v in known:
-                    known[v]["cn"] = c
+                overrides[v] = {"cn": c, "reason": r, "updatedAt": ts}
+                if _sync_known_on_rename(known, v, c, boss_by_cn, ts) == "new":
+                    n_new += 1
                 updated.append(v)
     elif vc and new_cn:
         v = str(vc or "").strip()
         c = str(new_cn or "").strip()
         r = str(reason or "人工纠偏").strip()
         if v and c:
-            overrides[v] = {"cn": c, "reason": r, "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            if v in known:
-                known[v]["cn"] = c
+            overrides[v] = {"cn": c, "reason": r, "updatedAt": ts}
+            if _sync_known_on_rename(known, v, c, boss_by_cn, ts) == "new":
+                n_new += 1
             updated.append(v)
     else:
         print("[错误] 未指定 --vc 和 --cn，或未指定有效 --file")
@@ -235,6 +271,7 @@ def set_vc_override(vc=None, new_cn=None, reason="人工纠偏", file_path=None)
 
     mapping.save_vc_registry(known=known, overrides=overrides)
     print(f"[纠偏登记] 已将 {len(updated)} 个 VC 改名写入 {config.VC_OVERRIDE_JSON}")
+    print(f"[已知池同步] 同步写入 {config.VC_KNOWN_JSON}：新建 {n_new} 条 / 更新 {len(updated) - n_new} 条")
     for v in updated:
         print(f"  {v} → {overrides[v]['cn']} ({overrides[v]['reason']})")
 

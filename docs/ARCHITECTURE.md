@@ -193,6 +193,8 @@
 4. **单店独立表 + 全局归属池 + 增量聚合总表（多店解耦核心）**：
    - **单店映射表**（`data/shops/shop_{id}_{name}.xlsx`）：每家活跃店铺拥有一张独立的映射表，反映该店铺当前存活在架的真实商品清单、单店 nmId、各店在架价格与库存，是店铺级真实资产。
    - **全局 VC 归属与纠偏池**（`data/state/vc_known.json` 与 `vc_override.json`）：解耦「商品中文名归属」与「店铺生命周期」。无论是统一审核、前缀自动识别，还是人工通过 `mapping-rename` 纠偏的 VC 归属，均沉淀入全局池；老商品上新店时免审核自动认领。
+   - **纠偏双写（2026-09-21）**：`mapping-rename` 的纠偏结果**同时写入 `vc_override.json`（第 1 优先级）与 `vc_known.json`（第 2 优先级）**。原因：解析链路为 `override > known > 四位前缀码兜底`，而原实现仅在 vc 已存在于 known 时才回写 known，导致**前缀码匹配不到、正则也匹配不上的「怪 vc」**（随机前缀如 `BCS-PPSG-*`、含 `/` 的旧格式如 `QQNL-XXXX/123`）其名字**只存于 override** —— 该文件一旦丢失即纠偏失效，且下次重建时这些行会掉进「未映射商品」。双写后任一层文件丢失都不影响纠偏，known 也能与各店 xlsx 一一对应。
+   - ⚠ **xlsx 不是名称真源**：`价格映射表.xlsx` 与单店表每次都由「快照 + 上述三层 registry」**重建**，看板上的名字只是上一次渲染结果；判断某纠偏是否安全须查 `vc_override.json` / `vc_known.json`。
    - **聚合全景总表**（`data/价格映射表.xlsx`）：`wb.py merge` 自动同步所有活跃单店表并执行 Outer Join，重建 8-Sheet 全景总表。下游 `ops`、`mabang` 等全量跨店操作完全基于总表无缝兼容。
    - **“消失即移除”与店铺增删解耦**：
      - **停用/归档店铺**：将单店表移入 `data/shops/_archive/` 后执行 `merge`，总表立即剔除该店，且该店独有的 VC 从总表中彻底消除（防止跨店批量操作发脏请求）；日后店铺恢复只需移回并 `merge` 即可瞬间无损复原。
@@ -220,7 +222,7 @@ wb.py merge [审核]   ④ 增量合并与多店聚合：
                         b. 跨活跃店铺 Outer Join 汇聚各店在架状态（自动跳过 _archive/ 目录）；
                         c. 重建 8-Sheet 聚合全景总表（价格映射表.xlsx）。
 wb.py shops-mapping  ④a 【独立维护】刷新单店映射表（支持 --shop-id 指定单店或刷新全部活跃店铺）
-wb.py mapping-rename ④b 【纠偏改名】修改某商品中文名：自动持久化全局纠偏池，并级联更新全部单店表与聚合总表
+wb.py mapping-rename ④b 【纠偏改名】修改某商品中文名：写入 **纠偏池 + 已知池两层**（vc_override.json + vc_known.json），并级联更新全部单店表与聚合总表
 wb.py price/stock/trash  ⑤ 按映射表定位 nmId/chrtId/warehouseId → dry-run 预览 → --apply 执行 → ops_result.csv → 写入接口成功即代表完成，默认直接结束（★ 严禁擅自补跑 fetch+merge 或自写验证）
 wb.py dimension         ⑤a 按商品价格表「尺寸」列批量改尺寸 → POST shopKeeper/dimension/batch → 写 CSV → 结束（不同步/不做写后验证）
 wb.py replicate      ⑥ 跨店复制上架（vc×多店，基于本地快照；单批50个批量推送）→ 上架成功即结束（默认不同步/不自动 merge）
@@ -284,7 +286,8 @@ wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传
 | 2026-09-16 | **改折扣支持双侧区间**：`wb.py discount` 新增 `--below N`（折扣<N 侧，与 `--threshold` 并集去重）；适配层新增 `WBClient.fetch_discount_goods_asc()` 走 WB 折扣**升序**列表（`sortOrder=1`，抓包已验证）——原降序实现「首条 ≤ threshold 即截断」无法覆盖低折扣区间，故不能再靠本地快照兜底。 |
 | 2026-09-17 | **结构审查整改（可移植性/去重/分层/卫生/测试覆盖）**：① 账号写死治理 —— 代码与文档里的「5 店 / 旧店铺ID」改为中性或动态文案，`replicate.KNOWN_WAREHOUSES` 改由数据文件 `data/state/known_warehouses.json` 驱动；② 真重复实现合并 —— ops 参数定义下沉 `framework/cli_args.py`（cli 与 ops 共用，保持启动零业务依赖）、`products.shop_ids_from_disk` 转发仓储、`support_svc` 删除与 `questions_watch` 重复的状态读写；③ 清理死代码/遗留 shim —— 删除 `order_pipeline.py`（零引用）、`replicate.fetch_wb_detail` 弃用桩、`llm_client` 兼容函数、CLI `--detail-source` 弃用参数；④ 分层修正 —— `order/mabang_stock.py` 内直接 requests 调用下沉到 `adapters/mabang_client`（`fetch_stock_list`/`download_file`），services 内已无原生 HTTP；⑤ 运维卫生 —— `ops_result.csv` 按月自动归档到 `data/logs/archive/`、技能去掉仓库镜像副本（唯一份在 `~/.workbuddy/skills/`）；⑥ 测试补全 —— 新增 9 个只读用例，**40 个命令全部有专属用例**（共 41 用例）。 |
 | 2026-09-17 | **改折扣两阶段提交修复（抓包驱动）**：据 `api/网络请求/wb批量修改折扣+降价提示.har` 确认 `upload/task` 必须**两步**——`?checkChange=true` 只做预检（仅回 `priceModal`/`quarantineModal` 弹窗标记，**无任务号、不落库**），`?checkChange=false` 才真正提交并回 `data.id`。旧实现 URL 写死 `checkChange=true`，导致 taskId 恒为 None、平台侧从未落库（表现为「改折扣没生效」）。适配层 `upload_batch_discount` 改为「预检 → 自动确认 → 提交」，新增 `precheck_batch_discount` 与 `DiscountUploadResult`（透出弹窗标记与真实任务号）；同时修两处逻辑/性能缺陷：① 只给 `--below` 时不再拉降序侧（`threshold=-1` 会翻遍全量目录，单次 12+ 分钟 → 修复后 42 秒）；② `_disc_matched` 在「两侧阈值均未启用」（`--vc` 精确定向）时放行，原先恒判不匹配导致 `discount --vc` 永远输出「无匹配」。新增离线用例 `test_04c_discount_upload_two_phase`（mock 断言 checkChange 两次调用顺序与任务号）。 |
-① 数据源由单一 orderalllist 改为 **orderalllist 最近500 + 待处理订单（tabId=7）两路合并去重**（只做了匹配、未进预报/上传/交运流程的订单只出现在待处理列表，仅按 orderalllist 会漏登；`--no-pending` 可关闭）；② **库存SKU 改为以本地商品价格表「库存SKU」列（第 8 列）为准，查不到一律留空**，不再回写马帮系统匹配值（消除 `BCS-xxx-40-56`、`ETPB-PINK` 等非法/错位值）；③ 商品中文名一律取本地映射表（查不到留空但**仍登记**）；④ 登记日志把「真排除」与「字段留空」分开计数，避免把仍登记的单误读成被排除。 |
+| 2026-09-17 | **飞书登记口径改造**：① 数据源由单一 orderalllist 改为 **orderalllist 最近500 + 待处理订单（tabId=7）两路合并去重**（只做了匹配、未进预报/上传/交运流程的订单只出现在待处理列表，仅按 orderalllist 会漏登；`--no-pending` 可关闭）；② **库存SKU 改为以本地商品价格表「库存SKU」列（第 8 列）为准，查不到一律留空**，不再回写马帮系统匹配值（消除 `BCS-xxx-40-56`、`ETPB-PINK` 等非法/错位值）；③ 商品中文名一律取本地映射表（查不到留空但**仍登记**）；④ 登记日志把「真排除」与「字段留空」分开计数，避免把仍登记的单误读成被排除。 |
+| 2026-09-21 | **纠偏双写修复（vc_override → vc_known）**：`mapping_sync.set_vc_override` 原为 `if v in known: known[v]["cn"] = c`，仅当 vc 已在已知池时才回写，导致**前缀码匹配不到的「怪 vc」**（随机前缀、含 `/` 的旧格式）名字只存于 `vc_override.json` —— 该文件丢失即纠偏失效、重建时掉进「未映射商品」。现改为**无条件 upsert 已知池**（新增私有帮助函数 `_sync_known_on_rename`：已存在只更新 `cn` 并保留原 dp/sku/尺寸/source；不存在则按新中文名从商品价格表补 `dp/sku`、标 `source="人工纠偏"`），日志新增「已知池同步：新建 X / 更新 Y」；一次性回填存量 override 进 known（新建 4 条，known 5973→5977，复核 **150/150 仅靠 known 即可取名**）；`test_29` 同步断言已知池写入并在 finally 清理 known 残留。 |
 
 ## 九、外部依赖与运行环境
 

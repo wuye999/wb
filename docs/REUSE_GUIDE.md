@@ -35,7 +35,7 @@
 | 命令注册（新子命令） | `cli.py` 加 parser + `framework/registry.py` 加 `registry.register(...)` | 见模板 T6 |
 | 写操作安全三件套（dry-run / `--apply` / `--yes`） | 模板 T2 + `ops.confirm_irreversible(action, amount, yes)` + `common.print_write_hint()` | `services/replicate/ops.py` |
 | 结果 CSV 落盘 | 模板 T1（`config.LOG_DIR` + `utf-8-sig`） | 各模块自带写法 |
-| 商品中文名归属纠偏（级联全部单表 + 总表） | `mapping_sync.set_vc_override(vc, new_cn, reason, file_path)` | `services/catalog/mapping_sync.py` |
+| 商品中文名归属纠偏（**双写 override + known** 并级联全部单表 + 总表） | `mapping_sync.set_vc_override(vc, new_cn, reason, file_path)`（内部用 `_sync_known_on_rename` 同步已知池） | `services/catalog/mapping_sync.py` |
 | 写后同步+合并（**仅用户显式要求时**） | `catalog_svc.post_write_merge(fetch=True)` | `services/catalog_svc.py` |
 
 ---
@@ -116,7 +116,8 @@ python tests/run_tests.py --changed      # 只跑「本次改动相关」的测�
 | `build_vc_resolver` | `()` → `(resolve_cn(vc, default_title), vc_cn)` | vc→中文名 秒级反查（override > known > 前缀码） |
 | `load_prefix_map` | `()` → `{前缀: {cn,…}}` | 4 位前缀码识别（免人工审核自动补录的依据） |
 | `load_vc_known` / `save_vc_known` | `()` / `(data)` | 全局已知归属池 `vc_known.json` |
-| `load_vc_override` / `save_vc_override` | 同上 | 人工纠偏池 `vc_override.json`（改名优先级最高） |
+| `load_vc_override` / `save_vc_override` | 同上 | 人工纠偏池 `vc_override.json`（解析优先级最高） |
+| 纠偏双写规则（2026-09-21） | `set_vc_override` 会**同时**改写 `vc_known.json`，故删改这两个文件前先确认对方也持有同一 `cn`；判定某 vc 的名字是否"安全"要看这两个 json，**不是**看 xlsx（xlsx 是每次重建的渲染产物） | `services/catalog/mapping_sync.py` |
 | `load_vc_excluded` / `save_vc_excluded` | 同上 | 排除清单 `vc_excluded.json` |
 
 `ProductSnapshotRepository`（别名 `ProductRepository`）
