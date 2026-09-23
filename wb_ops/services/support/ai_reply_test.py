@@ -12,7 +12,7 @@ import json
 import os
 import time
 
-from wb_ops.adapters import llm_client as ai_reply
+from wb_ops.adapters.llm_client import LLMClient
 from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
@@ -43,13 +43,13 @@ def _md(t):
 def run(args):
     common.ensure_utf8_stdout()
     cred = credentials.get()
-    cfg = {
-        "base_url": cred.ai_base_url,
-        "model": cred.ai_model,
-        "api_key": cred.ai_key,
-        "max_tokens": int(cred.ai.get("max_tokens") or 1000),
-    }
-    if not cfg["api_key"]:
+    cfg = LLMClient(
+        api_key=cred.ai_key,
+        base_url=cred.ai_base_url,
+        model=cred.ai_model,
+        max_tokens=int(cred.ai.get("max_tokens") or 1000),
+    )
+    if not cfg.api_key:
         print("[错误] 未配置 LLM API key（credentials.json 的 ai.api_key）")
         return 1
 
@@ -62,7 +62,7 @@ def run(args):
     lines = [
         "# AI 客服回复对照测试",
         "",
-        f"- 模型：`{cfg['model']}`",
+        f"- 模型：`{cfg.model}`",
         "",
         "| 商品信息 | 买家问题 | 人工客服回复 | AI 回复 |",
         "|---|---|---|---|",
@@ -73,7 +73,7 @@ def run(args):
         human = c.get("human_answer", "") or ""
         product = c.get("product") or {}
         pinfo = build_product_info(product)
-        ai = ai_reply.generate_reply(q, pinfo, cfg) or "(生成失败)"
+        ai = cfg.generate_reply(q, pinfo) or "(生成失败)"
 
         print(f"\n[商品] {product.get('title', '')}\n[问题] {q}\n[人工] {human}\n[AI] {ai}")
         lines.append(f"| {_md(pinfo)} | {_md(q)} | {_md(human)} | {_md(ai)} |")

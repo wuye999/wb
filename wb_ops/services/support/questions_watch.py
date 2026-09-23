@@ -18,7 +18,7 @@ import json
 import os
 import time
 
-from wb_ops.adapters import llm_client as ai_reply
+from wb_ops.adapters.llm_client import LLMClient
 from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
@@ -143,7 +143,7 @@ def poll_once(args, cn_map, reply_cfg, replied, shown, csv_writer, front_log):
                     print(f"\n[新提问] 店{shop['shopId']} {qid}")
                     print(f"  商品: {pinfo_str}")
                     print(f"  问题: {text}")
-                    reply_text = ai_reply.generate_reply(text, pinfo_str, reply_cfg)
+                    reply_text = reply_cfg.generate_reply(text, pinfo_str)
                     if not reply_text:
                         print("  [跳过] AI 生成回复失败（接口异常）")
                         continue
@@ -213,9 +213,9 @@ def run(args):
         return 0
 
     # 后台AI模式（原全自动）
-    cfg = {"base_url": cred.ai_base_url, "model": cred.ai_model, "api_key": cred.ai_key,
-           "max_tokens": cred.ai_max_tokens}
-    if args.apply and not cfg["api_key"]:
+    cfg = LLMClient(api_key=cred.ai_key, base_url=cred.ai_base_url,
+                    model=cred.ai_model, max_tokens=cred.ai_max_tokens)
+    if args.apply and not cfg.api_key:
         print("[错误] 后台模式 --apply 需要配置 LLM API key（credentials.json 的 ai.api_key）")
         return 1
     cn_map = {}
@@ -232,7 +232,7 @@ def run(args):
     csv_writer.writerow(["时间", "店铺", "提问ID", "供应商编码", "买家问题", "AI回复", "结果"])
 
     print(f"监听启动（后台AI/自动提交）：间隔 {interval}s，模式 {'apply（自动提交）' if args.apply else 'dry-run（只打草稿）'}，"
-          f"模型 {cfg['model']}，已回复 {len(replied)} 条")
+          f"模型 {cfg.model}，已回复 {len(replied)} 条")
     if args.once:
         poll_once(args, cn_map, cfg, replied, set(), csv_writer, None)
         csv_file.close()
