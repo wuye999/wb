@@ -97,6 +97,14 @@ def build_parser():
     p.add_argument("--days-back", type=int, default=90, help="查询起始=N天前")
     p.add_argument("--sleep", type=float, default=1.0, help="活动间请求间隔秒")
 
+    p = sub.add_parser("promo-goods", help="查询 WB 广告推广中被推广的商品（中文名/供应商代码/WB商品码，只读）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部已填 cookie 店铺）")
+    p.add_argument("--status", default="", help="活动状态ID逗号分隔（默认 4,9,11 = 后台默认视图）")
+    p.add_argument("--page-size", type=int, default=100, help="活动列表分页大小（默认 100）")
+    p.add_argument("--max-pages", type=int, default=50, help="活动列表最多翻页数（安全上限，默认 50）")
+    p.add_argument("--limit", type=int, default=0, help="每店最多拉取 N 个活动（0=不限，翻页到底）")
+    p.add_argument("--no-cn", action="store_true", help="不解析商品中文名（供应商代码仍解析）")
+
     # WB 原生批量改折扣参数辅助函数
     def _add_discount_wb_args(parser):
         parser.add_argument("--apply", action="store_true", help="真正提交修改（默认 dry-run 预览）")
@@ -259,6 +267,19 @@ def build_parser():
     p.add_argument("--begin", default="", help="区间开始 YYYY-MM-DD（显式给出即删除该日之前的旧日期列，并补建至 --end 的缺列）")
     p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin/--date 同用，单独使用直接报错）")
     p.add_argument("--apply", action="store_true", help="真正建列并填充（默认 dry-run 预览）")
+
+    p = sub.add_parser("feishu-vc-stats",
+                       help="只读：飞书「订单登记」按供应商代码(BCS编号)统计单数并降序（跨店合并；支持店铺/日期过滤）")
+    p.add_argument("--days", type=int, default=7, help="近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）")
+    p.add_argument("--date", default="", help="单天 YYYY-MM-DD（等价 --begin=--end）")
+    p.add_argument("--begin", default="", help="区间开始 YYYY-MM-DD（单独给按单天处理）")
+    p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）")
+    p.add_argument("--shops", default="", help="店铺过滤，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部）")
+    p.add_argument("--top", type=int, default=0, help="控制台只显示前 N 名（0=全部；CSV 始终写全量）")
+    p.add_argument("--by-prefix", action="store_true", help="按 vendorCode 的 4 位前缀码聚合（默认完整 vendorCode）")
+    p.add_argument("--no-cn", action="store_true", help="不补全商品中文名（表内已有的仍会显示）")
+    p.add_argument("--url", default="", help="飞书表格地址（可选，默认读配置 feishu.base_url）")
+    p.add_argument("--table", default="订单登记", help="表名（默认 订单登记）")
 
     p = sub.add_parser("mabang-process", aliases=["order-pipeline"],
                        help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运→飞书登记（登记含只匹配未进预报流程的订单）")

@@ -15,8 +15,8 @@
 | 读映射总表状态（vc → 中文名/双倍售价/店铺价/折扣/库存/nmId…） | `MappingRepository.load_mapping_state()` → `(state, excluded)` | `storage/mapping_repo.py` |
 | 读商品价格表（权威清单：SKU/中文名/双倍售价/尺寸/前缀码） | `MappingRepository.load_boss()` → `[{idx,sku,cn,dp,img,floor,prefix}]` | 同上 |
 | **vendorCode → 中文名**反查（含纠偏池 + 前缀码兜底，毫秒级） | `MappingRepository.build_vc_resolver()` → `(resolve_cn(vc, title), vc_cn)` | 同上 |
-| **nmId → 供应商代码 vendorCode**（如投诉/订单只给 nmId） | 本店快照 `load_shop_rows` 反查 vc，兜底映射总表 `load_mapping_state()[0][vc]["nmId"]`（能同时给 vc+中文名） | `services/support/complaints.py` → `_LocalResolver`（**只用本地真源，查不到就标注，不联网核实**） |
-| **nmId → 中文名**（按店；同一 vc 各店 nmId 不同） | 店快照 `load_shop_rows` 反查 vc → 再走上面的 resolver（模板 T3） | 同上 |
+| **nmId → 供应商代码 vendorCode**（如投诉/订单只给 nmId） | 本店快照 `load_shop_rows` 反查 vc，兜底映射总表 `load_mapping_state()[0][vc]["nmId"]`（能同时给 vc+中文名） | `storage/nm_resolver.py` → `NmResolver(shop_id).resolve(nm_id)`（**只用本地真源，查不到就标注，不联网核实**） |
+| **nmId → 中文名**（按店；同一 vc 各店 nmId 不同） | 店快照 `load_shop_rows` 反查 vc → 再走上面的 resolver（模板 T3） | 同上（`NmResolver`，2026-09-23 起自 `services/support/complaints._LocalResolver` 上移共用） |
 | 前缀码（4 位）→ 商品 | `MappingRepository.load_prefix_map()` | 同上 |
 | 任何 WB 卖家后台请求（任意子域） | `wb_client.make_session(shop, root_version)` + `wb_client.request(...)` | `adapters/wb_client.py` |
 | WB 商品 card.json（标题/颜色/描述/选项/尺寸） | `wb_client.fetch_product_info(nm_id, vc, own)` / `fetch_card_json(nm_id)` / `basket_base(nm_id)` | 同上 |
@@ -25,6 +25,10 @@
 | 查某店 WB 已取消订单号集合 | `wb_client.fetch_canceled_ids(shop_id, max_pages=10)` | 同上 |
 | 投诉单（列表 + 详情含商品 nmId） | `callcenter_client.fetch_appeals(session, ...)` / `fetch_appeal_detail(session, id)` | `adapters/callcenter_client.py` |
 | **BCS 一切操作**（店铺/商品/仓库/改价/库存/下架/上架/同步） | `BCSClient()` 的 19 个方法（见 3.5） | `adapters/bcs_client.py` |
+| **读飞书多维表格全量记录**（自动翻页，防 ndjson 2000 条截断） | `_record_list_all(base_token, table_id)` → `list[dict]`（每行含 `record_id` + `fields`）；单元格值用 `_sv(v)` 归一化 | `services/order/mabang_stock.py` |
+| 飞书表格地址/表名 → `base_token` / `table_id` | `resolve_base(url)` / `resolve_table(base_token, name)`；默认地址 `credentials.get().feishu_base_url()` | `services/order/feishu_register.py` |
+| 飞书底层调用（其余 `lark-cli base` 子命令） | `_lark(args, payload=None, timeout=120)`（payload 走临时文件，结尾自动 `--as user`） | 同上 |
+| **飞书「订单登记」按供应商代码统计单数**（跨店合并、降序） | `vc_order_stats(days=, begin=, end=, date=, shops=, by_prefix=, with_cn=)` → dict | `services/order/feishu_vc_stats.py` |
 | 马帮订单/库存/预报/上传/交运 | `mabang_client` 的 24 个函数（见 3.5） | `adapters/mabang_client.py` |
 | LLM 生成客服回复 | `support_svc.generate_ai_reply(question, product_info)`；或 `LLMClient(...)` | `services/support_svc.py` / `adapters/llm_client.py` |
 | 异步任务：提交 + 轮询到完成 | `AsyncTaskRunner.run_until_complete(submit_fn, check_fn, timeout, interval, max_retries)` | `adapters/task_runner.py` |
@@ -43,7 +47,7 @@
 ## 二、5 分钟上手
 
 ```bash
-python wb.py --help                      # 42 个命令一览（或看 docs/CLI.md）
+python wb.py --help                      # 44 个命令一览（或看 docs/CLI.md）
 python wb.py shops                       # 验证凭证链路（BCS 通）
 python tests/run_tests.py --changed      # 只跑「本次改动相关」的测试（见第六节）
 ```
@@ -167,8 +171,8 @@ python tests/run_tests.py --changed      # 只跑「本次改动相关」的测�
 | 门面 | 对外函数 | 领域实现目录 |
 | --- | --- | --- |
 | `catalog_svc.py` | `run_fetch` `run_mapping` `run_mapping_import` `run_mapping_check` `run_mismatch_check` `run_review` `run_merge` `run_mapping_rename` `run_shops_mapping` | `catalog/`：`products.py`（快照）`mapping.py`（增量合并）`mapping_sync.py`（单店表/纠偏）`mapping_excel.py`（8-Sheet 生成）`mapping_check.py` `mismatch_check.py` `workbench.py`（HTML）`keywords.py` |
-| `discount_svc.py` | `run_cli`（discount/discount-wb/discount-scan）`run_promo_apply` `run_discount_bcs` `run_price_review`；类方法 `apply_new_prices_by_nmids(shop, nm_ids)`（**跨域门面**：按 nmID 精确「应用新价格」，供 replicate 域 `price --auto-review` 调用，只审命中的待审项、不误审历史遗留） | `discount/`：`promo.py`（报名）`price_review.py`（隔离区审核）`discount_bcs.py`（BCS 慢速改折扣） |
-| `order_svc.py` | `run_orders` `run_mabang_orders` `run_mabang_forecast` `run_feishu_register` `run_mabang_process` `run_mabang_stock_register` `run_mabang_stock_daily` | `order/`：`orders.py` `mabang.py` `mabang_process.py` `mabang_stock.py` `mabang_stock_daily.py` `feishu_register.py` |
+| `discount_svc.py` | `run_cli`（discount/discount-wb/discount-scan）`run_promo_apply` `run_promo_goods` `run_discount_bcs` `run_price_review`；类方法 `apply_new_prices_by_nmids(shop, nm_ids)`（**跨域门面**：按 nmID 精确「应用新价格」，供 replicate 域 `price --auto-review` 调用，只审命中的待审项、不误审历史遗留） | `discount/`：`promo.py`（报名）`adverts.py`（广告推广商品查询）`price_review.py`（隔离区审核）`discount_bcs.py`（BCS 慢速改折扣） |
+| `order_svc.py` | `run_orders` `run_mabang_orders` `run_mabang_forecast` `run_feishu_register` `run_mabang_process` `run_mabang_stock_register` `run_mabang_stock_daily` `run_feishu_vc_stats` | `order/`：`orders.py` `mabang.py` `mabang_process.py` `mabang_stock.py` `mabang_stock_daily.py` `feishu_register.py` `feishu_vc_stats.py`（按供应商代码统计单数） |
 | `replicate_svc.py` | `run_price` `run_stock` `run_trash` `run_replicate` `run_import_shelve` `run_dimension` `run_dims_check` `run_banned` `run_clean` `run_remote_wh` `run_shelve` `run_shelve_old` | `replicate/`：`ops.py`（薄门面）+ `ops_plan.py`（**计划构造，无副作用**）+ `ops_executor.py`（**分批执行/审计**）+ `dimension.py` `dims_check.py` `banned.py` `clean.py` `replicate.py` `import_shelve.py` `foreign_table.py` `wb_card.py` `remote_wh.py` `shelve_new.py`（新版批量接口） `shelve_old.py`（旧版上品建卡） `shelve_common.py`（上架公共解析） |
 | `support_svc.py` | `run_questions` `run_questions_watch` `run_ai_test` `run_appeals`；类方法 `generate_ai_reply` / `load_replied` / `save_replied` / `load_shown` / `save_shown` | `support/`：`questions.py` `questions_watch.py` `ai_reply_test.py` `complaints.py` |
 
@@ -338,7 +342,7 @@ def run_xxx(args):
 # ③ wb_ops/framework/registry.py：注册（别名用 alias=）
 registry.register("xxx", "wb_ops.services.<域>_svc", "run_xxx")
 
-# ④ tests/test_all_commands.py：命令名加进 subcommands 列表 + assertEqual 计数（现为 40）
+# ④ tests/test_all_commands.py：命令名加进 subcommands 列表 + assertEqual 计数（现为 44）
 #    并新增用例（只读、不得带 --apply）：def test_NN_xxx(self): ...
 #    再在 tests/run_tests.py 的 PATH_HINTS 里为「文件→命令」加一行（见第六节）
 ```

@@ -9,6 +9,7 @@ from .order import (
     mabang_process,
     mabang_stock,
     feishu_register,
+    feishu_vc_stats,
     orders,
 )
 
@@ -44,6 +45,10 @@ class OrderService:
         """BCS 订单查询与同步"""
         return orders.run(args)
 
+    def count_register_by_vendor(self, args: Any) -> int:
+        """飞书「订单登记」按供应商代码统计单数（只读）"""
+        return feishu_vc_stats.run(args)
+
 
 order_svc = OrderService()
 
@@ -74,4 +79,8 @@ def run_mabang_stock_register(args):
 
 def run_mabang_stock_daily(args):
     return order_svc.manage_stock_daily(args)
+
+
+def run_feishu_vc_stats(args):
+    return order_svc.count_register_by_vendor(args)
 

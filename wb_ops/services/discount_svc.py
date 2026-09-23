@@ -291,6 +291,11 @@ class DiscountService:
         from .discount import promo
         return promo.run(args)
 
+    def run_promo_goods(self, args: Any) -> int:
+        """运行广告推广商品查询（cmp.wildberries.ru，只读）"""
+        from .discount import adverts
+        return adverts.run(args)
+
     def run_price_review(self, args: Any) -> int:
         """运行价格审查"""
         from .discount import price_review
@@ -451,6 +456,10 @@ def run_cli(args) -> int:
 
 def run_promo_apply(args):
     return discount_svc.run_promo(args)
+
+
+def run_promo_goods(args):
+    return discount_svc.run_promo_goods(args)
 
 
 def run_discount_bcs(args):

@@ -41,9 +41,9 @@ WB_SCRIPT = os.path.join(BASE_DIR, "wb.py")
 #   ⚠ 顺序敏感：先精确后宽泛（首次命中即 break）
 CATALOG_CMDS = ["fetch", "mapping", "mapping-import", "mapping-check", "mismatch-check",
                 "review", "merge", "mapping-rename", "shops-mapping"]
-DISCOUNT_CMDS = ["discount", "promo-apply", "discount-bcs", "price-review"]
+DISCOUNT_CMDS = ["discount", "promo-apply", "promo-goods", "discount-bcs", "price-review"]
 ORDER_CMDS = ["orders", "mabang-orders", "mabang-forecast", "feishu-register",
-              "mabang-stock-register", "mabang-stock-daily", "mabang-process"]
+              "mabang-stock-register", "mabang-stock-daily", "feishu-vc-stats", "mabang-process"]
 REPLICATE_CMDS = ["price", "stock", "trash", "replicate", "import-shelve", "dimension",
                   "dims-check", "banned", "clean", "remote-wh", "shelve", "shelve-old"]
 SUPPORT_CMDS = ["questions", "questions-watch", "ai-test", "appeals"]
@@ -76,6 +76,7 @@ PATH_HINTS = [
     ("wb_ops/services/discount/discount_bcs.py", ["discount-bcs"]),
     ("wb_ops/services/discount/price_review.py", ["price-review"]),
     ("wb_ops/services/discount/promo.py", ["promo-apply"]),
+    ("wb_ops/services/discount/adverts.py", ["promo-goods"]),
     ("wb_ops/services/discount/", DISCOUNT_CMDS),
     ("wb_ops/services/catalog/products.py", ["fetch"]),
     ("wb_ops/services/catalog/mapping.py", ["merge", "mapping"]),
@@ -87,9 +88,10 @@ PATH_HINTS = [
     ("wb_ops/services/catalog/", CATALOG_CMDS),
     ("wb_ops/services/order/orders.py", ["orders"]),
     ("wb_ops/services/order/mabang_process.py", ["mabang-process"]),
-    ("wb_ops/services/order/mabang_stock", ["mabang-stock-register", "mabang-stock-daily"]),
+    ("wb_ops/services/order/mabang_stock", ["mabang-stock-register", "mabang-stock-daily", "feishu-vc-stats"]),
     ("wb_ops/services/order/mabang.py", ["mabang-orders", "mabang-forecast", "mabang-process"]),
-    ("wb_ops/services/order/feishu_register.py", ["feishu-register"]),
+    ("wb_ops/services/order/feishu_register.py", ["feishu-register", "feishu-vc-stats"]),
+    ("wb_ops/services/order/feishu_vc_stats.py", ["feishu-vc-stats"]),
     ("wb_ops/services/order/", ORDER_CMDS),
     # 门面（薄转发，按域定向）
     ("wb_ops/services/catalog_svc.py", CATALOG_CMDS),
@@ -99,7 +101,8 @@ PATH_HINTS = [
     ("wb_ops/services/support_svc.py", SUPPORT_CMDS),
     # 适配器
     ("wb_ops/adapters/mabang_client.py", ORDER_CMDS),
-    ("wb_ops/adapters/wb_client.py", ["discount", "banned", "dims-check", "appeals", "questions", "orders"]),
+    ("wb_ops/adapters/wb_client.py", ["discount", "promo-goods", "banned", "dims-check", "appeals", "questions", "orders"]),
+    ("wb_ops/adapters/wb_ads_client.py", ["promo-goods"]),
     ("wb_ops/adapters/bcs_client.py", ["shops", "fetch", "stock", "price"]),
     ("wb_ops/adapters/task_runner.py", ["fetch", "orders"]),
     ("wb_ops/adapters/llm_client.py", ["questions-watch", "ai-test"]),
@@ -115,6 +118,7 @@ PATH_HINTS = [
     ("wb_ops/common.py", ["SMOKE"]),
     ("wb_ops/config.py", ["SMOKE"]),
     ("wb_ops/credentials.py", ["SMOKE"]),
+    ("wb_ops/storage/nm_resolver.py", ["promo-goods", "appeals"]),
     ("wb_ops/storage/", ["SMOKE"]),
     ("tests/test_all_commands.py", ["SMOKE"]),
     ("tests/run_tests.py", ["SMOKE"]),

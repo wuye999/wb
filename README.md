@@ -44,6 +44,7 @@ python wb.py dimension                        # 按价格表「尺寸」批量�
 python wb.py discount --apply           # >50% → 50%（BCS 批量；默认不自动同步/不写后验证，仅提示；加 --sync 自动同步并合并映射表）
 python wb.py discount-wb --apply        # WB 原生批量改折扣（从高到低查询 >50% 并原生批量修改；默认不写后验证）
 python wb.py promo-apply --apply        # 促销报名
+python wb.py promo-goods                 # 只读：广告推广中被推广的商品（WB商品码/供应商代码/中文名；明细 CSV）
 python wb.py price-review --apply       # ⚠ 报名/改折扣后必跑：应用新价格（改折扣也会触发价格审核）
 python wb.py dims-check --name 视黄醇面霜  # 只读：列出尺寸偏差待验证商品（--type weight/all 可看重量/合并）
 python wb.py clean --target all --apply # 清理（默认不自动同步，仅提示；加 --sync 自动同步并合并映射表）
@@ -56,6 +57,7 @@ python wb.py orders                     # 订单查询（同步+查询今天）
 # ▸ 写操作（改价/库存/下架/折扣/清理/上架/改尺寸）默认都不同步、不写后验证、不合并映射表；执行完成即结束，严禁擅自补跑 fetch+merge，仅在极低频全局盘点或用户显式要求时才跑。
 python wb.py questions                  # 买家未处理提问查询
 python wb.py appeals --days 5           # WB 平台投诉单：未处理(等待回复) + 剩余天数=5 → 明细 + 去重商品编号行 + CSV
+python wb.py feishu-vc-stats             # 只读：飞书「订单登记」近7天按供应商代码(BCS编号)统计单数降序（跨店合并；--days/--date/--begin/--end/--shops/--by-prefix）
 
 # ▸ 每日新订单处理（2026-09-10 拆分为两个独立脚本；先 A 后 B 保证库存SKU 正确）
 python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→物流交运（零飞书依赖）
@@ -74,7 +76,7 @@ python wb.py mabang-stock-register --apply              # 全量重建「马帮�
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 解耦实践 / 业务规则 / 数据流 |
 | [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程/按需测试门禁） |
 | [docs/REUSE_GUIDE.md](docs/REUSE_GUIDE.md)   | ★ 开发复用指南：能做 X 用哪个模块/函数 + 代码模板（写新功能前先读） |
-| [docs/CLI.md](docs/CLI.md)                   | 42 个命令全集参考 + Python 库调用 |
+| [docs/CLI.md](docs/CLI.md)                   | 44 个命令全集参考 + Python 库调用 |
 | [docs/USAGE.md](docs/USAGE.md)               | 日常情景使用流程               |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md)   | 鉴权与凭证                  |
 

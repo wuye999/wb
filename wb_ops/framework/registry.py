@@ -36,7 +36,7 @@ class CommandRegistry:
 
 registry = CommandRegistry()
 
-# 注册全部 40 个命令的动态模块映射
+# 注册全部 44 个命令的动态模块映射
 registry.register("shops", "wb_ops.adapters.bcs_client", "print_shops")
 registry.register("fetch", "wb_ops.services.catalog_svc", "run_fetch")
 registry.register("mapping", "wb_ops.services.catalog_svc", "run_mapping")
@@ -53,6 +53,7 @@ registry.register("trash", "wb_ops.services.replicate_svc", "run_trash")
 registry.register("replicate", "wb_ops.services.replicate_svc", "run_replicate")
 registry.register("import-shelve", "wb_ops.services.replicate_svc", "run_import_shelve")
 registry.register("promo-apply", "wb_ops.services.discount_svc", "run_promo_apply")
+registry.register("promo-goods", "wb_ops.services.discount_svc", "run_promo_goods")
 registry.register("discount", "wb_ops.services.discount_svc", "run_cli")
 registry.register("discount-wb", "wb_ops.services.discount_svc", "run_cli")
 registry.register("discount-scan", "wb_ops.services.discount_svc", "run_cli")
@@ -72,6 +73,7 @@ registry.register("mabang-forecast", "wb_ops.services.order_svc", "run_mabang_fo
 registry.register("feishu-register", "wb_ops.services.order_svc", "run_feishu_register")
 registry.register("mabang-stock-register", "wb_ops.services.order_svc", "run_mabang_stock_register")
 registry.register("mabang-stock-daily", "wb_ops.services.order_svc", "run_mabang_stock_daily")
+registry.register("feishu-vc-stats", "wb_ops.services.order_svc", "run_feishu_vc_stats")
 registry.register("mabang-process", "wb_ops.services.order_svc", "run_mabang_process", alias="order-pipeline")
 registry.register("cookies-update", "wb_ops.adapters.cookies", "run_cookies_update")
 registry.register("daily", "wb_ops.daily", "run_daily_cmd")

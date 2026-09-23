@@ -43,20 +43,20 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 40 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 44 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
             "mismatch-check", "review", "merge", "mapping-rename", "shops-mapping",
             "price", "stock", "trash", "replicate", "import-shelve",
-            "promo-apply", "discount", "discount-wb", "discount-scan", "discount-bcs",
+            "promo-apply", "promo-goods", "discount", "discount-wb", "discount-scan", "discount-bcs",
             "dimension", "dims-check", "banned", "clean", "price-review",
             "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
             "mabang-forecast", "feishu-register", "mabang-stock-register",
-            "mabang-stock-daily", "mabang-process", "cookies-update",
+            "mabang-stock-daily", "feishu-vc-stats", "mabang-process", "cookies-update",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 42)
+        self.assertEqual(len(subcommands), 44)
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -105,6 +105,70 @@ class TestAllCommands(unittest.TestCase):
         for vc in invalid:
             with self.subTest(vc=vc):
                 self.assertIsNone(re.match(rx, vc), f"应不匹配: {vc}")
+
+    def test_01c_promo_goods_parse_offline(self):
+        """promo-goods 离线解析断言（**不联网**）：查询串 / cmp 域请求头 / 供应商 UUID / 展平 / 本地反查。
+
+        背景：cmp.wildberries.ru 广告推广接口 `GET /api/v1/adverts` 首次接入，
+        被推广商品内嵌在 `content[].stocks.products[]`；抓包依据
+        `api/网络请求/wb推广活动列表.har`（2026-09-23，status=[4,9,11]）。
+        """
+        from wb_ops.adapters import wb_ads_client as ads
+        from wb_ops.services.discount import adverts
+
+        # ① adverts 查询串：`[`/`]` 按 HAR 百分号编码、逗号保留
+        url = ads.adverts_url(1, 100)
+        self.assertIn("status=%5B4,9,11%5D", url)
+        self.assertIn("bid_type=%5B1,2%5D", url)
+        self.assertIn("type=%5B8,9%5D", url)
+        self.assertIn("show_stocks=true", url)
+        self.assertIn("page_number=1", url)
+        self.assertIn("page_size=100", url)
+
+        # ② cmp 域必需头：Authorization: Bearer <authorizev3>；x-supplierid 取自 cookie 的
+        #    x-supplier-id-external（实测 credentials.json 三店均带，与 HAR 一致）
+        shop = {"authorizev3": "JWT-TEST", "cookie": "a=1; x-supplier-id-external=UUID-XYZ; b=2"}
+        h = ads.cmp_headers(shop)
+        self.assertEqual(h["authorization"], "Bearer JWT-TEST")
+        self.assertEqual(h["authorizev3"], "JWT-TEST")
+        self.assertEqual(h["x-supplierid"], "UUID-XYZ")
+        self.assertEqual(ads.supplier_uuid_from_cookie(shop), "UUID-XYZ")
+        self.assertEqual(ads.supplier_uuid_from_cookie({"cookie": "a=1"}), "")  # 取不到留空 → 走兜底
+
+        # ③ 展平：无商品的活动跳过；products_count>0 但明细为空 → 计入缺失清单（调用方打 [警告]）
+        campaigns = [
+            {"id": 40370920, "campaign_name": "c1", "status_id": 9, "payment_model": "cpc",
+             "budget": 100, "create_date": "2026-09-23T06:01:11.811229+03:00", "products_count": 2,
+             "stocks": {"products": [
+                 {"nm": 1358933567, "name": "Переноска", "subject": {"name": "Переноски"},
+                  "total_quantity_fbo": 0, "total_quantity_mp": 998},
+                 {"nm": 1336777003, "name": "Пионы", "subject": {"id": 1156}, "total_quantity_fbo": 1}]}},
+            {"id": 2, "campaign_name": "c2", "products_count": 3, "stocks": {"products": []}},
+            {"id": 3, "campaign_name": "c3", "products_count": 0},
+        ]
+        flat = adverts.iter_campaign_products(campaigns)
+        self.assertEqual(len(flat), 2)
+        self.assertEqual([p["nm"] for _, p in flat], [1358933567, 1336777003])
+        self.assertEqual(adverts.missing_detail_campaigns(campaigns), [2])
+
+        # ④ --status 解析：显式给出走自定义，缺省回落后台默认视图 [4,9,11]
+        class _Args:
+            status = "9"
+            no_cn = False
+            page_size = 100
+            limit = 0
+            max_pages = 50
+
+        self.assertEqual(adverts.build_options(_Args())["statuses"], (9,))
+        _Args.status = ""
+        opt = adverts.build_options(_Args())
+        self.assertEqual(opt["statuses"], ads.STATUS_DEFAULT)
+        self.assertTrue(opt["with_cn"])
+
+        # ⑤ 本地真源反查：未收录 nmId → vc/cn 全空（调用方标注「本地真源未收录」，不联网核实）
+        from wb_ops.storage.nm_resolver import NmResolver
+        info = NmResolver(9352, with_cn=True).resolve(999999999999)
+        self.assertEqual(info, {"vc": "", "cn": "", "src": ""})
 
     # ---------------- 2. 账号与基础数据 ----------------
     def test_02_shops_list(self):
@@ -430,6 +494,89 @@ class TestAllCommands(unittest.TestCase):
         # --end 单独使用必须报错中止（避免静默删列）
         res = self._run_cmd(["mabang-stock-daily", "--end", "2026-09-20"], expect_code=1)
         self.assertIn("--end", res.stdout)
+
+    def test_36b_feishu_vc_stats_offline(self):
+        """feishu-vc-stats 离线断言（**不联网、不调 lark-cli**）：字段解析 / 窗口 / 跨店合并 / 降序 / 前缀。
+
+        背景：飞书「订单登记」表的 vendorCode 载体是 `BCS编号` 列（表内无「供应商代码」列）；
+        同一 vendorCode 在各店 wb编号 不同，但统计须**跨店合并**到同一条（用户口径 2026-09-23）。
+        """
+        from datetime import datetime, timedelta
+
+        from wb_ops.services.order import feishu_vc_stats as st
+
+        # ① 字段解析：日期取前 10 位、店铺(list 多选)、订单量 number、BCS编号
+        row = st.parse_row({
+            "日期": "2026-09-22T03:26:00.000+08:00",
+            "订单编号": "419915682",
+            "店铺": ["袁州1"],
+            "BCS编号": "BCS-JPAV-163906301",
+            "商品中文名": "毛球修剪器",
+            "订单量": 3,
+        })
+        self.assertEqual(row["日期"], "2026-09-22")
+        self.assertEqual(row["vc"], "BCS-JPAV-163906301")
+        self.assertEqual(row["cn"], "毛球修剪器")
+        self.assertEqual(row["shops"], ["袁州1"])
+        self.assertEqual(row["qty"], 3)
+        self.assertEqual(row["order_id"], "419915682")
+        # 缺字段 / 空店铺 容错
+        empty = st.parse_row({})
+        self.assertEqual((empty["日期"], empty["vc"], empty["shops"], empty["qty"]), ("", "", [], 1))
+
+        # ② 窗口：闭区间 + 无日期不命中
+        self.assertTrue(st.in_window({"日期": "2026-09-22"}, "2026-09-22", "2026-09-22"))
+        self.assertTrue(st.in_window({"日期": "2026-09-17"}, "2026-09-17", "2026-09-23"))
+        self.assertFalse(st.in_window({"日期": "2026-09-16"}, "2026-09-17", "2026-09-23"))
+        self.assertFalse(st.in_window({"日期": ""}, "2026-09-17", "2026-09-23"))
+
+        # ③ 窗口推导：days 含今天；date 单天；仅 begin 按单天；仅 end 报错
+        b, e = st.resolve_window(days=7)
+        self.assertEqual(e, time.strftime("%Y-%m-%d"))
+        self.assertEqual(datetime.strptime(e, "%Y-%m-%d") - datetime.strptime(b, "%Y-%m-%d"),
+                         timedelta(days=6))
+        self.assertEqual(st.resolve_window(date="2026-9-5"), ("2026-09-05", "2026-09-05"))
+        self.assertEqual(st.resolve_window(begin="2026-09-20"), ("2026-09-20", "2026-09-20"))
+        self.assertEqual(st.resolve_window(begin="2026-09-02", end="2026-09-05"), ("2026-09-02", "2026-09-05"))
+        with self.assertRaises(ValueError):
+            st.resolve_window(end="2026-09-22")
+
+        # ④ 跨店合并 + 单数降序 + 同数按 key 升序 + 件数累加
+        rows = [
+            {"日期": "2026-09-22", "vc": "BCS-AAAA-1", "cn": "甲", "shops": ["袁州1"], "qty": 2, "order_id": "o1"},
+            {"日期": "2026-09-22", "vc": "BCS-AAAA-1", "cn": "甲", "shops": ["袁州3"], "qty": 1, "order_id": "o2"},
+            {"日期": "2026-09-22", "vc": "BCS-BBBB-2", "cn": "乙", "shops": ["袁州2"], "qty": 1, "order_id": "o3"},
+            {"日期": "2026-09-22", "vc": "BCS-CCCC-3", "cn": "丙", "shops": ["袁州1"], "qty": 1, "order_id": "o4"},
+            {"日期": "2026-09-22", "vc": "", "cn": "", "shops": ["袁州1"], "qty": 1, "order_id": "o5"},
+        ]
+        agg = st.aggregate(rows)
+        self.assertEqual([(r["key"], r["orders"], r["qty"]) for r in agg],
+                         [("BCS-AAAA-1", 2, 3), ("BCS-BBBB-2", 1, 1), ("BCS-CCCC-3", 1, 1), (st.NO_VC_KEY, 1, 1)])
+        self.assertEqual([r["rank"] for r in agg], [1, 2, 3, 4])
+        # 未归类桶恒排最后（不然 '(' 码位小于 'B' 会插到真实 vendorCode 前面）
+        self.assertTrue(str(agg[-1]["key"]).startswith("("))
+        # 跨店合并：同一 vc 在袁州1/袁州3 的店铺分布已合并（各 1 单 → 按单数降序、同数按名升序）
+        self.assertEqual(agg[0]["shops"], ["袁州1", "袁州3"])
+        self.assertEqual(agg[0]["cn"], "甲")
+        # 无 BCS编号 的记录不静默丢弃，单独成桶
+        self.assertEqual([r["key"] for r in agg if r["key"] == st.NO_VC_KEY], [st.NO_VC_KEY])
+
+        # ⑤ 前缀码聚合视角
+        pre = st.aggregate(rows, by_prefix=True)
+        self.assertEqual([(r["key"], r["orders"]) for r in pre], [("AAAA", 2), ("BBBB", 1), ("CCCC", 1), (st.NO_PREFIX_KEY, 1)])
+
+        # ⑥ 店铺过滤：空集 = 不过滤；否则取交集
+        r_shop = {"日期": "2026-09-22", "vc": "x", "shops": ["袁州2"]}
+        self.assertTrue(st.match_shops(r_shop, None))
+        self.assertTrue(st.match_shops(r_shop, set()))
+        self.assertFalse(st.match_shops(r_shop, {"袁州1", "袁州3"}))
+        self.assertTrue(st.match_shops(r_shop, {"袁州2"}))
+
+        # ⑦ 店铺标签解析：9352 → 袁州1（数字经 credentials 反查）；未知数字保留原值
+        self.assertEqual(st.resolve_shop_labels("9352"), {"袁州1"})
+        self.assertEqual(st.resolve_shop_labels("袁州1,袁州3"), {"袁州1", "袁州3"})
+        self.assertEqual(st.resolve_shop_labels(["9353", "璧山1"]), {"袁州2", "璧山1"})
+        self.assertEqual(st.resolve_shop_labels(""), set())
 
     def test_37_cookies_update_missing_file(self):
         res = self._run_cmd(["cookies-update", "__no_such_cookies__.md"], expect_code=1)

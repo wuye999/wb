@@ -54,6 +54,7 @@
 | 子命令 | 用途 | 关键参数 |
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
+| `promo-goods` | **广告推广中被推广商品查询**（cmp.wildberries.ru，**只读**；列出活动内商品的 WB 商品码 / 供应商代码 / 中文名 / 俄文标题 / 类目 / 活动内库存） | `--shops` / `--status`（默认 `4,9,11`=后台默认视图） / `--page-size` / `--max-pages` / `--limit` / `--no-cn` |
 | `discount` | 折扣改价**WB 原生批量**（默认）：按折扣从高到低查询 >阈值商品，调用 WB 原生 upload/task 批量修改；支持 `--vc`、`--name`（中文名包含）、`--prefix`、`--shops` 灵活圈定；**`--below N` 额外命中「折扣<N」侧（走 WB 折扣升序列表接口，与 `--threshold` 并集去重）**；默认**不做写后验证**（WB 异步生效延迟）；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--below` / `--all` / `--target` / `--name` / `--vc` / `--prefix` / `--shops` / `--limit` / `--chunk` / `--verify` |
 | `discount-wb` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
 | `discount-scan` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
@@ -79,6 +80,7 @@
 | `mabang-forecast` | 预报批次全链路（幂等状态机）：①生成批次（`order_label` 含「已预报」跳过）→②**依次上传**（逐批 getForecastConfig 模板 + `wb_automark=1` 自动发货 + 单批次号）→③等待→④物流交运「莫斯科仓-七库海外仓」（已选择跳过）；`--check` 只查批次状态 | `--apply` / `--check` / `--wait S` / `--upload-waiting` / `--days` |
 | `mabang-process` | **马帮订单处理一体（零飞书依赖）**：匹配商品→预报单生成→依次上传（自动发货）→物流交运；过滤/幂等机制与 mabang-orders+mabang-forecast 一致；末尾自动登记飞书（URL 读配置 feishu.base_url，--url 可覆盖） | `--days` / `--page-size` / `--wait` / `--url` / `--table` / `--apply` |
 | `feishu-register` | 新订单登记到飞书多维表格「订单登记」（数据源=**orderalllist 最近 500 条全状态订单 + 待处理订单两路合并**，按订单编号去重只登记新增；`--no-pending` 可关闭合并）：VC→中文名→下单店 wb编号→**库存SKU（本地商品价格表「库存SKU」列，查不到留空）**→WB链接；`--scope all --date/--begin/--end` 补录历史全部状态订单（orderalllist 忽略服务端日期过滤，本地按 paidTime 筛） | `--url`(可选，默认读配置 feishu.base_url) / `--table`(默认 订单登记) / `--scope latest\|pending\|all`(默认 latest) / `--date` / `--begin` / `--end` / `--apply` |
+| `feishu-vc-stats` | **只读**：读飞书「订单登记」→ 按**供应商代码（`BCS编号` = vendorCode）跨店合并**统计「**单数**」（= 登记记录条数；另附「件数」= `订单量` 求和）→ **降序**输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）。未命中原因（无日期/不在窗口/店铺被过滤）显式标注；`BCS编号` 为空的记录归入 `(无BCS编号)` 桶不丢弃 | `--days`(默认7，含今天) / `--date` / `--begin` / `--end` / `--shops`(支持 `9352` 或 `袁州1`) / `--top` / `--by-prefix` / `--no-cn` / `--url` / `--table` |
 | `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
 | `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
 
@@ -143,6 +145,10 @@ python wb.py shelve-old 248364237 --vc BCS-SPECIAL-MYVC --apply            # 旧
 
 # 促销/折扣/清理/价格审核/订单/提问
 python wb.py promo-apply                   # 预览可报名活动
+python wb.py promo-goods                   # 列出广告推广中被推广的商品（中文名/供应商代码/WB商品码，只读）
+python wb.py promo-goods --shops 9356       # 只查指定店
+python wb.py promo-goods --status 9         # 只看「在投」活动（默认 4,9,11 = 后台默认视图）
+python wb.py promo-goods --no-cn            # 不解析中文名，速度更快（供应商代码仍解析）
 # 折扣修改（默认 WB 原生批量，支持多种维度过滤）
 python wb.py discount                      # 预览全店 >50% 商品（WB 原生从高到低快速查询）
 python wb.py discount --apply              # 执行全店 >50%→50%（WB 原生 upload/task 批量修改，默认不写后验证）
@@ -168,6 +174,13 @@ python wb.py clean --target all --apply --sync  # 执行 + 清理前同步 + 清
 python wb.py orders                        # 同步+查询今天订单
 python wb.py orders --begin 2026-08-17 --end 2026-08-20   # 指定日期区间
 python wb.py orders --no-sync --days 3     # 跳过同步查缓存
+python wb.py feishu-vc-stats                # 只读：飞书「订单登记」近 7 天按供应商代码(BCS编号)统计单数降序
+python wb.py feishu-vc-stats --days 14      # 近 14 天（含今天）
+python wb.py feishu-vc-stats --date 2026-09-22          # 单天
+python wb.py feishu-vc-stats --begin 2026-09-17 --end 2026-09-23   # 指定区间
+python wb.py feishu-vc-stats --shops 9352,9356          # 只统计袁州1、袁州3（短名 袁州1 亦可）
+python wb.py feishu-vc-stats --days 7 --top 20          # 控制台只看前 20 名（CSV 仍写全量）
+python wb.py feishu-vc-stats --days 7 --by-prefix       # 按 vendorCode 的 4 位前缀码聚合
 python wb.py questions                     # 查询未处理提问（带中文名/标题/品牌/颜色/价格/描述/特征）
 python wb.py questions --no-detail         # 跳过商品详情拉取（只中文名，快）
 python wb.py questions --reply "..." --question-id <id>    # 回复单条
@@ -241,6 +254,13 @@ ops.run_apply(plans, 'price')                             # 提交执行（自�
 # replicate_svc.run_price(args)
 # discount_svc.run_discount(args)
 # order_svc.run_mabang_process(args)
+
+# 4. 飞书「订单登记」按供应商代码统计（只读；显式关键字参数，便于脚本内嵌调用）
+from wb_ops.services.order.feishu_vc_stats import vc_order_stats
+r = vc_order_stats(days=7, shops=["9352", "袁州3"])      # 或 begin="2026-09-17", end="2026-09-23"
+print(r["begin"], r["end"], r["total_orders"], r["vc_count"])   # 窗口 / 命中记录数 / 供应商代码数
+for row in r["rows"]:                                   # 已按单数降序、未归类桶垫底
+    print(row["rank"], row["key"], row["orders"], row["qty"], row["cn"], row["shops"])
 ```
 
 > 每个模块内部函数签名在源码 docstring 中都有说明；CLI 是这些函数的薄封装。

@@ -26,11 +26,9 @@ from wb_ops import credentials
 from wb_ops.adapters import callcenter_client as cc_api
 from wb_ops.adapters import wb_client as wb_api
 from wb_ops.domain.models import Complaint, ComplaintProduct
-from wb_ops.storage.mapping_repo import MappingRepository
-from wb_ops.storage.product_repo import ProductSnapshotRepository
+from wb_ops.storage.nm_resolver import MISS_LABEL, NmResolver
 
 PENDING_STATUS_ID = 1      # 「等待回复」= 未处理
-MISS_LABEL = "本地真源未收录"  # nmId 在本店快照与映射表中均查不到（不联网核实）
 SHOP_SLEEP = 0.5           # 店间间隔（串行）
 DETAIL_SLEEP = 0.3         # 详情接口逐条间隔
 CSV_FIELDS = [
@@ -40,42 +38,9 @@ CSV_FIELDS = [
 ]
 
 
-class _LocalResolver:
-    """按店本地反查 nmId → 供应商代码 / 中文名（一次读快照 + 映射池，失败静默降级）
-
-    真源优先级：
-      ① 本店在架快照 `{vendorCode: row}` 的 nmId 字段（最准，含该店真实在架商品）
-      ② 映射总表 state 的 nmId 字段（跨店兜底：vc 为跨店唯一键，商品可能在别的店在架）
-    两处都没有 → MISS_LABEL（不联网核实）。
-    """
-
-    def __init__(self, shop_id: int, with_cn: bool = True):
-        self.nm2vc: Dict[int, str] = {}
-        self.nm2src: Dict[int, str] = {}
-        self._cn = (lambda vc: "")
-        try:
-            resolve_cn, _ = MappingRepository.build_vc_resolver()
-            for vc, item in (ProductSnapshotRepository.load_shop_rows(shop_id) or {}).items():
-                nm_id = common.to_int(item.get("nmId") or item.get("nmID"))
-                if nm_id:
-                    self.nm2vc[nm_id] = vc
-                    self.nm2src[nm_id] = "店快照"
-            state, _ = MappingRepository.load_mapping_state()
-            for vc, info in state.items():
-                nm_id = common.to_int((info or {}).get("nmId"))
-                if nm_id and nm_id not in self.nm2vc:
-                    self.nm2vc[nm_id] = vc
-                    self.nm2src[nm_id] = "映射表"
-            if with_cn:
-                self._cn = lambda vc: resolve_cn(vc, "")
-        except Exception:
-            pass
-
-    def resolve(self, nm_id: int) -> Dict[str, str]:
-        """nm_id → {'vc': 供应商代码, 'cn': 中文名, 'src': 解析来源}"""
-        key = common.to_int(nm_id)
-        vc = self.nm2vc.get(key, "")
-        return {"vc": vc, "cn": self._cn(vc) if vc else "", "src": self.nm2src.get(key, "")}
+# 本地反查真源（nmId → 供应商代码 / 中文名）已下沉到 storage.nm_resolver，
+# 保留 _LocalResolver 旧名以兼容本模块既有引用（行为与迁移前一致）。
+_LocalResolver = NmResolver
 
 
 def _extract_products(detail: Optional[Dict[str, Any]]) -> List[ComplaintProduct]:

@@ -28,7 +28,7 @@
 
 **两大业务线**（现合并在一个入口 `wb.py` 下）：
 1. **商品映射 / 改价 / 库存 / 下架 / 价格审核 / 货不对板筛查 / 多店解耦维护**（原「检查价格」）：`shops / fetch / mapping / mapping-check / mismatch-check / review / merge / shops-mapping / mapping-rename / price / stock / trash / price-review`
-2. **促销报名 / 折扣改价 / 清理 / 订单 / 买家提问 / 每日自动化**（原「促销折扣」）：`promo-apply / discount / clean / orders / questions / cookies-update / daily / schedule`
+2. **促销报名 / 广告推广商品查询 / 折扣改价 / 清理 / 订单 / 买家提问 / 每日自动化**（原「促销折扣」）：`promo-apply / promo-goods / discount / clean / orders / feishu-vc-stats / questions / cookies-update / daily / schedule`
 
 ## 文档索引（按需读）
 
@@ -37,7 +37,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 模块分层、职责设计、解耦成果与数据流转规则 |
 | [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范：分层依赖、单文件拆分标准、类型与并发规范、新功能 6 步扩展流程、按需测试门禁 |
 | [REUSE_GUIDE.md](REUSE_GUIDE.md) | ★ 开发复用指南：**能做 X 用哪个模块/函数**速查表、可抄代码模板、复用铁律、一键重扫公共 API |
-| [CLI.md](CLI.md) | 42 个子命令全集参数、示例、退出码；Python 库调用方式 |
+| [CLI.md](CLI.md) | 44 个子命令全集参数、示例、退出码；Python 库调用方式 |
 | [USAGE.md](USAGE.md) | 按情景分步操作（初始化/刷新凭证/上新/改价/促销/折扣/清理/每日自动） |
 | [CREDENTIALS.md](CREDENTIALS.md) | 两套鉴权、凭证结构、如何刷新、失效表现、安全 |
 
