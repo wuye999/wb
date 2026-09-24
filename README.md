@@ -45,6 +45,8 @@ python wb.py discount --apply           # >50% → 50%（BCS 批量；默认不�
 python wb.py discount-wb --apply        # WB 原生批量改折扣（从高到低查询 >50% 并原生批量修改；默认不写后验证）
 python wb.py promo-apply --apply        # 促销报名
 python wb.py promo-goods                 # 只读：广告推广中被推广的商品（WB商品码/供应商代码/中文名；明细 CSV）
+python wb.py promo-gap                   # 只读：该推没推（按店对齐：本店单数≥4 但本店未推广）
+python wb.py promo-gap --mode waste      # 只读：在推但该关（在投活动里被推广但本店单数<4 → 建议关闭清单）
 python wb.py price-review --apply       # ⚠ 报名/改折扣后必跑：应用新价格（改折扣也会触发价格审核）
 python wb.py dims-check --name 视黄醇面霜  # 只读：列出尺寸偏差待验证商品（--type weight/all 可看重量/合并）
 python wb.py clean --target all --apply # 清理（默认不自动同步，仅提示；加 --sync 自动同步并合并映射表）
@@ -76,7 +78,7 @@ python wb.py mabang-stock-register --apply              # 全量重建「马帮�
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 解耦实践 / 业务规则 / 数据流 |
 | [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程/按需测试门禁） |
 | [docs/REUSE_GUIDE.md](docs/REUSE_GUIDE.md)   | ★ 开发复用指南：能做 X 用哪个模块/函数 + 代码模板（写新功能前先读） |
-| [docs/CLI.md](docs/CLI.md)                   | 44 个命令全集参考 + Python 库调用 |
+| [docs/CLI.md](docs/CLI.md)                   | 47 个命令全集参考 + Python 库调用 |
 | [docs/USAGE.md](docs/USAGE.md)               | 日常情景使用流程               |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md)   | 鉴权与凭证                  |
 

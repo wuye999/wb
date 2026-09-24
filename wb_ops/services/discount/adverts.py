@@ -82,82 +82,144 @@ def build_options(args: Any) -> Dict[str, Any]:
     }
 
 
-def process_shop(shop: Dict[str, Any], root_version: str, opt: Dict[str, Any],
-                 agg: Dict[str, Any]) -> None:
-    """单店：拉推广活动 → 展平商品 → 本地反查 → 打印明细 + 累积统计。"""
+def shop_adverted(shop: Dict[str, Any], root_version: str = "",
+                  statuses: Any = None, page_size: int = 100, max_pages: int = 50,
+                  limit: int = 0, with_cn: bool = True) -> Dict[str, Any]:
+    """★ 库入口：单店「已被推广」明细 + 去重供应商代码集合（只读、不打印）。
+
+    供 `promo-goods` 与 `promo_gap`（双向错配审计）共用，避免重复实现拉取/展平/反查。
+
+    返回：
+      {'shop_id', 'shop_name', 'no_snapshot': bool,
+       'campaigns': [原始活动...], 'campaign_count': int, 'total': int,   # total=-1 表示平台未给 counts
+       'truncated': bool, 'missing_detail_campaigns': [cid...], 'nm_unresolved': [nm...],
+       'products': [{campaign_id, campaign_name, status_id, payment_model, budget, create_date,
+                     nm, vc, cn, src, ru, subject, fbo, mp}, ...],     # ★ 反向审计用逐商品明细
+       'vcs': {vc: [{campaign_id, nm, status_id, cn}, ...]}}            # ★ 正向审计用去重 vc
+    """
+    statuses = statuses if statuses is not None else ads_api.STATUS_DEFAULT
     sid = common.to_int(shop.get("shopId") or shop.get("shop_id"))
     name = shop.get("shopName") or f"shop_{sid}"
+    resolver = NmResolver(sid, with_cn=with_cn)
+    session = wb_api.make_session(shop, root_version)
+    no_snapshot = not os.path.exists(config.shop_json_path(sid))
+
+    campaigns, total = ads_api.fetch_adverts(
+        session, shop, statuses=statuses, page_size=page_size,
+        limit=limit, max_pages=max_pages)
+
+    products: List[Dict[str, Any]] = []
+    vcs: Dict[str, List[Dict[str, Any]]] = {}
+    nm_unresolved: List[int] = []
+    for c, p in iter_campaign_products(campaigns):
+        nm_id = common.to_int(p.get("nm"))
+        info = resolver.resolve(nm_id)
+        subject = ((p.get("subject") or {}).get("name") or "") if isinstance(p.get("subject"), dict) else ""
+        item = {
+            "campaign_id": c.get("id"),
+            "campaign_name": c.get("campaign_name") or "",
+            "status_id": common.to_int(c.get("status_id")),
+            "payment_model": c.get("payment_model") or "",
+            "budget": c.get("budget"),          # 原样保留（可能为 None，打印时与旧实现一致）
+            "create_date": c.get("create_date") or "",
+            "nm": nm_id,
+            "vc": info["vc"],
+            "cn": info["cn"],
+            "src": info["src"],
+            "ru": p.get("name") or "",
+            "subject": subject,
+            "fbo": common.to_int(p.get("total_quantity_fbo")),
+            "mp": common.to_int(p.get("total_quantity_mp")),
+        }
+        products.append(item)
+        if info["vc"]:
+            vcs.setdefault(info["vc"], []).append({
+                "campaign_id": item["campaign_id"], "nm": nm_id,
+                "status_id": item["status_id"], "cn": item["cn"],
+            })
+        elif nm_id and nm_id not in nm_unresolved:
+            nm_unresolved.append(nm_id)
+
+    return {
+        "shop_id": sid, "shop_name": name, "no_snapshot": no_snapshot,
+        "campaigns": campaigns, "campaign_count": len(campaigns), "total": total,
+        "truncated": bool(total >= 0 and not limit and len(campaigns) < total),
+        "missing_detail_campaigns": missing_detail_campaigns(campaigns),
+        "nm_unresolved": nm_unresolved,
+        "products": products, "vcs": vcs,
+    }
+
+
+def process_shop(shop: Dict[str, Any], root_version: str, opt: Dict[str, Any],
+                 agg: Dict[str, Any]) -> None:
+    """单店：拉推广活动 → 展平商品 → 本地反查 → 打印明细 + 累积统计（消费 `shop_adverted`）。"""
+    adv = shop_adverted(shop, root_version, statuses=opt["statuses"], page_size=opt["page_size"],
+                        limit=opt["limit"], max_pages=opt["max_pages"], with_cn=opt["with_cn"])
+    sid, name = adv["shop_id"], adv["shop_name"]
     rows: List[Dict[str, Any]] = agg["rows"]
 
-    resolver = NmResolver(sid, with_cn=opt["with_cn"])
-    session = wb_api.make_session(shop, root_version)
-    if not os.path.exists(config.shop_json_path(sid)):
+    if adv["no_snapshot"]:
         print(f"  [警告] 本店无 BCS 快照（{config.shop_json_path(sid)} 不存在）→ "
               f"供应商代码/中文名仅靠映射总表兜底；需最新请先跑 python wb.py fetch")
 
-    campaigns, total = ads_api.fetch_adverts(
-        session, shop, statuses=opt["statuses"], page_size=opt["page_size"],
-        limit=opt["limit"], max_pages=opt["max_pages"])
-    agg["campaigns"] += len(campaigns)
-    print(f"\n=== 店铺 {name}({sid}) ===  活动 {len(campaigns)} 个"
+    agg["campaigns"] += adv["campaign_count"]
+    total = adv["total"]
+    print(f"\n=== 店铺 {name}({sid}) ===  活动 {adv['campaign_count']} 个"
           + (f"（平台口径 {total} 个）" if total >= 0 else ""))
-    if total >= 0 and not opt["limit"] and len(campaigns) < total:
-        print(f"  [警告] 分页未取全：平台口径 {total} 个，实取 {len(campaigns)} 个（可加 --page-size 重试）")
-    for cid in missing_detail_campaigns(campaigns):
+    if adv["truncated"]:
+        print(f"  [警告] 分页未取全：平台口径 {total} 个，实取 {adv['campaign_count']} 个（可加 --page-size 重试）")
+    for cid in adv["missing_detail_campaigns"]:
         print(f"  [警告] 活动 {cid} 声明有商品但未下发明细（stocks.products 为空），该活动不产出商品行")
 
-    flat = iter_campaign_products(campaigns)
-    if not flat:
+    products = adv["products"]
+    if not products:
         print("  （该店没有可列出的被推广商品）")
         return
 
-    camp_by_id = {c.get("id"): c for c in campaigns if isinstance(c, dict)}
     order: List[Any] = []
     by_camp: Dict[Any, List[Dict[str, Any]]] = {}
-    for c, p in flat:
-        cid = c.get("id")
+    for it in products:
+        cid = it["campaign_id"]
         if cid not in by_camp:
             by_camp[cid] = []
             order.append(cid)
-        by_camp[cid].append(p)
+        by_camp[cid].append(it)
 
     for cid in order:
-        c = camp_by_id.get(cid) or {}
-        products = by_camp[cid]
-        print(f"  活动 [{cid}] 「{c.get('campaign_name') or '-'}」 "
-              f"status={common.to_int(c.get('status_id'))} {c.get('payment_model') or ''} "
-              f"预算={c.get('budget')} 商品 {len(products)} 个")
-        for p in products:
-            nm_id = common.to_int(p.get("nm"))
-            info = resolver.resolve(nm_id)
-            vc = info["vc"] or MISS_LABEL
-            cn = info["cn"]
+        group = by_camp[cid]
+        head = group[0]
+        print(f"  活动 [{cid}] 「{head['campaign_name'] or '-'}」 "
+              f"status={head['status_id']} {head['payment_model']} "
+              f"预算={head['budget']} 商品 {len(group)} 个")
+        for it in group:
+            nm_id = it["nm"]
+            vc = it["vc"] or MISS_LABEL
+            cn = it["cn"]
             if nm_id:
                 agg["nmids"].add(nm_id)
-                if not info["vc"]:
+                if not it["vc"]:
                     agg["missing"].add(nm_id)
-            if info["vc"]:
-                agg["vcs"].add(info["vc"])
-            subject = ((p.get("subject") or {}).get("name") or "") if isinstance(p.get("subject"), dict) else ""
+            if it["vc"]:
+                agg["vcs"].add(it["vc"])
             rows.append({
                 "店铺": name, "店铺ID": sid,
                 "活动ID": cid,
-                "活动名": c.get("campaign_name") or "",
-                "活动状态ID": common.to_int(c.get("status_id")),
-                "结算方式": c.get("payment_model") or "",
-                "预算": c.get("budget") if c.get("budget") is not None else "",
-                "创建时间": (c.get("create_date") or "")[:19].replace("T", " "),
+                "活动名": it["campaign_name"],
+                "活动状态ID": it["status_id"],
+                "结算方式": it["payment_model"],
+                "预算": it["budget"] if it["budget"] is not None else "",
+                "创建时间": it["create_date"][:19].replace("T", " "),
                 "商品nmId": nm_id or "",
                 "供应商代码": vc,
-                "解析来源": info["src"] or MISS_LABEL,
+                "解析来源": it["src"] or MISS_LABEL,
                 "商品中文名": cn,
-                "俄文标题": p.get("name") or "",
-                "商品类目": subject,
-                "活动内FBO库存": common.to_int(p.get("total_quantity_fbo")),
-                "活动内MP库存": common.to_int(p.get("total_quantity_mp")),
+                "俄文标题": it["ru"],
+                "商品类目": it["subject"],
+                "活动内FBO库存": it["fbo"],
+                "活动内MP库存": it["mp"],
             })
             print(f"      nm={nm_id} | 供应商代码={vc} | 中文名={cn or '-'}"
-                  f" | {p.get('name') or '-'}" + (f" [{subject}]" if subject else ""))
+                  f" | {it['ru'] or '-'}" + (f" [{it['subject']}]" if it["subject"] else ""))
 
 
 def run(args: Any) -> int:

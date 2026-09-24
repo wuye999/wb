@@ -43,20 +43,20 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 44 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 47 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
             "mismatch-check", "review", "merge", "mapping-rename", "shops-mapping",
-            "price", "stock", "trash", "replicate", "import-shelve",
-            "promo-apply", "promo-goods", "discount", "discount-wb", "discount-scan", "discount-bcs",
+            "price", "stock", "stock-wb", "stock-bcs", "trash", "replicate", "import-shelve",
+            "promo-apply", "promo-goods", "promo-gap", "discount", "discount-wb", "discount-scan", "discount-bcs",
             "dimension", "dims-check", "banned", "clean", "price-review",
             "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
             "mabang-forecast", "feishu-register", "mabang-stock-register",
             "mabang-stock-daily", "feishu-vc-stats", "mabang-process", "cookies-update",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 44)
+        self.assertEqual(len(subcommands), 47)
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -323,8 +323,105 @@ class TestAllCommands(unittest.TestCase):
             self.assertEqual(posted, {})
 
     def test_10_stock_dry_run(self):
+        """stock 默认通道 = WB 原生在线接口（2026-09-24 起切换，registry 路由 stock_wb.run）。"""
         res = self._run_cmd(["stock", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
+        self.assertIn("WB 原生在线接口", res.stdout)
+
+    def test_10b_stock_bcs_dry_run(self):
+        """stock-bcs 备选通道：BCS stock/batchSetByChrtIdsBatch（dry-run 预览）。"""
+        res = self._run_cmd(["stock-bcs", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+
+    def test_10c_stock_wb_dry_run(self):
+        """stock-wb dry-run：WB 原生在线接口通道（快照解析，不写平台）。
+        用例名含归一化子串 stockwb → --cmd stock-wb 精确命中；
+        --cmd stock 时最长匹配不会误捞本用例（归一化 stockwb ⊃ stock 反向不成立）。"""
+        res = self._run_cmd(["stock-wb", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertIn("BCS-HAAJ-248364237", res.stdout)
+        self.assertIn("WB 原生在线接口", res.stdout)
+
+    def test_10d_stock_wb_offline(self):
+        """stock-wb 离线断言（**不触网、不写平台**）：
+
+        依据 HAR `api/网络请求/wb在线加载修改库存.har`：
+        - 修改端点 POST .../api/v3/portal/stocks/{warehouseId}，body {"data":[{chrtId,amount}]}
+        - 数组批量（探针 _scratch/probe_stock_wb_capacity.py 实测 1000 条 error=false）
+        - 查询端点 GET 同域 portal/stocks?order=asc[&stores=][&search=]（data.next 游标分页）
+        """
+        from unittest import mock
+        from wb_ops.adapters import wb_stock_client as wsc
+        from wb_ops.services.replicate import stock_wb
+
+        shop = {"shopId": 9352, "shopName": "袁州1", "cookie": "",
+                "authorizev3": "t", "wb_seller_lk": "t"}
+
+        # ① post_stocks：URL 以 warehouseId 结尾、body 结构与 allow_400_json 默认开启
+        posts = []
+
+        def fake_request_post(session, url, payload, allow_400_json=False):
+            posts.append((url, payload, allow_400_json))
+            return {"error": False, "errorText": "", "data": {}}
+
+        with mock.patch.object(wsc.wb_api, "request_post", side_effect=fake_request_post):
+            r = wsc.post_stocks(object(), 1929635, [{"chrtId": 2102520529, "amount": 30}])
+        self.assertTrue(posts[0][0].endswith("/api/v3/portal/stocks/1929635"))
+        self.assertEqual(posts[0][1], {"data": [{"chrtId": 2102520529, "amount": 30}]})
+        self.assertTrue(posts[0][2])          # WB 400 也带 JSON 错误体 → allow_400_json 默认 True
+        self.assertFalse(r["error"])
+
+        # ② set_stock 门面：201 条按 chunk=200 分 200+1 两批；明细 201 条全成功
+        items = [{"chrtId": 1000 + i, "amount": i} for i in range(201)]
+        posts.clear()
+        with mock.patch.object(wsc.wb_api, "request_post", side_effect=fake_request_post), \
+                mock.patch.object(wsc.wb_api, "make_session", return_value=object()):
+            r2 = stock_wb.set_stock(shop, 1929635, items, chunk=200, interval=0)
+        self.assertEqual([len(p[1]["data"]) for p in posts], [200, 1])
+        self.assertEqual((r2["ok"], r2["fail"]), (201, 0))
+        self.assertEqual(len(r2["details"]), 201)
+        self.assertTrue(all(d["ok"] for d in r2["details"]))
+
+        # ③ chunk 上限夹取：chunk=5000 传入门面 → 实际按 1000 分批（1001 条 → 1000+1）
+        items_1001 = [{"chrtId": 2000 + i, "amount": i} for i in range(1001)]
+        posts.clear()
+        with mock.patch.object(wsc.wb_api, "request_post", side_effect=fake_request_post), \
+                mock.patch.object(wsc.wb_api, "make_session", return_value=object()):
+            r3 = stock_wb.set_stock(shop, 1929635, items_1001, chunk=5000, interval=0)
+        self.assertEqual([len(p[1]["data"]) for p in posts], [1000, 1])
+        self.assertEqual(r3["ok"], 1001)
+
+        # ④ 失败路径：error=true → 全部计失败，msg 取 errorText
+        def fake_post_fail(session, url, payload, allow_400_json=False):
+            return {"error": True, "errorText": "Недостаточно прав", "data": {}}
+
+        with mock.patch.object(wsc.wb_api, "request_post", side_effect=fake_post_fail), \
+                mock.patch.object(wsc.wb_api, "make_session", return_value=object()):
+            r4 = stock_wb.set_stock(shop, 1929635, items[:3], chunk=200, interval=0)
+        self.assertEqual((r4["ok"], r4["fail"]), (0, 3))
+        self.assertEqual(r4["details"][0]["msg"], "Недостаточно прав")
+
+        # ⑤ get_stocks：stores/search 参数透传 + data.next 游标翻页 + 空游标终止
+        pages = [
+            {"data": {"next": "CUR1",
+                      "stocks": [{"article": "BCS-A-1", "chrtId": 11, "amount": 1}]}},
+            {"data": {"next": "",
+                      "stocks": [{"article": "BCS-B-2", "chrtId": 22, "amount": 0}]}},
+        ]
+        gets = []
+
+        def fake_request(session, method, url, **kwargs):
+            gets.append(kwargs.get("params") or {})
+            return pages[len(gets) - 1]
+
+        with mock.patch.object(wsc.wb_api, "request", side_effect=fake_request):
+            got = wsc.get_stocks(object(), store_id=1929635, search="BCS-A-1")
+        self.assertEqual([g["chrtId"] for g in got], [11, 22])
+        self.assertEqual(gets[0].get("stores"), 1929635)
+        self.assertEqual(gets[0].get("search"), "BCS-A-1")
+        self.assertNotIn("next", gets[0])     # 首页不带 next
+        self.assertEqual(gets[1].get("next"), "CUR1")
+        self.assertEqual(gets[1].get("search"), "BCS-A-1")  # search 每页透传
 
     def test_11_trash_dry_run(self):
         res = self._run_cmd(["trash", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
@@ -665,6 +762,146 @@ class TestAllCommands(unittest.TestCase):
             self.assertIn("1378756362", res.stdout)
             self.assertIn("BCS-DZJF-209792332", res.stdout)
             self.assertIn("原始VC", res.stdout)
+
+    def test_46_promo_gap_offline(self):
+        """promo-gap 离线差集/分组断言（**不联网、不调 lark-cli**）。
+
+        口径（2026-09-23 与用户确认并**修正为「合计」**）：**销量判据 = 该供应商代码在目标店铺
+        （默认袁州1/2/3）的 7 天单数「合计」**，不是单店单数（同一 vc 各店 wb编号 不同，但它是同一个商品）。
+        正向 gap：合计 ≥ 阈值 且某目标店未推广 → 该店该补推；
+        反向 waste：合计 < 阈值 → 这些店所有「在投(status=9)」活动里的推广都建议关闭；
+        nm 本地真源反查不到 vc → 「无法判定」（不推断）；暂停(11)/未识别状态 → 仅计数不逐条列。
+        """
+        from wb_ops.services.discount import promo_gap as pg
+
+        # ① 阈值解析
+        self.assertEqual(pg.resolve_min(None), 4)
+        self.assertEqual(pg.resolve_min(""), 4)
+        self.assertEqual(pg.resolve_min("6"), 6)
+        for bad in (0, -3, "abc"):
+            with self.assertRaises(ValueError):
+                pg.resolve_min(bad)
+
+        # ② 店铺选择：店铺ID 与短名双认
+        all_shops = [{"shopId": 9352, "shopName": "袁州1"}, {"shopId": 9353, "shopName": "袁州2"}]
+        self.assertEqual([x[1] for x in pg.select_shops(all_shops, "9352")], [9352])
+        self.assertEqual([x[2] for x in pg.select_shops(all_shops, "袁州2")], ["袁州2"])
+        self.assertEqual(len(pg.select_shops(all_shops, "9352,袁州2")), 2)
+        self.assertEqual(len(pg.select_shops(all_shops, "")), 2)
+
+        rows = [
+            # AAAA：袁州1×2 + 袁州2×2 → 合计 4（单店各 2 均 <4 ⇒ 旧「单店」口径会漏判）
+            {"日期": "2026-09-22", "vc": "BCS-AAAA-1", "cn": "甲", "shops": ["袁州1"], "qty": 1, "order_id": "a1"},
+            {"日期": "2026-09-22", "vc": "BCS-AAAA-1", "cn": "甲", "shops": ["袁州1"], "qty": 2, "order_id": "a2"},
+            {"日期": "2026-09-22", "vc": "BCS-AAAA-1", "cn": "甲", "shops": ["袁州2"], "qty": 1, "order_id": "a3"},
+            {"日期": "2026-09-22", "vc": "BCS-AAAA-1", "cn": "甲", "shops": ["袁州2"], "qty": 1, "order_id": "a4"},
+            # BBBB：袁州1×4 → 合计 4
+            {"日期": "2026-09-22", "vc": "BCS-BBBB-2", "cn": "乙", "shops": ["袁州1"], "qty": 1, "order_id": "b1"},
+            {"日期": "2026-09-22", "vc": "BCS-BBBB-2", "cn": "乙", "shops": ["袁州1"], "qty": 1, "order_id": "b2"},
+            {"日期": "2026-09-22", "vc": "BCS-BBBB-2", "cn": "乙", "shops": ["袁州1"], "qty": 1, "order_id": "b3"},
+            {"日期": "2026-09-22", "vc": "BCS-BBBB-2", "cn": "乙", "shops": ["袁州1"], "qty": 1, "order_id": "b4"},
+            # CCCC：袁州1×1 → 合计 1
+            {"日期": "2026-09-22", "vc": "BCS-CCCC-3", "cn": "丙", "shops": ["袁州1"], "qty": 1, "order_id": "c1"},
+            # EEEE：店铺多选 袁州1+袁州3 ×4 → 合计只计一次=4（不是 8），拆分各计 4
+            {"日期": "2026-09-22", "vc": "BCS-EEEE-4", "cn": "丁", "shops": ["袁州1", "袁州3"], "qty": 1, "order_id": "e1"},
+            {"日期": "2026-09-22", "vc": "BCS-EEEE-4", "cn": "丁", "shops": ["袁州1", "袁州3"], "qty": 1, "order_id": "e2"},
+            {"日期": "2026-09-22", "vc": "BCS-EEEE-4", "cn": "丁", "shops": ["袁州1", "袁州3"], "qty": 1, "order_id": "e3"},
+            {"日期": "2026-09-22", "vc": "BCS-EEEE-4", "cn": "丁", "shops": ["袁州1", "袁州3"], "qty": 1, "order_id": "e4"},
+            # FFFF：只在非目标店（璧山1）→ 目标店口径下不计
+            {"日期": "2026-09-22", "vc": "BCS-FFFF-6", "cn": "己", "shops": ["璧山1"], "qty": 1, "order_id": "f1"},
+            # 无 BCS编号
+            {"日期": "2026-09-22", "vc": "", "cn": "", "shops": ["袁州1"], "qty": 1, "order_id": "n1"},
+        ]
+
+        # ③ 跨店合计 vs 各店拆分（★ 本次口径修正的核心）
+        by_vc, by_shop, no_vc = pg.aggregate_orders(rows, {"袁州1", "袁州2", "袁州3"})
+        self.assertEqual(by_vc["BCS-AAAA-1"]["orders"], 4)
+        self.assertEqual(by_vc["BCS-AAAA-1"]["qty"], 5)
+        self.assertEqual(by_shop["BCS-AAAA-1"]["袁州1"]["orders"], 2)
+        self.assertEqual(by_shop["BCS-AAAA-1"]["袁州2"]["orders"], 2)
+        self.assertEqual(by_vc["BCS-EEEE-4"]["orders"], 4)          # 多店铺记录合计只计一次
+        self.assertEqual(by_shop["BCS-EEEE-4"]["袁州1"]["orders"], 4)
+        self.assertEqual(by_shop["BCS-EEEE-4"]["袁州3"]["orders"], 4)
+        self.assertNotIn("BCS-FFFF-6", by_vc)                        # 非目标店不计
+        self.assertEqual(no_vc, 1)
+        self.assertEqual(pg.shop_split_text(by_shop["BCS-AAAA-1"]), "袁州1=2,袁州2=2")
+        by1, _ = pg.shop_rows_by_vc(rows, "袁州1")                    # 单店视角包装仍可用
+        self.assertEqual(by1["BCS-BBBB-2"]["orders"], 4)
+
+        # ④ 正向 gap：合计≥4 且该目标店未推广 → 该店缺口
+        targets2 = [({}, 9352, "袁州1"), ({}, 9353, "袁州2")]
+        adverted = {9352: {"BCS-BBBB-2"}, 9353: set()}
+        snaps = {9352: {"BCS-AAAA-1": {}, "BCS-EEEE-4": {"nmId": 444}},
+                 9353: {"BCS-AAAA-1": {"nmID": 111}}}
+        g = pg.build_gap(targets2, rows, adverted, snaps, min_orders=4)
+        self.assertEqual([(x["vc"], x["shop_id"]) for x in g["gap_listed"]],
+                         [("BCS-AAAA-1", 9352), ("BCS-AAAA-1", 9353), ("BCS-EEEE-4", 9352)])
+        self.assertEqual([(x["vc"], x["shop_id"]) for x in g["gap_unlisted"]],
+                         [("BCS-BBBB-2", 9353), ("BCS-EEEE-4", 9353)])
+        self.assertEqual(g["gap_listed"][0]["orders"], 4)            # 合计单数
+        self.assertEqual(g["gap_listed"][0]["shop_orders"], 2)       # 该店单数
+        self.assertEqual(g["gap_listed"][0]["shop_split"], "袁州1=2,袁州2=2")
+        self.assertEqual(g["gap_listed"][1]["nm_id"], 111)           # nmID 键兼容
+        self.assertEqual(g["gap_listed"][2]["nm_id"], 444)
+        self.assertIn("nmId", g["gap_listed"][0]["备注"])             # 在架但缺 nmId
+        s = g["gap_stats"]
+        self.assertEqual((s["候选vc数"], s["已推广店位"], s["候选店铺位"]), (3, 1, 5))
+        self.assertEqual((s["可直接补推"], s["需先上架"], s["缺nmId"]), (3, 2, 1))
+        # 快照文件缺失 → 全部归组②并标注（不误判为「可补推」）
+        g2 = pg.build_gap(targets2, rows, {9352: set(), 9353: set()},
+                          {9352: None, 9353: None}, min_orders=4)
+        self.assertEqual(g2["gap_listed"], [])
+        self.assertIn("快照", g2["gap_unlisted"][0]["备注"])
+        # 阈值降到 1：CCCC（合计 1）也成候选
+        g3 = pg.build_gap(targets2, rows, {9352: set(), 9353: set()}, snaps, min_orders=1)
+        self.assertIn("BCS-CCCC-3", {x["vc"] for x in g3["gap_listed"] + g3["gap_unlisted"]})
+
+        # ⑤ 反向 waste：合计 ≥ 阈值 → 不关；合计 < 阈值 → 在投活动里的推广建议关闭
+        targets3 = [({}, 9352, "袁州1"), ({}, 9353, "袁州2"), ({}, 9356, "袁州3")]
+
+        def _prod(sid, sname, cid, status, nm, vc):
+            return {"shop_id": sid, "shop_name": sname, "campaign_id": cid,
+                    "campaign_name": "c%d" % cid, "status_id": status, "payment_model": "cpc",
+                    "budget": 100, "create_date": "", "nm": nm, "vc": vc, "cn": "名%d" % nm,
+                    "src": "店快照", "ru": "R%d" % nm, "subject": "", "fbo": 0, "mp": 0}
+
+        prods = [
+            _prod(9352, "袁州1", 1, 9, 11, "BCS-AAAA-1"),     # 合计 4 → 不关
+            _prod(9352, "袁州1", 1, 9, 12, "BCS-BBBB-2"),     # 合计 4 → 不关
+            _prod(9352, "袁州1", 2, 11, 13, "BCS-CCCC-3"),    # 合计 1 但已暂停 → 仅计数
+            _prod(9352, "袁州1", 3, 9, 14, ""),               # vc 反查不到 → 无法判定
+            _prod(9356, "袁州3", 4, 9, 15, "BCS-CCCC-3"),     # 合计 1 + 在投 → 建议关闭
+            _prod(9356, "袁州3", 5, 9, 15, "BCS-CCCC-3"),     # 同 nm 的第二个活动
+            _prod(9352, "袁州1", 6, 4, 16, "BCS-CCCC-3"),     # 未识别状态 → 已暂停 + 告警
+        ]
+        w = pg.build_waste(targets3, rows, prods, min_orders=4)
+        self.assertEqual([(x["shop_id"], x["campaign_id"]) for x in w["waste_close"]],
+                         [(9356, 4), (9356, 5)])
+        self.assertTrue(all(x["verdict"] == pg.VERDICT_CLOSE for x in w["waste_close"]))
+        self.assertEqual(w["waste_close"][0]["orders"], 1)            # 三店合计单数
+        self.assertEqual(w["waste_close"][0]["shop_orders"], 0)       # 袁州3 本店 0 单
+        self.assertEqual(w["waste_close"][0]["shop_split"], "袁州1=1")
+        self.assertIn("低于阈值", w["waste_close"][0]["备注"])
+        self.assertNotIn(1, [x["campaign_id"] for x in w["waste_close"]])   # 合计达标不进清单
+        self.assertEqual([x["campaign_id"] for x in w["waste_paused"]], [2, 6])
+        self.assertEqual(len(w["waste_unknown"]), 1)
+        self.assertEqual(w["waste_unknown_status"], [(4, 9352, 6)])
+        self.assertEqual(w["waste_stats"]["被推广商品位"], 7)
+        self.assertEqual(w["waste_stats"]["建议关闭"], 2)
+
+        # ⑥ 商品级汇总：同 (店铺, nm) 跨活动合并
+        bn = w["waste_by_nm"]
+        self.assertEqual([(x["shop_id"], x["nm"], x["n_campaigns"], x["orders"]) for x in bn],
+                         [(9356, 15, 2, 1)])
+
+        # ⑦ 活动级汇总：建议关闭数 == 被推广商品数 → 整活动建议关闭
+        bc = {(x["shop_id"], x["campaign_id"]): x for x in w["waste_by_campaign"]}
+        self.assertEqual(bc[(9356, 4)]["被推广商品数"], 1)
+        self.assertEqual(bc[(9356, 4)]["建议关闭数"], 1)
+        self.assertTrue(bc[(9356, 4)]["是否整活动建议关闭"])
+        self.assertEqual(bc[(9352, 1)]["建议关闭数"], 0)              # 合计达标 → 不关
+        self.assertEqual(bc[(9352, 1)]["是否整活动建议关闭"], "")
+        self.assertEqual(bc[(9352, 2)]["建议关闭数"], 0)              # 暂停 → 不算建议关闭
 
 
 if __name__ == "__main__":

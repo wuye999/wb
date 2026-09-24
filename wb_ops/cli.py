@@ -59,7 +59,23 @@ def build_parser():
     p = sub.add_parser("price", help="改价/改折扣（dry-run 默认，--apply 执行）")
     _add_ops_args(p, with_price=True)
 
-    p = sub.add_parser("stock", help="改库存")
+    p = sub.add_parser("stock", help="改库存（默认 WB 原生在线接口；dry-run 默认，归零须 --yes）")
+    _add_ops_args(p, with_stock=True)
+    p.add_argument("--chunk", type=int, default=500, help="每批提交条数（≤1000，探针实测 1000 可行，默认 500）")
+    p.add_argument("--interval", type=float, default=0.3, help="批/店间请求间隔秒")
+    p.add_argument("--max-pages", type=int, default=200, help="WB 游标分页安全上限（--resolve live 时使用）")
+    p.add_argument("--resolve", choices=["snapshot", "live"], default="snapshot",
+                   help="chrtId 解析源：snapshot=BCS 快照（默认，零请求）；live=WB portal/stocks 实时拉取（绕过快照滞后）")
+
+    p = sub.add_parser("stock-wb", help="[别名] 与 stock 相同（WB 原生在线接口，显式点名通道）")
+    _add_ops_args(p, with_stock=True)
+    p.add_argument("--chunk", type=int, default=500, help="每批提交条数（≤1000，探针实测 1000 可行，默认 500）")
+    p.add_argument("--interval", type=float, default=0.3, help="批/店间请求间隔秒")
+    p.add_argument("--max-pages", type=int, default=200, help="WB 游标分页安全上限（--resolve live 时使用）")
+    p.add_argument("--resolve", choices=["snapshot", "live"], default="snapshot",
+                   help="chrtId 解析源：snapshot=BCS 快照（默认，零请求）；live=WB portal/stocks 实时拉取（绕过快照滞后）")
+
+    p = sub.add_parser("stock-bcs", help="[备选] 改库存走 BCS 接口（stock/batchSetByChrtIdsBatch，WB 原生不可用时的兜底）")
     _add_ops_args(p, with_stock=True)
 
     p = sub.add_parser("trash", help="下架（移回收站，不可逆）")
@@ -104,6 +120,26 @@ def build_parser():
     p.add_argument("--max-pages", type=int, default=50, help="活动列表最多翻页数（安全上限，默认 50）")
     p.add_argument("--limit", type=int, default=0, help="每店最多拉取 N 个活动（0=不限，翻页到底）")
     p.add_argument("--no-cn", action="store_true", help="不解析商品中文名（供应商代码仍解析）")
+
+    p = sub.add_parser("promo-gap",
+                       help="只读：推广 × 销量双向错配审计（gap=该推没推 / waste=在推但没销量该关）")
+    p.add_argument("--mode", choices=["gap", "waste", "both"], default="gap",
+                   help="审计方向：gap=该推没推(默认) / waste=该关的(在推广但本店单数<阈值) / both=两个都出")
+    p.add_argument("--shops", default="", help="限定店铺，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部已填 cookie 店铺）")
+    p.add_argument("--min", type=int, default=4, help="单数阈值（默认 4）：gap=单数≥N；waste=单数<N")
+    p.add_argument("--days", type=int, default=7, help="近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）")
+    p.add_argument("--date", default="", help="单天 YYYY-MM-DD（等价 --begin=--end）")
+    p.add_argument("--begin", default="", help="区间开始 YYYY-MM-DD（单独给按单天处理）")
+    p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）")
+    p.add_argument("--status", default="", help="推广活动状态ID逗号分隔（默认 4,9,11 = 含暂停；只算在投用 --status 9）")
+    p.add_argument("--listed-only", action="store_true", help="[gap] 只输出「可直接补推」组（默认两组都出）")
+    p.add_argument("--top", type=int, default=0, help="每组控制台只显示前 N 名（0=全部；CSV 始终写全量）")
+    p.add_argument("--no-cn", action="store_true", help="不补全商品中文名（飞书表内已有的仍显示）")
+    p.add_argument("--url", default="", help="飞书表格地址（可选，默认读配置 feishu.base_url）")
+    p.add_argument("--table", default="订单登记", help="飞书表名（默认 订单登记）")
+    p.add_argument("--page-size", type=int, default=100, help="推广活动列表分页大小（默认 100）")
+    p.add_argument("--max-pages", type=int, default=50, help="推广活动列表最多翻页数（默认 50）")
+    p.add_argument("--limit", type=int, default=0, help="每店最多拉取 N 个活动（0=不限）")
 
     # WB 原生批量改折扣参数辅助函数
     def _add_discount_wb_args(parser):

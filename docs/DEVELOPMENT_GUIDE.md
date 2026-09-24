@@ -246,7 +246,7 @@
 3. **测试安全保护**：
    - 自动化测试中的写操作命令，严禁附带 `--apply`，必须保证测试过程为安全只读（dry-run），绝不污染线上真实店铺数据。
 4. **新增命令的同步义务（缺一不可）**：
-   - `tests/test_all_commands.py`：命令名加入 `subcommands` 列表、同步 `assertEqual` 计数（当前 44）、新增只读用例；
+   - `tests/test_all_commands.py`：命令名加入 `subcommands` 列表、同步 `assertEqual` 计数（当前 45）、新增只读用例；
    - `tests/run_tests.py`：在 `PATH_HINTS` 中补「改动文件 → 命令」映射（否则该文件改动会被判定为全量）；
-   - 文档：`docs/CLI.md`、`docs/USAGE.md`、`docs/REUSE_GUIDE.md`、以及各处「44 个命令」计数。
+   - 文档：`docs/CLI.md`、`docs/USAGE.md`、`docs/REUSE_GUIDE.md`、以及各处「45 个命令」计数。
 5. **复用优先**：动手写新功能前先查 **[REUSE_GUIDE.md](REUSE_GUIDE.md)**（可用依赖/函数速查、代码模板、决策表），避免重新造轮子或另立代码风格。

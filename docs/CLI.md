@@ -38,7 +38,9 @@
 | 子命令 | 用途 | 操作参数 |
 |---|---|---|
 | `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` / `--auto-review` |
-| `stock` | 改库存 | `--amount N`（默认 0） |
+| `stock` | 改库存（**默认 WB 原生在线接口**，2026-09-24 起；dry-run 默认，归零须 --yes） | `--amount N`（默认 0）/ `--chunk N`（默认 500，≤1000）/ `--interval S` / `--max-pages N` / `--resolve snapshot\|live` |
+| `stock-wb` | [别名] 与 `stock` 相同（WB 原生在线接口，显式点名通道） | 同 `stock` |
+| `stock-bcs` | [备选] 改库存走 BCS 接口（`stock/batchSetByChrtIdsBatch`，WB 原生不可用时的兜底） | `--amount N`（默认 0） |
 | `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
 | `dimension` | 批量改尺寸：默认读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；也可用 `--dims "长*宽*高/毛重"` 给选定的 vc 统一设自定义尺寸（有自定义用之、无则回退价格表）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--dims` / `--apply` / `--sync` |
 | `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次支持 50 个商品批量推送**，无需等待 WB 反爬抓取；包装尺寸优先读取价格映射表（绝不使用快照尺寸），商品价格表/card.json 兜底；前缀码智能匹配（中文名命中商品价格表前缀优先，原vc提取次之，随机兜底，均带 `BCS-` 前缀）；严格校验映射表「WB商品码」列（无商品码跳过）；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
@@ -55,6 +57,7 @@
 |---|---|---|
 | `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
 | `promo-goods` | **广告推广中被推广商品查询**（cmp.wildberries.ru，**只读**；列出活动内商品的 WB 商品码 / 供应商代码 / 中文名 / 俄文标题 / 类目 / 活动内库存） | `--shops` / `--status`（默认 `4,9,11`=后台默认视图） / `--page-size` / `--max-pages` / `--limit` / `--no-cn` |
+| `promo-gap` | **只读（双向）**：推广 × 销量错配审计。**销量判据 = 该供应商代码在目标店铺（默认袁州1/2/3）的 7 天单数「合计」**（非单店；多店铺记录只计一次）：`--mode gap`=合计≥`--min` 但某目标店未推（按该店快照分「可直接补推 / 需先上架」）；`--mode waste`=合计<`--min` → 这些店**所有「在投」活动**里的推广都列「建议关闭」（逐行明细 + 商品级汇总 + 活动级汇总，标「★ 整个活动建议关闭」）；`both`=两个都出 | `--mode gap\|waste\|both` / `--shops`(=合计范围) / `--min`(默认4) / `--days` / `--date` / `--begin` / `--end` / `--status` / `--listed-only` / `--top` / `--no-cn` / `--url` / `--table` / `--page-size` / `--max-pages` / `--limit` |
 | `discount` | 折扣改价**WB 原生批量**（默认）：按折扣从高到低查询 >阈值商品，调用 WB 原生 upload/task 批量修改；支持 `--vc`、`--name`（中文名包含）、`--prefix`、`--shops` 灵活圈定；**`--below N` 额外命中「折扣<N」侧（走 WB 折扣升序列表接口，与 `--threshold` 并集去重）**；默认**不做写后验证**（WB 异步生效延迟）；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--below` / `--all` / `--target` / `--name` / `--vc` / `--prefix` / `--shops` / `--limit` / `--chunk` / `--verify` |
 | `discount-wb` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
 | `discount-scan` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
@@ -112,6 +115,11 @@ python wb.py price --name 充电宝 --apply --yes
 python wb.py price --vc BCS-XXX-123 --price 130 --discount 20 --apply --sync
 python wb.py price --vc BCS-XXX-123 --discount 30 --keep-price --apply --yes
 python wb.py stock --prefix CYQX --amount 0 --apply --yes
+python wb.py stock --name 短直假发 --amount 0                 # WB 原生接口（默认通道）：全部店铺「短直假发」库存归零（dry-run 预览）
+python wb.py stock --name 短直假发 --amount 0 --apply --yes   # 真正执行（归零不可逆，必须 --yes）
+python wb.py stock --vc BCS-XXX-123 --shops 9352 --amount 50 --apply    # 单 vc 单店设库存 50
+python wb.py stock --name 短直假发 --amount 0 --resolve live --apply --yes  # chrtId 走 WB 实时列表解析（绕过快照滞后）
+python wb.py stock-bcs --name 短直假发 --amount 0 --apply --yes  # [备选] BCS 通道做同一件事
 python wb.py trash --vc BCS-XXX-123 --shops 9352 --apply --yes
 python wb.py dimension                               # 预览：按价格表尺寸改全部店铺商品（dry-run）
 python wb.py dimension --name 育发液 --apply          # 只改中文名含「育发液」的商品
@@ -149,6 +157,13 @@ python wb.py promo-goods                   # 列出广告推广中被推广的�
 python wb.py promo-goods --shops 9356       # 只查指定店
 python wb.py promo-goods --status 9         # 只看「在投」活动（默认 4,9,11 = 后台默认视图）
 python wb.py promo-goods --no-cn            # 不解析中文名，速度更快（供应商代码仍解析）
+# 推广 × 销量双向错配审计（只读；销量判据 = 目标店铺的「合计单数」）
+python wb.py promo-gap                      # 正向：该推没推（三店合计≥4 但某店未推广）
+python wb.py promo-gap --mode waste          # 反向：在推但该关（三店合计<4 → 建议关闭清单）
+python wb.py promo-gap --mode both --shops 9352,9353,9356   # 两个方向都出，限目标店（= 合计范围）
+python wb.py promo-gap --min 6 --days 14     # 阈值改 6、窗口改近 14 天
+python wb.py promo-gap --mode waste --listed-only   # ⚠ --listed-only 仅对 gap 生效，waste 下忽略
+python wb.py promo-gap --status 9            # 只把「在投」活动算作已推广
 # 折扣修改（默认 WB 原生批量，支持多种维度过滤）
 python wb.py discount                      # 预览全店 >50% 商品（WB 原生从高到低快速查询）
 python wb.py discount --apply              # 执行全店 >50%→50%（WB 原生 upload/task 批量修改，默认不写后验证）
@@ -261,6 +276,17 @@ r = vc_order_stats(days=7, shops=["9352", "袁州3"])      # 或 begin="2026-09-
 print(r["begin"], r["end"], r["total_orders"], r["vc_count"])   # 窗口 / 命中记录数 / 供应商代码数
 for row in r["rows"]:                                   # 已按单数降序、未归类桶垫底
     print(row["rank"], row["key"], row["orders"], row["qty"], row["cn"], row["shops"])
+
+# 5. 推广 × 销量双向错配审计（只读；销量判据 = 目标店铺「合计单数」，mode 只影响打印/写文件）
+from wb_ops.services.discount.promo_gap import promo_gap
+a = promo_gap(days=7, min_orders=4, mode="both", shops=["9352", "袁州3"])
+print(a["stats"])                                       # {'gap': {...}, 'waste': {...}}
+for x in a["gap_rows"]:                                 # 该推没推（x['orders']=合计, x['shop_orders']=该店）
+    print(x["shop_name"], x["vc"], x["orders"], x["shop_orders"], x["group"], x["nm_id"])
+for x in a["waste_rows"]:                               # 在推但该关（合计单数升序，0 单优先）
+    print(x["shop_name"], x["campaign_id"], x["nm"], x["vc"], x["orders"], x["verdict"])
+for x in a["waste_by_campaign"]:                        # 活动级：便于整活动关停
+    print(x["campaign_id"], x["被推广商品数"], x["建议关闭数"], x["是否整活动建议关闭"])
 ```
 
 > 每个模块内部函数签名在源码 docstring 中都有说明；CLI 是这些函数的薄封装。

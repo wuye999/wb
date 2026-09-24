@@ -36,7 +36,7 @@ class CommandRegistry:
 
 registry = CommandRegistry()
 
-# 注册全部 44 个命令的动态模块映射
+# 注册全部 45 个命令的动态模块映射
 registry.register("shops", "wb_ops.adapters.bcs_client", "print_shops")
 registry.register("fetch", "wb_ops.services.catalog_svc", "run_fetch")
 registry.register("mapping", "wb_ops.services.catalog_svc", "run_mapping")
@@ -48,12 +48,15 @@ registry.register("merge", "wb_ops.services.catalog_svc", "run_merge", alias="ma
 registry.register("mapping-rename", "wb_ops.services.catalog_svc", "run_mapping_rename")
 registry.register("shops-mapping", "wb_ops.services.catalog_svc", "run_shops_mapping", alias="mapping-sync")
 registry.register("price", "wb_ops.services.replicate_svc", "run_price")
-registry.register("stock", "wb_ops.services.replicate_svc", "run_stock")
+# stock 默认走 WB 原生在线接口（stock-wb 同一实现，显式别名）；stock-bcs = BCS 备选通道
+registry.register("stock", "wb_ops.services.replicate_svc", "run_stock_wb", alias="stock-wb")
+registry.register("stock-bcs", "wb_ops.services.replicate_svc", "run_stock")
 registry.register("trash", "wb_ops.services.replicate_svc", "run_trash")
 registry.register("replicate", "wb_ops.services.replicate_svc", "run_replicate")
 registry.register("import-shelve", "wb_ops.services.replicate_svc", "run_import_shelve")
 registry.register("promo-apply", "wb_ops.services.discount_svc", "run_promo_apply")
 registry.register("promo-goods", "wb_ops.services.discount_svc", "run_promo_goods")
+registry.register("promo-gap", "wb_ops.services.discount_svc", "run_promo_gap")
 registry.register("discount", "wb_ops.services.discount_svc", "run_cli")
 registry.register("discount-wb", "wb_ops.services.discount_svc", "run_cli")
 registry.register("discount-scan", "wb_ops.services.discount_svc", "run_cli")

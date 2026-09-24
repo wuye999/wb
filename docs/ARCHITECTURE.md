@@ -10,7 +10,7 @@
 ├── wb.py                    ★ 统一入口（薄启动器 → wb_ops.cli.main）
 ├── wb_ops/                  ★ 核心库（Python 包）
 │   ├── __init__.py            版本号 + 公共导出
-│   ├── cli.py                 ★ 统一 CLI 调度器（44 个子命令动态延迟分发）
+│   ├── cli.py                 ★ 统一 CLI 调度器（45 个子命令动态延迟分发）
 │   ├── config.py              非敏感配置：路径常量（BASE_DIR→data/）、默认阈值、VC_PREFIX_RE
 │   ├── credentials.py         ★ 统一凭证加载中枢（读 data/credentials.json）
 │   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8 / print_write_hint
@@ -54,6 +54,7 @@
 │       ├── discount/          折扣调整与促销活动业务实现
 │       │   ├── promo.py       促销活动报名
 │       │   ├── adverts.py     广告推广中被推广商品查询（cmp adverts，只读）
+│       │   ├── promo_gap.py   推广 × 销量双向错配审计（该推没推 / 在推但该关，只读）
 │       │   ├── price_review.py 价格审查隔离区释放
 │       │   └── discount_bcs.py BCS 模式折扣修改
 │       ├── order/             订单履约业务实现
@@ -84,7 +85,7 @@
 │           ├── ai_reply_test.py AI 回复效果测试
 │           └── complaints.py  WB 平台投诉单查询（未处理/剩余天数 → 去重商品编号）
 ├── tests/                    ★ 自动化测试套件
-│   ├── test_all_commands.py   覆盖全部 44 个 CLI 命令 / 53 个用例的集成测试（100% PASS，全量约 5 分钟）
+│   ├── test_all_commands.py   覆盖全部 45 个 CLI 命令 / 54 个用例的集成测试（100% PASS，全量约 5 分钟）
 │   └── run_tests.py           按需测试选择器（--changed / --cmd / --help-smoke，日常只跑改动相关）
 ├── data/                     ★ 统一数据目录（本地专属，不进 git）
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
@@ -116,7 +117,7 @@
 
 ```
 表现与调度层 (Presentation)
-  └── cli.py（动态按需延迟加载路由，44 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+  └── cli.py（动态按需延迟加载路由，45 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
         │ 动态调度 (Command DTO)
         ▼
 业务用例服务层 (Services)
@@ -238,6 +239,7 @@ wb.py shelve-old     ⑥c 旧版上品建卡（指定/智能解析 nm/任意自�
 （促销线）
 wb.py promo-apply    ⑦ cookie 会话 → timeline 查可参加 → detail 取 periodID → applyAll（幂等）
 wb.py promo-goods    ⑦b 只读：cmp.wildberries.ru `/api/v1/adverts?show_stocks=true` 分页拉推广活动 → 展平 `stocks.products[]`（nm/俄文标题/类目/活动内库存）→ 本地真源反查供应商代码与中文名 → 控制台明细 + 去重 nmId/vendorCode 清单 + CSV
+wb.py promo-gap      ⑦c 只读（双向，`--mode gap|waste|both`）：**销量判据 = 该供应商代码在目标店铺（默认袁州1/2/3）的 7 天单数「合计」**（非单店；多店铺记录只计一次）—— 正向 gap=合计≥阈值但某目标店未推（按该店快照分「可直接补推 / 需先上架」）；反向 waste=三店合计<阈值 → 这些店所有「在投」活动里的推广列「建议关闭」清单（附商品级/活动级汇总，便于整活动关停）。飞书表只读一次，跨域经 `order_svc.feishu_register_stats` 门面
 wb.py discount-wb    ⑧ WB 原生批量（按需调用）：list/goods/filter 按折扣排序找目标（降序取 >阈值；`--below N` 走升序取 <阈值；只给 `--below` 时不再拉降序侧）→ **两阶段提交** `upload/task?checkChange=true`（预检，仅回 price/quarantine 弹窗标记）→ `?checkChange=false`（真正落库，回 `data.id` 任务号）→ 默认不做写后验证（生效延迟）；日常自动化默认仍走 BCS discount
 wb.py discount       ⑧a BCS 全量（模式2，慢）：默认不自动同步 → 查（全量用 --threshold -1）→ 批量改 → 仅提示；加 --sync 才前置同步 + 提交后同步复核
 wb.py price-review   ⑧b ⚠ 改折扣后**必跑且须 `--apply`**：查隔离区（quarantine/goods）待审商品 → 应用新价格；0%→49% 这类降幅落 30-49.9% 的商品会进隔离区，不「应用新价格」折扣不生效（实测隔离区会逐个列出对应 nmID）
@@ -295,6 +297,7 @@ wb.py feishu-vc-stats ⑤ 只读统计（可按需/编排调用）：读「订�
 | 2026-09-17 | **改折扣两阶段提交修复（抓包驱动）**：据 `api/网络请求/wb批量修改折扣+降价提示.har` 确认 `upload/task` 必须**两步**——`?checkChange=true` 只做预检（仅回 `priceModal`/`quarantineModal` 弹窗标记，**无任务号、不落库**），`?checkChange=false` 才真正提交并回 `data.id`。旧实现 URL 写死 `checkChange=true`，导致 taskId 恒为 None、平台侧从未落库（表现为「改折扣没生效」）。适配层 `upload_batch_discount` 改为「预检 → 自动确认 → 提交」，新增 `precheck_batch_discount` 与 `DiscountUploadResult`（透出弹窗标记与真实任务号）；同时修两处逻辑/性能缺陷：① 只给 `--below` 时不再拉降序侧（`threshold=-1` 会翻遍全量目录，单次 12+ 分钟 → 修复后 42 秒）；② `_disc_matched` 在「两侧阈值均未启用」（`--vc` 精确定向）时放行，原先恒判不匹配导致 `discount --vc` 永远输出「无匹配」。新增离线用例 `test_04c_discount_upload_two_phase`（mock 断言 checkChange 两次调用顺序与任务号）。 |
 | 2026-09-23 | **新增 `promo-goods` 只读推广商品查询**：接入 WB 广告推广 `cmp.wildberries.ru`（首个 cmp 域调用）——`/api/v1/adverts?show_stocks=true` 按 `status=[4,9,11]`（后台默认视图）分页拉活动，展平 `content[].stocks.products[]`（nm / 俄文标题 / 类目 / 活动内库存），本地真源反查供应商代码与中文名（未收录如实标注，不联网核实），输出控制台「活动→商品」明细 + 去重 nmId/vendorCode 可复制清单 + CSV（`data/logs/推广商品_*.csv`）；鉴权复用 cookie 三件套会话 + cmp 域头（`Authorization: Bearer <authorizev3>`、`x-supplierid` 取自 cookie 的 `x-supplier-id-external`）。同时把 nmId 反查器从 `services/support/complaints._LocalResolver` 下沉为 `storage/nm_resolver.NmResolver`（多域共用，消除跨域私有 import）。新增 `adapters/wb_ads_client.py`、`services/discount/adverts.py`，CLI 命令数 42 → 43。 |
 | 2026-09-23 | **新增 `feishu-vc-stats` 只读统计命令**：读飞书「订单登记」表，按 `BCS编号`（= vendorCode，表内无「供应商代码」列）**跨店合并**统计「单数」（= 登记记录条数，另附「件数」= `订单量` 求和）并降序输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）。支持 `--days/--date/--begin/--end` 时间窗口（默认近 7 天含今天，基准列=日期/付款时间）与 `--shops` 店铺过滤（店铺ID `9352` 与短名 `袁州1` 双认）、`--by-prefix` 前缀码视角、`--top` 截断；未命中原因（无日期/不在窗口/店铺被过滤）显式标注，`BCS编号` 为空的记录归入 `(无BCS编号)` 桶不静默丢弃。可编程 API：`vc_order_stats(days=,begin=,end=,date=,shops=,by_prefix=,with_cn=)` → dict（供其它脚本 import）。复用 `mabang_stock._record_list_all`（分页读，防 ndjson 2000 截断）+ `feishu_register.resolve_base/resolve_table` + `MappingRepository.build_vc_resolver`，**未新增适配器/未写飞书**。新增 `services/order/feishu_vc_stats.py`，CLI 命令数 43 → 44。 |
+| 2026-09-23 | **新增 `promo-gap` 推广 × 销量双向错配审计**（只读）：把「目标店铺（默认袁州1/2/3）的飞书「订单登记」单数」与「各店 cmp 广告推广覆盖」做差集。🔴 **销量判据 = 该供应商代码在三店的 7 天单数「合计」**（同一 vc 各店 wb编号 不同但同一商品，要合计够量才算值得推；多店铺记录只计一次，另出「各店拆分」仅供展示）—— 正向 `--mode gap`=合计≥`--min`(默认4) 但某目标店未推 → 按该店快照分「可直接补推 / 需先上架」；反向 `--mode waste`=三店合计<阈值 → 这些店**所有在投(status=9)**活动里的推广列「建议关闭」（暂停活动仅计数；nm 反查不到 vc 归「无法判定」不推断），并输出逐行明细 + 商品级汇总 + 活动级汇总（标「★ 整个活动建议关闭」）。飞书表**只读一次**，跨域经新门面 `order_svc.feishu_register_stats()`（同 `discount_svc.apply_new_prices_by_nmids` 的跨域先例）；`adverts.py` 抽出库入口 `shop_adverted()` 供 `promo-goods`/`promo-gap` 共用（重构前后输出逐行等价）。新增 `services/discount/promo_gap.py`，CLI 命令数 44 → 45。 |
 | 2026-09-17 | **飞书登记口径改造**：① 数据源由单一 orderalllist 改为 **orderalllist 最近500 + 待处理订单（tabId=7）两路合并去重**（只做了匹配、未进预报/上传/交运流程的订单只出现在待处理列表，仅按 orderalllist 会漏登；`--no-pending` 可关闭）；② **库存SKU 改为以本地商品价格表「库存SKU」列（第 8 列）为准，查不到一律留空**，不再回写马帮系统匹配值（消除 `BCS-xxx-40-56`、`ETPB-PINK` 等非法/错位值）；③ 商品中文名一律取本地映射表（查不到留空但**仍登记**）；④ 登记日志把「真排除」与「字段留空」分开计数，避免把仍登记的单误读成被排除。 |
 | 2026-09-21 | **纠偏双写修复（vc_override → vc_known）**：`mapping_sync.set_vc_override` 原为 `if v in known: known[v]["cn"] = c`，仅当 vc 已在已知池时才回写，导致**前缀码匹配不到的「怪 vc」**（随机前缀、含 `/` 的旧格式）名字只存于 `vc_override.json` —— 该文件丢失即纠偏失效、重建时掉进「未映射商品」。现改为**无条件 upsert 已知池**（新增私有帮助函数 `_sync_known_on_rename`：已存在只更新 `cn` 并保留原 dp/sku/尺寸/source；不存在则按新中文名从商品价格表补 `dp/sku`、标 `source="人工纠偏"`），日志新增「已知池同步：新建 X / 更新 Y」；一次性回填存量 override 进 known（新建 4 条，known 5973→5977，复核 **150/150 仅靠 known 即可取名**）；`test_29` 同步断言已知池写入并在 finally 清理 known 残留。 |
 | 2026-09-21 | **改价自动审核修复（`price --auto-review` 静默失效）**：`services/replicate/ops_executor.py` 的 `_auto_review_shop` 直接调用 `price_review.fetch_all_quarantine/apply_prices`，但该模块**从未 import `price_review`** —— NameError 被 `except Exception` 吞掉，表现为 `[自动审核] 店铺 X 失败: name 'price_review' is not defined`，降价 30-49.9% 的隔离区商品**价格永不生效**（须手工补跑 `price-review --apply`）。修复按 REUSE_GUIDE 铁律 3（跨域只能经 `*_svc.py` 门面）落地：① `discount_svc.apply_new_prices_by_nmids(shop, nm_ids)` 新增**跨域门面方法**（内部封装隔离区拉取 + 按 nmID 精确匹配 + 提交审核，只审本次改价命中的项）；② `_auto_review_shop` 改为懒加载门面调用，并删除 `ops_executor` 中因此闲置的 `wb_api` 导入；③ 新增离线回归用例 `test_09b_price_auto_quarantine_apply`（mock 断言只提交命中 id、历史遗留待审不误审、隔离区未生成时返回 0）。 |

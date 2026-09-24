@@ -296,6 +296,11 @@ class DiscountService:
         from .discount import adverts
         return adverts.run(args)
 
+    def run_promo_gap(self, args: Any) -> int:
+        """运行「推广 × 销量」双向错配审计（该推没推 / 在推但该关，只读）"""
+        from .discount import promo_gap
+        return promo_gap.run(args)
+
     def run_price_review(self, args: Any) -> int:
         """运行价格审查"""
         from .discount import price_review
@@ -460,6 +465,10 @@ def run_promo_apply(args):
 
 def run_promo_goods(args):
     return discount_svc.run_promo_goods(args)
+
+
+def run_promo_gap(args):
+    return discount_svc.run_promo_gap(args)
 
 
 def run_discount_bcs(args):

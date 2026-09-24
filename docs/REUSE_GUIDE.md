@@ -29,6 +29,9 @@
 | 飞书表格地址/表名 → `base_token` / `table_id` | `resolve_base(url)` / `resolve_table(base_token, name)`；默认地址 `credentials.get().feishu_base_url()` | `services/order/feishu_register.py` |
 | 飞书底层调用（其余 `lark-cli base` 子命令） | `_lark(args, payload=None, timeout=120)`（payload 走临时文件，结尾自动 `--as user`） | 同上 |
 | **飞书「订单登记」按供应商代码统计单数**（跨店合并、降序） | `vc_order_stats(days=, begin=, end=, date=, shops=, by_prefix=, with_cn=)` → dict | `services/order/feishu_vc_stats.py` |
+| **飞书统计的跨域入口**（其它域需要飞书订单数据时**只经此门面**，勿跨域 import） | `order_svc.feishu_register_stats(days=, begin=, end=, date=, shops=, url=, table=, with_cn=)` → 同 `vc_order_stats` | `services/order_svc.py`（先例：`discount_svc.apply_new_prices_by_nmids`） |
+| **单店被推广商品明细 + 去重 vc**（库入口，供 promo-goods / promo-gap 共用） | `shop_adverted(shop, root_version, statuses=, page_size=, max_pages=, limit=, with_cn=)` → `{products, vcs, campaigns, nm_unresolved, ...}` | `services/discount/adverts.py` |
+| **推广 × 销量双向错配审计**（该推没推 / 在推但该关；**销量判据 = 目标店铺单数「合计」**） | `promo_gap(days=, begin=, end=, date=, min_orders=, shops=, statuses=, mode=, with_cn=)` → dict（`gap_rows` / `waste_rows` / `waste_by_campaign` / `waste_by_nm` / `stats`） | `services/discount/promo_gap.py` |
 | 马帮订单/库存/预报/上传/交运 | `mabang_client` 的 24 个函数（见 3.5） | `adapters/mabang_client.py` |
 | LLM 生成客服回复 | `support_svc.generate_ai_reply(question, product_info)`；或 `LLMClient(...)` | `services/support_svc.py` / `adapters/llm_client.py` |
 | 异步任务：提交 + 轮询到完成 | `AsyncTaskRunner.run_until_complete(submit_fn, check_fn, timeout, interval, max_retries)` | `adapters/task_runner.py` |
@@ -47,7 +50,7 @@
 ## 二、5 分钟上手
 
 ```bash
-python wb.py --help                      # 44 个命令一览（或看 docs/CLI.md）
+python wb.py --help                      # 45 个命令一览（或看 docs/CLI.md）
 python wb.py shops                       # 验证凭证链路（BCS 通）
 python tests/run_tests.py --changed      # 只跑「本次改动相关」的测试（见第六节）
 ```
@@ -171,8 +174,8 @@ python tests/run_tests.py --changed      # 只跑「本次改动相关」的测�
 | 门面 | 对外函数 | 领域实现目录 |
 | --- | --- | --- |
 | `catalog_svc.py` | `run_fetch` `run_mapping` `run_mapping_import` `run_mapping_check` `run_mismatch_check` `run_review` `run_merge` `run_mapping_rename` `run_shops_mapping` | `catalog/`：`products.py`（快照）`mapping.py`（增量合并）`mapping_sync.py`（单店表/纠偏）`mapping_excel.py`（8-Sheet 生成）`mapping_check.py` `mismatch_check.py` `workbench.py`（HTML）`keywords.py` |
-| `discount_svc.py` | `run_cli`（discount/discount-wb/discount-scan）`run_promo_apply` `run_promo_goods` `run_discount_bcs` `run_price_review`；类方法 `apply_new_prices_by_nmids(shop, nm_ids)`（**跨域门面**：按 nmID 精确「应用新价格」，供 replicate 域 `price --auto-review` 调用，只审命中的待审项、不误审历史遗留） | `discount/`：`promo.py`（报名）`adverts.py`（广告推广商品查询）`price_review.py`（隔离区审核）`discount_bcs.py`（BCS 慢速改折扣） |
-| `order_svc.py` | `run_orders` `run_mabang_orders` `run_mabang_forecast` `run_feishu_register` `run_mabang_process` `run_mabang_stock_register` `run_mabang_stock_daily` `run_feishu_vc_stats` | `order/`：`orders.py` `mabang.py` `mabang_process.py` `mabang_stock.py` `mabang_stock_daily.py` `feishu_register.py` `feishu_vc_stats.py`（按供应商代码统计单数） |
+| `discount_svc.py` | `run_cli`（discount/discount-wb/discount-scan）`run_promo_apply` `run_promo_goods` `run_promo_gap` `run_discount_bcs` `run_price_review`；类方法 `apply_new_prices_by_nmids(shop, nm_ids)`（**跨域门面**：按 nmID 精确「应用新价格」，供 replicate 域 `price --auto-review` 调用，只审命中的待审项、不误审历史遗留） | `discount/`：`promo.py`（报名）`adverts.py`（广告推广商品查询 + `shop_adverted` 库入口）`promo_gap.py`（推广×销量双向错配审计）`price_review.py`（隔离区审核）`discount_bcs.py`（BCS 慢速改折扣） |
+| `order_svc.py` | `run_orders` `run_mabang_orders` `run_mabang_forecast` `run_feishu_register` `run_mabang_process` `run_mabang_stock_register` `run_mabang_stock_daily` `run_feishu_vc_stats`；类方法 `feishu_register_stats(...)`（**跨域门面**：飞书「订单登记」统计库入口，供 discount 域 `promo-gap` 调用） | `order/`：`orders.py` `mabang.py` `mabang_process.py` `mabang_stock.py` `mabang_stock_daily.py` `feishu_register.py` `feishu_vc_stats.py`（按供应商代码统计单数） |
 | `replicate_svc.py` | `run_price` `run_stock` `run_trash` `run_replicate` `run_import_shelve` `run_dimension` `run_dims_check` `run_banned` `run_clean` `run_remote_wh` `run_shelve` `run_shelve_old` | `replicate/`：`ops.py`（薄门面）+ `ops_plan.py`（**计划构造，无副作用**）+ `ops_executor.py`（**分批执行/审计**）+ `dimension.py` `dims_check.py` `banned.py` `clean.py` `replicate.py` `import_shelve.py` `foreign_table.py` `wb_card.py` `remote_wh.py` `shelve_new.py`（新版批量接口） `shelve_old.py`（旧版上品建卡） `shelve_common.py`（上架公共解析） |
 | `support_svc.py` | `run_questions` `run_questions_watch` `run_ai_test` `run_appeals`；类方法 `generate_ai_reply` / `load_replied` / `save_replied` / `load_shown` / `save_shown` | `support/`：`questions.py` `questions_watch.py` `ai_reply_test.py` `complaints.py` |
 
@@ -342,7 +345,7 @@ def run_xxx(args):
 # ③ wb_ops/framework/registry.py：注册（别名用 alias=）
 registry.register("xxx", "wb_ops.services.<域>_svc", "run_xxx")
 
-# ④ tests/test_all_commands.py：命令名加进 subcommands 列表 + assertEqual 计数（现为 44）
+# ④ tests/test_all_commands.py：命令名加进 subcommands 列表 + assertEqual 计数（现为 45）
 #    并新增用例（只读、不得带 --apply）：def test_NN_xxx(self): ...
 #    再在 tests/run_tests.py 的 PATH_HINTS 里为「文件→命令」加一行（见第六节）
 ```

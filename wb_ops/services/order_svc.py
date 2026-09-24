@@ -49,6 +49,18 @@ class OrderService:
         """飞书「订单登记」按供应商代码统计单数（只读）"""
         return feishu_vc_stats.run(args)
 
+    def feishu_register_stats(self, days: int = 7, begin: str = "", end: str = "",
+                              date: str = "", shops: Any = None, url: str = "",
+                              table: str = "订单登记", with_cn: bool = True) -> dict:
+        """★ 门面库入口（跨域只经门面，REUSE_GUIDE 铁律 3）：飞书「订单登记」统计（只读）。
+
+        返回 == `feishu_vc_stats.vc_order_stats(...)`（含 'begin'/'end'/'raw_rows'/'stats'），
+        供其它域（如 discount 域 promo-gap）复用，避免跨域 import order 域私有实现。
+        """
+        return feishu_vc_stats.vc_order_stats(days=days, begin=begin, end=end, date=date,
+                                             shops=shops, url=url, table=table,
+                                             by_prefix=False, with_cn=with_cn)
+
 
 order_svc = OrderService()
 
@@ -83,4 +95,9 @@ def run_mabang_stock_daily(args):
 
 def run_feishu_vc_stats(args):
     return order_svc.count_register_by_vendor(args)
+
+
+def feishu_register_stats(**kwargs):
+    """模块级薄转发（供其它域 import：`from wb_ops.services.order_svc import feishu_register_stats`）"""
+    return order_svc.feishu_register_stats(**kwargs)
 

@@ -15,6 +15,7 @@ from .replicate import (
     dims_check,
     banned,
     ops,
+    stock_wb,
 )
 
 
@@ -61,6 +62,19 @@ class ReplicationService:
         """一键库存/下架操作 (stock / trash)"""
         return ops.run(action, args)
 
+    def run_stock_wb_native(self, args: Any) -> int:
+        """改库存默认通道（2026-09-24 起）：WB 原生在线接口（portal stocks）；
+        `stock` 与 `stock-wb` 均路由至此。"""
+        return stock_wb.run(args)
+
+    def run_stock_bcs(self, args: Any) -> int:
+        """改库存备选通道：BCS stock/batchSetByChrtIdsBatch（`stock-bcs` 命令）。"""
+        return ops.run("stock", args)
+
+    def set_stock_wb(self, shop: dict, warehouse_id: int, chrt_items: list, **kw) -> dict:
+        """跨域脚本入口（铁律 3）：单店批量设库存（WB 原生 portal 接口）"""
+        return stock_wb.set_stock(shop, warehouse_id, chrt_items, **kw)
+
 
 replicate_svc = ReplicationService()
 
@@ -70,7 +84,17 @@ def run_price(args):
 
 
 def run_stock(args):
-    return replicate_svc.handle_ops("stock", args)
+    """[备选] BCS 通道改库存（stock-bcs 命令；stock/stock-wb 默认走 WB 原生）"""
+    return replicate_svc.run_stock_bcs(args)
+
+
+def run_stock_wb(args):
+    """[默认] WB 原生在线接口改库存（stock 与 stock-wb 命令）"""
+    return replicate_svc.run_stock_wb_native(args)
+
+
+def run_stock_bcs(args):
+    return replicate_svc.run_stock_bcs(args)
 
 
 def run_trash(args):
