@@ -56,7 +56,17 @@ def build_parser():
         # 唯一实现下沉到 framework.cli_args（argparse-only，保证本模块启动零业务依赖）
         cli_args.add_ops_args(p, with_price=with_price, with_stock=with_stock)
 
-    p = sub.add_parser("price", help="改价/改折扣（dry-run 默认，--apply 执行）")
+    p = sub.add_parser("price", help="改价/改折扣（默认 WB 原生 dp-api 批量，自动确认降价/隔离区弹窗；dry-run 默认）")
+    _add_ops_args(p, with_price=True)
+    p.add_argument("--chunk", type=int, default=100, help="每批提交条数（≤300，对齐 discount 实践，默认 100）")
+    p.add_argument("--interval", type=float, default=0.3, help="批/店间请求间隔秒")
+
+    p = sub.add_parser("price-wb", help="[别名] 与 price 相同（WB 原生 dp-api 批量，显式点名通道）")
+    _add_ops_args(p, with_price=True)
+    p.add_argument("--chunk", type=int, default=100, help="每批提交条数（≤300，对齐 discount 实践，默认 100）")
+    p.add_argument("--interval", type=float, default=0.3, help="批/店间请求间隔秒")
+
+    p = sub.add_parser("price-bcs", help="[备选] 改价走 BCS 接口（price/batch，WB 原生不可用时的兜底）")
     _add_ops_args(p, with_price=True)
 
     p = sub.add_parser("stock", help="改库存（默认 WB 原生在线接口；dry-run 默认，归零须 --yes）")

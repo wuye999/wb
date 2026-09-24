@@ -78,7 +78,7 @@ python wb.py mabang-stock-register --apply              # 全量重建「马帮�
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 解耦实践 / 业务规则 / 数据流 |
 | [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程/按需测试门禁） |
 | [docs/REUSE_GUIDE.md](docs/REUSE_GUIDE.md)   | ★ 开发复用指南：能做 X 用哪个模块/函数 + 代码模板（写新功能前先读） |
-| [docs/CLI.md](docs/CLI.md)                   | 47 个命令全集参考 + Python 库调用 |
+| [docs/CLI.md](docs/CLI.md)                   | 49 个命令全集参考 + Python 库调用 |
 | [docs/USAGE.md](docs/USAGE.md)               | 日常情景使用流程               |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md)   | 鉴权与凭证                  |
 

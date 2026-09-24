@@ -16,6 +16,7 @@ from .replicate import (
     banned,
     ops,
     stock_wb,
+    price_wb,
 )
 
 
@@ -71,16 +72,39 @@ class ReplicationService:
         """改库存备选通道：BCS stock/batchSetByChrtIdsBatch（`stock-bcs` 命令）。"""
         return ops.run("stock", args)
 
+    def run_price_wb_native(self, args: Any) -> int:
+        """改价默认通道（2026-09-24 起）：WB 原生 dp-api 批量（upload/task，预检后自动确认）；
+        `price` 与 `price-wb` 均路由至此。"""
+        return price_wb.run(args)
+
+    def run_price_bcs(self, args: Any) -> int:
+        """改价备选通道：BCS price/batch（`price-bcs` 命令）。"""
+        return ops.run("price", args)
+
     def set_stock_wb(self, shop: dict, warehouse_id: int, chrt_items: list, **kw) -> dict:
         """跨域脚本入口（铁律 3）：单店批量设库存（WB 原生 portal 接口）"""
         return stock_wb.set_stock(shop, warehouse_id, chrt_items, **kw)
+
+    def apply_prices_wb(self, shop: dict, items: list, **kw) -> dict:
+        """跨域脚本入口（铁律 3）：单店批量改价（WB 原生 dp-api upload/task）"""
+        return price_wb.apply_prices(shop, items, **kw)
 
 
 replicate_svc = ReplicationService()
 
 
 def run_price(args):
-    return replicate_svc.handle_ops("price", args)
+    """[备选] BCS 通道改价（price-bcs 命令；price/price-wb 默认走 WB 原生 dp-api）"""
+    return replicate_svc.run_price_bcs(args)
+
+
+def run_price_wb(args):
+    """[默认] WB 原生 dp-api 批量改价（price 与 price-wb 命令）"""
+    return replicate_svc.run_price_wb_native(args)
+
+
+def run_price_bcs(args):
+    return replicate_svc.run_price_bcs(args)
 
 
 def run_stock(args):

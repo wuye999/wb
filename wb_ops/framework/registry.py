@@ -36,7 +36,7 @@ class CommandRegistry:
 
 registry = CommandRegistry()
 
-# 注册全部 45 个命令的动态模块映射
+# 注册全部 49 个命令的动态模块映射
 registry.register("shops", "wb_ops.adapters.bcs_client", "print_shops")
 registry.register("fetch", "wb_ops.services.catalog_svc", "run_fetch")
 registry.register("mapping", "wb_ops.services.catalog_svc", "run_mapping")
@@ -47,7 +47,9 @@ registry.register("review", "wb_ops.services.catalog_svc", "run_review")
 registry.register("merge", "wb_ops.services.catalog_svc", "run_merge", alias="mapping-merge")
 registry.register("mapping-rename", "wb_ops.services.catalog_svc", "run_mapping_rename")
 registry.register("shops-mapping", "wb_ops.services.catalog_svc", "run_shops_mapping", alias="mapping-sync")
-registry.register("price", "wb_ops.services.replicate_svc", "run_price")
+# price 默认走 WB 原生 dp-api 批量改价（price-wb 同一实现，显式别名）；price-bcs = BCS 备选通道
+registry.register("price", "wb_ops.services.replicate_svc", "run_price_wb", alias="price-wb")
+registry.register("price-bcs", "wb_ops.services.replicate_svc", "run_price")
 # stock 默认走 WB 原生在线接口（stock-wb 同一实现，显式别名）；stock-bcs = BCS 备选通道
 registry.register("stock", "wb_ops.services.replicate_svc", "run_stock_wb", alias="stock-wb")
 registry.register("stock-bcs", "wb_ops.services.replicate_svc", "run_stock")

@@ -50,7 +50,7 @@
 ## 二、5 分钟上手
 
 ```bash
-python wb.py --help                      # 45 个命令一览（或看 docs/CLI.md）
+python wb.py --help                      # 49 个命令一览（或看 docs/CLI.md）
 python wb.py shops                       # 验证凭证链路（BCS 通）
 python tests/run_tests.py --changed      # 只跑「本次改动相关」的测试（见第六节）
 ```
@@ -345,7 +345,7 @@ def run_xxx(args):
 # ③ wb_ops/framework/registry.py：注册（别名用 alias=）
 registry.register("xxx", "wb_ops.services.<域>_svc", "run_xxx")
 
-# ④ tests/test_all_commands.py：命令名加进 subcommands 列表 + assertEqual 计数（现为 45）
+# ④ tests/test_all_commands.py：命令名加进 subcommands 列表 + assertEqual 计数（现为 49）
 #    并新增用例（只读、不得带 --apply）：def test_NN_xxx(self): ...
 #    再在 tests/run_tests.py 的 PATH_HINTS 里为「文件→命令」加一行（见第六节）
 ```

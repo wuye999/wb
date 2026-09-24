@@ -37,7 +37,9 @@
 
 | 子命令 | 用途 | 操作参数 |
 |---|---|---|
-| `price` | 改价/改折扣 | `--price N` / `--discount N` / `--club-discount N` / `--keep-price` / `--auto-review` |
+| `price` | 改价/改折扣（**默认 WB 原生 dp-api 批量**，2026-09-24 起；预检降价/隔离区弹窗自动确认提交；dry-run 默认，归零式大降不拦截需人工确认不在本命令） | `--price N` / `--discount N` / `--club-discount N`（WB 原生通道暂不支持，警告并忽略）/ `--keep-price` / `--auto-review` / `--chunk N`（默认 100，≤300）/ `--interval S` |
+| `price-wb` | [别名] 与 `price` 相同（WB 原生 dp-api 批量，显式点名通道） | 同 `price` |
+| `price-bcs` | [备选] 改价走 BCS 接口（`price/batch`，条目带 price+discount+clubDiscount；WB 原生不可用或需要 clubDiscount 时的兜底） | 同 `price` 原参数 |
 | `stock` | 改库存（**默认 WB 原生在线接口**，2026-09-24 起；dry-run 默认，归零须 --yes） | `--amount N`（默认 0）/ `--chunk N`（默认 500，≤1000）/ `--interval S` / `--max-pages N` / `--resolve snapshot\|live` |
 | `stock-wb` | [别名] 与 `stock` 相同（WB 原生在线接口，显式点名通道） | 同 `stock` |
 | `stock-bcs` | [备选] 改库存走 BCS 接口（`stock/batchSetByChrtIdsBatch`，WB 原生不可用时的兜底） | `--amount N`（默认 0） |
@@ -114,6 +116,7 @@ python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25  # 指定时间�
 python wb.py price --name 充电宝 --apply --yes
 python wb.py price --vc BCS-XXX-123 --price 130 --discount 20 --apply --sync
 python wb.py price --vc BCS-XXX-123 --discount 30 --keep-price --apply --yes
+python wb.py price-bcs --vc BCS-XXX-123 --price 130 --apply --yes   # [备选] BCS 通道做同一件事
 python wb.py stock --prefix CYQX --amount 0 --apply --yes
 python wb.py stock --name 短直假发 --amount 0                 # WB 原生接口（默认通道）：全部店铺「短直假发」库存归零（dry-run 预览）
 python wb.py stock --name 短直假发 --amount 0 --apply --yes   # 真正执行（归零不可逆，必须 --yes）

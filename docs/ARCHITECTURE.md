@@ -117,7 +117,7 @@
 
 ```
 表现与调度层 (Presentation)
-  └── cli.py（动态按需延迟加载路由，45 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+  └── cli.py（动态按需延迟加载路由，49 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
         │ 动态调度 (Command DTO)
         ▼
 业务用例服务层 (Services)

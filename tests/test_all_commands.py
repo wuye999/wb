@@ -43,12 +43,12 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 47 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 49 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
             "mismatch-check", "review", "merge", "mapping-rename", "shops-mapping",
-            "price", "stock", "stock-wb", "stock-bcs", "trash", "replicate", "import-shelve",
+            "price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs", "trash", "replicate", "import-shelve",
             "promo-apply", "promo-goods", "promo-gap", "discount", "discount-wb", "discount-scan", "discount-bcs",
             "dimension", "dims-check", "banned", "clean", "price-review",
             "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
@@ -56,7 +56,7 @@ class TestAllCommands(unittest.TestCase):
             "mabang-stock-daily", "feishu-vc-stats", "mabang-process", "cookies-update",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 47)
+        self.assertEqual(len(subcommands), 49)
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -258,8 +258,10 @@ class TestAllCommands(unittest.TestCase):
 
     # ---------------- 4. Ops 一键操作 ----------------
     def test_09_price_dry_run(self):
+        """price 默认通道 = WB 原生 dp-api 批量（2026-09-24 起切换，registry 路由 price_wb.run）。"""
         res = self._run_cmd(["price", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
+        self.assertIn("WB 原生 dp-api", res.stdout)
 
     def test_09b_price_auto_quarantine_apply(self):
         """改价自动审核：隔离区按 nmID 精确匹配 + 跨域走 discount_svc 门面（离线 mock，不触网）。
@@ -327,6 +329,97 @@ class TestAllCommands(unittest.TestCase):
         res = self._run_cmd(["stock", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
         self.assertIn("WB 原生在线接口", res.stdout)
+
+    def test_09c_price_wb_dry_run(self):
+        """price-wb dry-run：WB 原生 dp-api 通道（显式点名，不写平台）。
+        用例名含归一化子串 pricewb → --cmd price-wb 精确命中；--cmd price 不会误捞。"""
+        res = self._run_cmd(["price-wb", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertIn("BCS-HAAJ-248364237", res.stdout)
+        self.assertIn("WB 原生 dp-api", res.stdout)
+
+    def test_09d_price_bcs_dry_run(self):
+        """price-bcs 备选通道：BCS price/batch（dry-run 预览，无「WB 原生」字样）。"""
+        res = self._run_cmd(["price-bcs", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertNotIn("WB 原生 dp-api", res.stdout)
+
+    def test_09e_price_wb_offline(self):
+        """price_wb 离线断言（**不触网、不写平台**）。
+
+        依据 HAR `api/网络请求/wb在线批量修改价格.har`：
+        - 提交条目 {"vendorCode","nmID","price","currencyIsoCode":"CNY"}（只改价无 discount 字段）
+        - checkChange=true 预检（可能返回 priceModal/quarantineModal）→ checkChange=false 落库
+          =「自动确认提交」（用户确认的语义，与改折扣两阶段同机制）
+        """
+        from unittest import mock
+        from argparse import Namespace
+        from wb_ops.adapters import wb_client as wc
+        from wb_ops.services.replicate import price_wb
+
+        shop = {"shopId": 9352, "shopName": "袁州1", "cookie": "",
+                "authorizev3": "t", "wb_seller_lk": "t"}
+
+        # ① 条目映射：只改价（无 discount 字段）/ --discount 显式给出（含 0）才带
+        it = {"vc": "BCS-X-1", "nmID": 123, "price": 150, "cur_price": 198.0,
+              "orig_zero": False, "discount": None, "clubDiscount": None, "cn": "测试"}
+        p0 = price_wb._build_payload(it, None)
+        self.assertEqual(p0, {"vendorCode": "BCS-X-1", "nmID": 123,
+                              "price": 150, "currencyIsoCode": "CNY"})
+        self.assertEqual(price_wb._build_payload(it, 30)["discount"], 30)
+        self.assertEqual(price_wb._build_payload(it, 0)["discount"], 0)   # 显式 0 也照传
+
+        # ② exec_shop：checkChange 两阶段 + 预检 modal=true 仍自动确认落库 + 分批
+        calls = []
+
+        def fake_request(session, method, url, **kwargs):
+            calls.append((url.split("?")[-1], kwargs.get("json")))
+            if url.endswith("checkChange=true"):
+                return {"data": {"priceModal": True, "quarantineModal": True}, "error": False, "errorText": ""}
+            return {"data": {"id": 166628902, "alreadyExists": False}, "error": False, "errorText": ""}
+
+        items = [{"vc": f"BCS-WB-{i}", "nmID": 1000 + i, "price": 150, "cur_price": 198.0,
+                  "orig_zero": False, "discount": None, "clubDiscount": None, "cn": "测试"}
+                 for i in range(4)]
+        plan = {"shopId": 9352, "items": items}
+        pargs = Namespace(chunk=2, interval=0, discount=None)
+        client = wc.WBClient(shop, root_version="v1.113.3")
+        results, ts = [], "2026-09-24 12:00:00"
+        with mock.patch.object(wc, "request", side_effect=fake_request):
+            ok, fail = price_wb.exec_shop(client, plan, pargs, results, ts)
+        self.assertEqual((ok, fail), (4, 0))
+        self.assertEqual([c[0] for c in calls],
+                         ["checkChange=true", "checkChange=false", "checkChange=true", "checkChange=false"])
+        self.assertEqual(calls[0][1], {"data": [
+            {"vendorCode": "BCS-WB-0", "nmID": 1000, "price": 150, "currencyIsoCode": "CNY"},
+            {"vendorCode": "BCS-WB-1", "nmID": 1001, "price": 150, "currencyIsoCode": "CNY"}]})
+        self.assertEqual(len(results), 4)
+        self.assertTrue(all(r[2] == "price_wb" for r in results))
+
+        # ③ apply_prices 门面：chunk 分批 + alreadyExists 计成功 + task_ids 收集
+        def fake_request_exists(session, method, url, **kwargs):
+            if url.endswith("checkChange=true"):
+                return {"data": {"priceModal": False, "quarantineModal": False}, "error": False, "errorText": ""}
+            return {"data": {"id": 166628902, "alreadyExists": True}, "error": False, "errorText": ""}
+
+        witems = [{"vendorCode": f"BCS-WB-{i}", "nmID": 2000 + i, "price": 88} for i in range(3)]
+        calls.clear()
+        with mock.patch.object(wc, "request", side_effect=fake_request_exists):
+            r = price_wb.apply_prices(shop, witems, root_version="v1.113.3", chunk=2, interval=0)
+        self.assertEqual((r["ok"], r["fail"]), (3, 0))
+        self.assertEqual(r["task_ids"], [166628902, 166628902])
+        self.assertEqual(len(r["details"]), 3)
+        self.assertTrue(all(d["ok"] for d in r["details"]))
+
+        # ④ ≤原价/2 预拦截：price=99 ≤ cur/2=99 → 剔除不提交
+        bad_items = [{"vc": "BCS-WB-9", "nmID": 9999, "price": 99, "cur_price": 198.0,
+                      "orig_zero": False, "discount": None, "clubDiscount": None, "cn": "测试"}]
+        plan_bad = {"shopId": 9352, "items": bad_items}
+        calls.clear()
+        with mock.patch.object(wc, "request", side_effect=fake_request):
+            ok2, fail2 = price_wb.exec_shop(client, plan_bad, pargs, [], ts)
+        self.assertEqual((ok2, fail2), (0, 0))
+        self.assertEqual(calls, [])          # 全部被拦截 → 不发任何请求
 
     def test_10b_stock_bcs_dry_run(self):
         """stock-bcs 备选通道：BCS stock/batchSetByChrtIdsBatch（dry-run 预览）。"""
