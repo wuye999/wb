@@ -62,7 +62,7 @@ python wb.py appeals --days 5           # WB 平台投诉单：未处理(等待�
 python wb.py feishu-vc-stats             # 只读：飞书「订单登记」近7天按供应商代码(BCS编号)统计单数降序（跨店合并；--days/--date/--begin/--end/--shops/--by-prefix）
 
 # ▸ 每日新订单处理（2026-09-10 拆分为两个独立脚本；先 A 后 B 保证库存SKU 正确）
-python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→轮询确认预报成功→物流交运（零飞书依赖）
+python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→轮询确认预报成功→物流交运（零飞书依赖；轮询 1 请求/轮）
 python wb.py feishu-register                            # B 飞书登记：orderalllist 最近500条 + 待处理订单（两路合并）去重只登新增；只匹配未进预报/上传/交运的单也登记，库存SKU 取本地价格表（查不到留空）
 python wb.py feishu-register --scope all --date 2026-09-05 --apply   # 补录历史订单（指定日期/区间）
 python wb.py mabang-forecast --check                    # 预报批次概览（四 tab：待预报/预报成功/预报失败/历史预报；--status 3 看成功明细）

@@ -434,10 +434,22 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
 
     完成判据：batch_nos 全部命中 status=3「预报成功」；为防成功后迅速归档移入
     status=5「历史预报」导致永不命中，**命中 status=5 亦算成功**。
-    依据（2026-09-30 抓包实证）：批次上传期间留在 status=1 列表（行级 status 1→2「上传中」），
-    上传成功后出现在 status=3 列表（successNum==total、handoverNumber 回填）。
-    每轮预算：status=3 一次；未成功者再查 status=1 判「仍在传」；既非成功也不在待上传的
-    「未知」批次补查 status=5；超时后才查 status=99 定性失败。查询异常容错重试至超时。
+
+    依据（2026-09-30 两次抓包实证）：
+      - `uploadForecastBatch` 响应仅「批次已插入上传队列，请5-10分后查看预报结果」
+        ⇒ **无任务 id / 无进度字段**，完成判定只能靠列表轮询；
+      - 上传后 **≤0.3s 行级 status 由 1→2（上传中）**，期间 successNum **恒为 0**
+        （没有「部分完成」判据），成功后出现在 status=3（successNum==total、
+        handoverNumber 回填）；
+      - 四统计（waitTotal/succesTotal/failTotal/historyTotal）为**全局值、不随 tab 变**。
+
+    请求节奏（2026-09-30 精简，稳态 **1 请求/轮**，原为 2-3 次/轮）：
+      预扫描：上传后立即查一次 status=1 —— 确认受理（逐批打印 排队中/上传中 相位）
+              并建立 batchNo→shopId 店铺映射；失败自动重试一次；
+      主循环：每轮只查一次 status=3（仅对未成功批次），命中即成功；
+      status=5 兜底：仅当「连续 3 轮 status=3 未命中」或「已耗时 ≥ 超时一半」时
+              各触发一次（限频，避免每轮往返）；
+      超时定性：先 best-effort 补查一次 status=1 补齐缺失映射，再查一次 status=99。
 
     Returns:
         {"done": bool,           # True=全部批次已确认成功
@@ -459,50 +471,74 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
     mw = f"，最小等待 {min_wait}s" if min_wait else ""
     print(f"\n[③ 等待上传] 轮询 {len(batch_nos)} 个批次直至命中「预报成功(status=3)」"
           f"或「历史预报(status=5)」（超时 {timeout}s，间隔 {interval}s{mw}）...")
-    while True:
-        # ① status=3 预报成功：命中即成功
-        try:
-            r3 = find_batches(cred, want, status=3, rows_per_page=rows_per_page)
-            if r3["stats"]:
-                last_stats = r3["stats"]
-            for bn, row in r3["found"].items():
-                success.add(bn)
-                rows[bn] = row
-                store_of.setdefault(bn, row.get("shopId"))
-            _warn_batch_failnum(r3["found"], warned)
-        except Exception as e:
-            print(f"  [警告] status=3 查询异常（{str(e)[:80]}），稍后重试 ...")
 
-        # ② status=1 待预报：未成功者是否仍在上传/排队
+    def _merge(found, mark_success=False):
+        """统一收口：写快照 / 建店铺映射 / 成功集合 / 行级失败告警。"""
+        for bn, row in (found or {}).items():
+            rows[bn] = row
+            store_of.setdefault(bn, row.get("shopId"))
+            if mark_success:
+                success.add(bn)
+        _warn_batch_failnum(found, warned)
+
+    # —— 预扫描：status=1 一次（确认受理 + 建立 batchNo→shopId 映射；失败重试一次）——
+    prescan = None
+    for attempt in (1, 2):
+        try:
+            prescan = find_batches(cred, want, status=1, rows_per_page=rows_per_page)
+            if prescan["stats"]:
+                last_stats = prescan["stats"]
+            _merge(prescan["found"])
+            break
+        except Exception as e:
+            prescan = None
+            tail = "重试一次" if attempt == 1 else "跳过（映射稍后由 status=3/99 命中补齐）"
+            print(f"  [警告] 预扫描 status=1 查询异常（{str(e)[:80]}），{tail} ...")
+    if prescan is not None:
+        for bn in batch_nos:
+            row = prescan["found"].get(bn)
+            if row is None:
+                phase = "未出现（以 status=3 命中为准）"
+            else:
+                st = int(row.get("status") or 0)
+                phase = ("排队中(status=1)" if st == 1 else
+                         "上传中(status=2)" if st == 2 else f"status={st}")
+            print(f"  [预扫描] {bn}[{store_of.get(bn) or '-'}] {phase}")
+        print(f"  [预扫描] 已建立店铺映射 "
+              f"{sum(1 for b in want if store_of.get(b))}/{len(want)}")
+
+    miss_rounds, did5_miss3, did5_half = 0, False, False
+    while True:
+        # ① 每轮仅 1 次请求：status=3 预报成功（仅查未成功批次）
         pend = want - success
-        uploading = {}
+        added = 0
         if pend:
             try:
-                r1 = find_batches(cred, pend, status=1, rows_per_page=rows_per_page)
-                if r1["stats"]:
-                    last_stats = r1["stats"]
-                uploading = r1["found"]
-                for bn, row in uploading.items():
-                    rows[bn] = row
-                    store_of.setdefault(bn, row.get("shopId"))
-                _warn_batch_failnum(uploading, warned)
+                r3 = find_batches(cred, pend, status=3, rows_per_page=rows_per_page)
+                if r3["stats"]:
+                    last_stats = r3["stats"]      # 四统计为全局值，无 status=1 查询时同样可用
+                n0 = len(success)
+                _merge(r3["found"], mark_success=True)
+                added = len(success) - n0
             except Exception as e:
-                print(f"  [警告] status=1 查询异常（{str(e)[:80]}），稍后重试 ...")
+                print(f"  [警告] status=3 查询异常（{str(e)[:80]}），稍后重试 ...")
+        miss_rounds = 0 if added else miss_rounds + 1
 
-        # ③ 既非成功也不在待上传的「未知」批次：查 status=5 兜底（成功后归档）
-        unknown = want - success - set(uploading)
-        if unknown:
+        # ② status=5 兜底（成功后归档）：限频，每个触发条件各一次
+        pend = want - success
+        elapsed = int(time.time() - start)
+        trig_miss3 = bool(pend) and miss_rounds >= 3 and not did5_miss3
+        trig_half = bool(pend) and (elapsed * 2 >= timeout) and not did5_half
+        if trig_miss3 or trig_half:
             try:
-                r5 = find_batches(cred, unknown, status=5, rows_per_page=rows_per_page)
+                r5 = find_batches(cred, pend, status=5, rows_per_page=rows_per_page)
                 if r5["stats"]:
                     last_stats = r5["stats"]
-                for bn, row in r5["found"].items():
-                    success.add(bn)
-                    rows[bn] = row
-                    store_of.setdefault(bn, row.get("shopId"))
-                _warn_batch_failnum(r5["found"], warned)
+                _merge(r5["found"], mark_success=True)
             except Exception as e:
                 print(f"  [警告] status=5 查询异常（{str(e)[:80]}），稍后重试 ...")
+            did5_miss3 = did5_miss3 or trig_miss3
+            did5_half = did5_half or trig_half
 
         fail_now = int((last_stats or {}).get("failTotal") or 0)
         if prev_fail is not None and fail_now > prev_fail:
@@ -530,7 +566,16 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
             break
         time.sleep(interval)
 
-    # 超时：查一次 status=99 定性「预报失败」，其余归入未完成
+    # 超时：先 best-effort 补齐缺失的店铺映射，再查一次 status=99 定性「预报失败」
+    missing_map = [b for b in (want - success) if not store_of.get(b)]
+    if missing_map:
+        try:
+            rf = find_batches(cred, missing_map, status=1, rows_per_page=rows_per_page)
+            if rf["stats"]:
+                last_stats = rf["stats"]
+            _merge(rf["found"])
+        except Exception as e:
+            print(f"  [警告] 超时补查 status=1 映射异常（{str(e)[:80]}），映射可能不全")
     try:
         r99 = find_batches(cred, want - success, status=99, rows_per_page=rows_per_page)
         for bn, row in r99["found"].items():
@@ -697,6 +742,8 @@ def run_forecast(args):
             r["_step_upload"] = r["_step_upload"] or "跳过-无新批次"
 
     # ③ 轮询等待上传结束（正向判据：命中 status=3 预报成功；status=5 历史归档亦算成功）
+    #    节奏：上传后 status=1 预扫描建店铺映射 → 每轮仅 status=3（1 请求/轮）
+    #          → status=5 限频兜底 → 超时补映射 + status=99 定性
     to_handover = [r for r in target if not r["channel_selected"]]
     skipped_fail, skipped_upload, up_rows, store_of = [], [], {}, {}
     success_nos, failed_nos, still_nos = set(), set(), set()

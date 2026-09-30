@@ -103,8 +103,8 @@
 | `shop_map` | `mabang.shop_map` | 马帮店铺名 → 本地店铺；**只处理名单内店铺**的订单（如 `子龙主2 → 袁州1(9352)`） |
 | `handover_channel_id` / `handover_keyword` / `handover_channel_value` | `mabang.handover_*` | 物流交运渠道（830556 七库海外仓）；脚本优先从 order.list 页面动态发现，配置仅兜底 |
 | `handover_wait_seconds` | `mabang.handover_wait_seconds` | ⚠ **已废弃（2026-09-30）**：原为「上传后盲等秒数」（默认 150），现改为轮询等待批次上传结束，该键不再被读取 |
-| `upload_timeout_seconds` | `mabang.upload_timeout_seconds` | 轮询等待「预报成功」的最长秒数（可选；默认 900，`--upload-timeout` 可覆盖）。判据=批次出现在 `status=3` 预报成功列表（兼容 `status=5` 历史归档） |
-| `upload_poll_interval` | `mabang.upload_poll_interval` | 批次状态轮询间隔秒数（可选；默认 20，`--poll-interval` 可覆盖） |
+| `upload_timeout_seconds` | `mabang.upload_timeout_seconds` | 轮询等待「预报成功」的最长秒数（可选；默认 900，`--upload-timeout` 可覆盖）。判据=批次命中 `status=3` 预报成功（兼容 `status=5` 历史归档）；节奏=上传后 `status=1` 预扫描一次 + **每轮仅 `status=3` 一次**（原每轮 2-3 次） |
+| `upload_poll_interval` | `mabang.upload_poll_interval` | 批次状态轮询间隔秒数（可选；默认 20，`--poll-interval` 可覆盖）。⚠ 不建议小于 20s：上传结果 5–10 分钟才出，且上传响应无进度字段，高频轮询无收益 |
 
 - 失效表现：www 域 401/跳登录 → 重抓 www_cookie；aamz 域（`mabang-forecast --check` 报错）→ 重抓 aamz_cookie（实测 www 登录态可直接用 aamz 域，通常无需单独抓）。
 - **api 域 401 无需手工处理（2026-09-08）**：脚本检测到 Bearer 过期会自动用 www cookie 中的 `MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE` 作 key 调 `POST api.mabangerp.com/sso/api/v1/getTokenByKey` 换发新 Bearer 并写回 credentials.json（`refresh_api_token`）。只要 www cookie 有效，api 域永远可用。

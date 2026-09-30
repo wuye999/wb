@@ -404,6 +404,7 @@ python wb.py orders --no-sync                         # 跳过同步，直接查
 ```bash
 # A. 马帮订单处理一体（零飞书依赖）：匹配商品→预报单生成→依次上传（自动发货）→轮询确认预报成功→物流交运
 python wb.py mabang-process --apply                       # 匹配/预报/上传/轮询等待/交运 + 末尾自动登记飞书（URL 读配置）
+                                                          # 轮询节奏：上传后 status=1 预扫描一次（建店铺映射）→ 每轮仅 status=3
 
 # B. 飞书登记（独立）：拉取马帮最近 500 条全状态订单，按订单编号去重只登记新增
 python wb.py feishu-register                               # dry-run → 加 --apply 写入（URL 读配置）
@@ -419,6 +420,7 @@ python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-0
 
 - ⚠ 口径（2026-09-10 拆分）：**`mabang-process` 与 `feishu-register` 完全独立**——前者只做马帮处理（匹配/预报/上传/交运，零飞书调用），后者只做飞书登记（orderalllist 最近 500 条全状态订单 + 待处理订单两路合并，订单编号去重只登新增；`--no-pending` 可关闭合并）。只处理 `shop_map` 内店铺（其他员工的马帮店铺如 子龙2/子龙 不在本环境处理，由其在自己环境运行）；**已取消订单（WB 门户 portal/fbs/orders/canceled 逐店查询）排除在登记/预报/上传/交运之外**（取消单不出现在马帮列表，属防御性过滤，逐店查询失败时降级跳过）；**价格表缺库存 SKU 的订单（NO_SKU）只登记/匹配、不进批次/上传/交运**，执行时逐单打印并导出 `data/logs/缺库存SKU订单_*.csv`，需人工处理。
 - ⚠ 口径（2026-09-30 修正）：**上传 ≠ 预报成功**。上传后批次先留在「待预报」列表（行级 status=2 上传中），**只有出现在「预报成功(status=3)」列表才算完成**（旧逻辑按「离开待上传列表」负向推断，分不清成功/失败）。`mabang-process`/`mabang-forecast` 现轮询 `status=3`（兼容 `status=5` 历史归档）确认后才交运；**超时经 `status=99` 定性为「预报失败」的批次，其订单不交运（CSV 标记 `跳过-预报失败`）**，未完成批次标 `跳过-上传未完成`，两者飞书登记照旧；因批次列表无订单级明细，跳过粒度是**店铺级**（失败优先）。
+- 🔬 抓包实测补充（2026-09-30，`api/网络请求/马帮预报列表查询 待上传、上传中.har`）：① `uploadForecastBatch` 响应**只有** `{"success":true,"message":"批次已插入上传队列，请5-10分后查看预报结果"}` —— **无任务 id / 无进度字段**，故完成判定只能靠列表轮询；② 上传后 **≤0.3s 行级 `status` 即由 1 变 2（上传中）**；③ 「上传中」期间 `successNum` **恒为 0**（没有「部分完成」判据），成功后才 `successNum==total` 且 `handoverNumber` 回填；④ `getForecastConfig` 模板与批次无关，**上传前只取一次**（脚本已同步为循环外取一次，N 批省 N−1 次请求）；⑤ 四个统计（waitTotal/succesTotal/failTotal/historyTotal）为**全局值、不随 tab 变**，且 `waitTotal` 把 status=1（排队）与 status=2（上传中）一并计数；⑥ 轮询节奏已精简为「预扫描 status=1 一次 + 每轮仅 status=3 一次」，`status=5` 兜底限频（连续 3 轮未命中或过半超时各一次）。
 - 前置：`data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）为最新值；飞书鉴权走 `lark-cli` 用户身份。
 - 口径：只处理 shop_map 内店铺（马帮 子龙主2/子龙主2（1）/子龙主2（2）↔ 袁州1/2/3）；订单编号为飞书去重键，重复不登记；wb编号 = **下单店铺自己的码**（非映射表主店码）；库存SKU = **本地商品价格表「库存SKU」列（第 8 列）**，查不到一律留空（含只匹配未进预报/上传/交运流程的订单；不再回写马帮系统的匹配值，避免 `BCS-xxx-40-56` 这类非法值）；中文名一律以本地映射表为准（查不到留空但**仍登记**）。
 - 每步产出 CSV 报告（`data/logs/马帮订单匹配_* / 马帮预报批次_* / 飞书订单登记_*.csv`）；某步失败即中止后续。

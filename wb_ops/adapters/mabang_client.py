@@ -421,12 +421,23 @@ def get_forecast_config(cred, my_logistics_id="262534"):
 
 
 def upload_forecast_batch(cred, batch_nos):
-    """依次上传预报批次（aamz 域，异步队列，勾选自动发货 wb_automark=1）"""
+    """依次上传预报批次（aamz 域，异步队列，勾选自动发货 wb_automark=1）。
+
+    优化（2026-09-30 抓包实测）：getForecastConfig 模板与具体批次无关，**循环外只取一次**
+    （原实现每批取一次），循环内基于模板副本覆盖 batchNoInfo，避免跨批污染。
+    config 取不到（None）⇒ 整轮降级为旧批量方式（forecastLogistics=100，**失去自动发货**），
+    与原「form 为空即降级」语义等价。
+    上传响应仅 `{"success":true,"message":"批次已插入上传队列，请5-10分后查看预报结果"}`
+    —— **无任务 id / 无进度字段**，完成判定必须依赖 wait_upload_done 的列表轮询。
+    """
     msgs = []
+    template = get_forecast_config(cred)      # 只取一次（循环外）
+    automark = bool(template)
+    if not automark:
+        print("  [警告] 获取上传配置模板失败，本次降级为 forecastLogistics=100（不勾选自动发货）")
     for i, batch in enumerate(batch_nos):
-        form = get_forecast_config(cred) or {}
-        automark = bool(form)
-        if form:
+        if automark:
+            form = dict(template)             # 模板副本（浅拷贝足够：仅覆盖标量键）
             form["batchNoInfo"] = batch
             form["wb_automark"] = "1"
             form["is_set_forecast"] = "2"

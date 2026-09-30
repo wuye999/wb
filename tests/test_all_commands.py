@@ -628,8 +628,9 @@ class TestAllCommands(unittest.TestCase):
     def test_25b_mabang_process_upload_wait_unit(self):
         """离线单测：正向判据 —— 命中 status=3「预报成功」即完成 + 店铺映射提取。
 
-        第 1 轮：status=3 未命中、status=1 命中（上传中，status=2）；
-        第 2 轮：status=3 命中 ⇒ done=True。
+        预扫描 status=1 命中（上传中 status=2，建立映射）；
+        第 1 轮 status=3 未命中、第 2 轮 status=3 命中 ⇒ done=True。
+        并校验新节奏：status=1 仅预扫描一次（不再每轮查）。
         """
         from unittest import mock
         from wb_ops.services.order import mabang
@@ -638,9 +639,10 @@ class TestAllCommands(unittest.TestCase):
                "total": 3, "successNum": 3, "failNum": 0, "handoverNumber": "WB-GI-1"}
         up1 = {"batchNo": "B1", "shopId": "子龙主2", "status": 2,
                "total": 3, "successNum": 0, "failNum": 0}
-        rounds = {"n": 0}
+        rounds, calls = {"n": 0}, []
 
         def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            calls.append(status)
             if status == 3:
                 rounds["n"] += 1
                 if rounds["n"] >= 2:
@@ -659,6 +661,8 @@ class TestAllCommands(unittest.TestCase):
         self.assertEqual(res["store_of"].get("B1"), "子龙主2", "应记录 batchNo→shopId 映射")
         self.assertTrue(res["rows"].get("B1"), "应保留批次快照")
         self.assertEqual(res["failed"], set())
+        self.assertEqual(calls.count(1), 1, "status=1 应只在预扫描查一次（每轮仅查 status=3）")
+        self.assertGreaterEqual(calls.count(3), 1, "主循环应轮询 status=3")
 
     def test_25c_mabang_process_upload_wait_timeout_unit(self):
         """离线单测：轮询超时且批次仍在待预报 ⇒ done=False，返回未完成集合与映射。"""
@@ -713,14 +717,19 @@ class TestAllCommands(unittest.TestCase):
         self.assertEqual(res["store_of"].get("B7"), "子龙主2")
 
     def test_25e_mabang_process_history_success_unit(self):
-        """离线单测：批次已归档到 status=5「历史预报」亦算成功（防永不命中而空等超时）。"""
+        """离线单测：批次已归档到 status=5「历史预报」亦算成功（防永不命中而空等超时）。
+
+        同时校验 status=5 兜底的**限频**：连续 3 轮 status=3 未命中才触发一次。
+        """
         from unittest import mock
         from wb_ops.services.order import mabang
 
         row = {"batchNo": "B1", "shopId": "袁州3", "status": 3, "isHistoryStatus": "5",
                "total": 1, "successNum": 1, "failNum": 0}
+        calls = []
 
         def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            calls.append(status)
             return self._fb(found={"B1": row}, stats={"historyTotal": 1}) if status == 5 else self._fb()
 
         with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
@@ -730,6 +739,92 @@ class TestAllCommands(unittest.TestCase):
         self.assertTrue(res["done"])
         self.assertEqual(res["success"], {"B1"})
         self.assertEqual(res["store_of"].get("B1"), "袁州3")
+        self.assertEqual(calls.count(5), 1, "status=5 兜底应限频（3 轮未命中触发一次）")
+        self.assertEqual(calls.count(1), 1, "status=1 仅预扫描一次")
+
+    def test_25g_mabang_process_prescan_map_timeout_unit(self):
+        """离线单测：预扫描建立店铺映射；status=3 恒不命中 ⇒ 超时时映射仍齐全（避免整体跳过）。"""
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        row = {"batchNo": "B1", "shopId": "子龙主2", "status": 2,
+               "total": 3, "successNum": 0, "failNum": 0}
+        calls, clock = [], {"v": 0}
+
+        def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            calls.append(status)
+            return self._fb(found={"B1": row}, stats={"waitTotal": 1}) if status == 1 else self._fb()
+
+        def fake_time():
+            clock["v"] += 10
+            return clock["v"]
+
+        with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None), \
+                mock.patch.object(mabang.time, "time", fake_time):
+            res = mabang.wait_upload_done(None, ["B1"], timeout=5, interval=1)
+
+        self.assertFalse(res["done"])
+        self.assertEqual(res["still"], {"B1"})
+        self.assertEqual(res["store_of"].get("B1"), "子龙主2", "预扫描应建立店铺映射")
+        self.assertEqual(calls.count(1), 1, "映射已齐全 ⇒ 超时补查 status=1 应跳过")
+
+    def test_25h_mabang_process_fallback5_throttled_unit(self):
+        """离线单测：status=3 连续未命中时 status=5 兜底触发，且全程只触发一次（限频）。"""
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        calls = []
+        fake_time = type("T", (), {"t": 0})()
+
+        def _time():
+            fake_time.t += 1      # 每轮推进 1s：miss≥3 与「过半超时」同期触发 ⇒ 只查一次
+            return fake_time.t
+
+        def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            calls.append(status)
+            return self._fb(stats={"waitTotal": 1})     # 全部不命中
+
+        with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None), \
+                mock.patch.object(mabang.time, "time", _time):
+            res = mabang.wait_upload_done(None, ["B1"], timeout=8, interval=1)
+
+        self.assertFalse(res["done"])
+        self.assertEqual(calls.count(5), 1, "status=5 兜底应限频为一次")
+
+    def test_25i_mabang_forecast_config_cached_unit(self):
+        """离线单测：upload_forecast_batch 的 getForecastConfig 模板循环外只取一次。"""
+        from unittest import mock
+        from wb_ops.adapters import mabang_client as mc
+
+        cfg = {"forecastLogistics": "2369||262534", "smt_sfc_shipping_method": "3"}
+        posts = []
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"success": True, "message": "批次已插入上传队列，请5-10分后查看预报结果"}
+
+        def fake_post(url, params=None, headers=None, data=None, timeout=None):
+            posts.append(dict(data or {}))
+            return _Resp()
+
+        with mock.patch.object(mc, "get_forecast_config", return_value=cfg) as mcfg, \
+                mock.patch.object(mc, "aamz_headers", return_value={}), \
+                mock.patch.object(mc.requests, "post", side_effect=fake_post), \
+                mock.patch.object(mc.time, "sleep", lambda *_: None):
+            msgs = mc.upload_forecast_batch({}, ["A", "B", "C"])
+
+        self.assertEqual(mcfg.call_count, 1, "配置模板应只取一次（循环外）")
+        self.assertEqual([p["batchNoInfo"] for p in posts], ["A", "B", "C"])
+        self.assertTrue(all(p.get("wb_automark") == "1" and p.get("is_set_forecast") == "2"
+                            for p in posts), "应保持自动发货参数")
+        self.assertEqual(posts[0].get("forecastLogistics"), "2369||262534",
+                         "应使用模板字段（未走降级路径）")
+        self.assertTrue(msgs)
 
     def test_25f_mabang_process_find_batches_pagination_unit(self):
         """离线单测：find_batches 首批未命中时按 pageHtml 页数自动翻页并命中。"""

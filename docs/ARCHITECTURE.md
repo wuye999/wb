@@ -256,7 +256,7 @@ wb.py mabang-orders   ① VC→映射表中文名→价格表库存SKU → repla
 wb.py feishu-register ② 登记飞书「订单登记」（数据源=orderalllist 最近500 + 待处理订单两路合并，
                         订单编号去重；只匹配未进预报/上传/交运的单也登记；
                         库存SKU=本地商品价格表「库存SKU」列（查不到留空）；中文名=本地映射表；排除已取消订单）
-wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传 → 轮询确认批次出现在「预报成功(status=3)」列表（兼容 status=5 历史归档；超时经 status=99 定性失败，失败批次订单不交运）→ 物流交运（已选跳过）
+wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传（config 模板只取一次）→ 上传后 status=1 预扫描建店铺映射 + 每轮仅查 status=3 确认「预报成功」（兼容 status=5 归档；status=5 限频兜底；超时经 status=99 定性失败，失败批次订单不交运）→ 物流交运（已选跳过）
                       ④ 归属统计（店铺×中文名单量 CSV）
 wb.py feishu-vc-stats ⑤ 只读统计（可按需/编排调用）：读「订单登记」→ 按 `BCS编号`（= vendorCode）
                         跨店合并统计单数 → 降序输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）
