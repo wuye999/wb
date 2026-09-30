@@ -62,10 +62,10 @@ python wb.py appeals --days 5           # WB 平台投诉单：未处理(等待�
 python wb.py feishu-vc-stats             # 只读：飞书「订单登记」近7天按供应商代码(BCS编号)统计单数降序（跨店合并；--days/--date/--begin/--end/--shops/--by-prefix）
 
 # ▸ 每日新订单处理（2026-09-10 拆分为两个独立脚本；先 A 后 B 保证库存SKU 正确）
-python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→物流交运（零飞书依赖）
+python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→轮询等待上传结束→物流交运（零飞书依赖）
 python wb.py feishu-register                            # B 飞书登记：orderalllist 最近500条 + 待处理订单（两路合并）去重只登新增；只匹配未进预报/上传/交运的单也登记，库存SKU 取本地价格表（查不到留空）
 python wb.py feishu-register --scope all --date 2026-09-05 --apply   # 补录历史订单（指定日期/区间）
-python wb.py mabang-forecast --check                    # 上传 5-10 分钟后查预报结果
+python wb.py mabang-forecast --check                    # 查预报批次状态（「上传中」识别；上传结束的批次离开待上传列表）
 python wb.py mabang-stock-daily --apply                 # 「马帮库存登记表」日期列管理：默认只建今天列+更新全部已有日期列+总新增订单量（--begin/--date 显式时删旧列，--end 需同用）
 python wb.py mabang-stock-register --apply              # 全量重建「马帮库存登记表」（马帮全部库存SKU 库存/状态/附件列「图」；会清空各日列与总列）
 ```

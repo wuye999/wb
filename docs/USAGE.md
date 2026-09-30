@@ -409,7 +409,7 @@ python wb.py mabang-process --apply                       # 匹配/预报/交运
 python wb.py feishu-register                               # dry-run → 加 --apply 写入（URL 读配置）
 
 # 补充（排查/幂等确认）
-python wb.py mabang-forecast --check                      #    上传 5-10 分钟后查预报结果
+python wb.py mabang-forecast --check                      #    查预报批次状态（「上传中」识别；上传结束的批次会离开待上传列表）
 
 # 补录历史订单（全部状态，指定日期/区间）
 python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-05 --apply

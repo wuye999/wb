@@ -580,6 +580,56 @@ class TestAllCommands(unittest.TestCase):
         res = self._run_cmd(["mabang-process", "--days", "1"], expect_code=0)
         self.assertIn("步骤", res.stdout)
 
+    def test_25b_mabang_process_upload_wait_unit(self):
+        """离线单测：上传完成轮询（判据=批次离开 status=1 待上传列表）+ 店铺映射提取。
+
+        不连平台：mock 掉 get_forecast_list 与 time.sleep。
+        序列：① 批次仍在列表（status=2 上传中）→ ② 批次消失 ⇒ 判定完成。
+        """
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        seq = [
+            ([{"batchNo": "B1", "shopId": "子龙主2", "status": 2,
+               "total": 3, "successNum": 0, "failNum": 0}],
+             {"waitTotal": 1, "succesTotal": 0, "failTotal": 0, "historyTotal": 9}),
+            ([], {"waitTotal": 0, "succesTotal": 1, "failTotal": 0, "historyTotal": 10}),
+        ]
+        with mock.patch.object(mabang, "get_forecast_list", side_effect=seq), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None):
+            done, still, store_of, rows, stats = mabang.wait_upload_done(
+                None, ["B1"], timeout=60, interval=1)
+
+        self.assertTrue(done, "批次离开待上传列表后应判定为上传完成")
+        self.assertEqual(still, set())
+        self.assertEqual(store_of.get("B1"), "子龙主2", "应记录 batchNo→shopId 映射（局部跳过交运用）")
+        self.assertTrue(rows.get("B1"), "应保留最后一次批次快照")
+        self.assertEqual(stats.get("succesTotal"), 1)
+
+    def test_25c_mabang_process_upload_wait_timeout_unit(self):
+        """离线单测：轮询超时 → done=False，返回滞留批次与映射（供局部跳过交运）。"""
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        row = {"batchNo": "B9", "shopId": "子龙主2（2）", "status": 1,
+               "total": 2, "successNum": 0, "failNum": 0}
+        stats = {"waitTotal": 1, "succesTotal": 0, "failTotal": 0, "historyTotal": 3}
+        clock = {"v": 0}
+
+        def _fake_time():
+            clock["v"] += 10      # 每次读表前进 10s ⇒ 第一轮即越过 timeout
+            return clock["v"]
+
+        with mock.patch.object(mabang, "get_forecast_list", return_value=([row], stats)), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None), \
+                mock.patch.object(mabang.time, "time", _fake_time):
+            done, still, store_of, _rows, _stats = mabang.wait_upload_done(
+                None, ["B9"], timeout=5, interval=1)
+
+        self.assertFalse(done, "批次始终滞留时应判定超时")
+        self.assertEqual(still, {"B9"})
+        self.assertEqual(store_of.get("B9"), "子龙主2（2）")
+
     # ---------------- 8. 客服与监控 ----------------
     def test_26_questions(self):
         res = self._run_cmd(["questions", "--no-detail", "--shops", "9352"], expect_code=0)

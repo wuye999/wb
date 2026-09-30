@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 wb_ops 马帮订单处理一体脚本：
-匹配商品 → 生成预报单 → 依次上传预报单（自动发货）→ 物流交运 → 自动登记飞书
+匹配商品 → 生成预报单 → 依次上传预报单（自动发货）→ **轮询等待上传真正结束**（判据：批次离开
+status=1「待上传」列表）→ 物流交运 → 自动登记飞书
 过滤机制与既有流程一致：shop_map 店铺过滤 / 取消单排除（WB 门户）/
 NO_SKU（价格表缺库存SKU）只匹配不预报 / 幂等跳过（已预报、已交运）
+上传超时或接口异常时：仅对已确认上传完成的批次所属店铺交运，其余标记「跳过-上传未完成」不交运
+（飞书登记照常执行），稍后重跑本命令幂等补齐
 飞书登记：数据源=orderalllist 最近 500 条全状态订单 + 待处理订单（两路合并去重），按订单编号去重只登新增；
     只做了匹配、未进预报/上传/交运流程的订单（如 NO_SKU）也会登记（库存SKU 可留空，中文名以本地映射表为准）；--no-pending 可关闭该合并
 URL 从 credentials.json 的 feishu.base_url 读取（--url 可覆盖）
@@ -38,7 +41,9 @@ def run(args):
     print("#" * 72)
     ns_fc = SimpleNamespace(days=args.days, page_size=args.page_size,
                             apply=args.apply, check=False,
-                            wait=args.wait, upload_waiting=False)
+                            wait=args.wait, upload_waiting=False,
+                            upload_timeout=getattr(args, "upload_timeout", None),
+                            poll_interval=getattr(args, "poll_interval", None))
     code = mabang.run_forecast(ns_fc)
     if code:
         print("[中止] 预报/交运失败")

@@ -332,6 +332,108 @@ def collect_forecast_orders(args):
     return target, cred
 
 
+DEF_UPLOAD_TIMEOUT = 900      # 等待批次上传结束的最长秒数（--upload-timeout / 配置可覆盖）
+DEF_POLL_INTERVAL = 20        # 批次状态轮询间隔秒数（--poll-interval / 配置可覆盖）
+
+
+def _resolve_upload_timeout(args, cred):
+    """上传完成轮询超时（秒）：CLI --upload-timeout > cred.mabang.upload_timeout_seconds > 900"""
+    v = getattr(args, "upload_timeout", None)
+    if v is None:
+        v = cred.get("upload_timeout_seconds")
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else DEF_UPLOAD_TIMEOUT
+
+
+def _resolve_poll_interval(args, cred):
+    """批次状态轮询间隔（秒）：CLI --poll-interval > cred.mabang.upload_poll_interval > 20"""
+    v = getattr(args, "poll_interval", None)
+    if v is None:
+        v = cred.get("upload_poll_interval")
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else DEF_POLL_INTERVAL
+
+
+def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
+                     interval=DEF_POLL_INTERVAL, min_wait=0):
+    """③ 轮询等待本批预报单真正上传结束（替代原「盲等固定秒数」）。
+
+    完成判据：batch_nos 全部离开 status=1「待上传」列表（且已耗时 >= min_wait）。
+    依据：批次上传期间仍留在待上传列表中（行级 status 由 1→2「上传中」），
+    上传真正结束后才从列表消失（waitTotal 回落、succesTotal 上涨）。
+    查询异常容错重试，不中断；failTotal 相比上次上涨即告警。
+
+    Args:
+        cred: 马帮凭证（mabang 段）。
+        batch_nos: 本轮上传的批次号列表。
+        timeout: 最长等待秒数。
+        interval: 轮询间隔秒数。
+        min_wait: 额外最小等待秒数（原 --wait 语义）。
+
+    Returns:
+        (done, still, store_of, last_rows, last_stats)
+        done       True=全部批次已上传结束；False=超时仍有批次滞留
+        still      超时后仍滞留待上传列表的批次号集合
+        store_of   batchNo → shopId（店铺级映射，用于局部跳过交运）
+        last_rows  batchNo → 最后一次看到的批次行
+        last_stats 最后一次查询的统计 dict
+    """
+    batch_nos = [str(b) for b in (batch_nos or []) if b]
+    if not batch_nos:
+        return True, set(), {}, {}, {}
+    want = set(batch_nos)
+    store_of, last_rows, last_stats = {}, {}, {}
+    prev_fail = None
+    start = time.time()
+    still = set(want)
+    mw = f"，最小等待 {min_wait}s" if min_wait else ""
+    print(f"\n[③ 等待上传] 轮询 {len(batch_nos)} 个批次直至离开「待上传」列表"
+          f"（超时 {timeout}s，间隔 {interval}s{mw}）...")
+    while True:
+        try:
+            rows, stats = get_forecast_list(cred, status=1)
+            last_stats = stats or {}
+            present = [b for b in rows if str(b.get("batchNo")) in want]
+            for b in present:
+                bn = str(b.get("batchNo"))
+                store_of.setdefault(bn, b.get("shopId"))
+                last_rows[bn] = b
+            still = {str(b.get("batchNo")) for b in present}
+            fail_now = int(last_stats.get("failTotal") or 0)
+            if prev_fail is not None and fail_now > prev_fail:
+                print(f"  [⚠ 告警] failTotal 上涨：{prev_fail} → {fail_now}"
+                      f"（疑似批次上传失败，请留意）")
+            prev_fail = fail_now
+            elapsed = int(time.time() - start)
+            detail = "  ".join(
+                f"{b.get('batchNo')}[{b.get('shopId')}] status={b.get('status')} "
+                f"{b.get('successNum')}/{b.get('total')}(fail={b.get('failNum')})"
+                for b in present) or "（无）"
+            print(f"  [{elapsed}s/剩余 {max(0, timeout - elapsed)}s] 仍在待上传 "
+                  f"{len(present)}/{len(batch_nos)}: {detail}"
+                  f" | wait={last_stats.get('waitTotal')} succ={last_stats.get('succesTotal')}"
+                  f" fail={last_stats.get('failTotal')}")
+        except Exception as e:      # 接口异常：容错，继续轮询至超时
+            print(f"  [警告] 查询批次列表异常（{str(e)[:80]}），{interval}s 后重试 ...")
+        if not still and (time.time() - start) >= min_wait:
+            print(f"  [完成] 全部 {len(batch_nos)} 个批次已上传结束"
+                  f"（耗时 {int(time.time() - start)}s）")
+            return True, set(), store_of, last_rows, last_stats
+        if (time.time() - start) >= timeout:
+            break
+        time.sleep(interval)
+    print(f"  [⚠ 超时] {int(timeout)}s 内仍有 {len(still)} 个批次未完成："
+          f"{','.join(sorted(still)) if still else '（查询持续异常，状态未知）'}")
+    print("          对应订单将标记「跳过-上传未完成」不交运；稍后重跑本命令可幂等补齐。")
+    return False, still, store_of, last_rows, last_stats
+
+
 def run_forecast(args):
     common.ensure_utf8_stdout()
     cred_check = _mabang_cred()
@@ -341,11 +443,22 @@ def run_forecast(args):
         order_list, stats = get_forecast_list(cred_check)
         print(f"统计: 待上传 {stats.get('waitTotal')} / 成功 {stats.get('succesTotal')} / "
               f"失败 {stats.get('failTotal')} / 历史 {stats.get('historyTotal')}")
+        uploading = 0
         for b in order_list:
-            print(f"  {b['batchNo']} | {b.get('shopId')} | 状态={b.get('status')} "
-                  f"订单数={b.get('total')} 成功={b.get('successNum')} 失败={b.get('failNum')} "
+            st = int(b.get("status") or 0)
+            tag = {1: "待上传", 2: "上传中"}.get(st, f"状态{st}")
+            if st == 2:
+                uploading += 1
+            fl = int(b.get("failNum") or 0)
+            print(f"  {b['batchNo']} | {b.get('shopId')} | {tag}(status={st}) "
+                  f"订单数={b.get('total')} 成功={b.get('successNum')} 失败={fl} "
                   f"创建={b.get('createTime')}")
-        print("\n（上传为异步处理，5-10 分钟后可重跑 --check 确认预报结果）")
+            if fl:
+                print(f"     [⚠ 告警] 该批次失败 {fl} 单，请核查")
+        if uploading:
+            print(f"\n（{uploading} 个批次处于「上传中」：待其离开「待上传」列表即上传完成）")
+        else:
+            print("\n（当前无「上传中」批次；刚上传的批次会先出现在待上传列表中，稍后重跑 --check 复核）")
         return 0
 
     target, cred = collect_forecast_orders(args)
@@ -385,9 +498,15 @@ def run_forecast(args):
         for r in target:
             r["_step_create"] = "跳过-已预报"
 
+    up_timeout = _resolve_upload_timeout(args, cred)
+    poll_iv = _resolve_poll_interval(args, cred)
+    min_wait = int(getattr(args, "wait", 0) or 0)
+    uploaded_nos = []          # 本轮流经上传的批次号（新批次或补传批次）
+
     if batch_nos_new:
         up_msg = upload_forecast_batch(cred, batch_nos_new)
         print(f"[② 上传批次] {len(batch_nos_new)} 个新批次: {up_msg}")
+        uploaded_nos = [str(b) for b in batch_nos_new]
     elif getattr(args, "upload_waiting", False):
         waiting, _stats = get_forecast_list(cred, status=1)
         wb_nos = [b["batchNo"] for b in waiting]
@@ -396,6 +515,7 @@ def run_forecast(args):
             print(f"[② 上传批次] 补传待上传列表 {len(wb_nos)} 个批次: {up_msg}")
             for r in target:
                 r["_step_upload"] = r["_step_upload"] or "补传历史批次"
+            uploaded_nos = [str(b) for b in wb_nos]
         else:
             print("[② 上传批次] 待上传列表为空，无需补传")
     else:
@@ -403,20 +523,34 @@ def run_forecast(args):
         for r in target:
             r["_step_upload"] = r["_step_upload"] or "跳过-无新批次"
 
-    wait_s = int(getattr(args, "wait", 0) or cred.get("handover_wait_seconds") or 150)
+    # ③ 轮询等待上传真正结束（判据：批次离开 status=1「待上传」列表）
     to_handover = [r for r in target if not r["channel_selected"]]
-    if batch_nos_new and to_handover:
-        print(f"\n[③ 等待] 系统信息更新 {wait_s}s（约 2-3 分钟）...")
-        for left in range(wait_s, 0, -30):
-            print(f"  剩余 {left}s ...")
-            time.sleep(min(left, 30))
-    elif to_handover:
-        print(f"\n[③ 等待] 本次未生成新批次，仍等待 {wait_s}s 后尝试交运（--wait 可调）...")
-        for left in range(wait_s, 0, -30):
+    pending_stores, skipped_upload, up_rows = set(), [], {}
+    if uploaded_nos:
+        done, still, store_of, up_rows, _fstats = wait_upload_done(
+            cred, uploaded_nos, timeout=up_timeout, interval=poll_iv, min_wait=min_wait)
+        if not done and to_handover:
+            pending_stores = {store_of.get(b) for b in still if store_of.get(b)}
+            if pending_stores:      # 店铺级局部跳过：未完成批次所属店铺本轮不交运
+                need_skip = [r for r in to_handover if r["shop"] in pending_stores]
+            else:                   # 映射不可得（接口持续异常）⇒ 保守整体跳过
+                need_skip = list(to_handover)
+                print("  [警告] 无法定位未完成批次所属店铺，本轮交运整体跳过（保守策略）")
+            for r in need_skip:
+                r["_step_handover"] = "跳过-上传未完成"
+            skipped_upload = need_skip
+            to_handover = [r for r in to_handover if r not in need_skip]
+    elif min_wait > 0:
+        print(f"\n[③ 等待] 本次未生成新批次，额外等待 {min_wait}s（--wait）...")
+        for left in range(min_wait, 0, -30):
             print(f"  剩余 {left}s ...")
             time.sleep(min(left, 30))
     else:
-        print("\n[③ 等待] 所有订单交运方式已选择，跳过")
+        print("\n[③ 等待] 本次未生成新批次，直接尝试交运（不轮询）")
+
+    if skipped_upload:
+        print(f"[⚠ 告警] {len(skipped_upload)} 单因「上传未完成」跳过交运"
+              f"（标记=跳过-上传未完成）；稍后重跑 mabang-process 幂等补交运。")
 
     if not to_handover:
         print("[④ 交运] 全部订单已选择交运方式，跳过")
@@ -444,18 +578,36 @@ def run_forecast(args):
                 r["_step_handover"] = f"错误:{str(e)[:40]}"
 
     batch_rows = []
-    try:
-        order_list, _stats = get_forecast_list(cred, status=1)
-        for b in order_list:
-            if b["batchNo"] in batch_nos_new:
-                batch_rows.append({"batchNo": b["batchNo"], "shop": b.get("shopId"),
-                                   "total": b.get("total"), "状态": f"status={b.get('status')}"})
-    except Exception as e:
-        print(f"  [警告] 回读批次清单失败: {e}")
+    for bn in uploaded_nos:      # 优先用轮询快照（批次离开待上传列表后将查不到）
+        b = (up_rows or {}).get(bn)
+        if b:
+            shop, total = b.get("shopId"), b.get("total")
+            status_txt = (f"status={b.get('status')} 成功={b.get('successNum')}/{b.get('total')} "
+                          f"失败={b.get('failNum')}")
+        else:
+            shop, total = store_of.get(bn, ""), ""
+            status_txt = "已上传结束（离开待上传列表）"
+        batch_rows.append({"batchNo": bn, "shop": shop, "total": total,
+                           "状态": status_txt, "note": ""})
+    if not batch_rows and batch_nos_new:
+        try:
+            order_list, _s2 = get_forecast_list(cred, status=1)
+            for b in order_list:
+                if b["batchNo"] in batch_nos_new:
+                    batch_rows.append({"batchNo": b["batchNo"], "shop": b.get("shopId"),
+                                       "total": b.get("total"),
+                                       "状态": f"status={b.get('status')}"})
+        except Exception as e:
+            print(f"  [警告] 回读批次清单失败: {e}")
 
     csv_path = write_forecast_csv(target, batch_rows)
+    n_ok = sum(1 for r in target if r["_step_handover"] == "交运成功")
+    n_skip_up = sum(1 for r in target if r["_step_handover"] == "跳过-上传未完成")
+    skip_kw = f"，跳过-上传未完成 {n_skip_up}" if n_skip_up else ""
     print(f"\n[汇总] 订单 {len(target)} 单（生成 {len(to_create)}/{len(target)}，"
-          f"交运 {sum(1 for r in target if r['_step_handover'] == '交运成功')}）"
-          f"| 批次 {len(batch_nos_new)} 个 | 明细: {csv_path}")
-    print("（上传为异步处理，5-10 分钟后运行 wb.py mabang-forecast --check 确认预报结果）")
+          f"交运成功 {n_ok}{skip_kw}）| 批次 {len(batch_nos_new)} 个 | 明细: {csv_path}")
+    if n_skip_up:
+        print("[⚠ 告警] 存在上传未完成的批次：对应订单未交运；稍后重跑 mabang-process 幂等补齐。")
+    else:
+        print("（本次已轮询确认批次上传结束；如需核对可运行 wb.py mabang-forecast --check）")
     return 0
