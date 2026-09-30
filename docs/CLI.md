@@ -43,7 +43,7 @@
 | `stock` | 改库存（**默认 WB 原生在线接口**，2026-09-24 起；dry-run 默认，归零须 --yes） | `--amount N`（默认 0）/ `--chunk N`（默认 500，≤1000）/ `--interval S` / `--max-pages N` / `--resolve snapshot\|live` |
 | `stock-wb` | [别名] 与 `stock` 相同（WB 原生在线接口，显式点名通道） | 同 `stock` |
 | `stock-bcs` | [备选] 改库存走 BCS 接口（`stock/batchSetByChrtIdsBatch`，WB 原生不可用时的兜底） | `--amount N`（默认 0） |
-| `trash` | 下架（不可逆，先清库存再移回收站） | 无 |
+| `trash` | 下架（不可逆；先清库存[WB 原生 portal stocks，随 stock 命令通道]再移回收站[BCS]） | 无 |
 | `dimension` | 批量改尺寸：默认读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；也可用 `--dims "长*宽*高/毛重"` 给选定的 vc 统一设自定义尺寸（有自定义用之、无则回退价格表）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--dims` / `--apply` / `--sync` |
 | `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次支持 50 个商品批量推送**，无需等待 WB 反爬抓取；包装尺寸优先读取价格映射表（绝不使用快照尺寸），商品价格表/card.json 兜底；前缀码智能匹配（中文名命中商品价格表前缀优先，原vc提取次之，随机兜底，均带 `BCS-` 前缀）；严格校验映射表「WB商品码」列（无商品码跳过）；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 | `import-shelve` | 他人映射表导入上架：他人有我方无的商品上架到我的店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次 50 个商品批量推送**；**严格基于他人表「WB商品码」列比对差集与拉取商品**（绝不从 vendorCode 提取末尾数字，无商品码跳过）；前缀码我方价格表命中优先（均带 `BCS-` 前缀）；价格 = floor(双倍售价)；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |

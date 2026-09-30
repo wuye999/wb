@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 wb_ops 批量操作执行器 (ops_executor)
-负责分批调用 BCS 接口提交改价、改库存、下架操作，自动处理编码转换、日志记录与审核触发。
+负责分批提交改价、改库存、下架操作（BCS 接口 + trash 清库存走 WB 原生 portal stocks），
+自动处理编码转换、日志记录与审核触发。
 """
 import csv
 import glob
@@ -205,24 +206,38 @@ def run_apply(plans, action, auto_review=False):
                               for it in p["items"] if it.get("orig_zero"))
         elif action == "trash":
             by_wh = {}
-            spec_total = 0
             for it in p["items"]:
                 for chrt, wh in it.get("stock_specs", []):
                     by_wh.setdefault(wh, []).append(chrt)
+            spec_total = 0
             clear_fail = []
-            for wh, chrt_list in sorted(by_wh.items()):
-                for i in range(0, len(chrt_list), STOCK_CHUNK):
-                    body = {"shopId": sid,
-                            "warehouses": [{"warehouseId": wh,
-                                            "stockItems": [{"chrtId": c, "amount": 0}
-                                                           for c in chrt_list[i:i + STOCK_CHUNK]]}]}
-                    ok_flag, _msg = _post(body, f"清库存 仓库{wh} 批{i // STOCK_CHUNK + 1}")
-                    if ok_flag:
-                        spec_total += len(chrt_list[i:i + STOCK_CHUNK])
-                    else:
-                        clear_fail.extend(chrt_list[i:i + STOCK_CHUNK])
             if by_wh:
-                print(f"  [清库存] 下架前已提交 {spec_total} 个规格库存归零" +
+                # 清库存跟随 stock 命令默认通道：WB 原生 portal stocks（2026-09-29 起，
+                # 替代 BCS stock/batchSetByChrtIdsBatch）。复用 stock_wb.set_stock 底层门面；
+                # 懒加载：stock_wb→ops→本模块，顶层 import 会循环依赖。
+                from . import stock_wb as stock_wb_mod
+                shop = credentials.get().wb_shop(sid)
+                if not shop:
+                    print(f"  {RED}✗{RESET} 清库存跳过：店{sid} 无 WB 凭证"
+                          f"（{sum(len(v) for v in by_wh.values())} 个规格计入清库存失败）")
+                    clear_fail = [c for lst in by_wh.values() for c in lst]
+                else:
+                    wh_items = sorted(by_wh.items())
+                    for wi, (wh, chrt_list) in enumerate(wh_items):
+                        try:
+                            r = stock_wb_mod.set_stock(shop, wh,
+                                                       [{"chrtId": c, "amount": 0} for c in chrt_list])
+                        except common.CookieExpiredError as e:
+                            print(f"  {RED}✗{RESET} 清库存中止（WB cookie 失效）：{e}")
+                            for _wh2, _cl in wh_items[wi:]:
+                                clear_fail.extend(_cl)
+                            break
+                        ok_n = sum(1 for d in r["details"] if d["ok"])
+                        spec_total += ok_n
+                        clear_fail.extend(d["chrtId"] for d in r["details"] if not d["ok"])
+                        print(f"  ✓ 清库存(WB原生) 仓库{wh}：成功 {ok_n} · 失败 {len(chrt_list) - ok_n}")
+            if by_wh:
+                print(f"  [清库存] 下架前已提交 {spec_total} 个规格库存归零（WB 原生 portal stocks）" +
                       (f"，{len(clear_fail)} 个失败" if clear_fail else ""))
             nms = p["nmIds"]
             for i in range(0, len(nms), PRICE_CHUNK):
