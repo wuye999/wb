@@ -26,6 +26,30 @@ CHANNEL_OBJ_RE = re.compile(
     r'\{"id":"(\d+)","source":"\d+","logisticsId":"(\d+)","myLogisticsId":"(\d+)",'
     r'"logisticsChannelName":"((?:\\u[0-9a-fA-F]{4})+)"')
 
+# 预报批次列表 pageHtml 解析（实测样例：'每页50条 -请选择-50100200500 共199条 当前显示第1-50条 1/4页 1234 跳转'）
+FORECAST_PAGE_TOTAL_RE = re.compile(r"共\s*(\d+)\s*条")
+FORECAST_PAGE_RANGE_RE = re.compile(r"第\s*(\d+)\s*-\s*(\d+)\s*条")
+FORECAST_PAGE_NO_RE = re.compile(r"(\d+)\s*/\s*(\d+)\s*页")
+
+
+def parse_forecast_page(page_html):
+    """解析预报批次列表的 pageHtml → {'pageTotal','pageFrom','pageTo','pageCur','pageCount'}。
+
+    pageHtml 是带标签的 HTML（数字常被 <span> 等分隔），先剥标签再按空白归一化匹配；
+    形如 '<b>共 200 条 当前显示第 1-50 条 1/4 页</b>'。空列表时 pageHtml 为空串 ⇒ 全 0。
+    用于分页终止与「共 N 条」展示。
+    """
+    html = re.sub(r"<[^>]+>", " ", page_html or "")
+    text = " ".join(html.split())
+    m = FORECAST_PAGE_TOTAL_RE.search(text)
+    total = int(m.group(1)) if m else 0
+    m = FORECAST_PAGE_RANGE_RE.search(text)
+    begin, end = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    m = FORECAST_PAGE_NO_RE.search(text)
+    cur, pages = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    return {"pageTotal": total, "pageFrom": begin, "pageTo": end,
+            "pageCur": cur, "pageCount": pages}
+
 
 def get_mabang_cred():
     """读 credentials.json 的 mabang 段。"""
@@ -360,11 +384,20 @@ def batch_create_forecast(cred, order_ids, logistics, channel):
     return batch_nos, d.get("message") or ""
 
 
-def get_forecast_list(cred, status=1, rows_per_page=50):
-    """待上传/历史预报批次列表（aamz 域）；返回 (orderList, 统计dict)"""
+def get_forecast_list(cred, status=1, rows_per_page=200, page=1):
+    """预报批次列表（aamz 域）；返回 (orderList, stats)。
+
+    tab → status：待预报=1 / 预报成功=3 / 预报失败=99 / 历史预报=5（2026-09-30 抓包实证）。
+    stats = 全局四统计（waitTotal/succesTotal/failTotal/historyTotal，**不随 tab 变**）
+            + pageHtml 解析键（pageTotal/pageFrom/pageTo/pageCur/pageCount）+ pageHtml 原文。
+    批次行关键字段：batchNo(揽货批次号)/shopId(=shop_map 键)/status(1待上传 2上传中 3成功 99失败)
+                    /isHistoryStatus(当前 tab)/total/successNum/failNum/handoverNumber(成功后回填)
+                    /createTime/employeeName/forecastLogisticsName(上传货代)/orderWeight(批次重量)。
+    注意：orderList **无订单级明细**（无 orderIds/子列表）⇒ 映射只能到批次级 + 店铺级。
+    """
     form = {"searchType": "1", "createoperType": "", "printstatus": "", "cancelStatus": "",
             "numberId": "", "datepicker-from": "", "datepicker-to": "", "status": str(status),
-            "uploadlogisticschannel": "", "type": "1", "page": "1",
+            "uploadlogisticschannel": "", "type": "1", "page": str(page),
             "rowsPerPage": str(rows_per_page)}
     r = requests.post(AAMZ_BASE, params={"mod": "uploadforecastorderv2.getForecastOrderList"},
                       headers=aamz_headers(cred), data=form, timeout=60)
@@ -373,6 +406,8 @@ def get_forecast_list(cred, status=1, rows_per_page=50):
     if not d.get("success"):
         raise RuntimeError(f"getForecastOrderList 返回失败: {d.get('message')}")
     stats = {k: d.get(k) for k in ("waitTotal", "succesTotal", "failTotal", "historyTotal")}
+    stats.update(parse_forecast_page(d.get("pageHtml")))
+    stats["pageHtml"] = d.get("pageHtml") or ""
     return d.get("orderList") or [], stats
 
 

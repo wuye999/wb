@@ -574,61 +574,183 @@ class TestAllCommands(unittest.TestCase):
 
     def test_24_mabang_forecast_check(self):
         res = self._run_cmd(["mabang-forecast", "--check"], expect_code=0)
-        self.assertIn("预报批次列表", res.stdout)
+        self.assertIn("预报批次", res.stdout)
+
+    def test_24b_mabang_forecast_check_overview_unit(self):
+        """离线单测：--check 四 tab 概览（mock get_forecast_list，按 status 分派）。
+
+        tab → status：1 待预报 / 3 预报成功 / 99 预报失败 / 5 历史预报。
+        """
+        import contextlib
+        import io as _io
+        from types import SimpleNamespace
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        def fake_list(cred, status=1, rows_per_page=200, page=1, **kw):
+            rows = {"1": [], "3": [{"batchNo": "B3", "shopId": "主号7", "status": 3, "total": 1,
+                                    "successNum": 1, "failNum": 0, "handoverNumber": "WB-GI-1",
+                                    "createTime": "2026-09-30 09:52:14",
+                                    "employeeName": "1503", "forecastLogisticsName": "WB线上",
+                                    "orderWeight": "1.0000"}],
+                    "99": [], "5": [{"batchNo": "B5", "shopId": "子龙", "status": 3, "total": 2,
+                                     "successNum": 2, "failNum": 0}]}[str(status)]
+            stats = {"waitTotal": 0, "succesTotal": 1, "failTotal": 0, "historyTotal": 1,
+                     "pageTotal": len(rows), "pageFrom": 1 if rows else 0,
+                     "pageTo": len(rows), "pageCur": 1 if rows else 0,
+                     "pageCount": 1 if rows else 0}
+            return rows, stats
+
+        args = SimpleNamespace(check=True, status=None, pages=1)
+        buf = _io.StringIO()
+        with mock.patch.object(mabang, "get_forecast_list", side_effect=fake_list), \
+                mock.patch.object(mabang, "_mabang_cred", return_value={}), \
+                contextlib.redirect_stdout(buf):
+            code = mabang.run_forecast(args)
+        out = buf.getvalue()
+        self.assertEqual(code, 0)
+        for label in ("待预报", "预报成功", "预报失败", "历史预报"):
+            self.assertIn(label, out, f"四 tab 概览应包含「{label}」段")
+        self.assertIn("B3", out)
 
     def test_25_mabang_process_dry_run(self):
         res = self._run_cmd(["mabang-process", "--days", "1"], expect_code=0)
         self.assertIn("步骤", res.stdout)
 
-    def test_25b_mabang_process_upload_wait_unit(self):
-        """离线单测：上传完成轮询（判据=批次离开 status=1 待上传列表）+ 店铺映射提取。
+    @staticmethod
+    def _fb(found=None, stats=None, missing=None, pages=1):
+        """构造 find_batches 返回值（离线单测用）。"""
+        found = found or {}
+        return {"found": found, "missing": set(missing or []),
+                "all_found": not (missing or []), "pages_fetched": pages,
+                "stats": stats or {}}
 
-        不连平台：mock 掉 get_forecast_list 与 time.sleep。
-        序列：① 批次仍在列表（status=2 上传中）→ ② 批次消失 ⇒ 判定完成。
+    def test_25b_mabang_process_upload_wait_unit(self):
+        """离线单测：正向判据 —— 命中 status=3「预报成功」即完成 + 店铺映射提取。
+
+        第 1 轮：status=3 未命中、status=1 命中（上传中，status=2）；
+        第 2 轮：status=3 命中 ⇒ done=True。
         """
         from unittest import mock
         from wb_ops.services.order import mabang
 
-        seq = [
-            ([{"batchNo": "B1", "shopId": "子龙主2", "status": 2,
-               "total": 3, "successNum": 0, "failNum": 0}],
-             {"waitTotal": 1, "succesTotal": 0, "failTotal": 0, "historyTotal": 9}),
-            ([], {"waitTotal": 0, "succesTotal": 1, "failTotal": 0, "historyTotal": 10}),
-        ]
-        with mock.patch.object(mabang, "get_forecast_list", side_effect=seq), \
-                mock.patch.object(mabang.time, "sleep", lambda *_: None):
-            done, still, store_of, rows, stats = mabang.wait_upload_done(
-                None, ["B1"], timeout=60, interval=1)
+        row = {"batchNo": "B1", "shopId": "子龙主2", "status": 3,
+               "total": 3, "successNum": 3, "failNum": 0, "handoverNumber": "WB-GI-1"}
+        up1 = {"batchNo": "B1", "shopId": "子龙主2", "status": 2,
+               "total": 3, "successNum": 0, "failNum": 0}
+        rounds = {"n": 0}
 
-        self.assertTrue(done, "批次离开待上传列表后应判定为上传完成")
-        self.assertEqual(still, set())
-        self.assertEqual(store_of.get("B1"), "子龙主2", "应记录 batchNo→shopId 映射（局部跳过交运用）")
-        self.assertTrue(rows.get("B1"), "应保留最后一次批次快照")
-        self.assertEqual(stats.get("succesTotal"), 1)
+        def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            if status == 3:
+                rounds["n"] += 1
+                if rounds["n"] >= 2:
+                    return self._fb(found={"B1": row}, stats={"succesTotal": 1})
+                return self._fb(stats={"succesTotal": 0, "waitTotal": 1})
+            if status == 1:
+                return self._fb(found={"B1": up1}, stats={"waitTotal": 1})
+            return self._fb()
+
+        with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None):
+            res = mabang.wait_upload_done(None, ["B1"], timeout=60, interval=1)
+
+        self.assertTrue(res["done"], "命中 status=3 后应判定上传成功完成")
+        self.assertEqual(res["success"], {"B1"})
+        self.assertEqual(res["store_of"].get("B1"), "子龙主2", "应记录 batchNo→shopId 映射")
+        self.assertTrue(res["rows"].get("B1"), "应保留批次快照")
+        self.assertEqual(res["failed"], set())
 
     def test_25c_mabang_process_upload_wait_timeout_unit(self):
-        """离线单测：轮询超时 → done=False，返回滞留批次与映射（供局部跳过交运）。"""
+        """离线单测：轮询超时且批次仍在待预报 ⇒ done=False，返回未完成集合与映射。"""
         from unittest import mock
         from wb_ops.services.order import mabang
 
         row = {"batchNo": "B9", "shopId": "子龙主2（2）", "status": 1,
                "total": 2, "successNum": 0, "failNum": 0}
-        stats = {"waitTotal": 1, "succesTotal": 0, "failTotal": 0, "historyTotal": 3}
         clock = {"v": 0}
 
-        def _fake_time():
+        def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            return self._fb(found={"B9": row}, stats={"waitTotal": 1}) if status == 1 else self._fb()
+
+        def fake_time():
             clock["v"] += 10      # 每次读表前进 10s ⇒ 第一轮即越过 timeout
             return clock["v"]
 
-        with mock.patch.object(mabang, "get_forecast_list", return_value=([row], stats)), \
+        with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
                 mock.patch.object(mabang.time, "sleep", lambda *_: None), \
-                mock.patch.object(mabang.time, "time", _fake_time):
-            done, still, store_of, _rows, _stats = mabang.wait_upload_done(
-                None, ["B9"], timeout=5, interval=1)
+                mock.patch.object(mabang.time, "time", fake_time):
+            res = mabang.wait_upload_done(None, ["B9"], timeout=5, interval=1)
 
-        self.assertFalse(done, "批次始终滞留时应判定超时")
-        self.assertEqual(still, {"B9"})
-        self.assertEqual(store_of.get("B9"), "子龙主2（2）")
+        self.assertFalse(res["done"], "批次始终未成功时应判定超时")
+        self.assertEqual(res["still"], {"B9"})
+        self.assertEqual(res["failed"], set())
+        self.assertEqual(res["store_of"].get("B9"), "子龙主2（2）")
+
+    def test_25d_mabang_process_forecast_failed_unit(self):
+        """离线单测：超时后经 status=99 定性为「预报失败」⇒ failed 集合（不交运）。"""
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        fr = {"batchNo": "B7", "shopId": "子龙主2", "status": 99,
+              "total": 2, "successNum": 0, "failNum": 2}
+        clock = {"v": 0}
+
+        def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            return self._fb(found={"B7": fr}, stats={"failTotal": 1}) if status == 99 else self._fb()
+
+        def fake_time():
+            clock["v"] += 10
+            return clock["v"]
+
+        with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None), \
+                mock.patch.object(mabang.time, "time", fake_time):
+            res = mabang.wait_upload_done(None, ["B7"], timeout=5, interval=1)
+
+        self.assertFalse(res["done"])
+        self.assertEqual(res["failed"], {"B7"})
+        self.assertEqual(res["still"], set(), "定性命中失败的批次不应再计入未完成")
+        self.assertEqual(res["store_of"].get("B7"), "子龙主2")
+
+    def test_25e_mabang_process_history_success_unit(self):
+        """离线单测：批次已归档到 status=5「历史预报」亦算成功（防永不命中而空等超时）。"""
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        row = {"batchNo": "B1", "shopId": "袁州3", "status": 3, "isHistoryStatus": "5",
+               "total": 1, "successNum": 1, "failNum": 0}
+
+        def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            return self._fb(found={"B1": row}, stats={"historyTotal": 1}) if status == 5 else self._fb()
+
+        with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None):
+            res = mabang.wait_upload_done(None, ["B1"], timeout=60, interval=1)
+
+        self.assertTrue(res["done"])
+        self.assertEqual(res["success"], {"B1"})
+        self.assertEqual(res["store_of"].get("B1"), "袁州3")
+
+    def test_25f_mabang_process_find_batches_pagination_unit(self):
+        """离线单测：find_batches 首批未命中时按 pageHtml 页数自动翻页并命中。"""
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        def side(cred, status=1, rows_per_page=200, page=1, **kw):
+            if status != 3:
+                return ([], {})
+            if page == 1:
+                return ([{"batchNo": f"X{i}"} for i in range(200)],
+                        {"pageTotal": 201, "pageCount": 2, "pageCur": 1})
+            return ([{"batchNo": "ZZ", "shopId": "主号7", "status": 3}],
+                    {"pageTotal": 201, "pageCount": 2, "pageCur": 2})
+
+        with mock.patch.object(mabang, "get_forecast_list", side_effect=side):
+            res = mabang.find_batches(None, ["ZZ"], status=3, rows_per_page=200)
+
+        self.assertTrue(res["all_found"], "翻页后应命中后段批次")
+        self.assertEqual(res["pages_fetched"], 2)
+        self.assertEqual(res["found"]["ZZ"]["shopId"], "主号7")
 
     # ---------------- 8. 客服与监控 ----------------
     def test_26_questions(self):

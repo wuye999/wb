@@ -279,7 +279,10 @@ def build_parser():
     p.add_argument("--days", type=int, default=30, help="查询最近 N 天订单（默认 30）")
     p.add_argument("--page-size", type=int, default=100, help="订单列表每页条数")
     p.add_argument("--apply", action="store_true", help="全链路执行：生成批次→上传→轮询等待上传结束→设置交运方式（各步幂等跳过已完成项）")
-    p.add_argument("--check", action="store_true", help="只查询预报批次列表与上传结果统计（含「上传中」识别）")
+    p.add_argument("--check", action="store_true", help="只查询预报批次（默认四 tab 概览：待预报/预报成功/预报失败/历史预报）")
+    p.add_argument("--status", type=int, choices=[1, 3, 99, 5], default=None,
+                   help="--check 只看单个 tab：1=待预报 / 3=预报成功 / 99=预报失败 / 5=历史预报（默认四 tab 概览）")
+    p.add_argument("--pages", type=int, default=1, help="--check --status 时最多打印页数（默认 1；0=翻到底）")
     p.add_argument("--wait", type=int, default=0,
                    help="轮询之外额外的最小等待秒数（默认 0；旧「盲等固定秒数」语义已废弃）")
     p.add_argument("--upload-timeout", type=int, default=None,

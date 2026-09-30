@@ -402,20 +402,23 @@ python wb.py orders --no-sync                         # 跳过同步，直接查
 > **两个独立脚本**：`mabang-process`（马帮处理，零飞书依赖）与 `feishu-register`（飞书登记，零马帮处理逻辑）。日常先跑 A 再跑 B，即可保证登记的库存SKU 为匹配后的正确值。
 
 ```bash
-# A. 马帮订单处理一体（零飞书依赖）：匹配商品→预报单生成→依次上传（自动发货）→物流交运
-python wb.py mabang-process --apply                       # 匹配/预报/交运 + 末尾自动登记飞书（URL 读配置）
+# A. 马帮订单处理一体（零飞书依赖）：匹配商品→预报单生成→依次上传（自动发货）→轮询确认预报成功→物流交运
+python wb.py mabang-process --apply                       # 匹配/预报/上传/轮询等待/交运 + 末尾自动登记飞书（URL 读配置）
 
 # B. 飞书登记（独立）：拉取马帮最近 500 条全状态订单，按订单编号去重只登记新增
 python wb.py feishu-register                               # dry-run → 加 --apply 写入（URL 读配置）
 
 # 补充（排查/幂等确认）
-python wb.py mabang-forecast --check                      #    查预报批次状态（「上传中」识别；上传结束的批次会离开待上传列表）
+python wb.py mabang-forecast --check                      #    四 tab 概览：待预报1/预报成功3/预报失败99/历史预报5
+python wb.py mabang-forecast --check --status 3 --pages 1  #    只看「预报成功」明细（揽货批次号/批次状态/重量/货代/创建人/回传号）
+python wb.py mabang-forecast --check --status 99          #    只看「预报失败」明细（有失败批次时核查用）
 
 # 补录历史订单（全部状态，指定日期/区间）
 python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-05 --apply
 ```
 
 - ⚠ 口径（2026-09-10 拆分）：**`mabang-process` 与 `feishu-register` 完全独立**——前者只做马帮处理（匹配/预报/上传/交运，零飞书调用），后者只做飞书登记（orderalllist 最近 500 条全状态订单 + 待处理订单两路合并，订单编号去重只登新增；`--no-pending` 可关闭合并）。只处理 `shop_map` 内店铺（其他员工的马帮店铺如 子龙2/子龙 不在本环境处理，由其在自己环境运行）；**已取消订单（WB 门户 portal/fbs/orders/canceled 逐店查询）排除在登记/预报/上传/交运之外**（取消单不出现在马帮列表，属防御性过滤，逐店查询失败时降级跳过）；**价格表缺库存 SKU 的订单（NO_SKU）只登记/匹配、不进批次/上传/交运**，执行时逐单打印并导出 `data/logs/缺库存SKU订单_*.csv`，需人工处理。
+- ⚠ 口径（2026-09-30 修正）：**上传 ≠ 预报成功**。上传后批次先留在「待预报」列表（行级 status=2 上传中），**只有出现在「预报成功(status=3)」列表才算完成**（旧逻辑按「离开待上传列表」负向推断，分不清成功/失败）。`mabang-process`/`mabang-forecast` 现轮询 `status=3`（兼容 `status=5` 历史归档）确认后才交运；**超时经 `status=99` 定性为「预报失败」的批次，其订单不交运（CSV 标记 `跳过-预报失败`）**，未完成批次标 `跳过-上传未完成`，两者飞书登记照旧；因批次列表无订单级明细，跳过粒度是**店铺级**（失败优先）。
 - 前置：`data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）为最新值；飞书鉴权走 `lark-cli` 用户身份。
 - 口径：只处理 shop_map 内店铺（马帮 子龙主2/子龙主2（1）/子龙主2（2）↔ 袁州1/2/3）；订单编号为飞书去重键，重复不登记；wb编号 = **下单店铺自己的码**（非映射表主店码）；库存SKU = **本地商品价格表「库存SKU」列（第 8 列）**，查不到一律留空（含只匹配未进预报/上传/交运流程的订单；不再回写马帮系统的匹配值，避免 `BCS-xxx-40-56` 这类非法值）；中文名一律以本地映射表为准（查不到留空但**仍登记**）。
 - 每步产出 CSV 报告（`data/logs/马帮订单匹配_* / 马帮预报批次_* / 飞书订单登记_*.csv`）；某步失败即中止后续。
