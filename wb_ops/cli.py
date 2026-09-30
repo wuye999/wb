@@ -259,6 +259,8 @@ def build_parser():
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部已填 cookie 店铺）")
     p.add_argument("--days", type=int, default=0,
                    help="仅命中剩余天数恰好=N 的未处理投诉（decide_counter，0=不筛选，默认）")
+    p.add_argument("--days-max", type=int, default=0, dest="days_max",
+                   help="仅命中剩余天数≤N 的未处理投诉（0=不筛选，默认；与 --days 同给时 --days 优先）")
     p.add_argument("--type", default="in", choices=["in", "out"], help="投诉方向：in=发往本店（默认）/ out=本店发出")
     p.add_argument("--limit", type=int, default=0, help="每店最多拉取 N 条投诉列表（0=不限，翻页到底）")
     p.add_argument("--no-cn", action="store_true",

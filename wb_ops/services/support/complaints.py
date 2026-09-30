@@ -72,13 +72,28 @@ def _pick_pending(listed: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [it for it in listed if common.to_int(it.get("status_id")) == PENDING_STATUS_ID]
 
 
-def _filter_by_days(pending: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
-    """按剩余天数精确筛选（days=0 表示不筛选）。decide_counter 缺失的条目不命中"""
-    if not days:
-        return pending
-    return [it for it in pending
-            if it.get("decide_counter") is not None
-            and common.to_int(it.get("decide_counter")) == days]
+def _filter_by_days(pending: List[Dict[str, Any]], days: int,
+                    days_max: int = 0) -> List[Dict[str, Any]]:
+    """按剩余天数筛选（decide_counter 缺失的条目不命中）。
+
+    Args:
+        pending: 未处理投诉列表。
+        days: 精确匹配剩余天数=N（0=不启用精确筛选）。
+        days_max: 命中剩余天数 ≤ N（0=不启用上限筛选）；与 days 同时给定时取并集不成立，
+            实际语义为 days 优先（精确命中），否则按 days_max 上限过滤。
+
+    Returns:
+        筛选后的投诉条目列表。
+    """
+    if days:
+        return [it for it in pending
+                if it.get("decide_counter") is not None
+                and common.to_int(it.get("decide_counter")) == days]
+    if days_max:
+        return [it for it in pending
+                if it.get("decide_counter") is not None
+                and common.to_int(it.get("decide_counter")) <= days_max]
+    return pending
 
 
 def run(args: Any) -> int:
@@ -99,11 +114,17 @@ def run(args: Any) -> int:
 
     appeal_type = getattr(args, "type", "in") or "in"
     days = common.to_int(getattr(args, "days", 0))
+    days_max = common.to_int(getattr(args, "days_max", 0))
     limit = common.to_int(getattr(args, "limit", 0))
     with_cn = not bool(getattr(args, "no_cn", False))
 
     names = ", ".join(f"{s['shopName']}({sid})" for s, sid in pairs)
-    day_kw = f"｜剩余天数={days}" if days else "｜全部剩余天数"
+    if days:
+        day_kw = f"｜剩余天数={days}"
+    elif days_max:
+        day_kw = f"｜剩余天数≤{days_max}"
+    else:
+        day_kw = "｜全部剩余天数"
     limit_kw = f"｜每店限拉 {limit} 条" if limit else ""
     print(f"店铺 {len(pairs)} 个: {names}"
           f"（只读；未处理=等待回复({PENDING_STATUS_ID})｜type={appeal_type}{day_kw}{limit_kw}）")
@@ -130,7 +151,7 @@ def run(args: Any) -> int:
             continue
 
         pending = _pick_pending(listed)
-        matched = _filter_by_days(pending, days)
+        matched = _filter_by_days(pending, days, days_max)
         matched_total += len(matched)
         scope = f"列表 {len(listed)} 条" + (f"/共 {stats.get('total')} 条" if stats.get("total") else "")
         if not pending:
@@ -138,7 +159,7 @@ def run(args: Any) -> int:
             time.sleep(SHOP_SLEEP)
             continue
         if not matched:
-            print(f"\n=== {name}({sid}) 无剩余天数={days} 的未处理投诉"
+            print(f"\n=== {name}({sid}) 无「{day_kw.split('｜')[1]}」的未处理投诉"
                   f"（等待回复 {len(pending)} 条｜{scope}）===")
             time.sleep(SHOP_SLEEP)
             continue
