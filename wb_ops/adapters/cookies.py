@@ -17,6 +17,19 @@ from wb_ops.framework.safe_io import atomic_dump_json, safe_load_json
 
 
 
+def _validate_authorizev3(token: str) -> bool:
+    """校验 authorizev3 JWT payload 是否为合法 JSON（防复制丢字符的损坏 token 混入）。
+
+    2026-09-28 事故：粘贴的 authorizev3 尾部丢失字符 → payload JSON 断裂
+    （"user_registration_dtr:..."），token 从根上无效，导致全天 401 排查被带偏。
+    """
+    try:
+        common.jwt_payload(token)
+        return True
+    except Exception:
+        return False
+
+
 def extract_sessions(md_text):
     """按 fetch( 分割，每个块提取 authorizev3 / wb-seller-lk / cookie，返回列表"""
     sessions = []
@@ -25,6 +38,9 @@ def extract_sessions(md_text):
         lk = re.search(r'"(?:wb-seller-lk|seller-lk)":\s*"([^"]+)"', block)
         ck = re.search(r'"cookie":\s*"([^"]+)"', block)
         if not (a3 and lk and ck):
+            continue
+        if not _validate_authorizev3(a3.group(1)):
+            print("[错误] authorizev3 payload 损坏（复制丢失字符，JSON 解析失败），拒绝写入该会话")
             continue
         try:
             sid = (common.jwt_payload(lk.group(1)).get("data") or {}).get("Z-Sid", "")

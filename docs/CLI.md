@@ -74,6 +74,7 @@
 | `ai-test` | 离线对照测试 AI 客服回复效果（读取本地问答数据集测试 prompt，不调外网） | `--qa <json文件路径>` |
 | `remote-wh` | 成都仓库（国内仓）商品永久删除（dry-run 默认；`--apply --yes` 真正执行） | `--shops` / `--interval` / `--parallel` / `--apply` / `--yes` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
+| `cookie-refresh-wb` | 无头浏览器刷新 WB 会话（401 根因=浏览器指纹信标门槛，纯脚本凭证不可独立续期；Playwright 无头持久化 context 播种既有登录态→等 validate→收割全量 cookie 回写 credentials.json；wb_client 遇 401 亦自动触发同机制重试一次） | `--shops`(店铺id逗号分隔) / `--headed`(首次播种被拒时人工登录) / `--apply` |
 | `daily` | 每日任务 | `morning\|check`（+ 透传参数） |
 | `schedule` | 创建/删除 Windows 计划任务（⚠ 默认不创建，仅按需执行）；`--plan` 只读预览任务定义 | `--remove` / `--plan` |
 
@@ -299,6 +300,7 @@ for x in a["waste_by_campaign"]:                        # 活动级：便于整�
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | WB 接口 403 | cfidsw-wb 过期 | 重新抓包 → `wb.py cookies-update` |
+| WB 接口 401 | 浏览器指纹信标门槛过期（浏览器不活跃超 ~15 分钟） | `wb.py cookie-refresh-wb --apply`（无头浏览器自动续会话；批量命令遇 401 亦自动触发）；仍失败用 `--headed` 人工登录一次 |
 | BCS 接口 401 | bcs.token 过期 | 更新 `data/credentials.json` 的 bcs.token |
 | BCS 接口 405 | 缺 X-Limit-Key | 更新 bcs.limit_key |
 | 改价查出 0 个但 WB 有高折扣 | BCS 缓存未同步 | 确认加了 `--sync`（或先 `wb.py fetch`），重跑 |

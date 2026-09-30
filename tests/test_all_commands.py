@@ -43,7 +43,7 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 49 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 50 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
@@ -54,9 +54,10 @@ class TestAllCommands(unittest.TestCase):
             "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
             "mabang-forecast", "feishu-register", "mabang-stock-register",
             "mabang-stock-daily", "feishu-vc-stats", "mabang-process", "cookies-update",
+            "cookie-refresh-wb",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 49)
+        self.assertEqual(len(subcommands), 50)
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -771,6 +772,10 @@ class TestAllCommands(unittest.TestCase):
     def test_37_cookies_update_missing_file(self):
         res = self._run_cmd(["cookies-update", "__no_such_cookies__.md"], expect_code=1)
         self.assertIn("[错误]", res.stdout + res.stderr)
+
+    def test_37b_cookie_refresh_wb_dry_run(self):
+        res = self._run_cmd(["cookie-refresh-wb", "--shops", "999999999"], expect_code=0)
+        self.assertIn("[汇总] 成功 0/0", res.stdout)
 
     def test_38_daily_safe_scope(self):
         # 用不存在的店铺 ID 限定，使各步骤「无匹配店铺」空转（不产生任何写操作）；

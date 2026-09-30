@@ -81,6 +81,7 @@ registry.register("mabang-stock-daily", "wb_ops.services.order_svc", "run_mabang
 registry.register("feishu-vc-stats", "wb_ops.services.order_svc", "run_feishu_vc_stats")
 registry.register("mabang-process", "wb_ops.services.order_svc", "run_mabang_process", alias="order-pipeline")
 registry.register("cookies-update", "wb_ops.adapters.cookies", "run_cookies_update")
+registry.register("cookie-refresh-wb", "wb_ops.adapters.cookie_bridge", "run_cookie_refresh_wb")
 registry.register("daily", "wb_ops.daily", "run_daily_cmd")
 registry.register("schedule", "wb_ops.schedule", "run")
 registry.register("remote-wh", "wb_ops.services.replicate_svc", "run_remote_wh")

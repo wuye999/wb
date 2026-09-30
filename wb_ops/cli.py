@@ -341,6 +341,11 @@ def build_parser():
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
     p.add_argument("md_file", help="含 fetch 块的 md 文件")
 
+    p = sub.add_parser("cookie-refresh-wb", help="无头浏览器刷新 WB 会话（401 自动恢复，手动诊断用）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部 WB 店铺）")
+    p.add_argument("--headed", action="store_true", help="弹出有头浏览器（首次播种登录态被拒时人工登录用）")
+    p.add_argument("--apply", action="store_true", help="实际执行刷新（默认 dry-run 预览）")
+
     p = sub.add_parser("daily", help="每日任务（morning=报名+改价 / check=只改价）")
     p.add_argument("mode", choices=["morning", "check"])
     p.add_argument("extra", nargs=argparse.REMAINDER, help="透传给子步骤（如 --shops <店铺ID>）")

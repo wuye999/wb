@@ -113,6 +113,7 @@ PATH_HINTS = [
     ("wb_ops/adapters/task_runner.py", ["fetch", "orders"]),
     ("wb_ops/adapters/llm_client.py", ["questions-watch", "ai-test"]),
     ("wb_ops/adapters/cookies.py", ["cookies-update"]),
+    ("wb_ops/adapters/cookie_bridge.py", ["cookie-refresh-wb"]),
     ("wb_ops/adapters/", ["SMOKE"]),
     # 调度
     ("wb_ops/daily.py", ["daily"]),
