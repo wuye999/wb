@@ -87,6 +87,7 @@
 | `mabang-process` | **马帮订单处理一体（零飞书依赖）**：匹配商品→预报单生成→依次上传（自动发货，config 只取一次）→**轮询确认预报成功**（预扫描 `status=1` 建店铺映射 + 每轮仅 `status=3`，判据同上）→物流交运→飞书登记（URL 读配置 feishu.base_url，--url 可覆盖）；过滤/幂等机制与 mabang-orders+mabang-forecast 一致；超时时仅对已确认成功的批次所属店铺交运（**店铺级粒度**，失败优先），飞书登记照常执行 | `--days` / `--page-size` / `--wait` / `--upload-timeout` / `--poll-interval` / `--url` / `--table` / `--apply` |
 | `feishu-register` | 新订单登记到飞书多维表格「订单登记」（数据源=**orderalllist 最近 500 条全状态订单 + 待处理订单两路合并**，按订单编号去重只登记新增；`--no-pending` 可关闭合并）：VC→中文名→下单店 wb编号→**库存SKU（本地商品价格表「库存SKU」列，查不到留空）**→WB链接；`--scope all --date/--begin/--end` 补录历史全部状态订单（orderalllist 忽略服务端日期过滤，本地按 paidTime 筛） | `--url`(可选，默认读配置 feishu.base_url) / `--table`(默认 订单登记) / `--scope latest\|pending\|all`(默认 latest) / `--date` / `--begin` / `--end` / `--apply` |
 | `feishu-vc-stats` | **只读**：读飞书「订单登记」→ 按**供应商代码（`BCS编号` = vendorCode）跨店合并**统计「**单数**」（= 登记记录条数；另附「件数」= `订单量` 求和）→ **降序**输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）。未命中原因（无日期/不在窗口/店铺被过滤）显式标注；`BCS编号` 为空的记录归入 `(无BCS编号)` 桶不丢弃 | `--days`(默认7，含今天) / `--date` / `--begin` / `--end` / `--shops`(支持 `9352` 或 `袁州1`) / `--top` / `--by-prefix` / `--no-cn` / `--url` / `--table` |
+| `fbs-delivery` | **只读**：WB FBS「配送中」→ 遍历各店拉取**全部清单**及每张清单下**全部商品**（`portal/supplies/delivery` + `portal/supplies/{supplyID}/orders/delivery`，游标分页），按**清单 createdAt 时段 / 商品状态 / 店铺**筛选 → 按「**商品中文名**」统计（vc→中文名走本地映射真源；查不到归 `(中文名未知)` 桶置尾）→ 控制台汇总 + 两份 CSV（明细 + 按中文名统计，写 `data/logs/配送中*_*.csv`）。⚠ 商品明细接口返回该清单下**全部**订单（**含已取消/已售出**），**默认只保留 `shipment`（待发货）**；聚合口径：商品数=明细行数、供应商代码数=去重 vendorCode、清单数=去重 supplyID | `--shops` / `--days`(默认0=不过滤) / `--date` / `--begin` / `--end` / `--item-state`(默认 shipment；all=不过滤) / `--supply-state` / `--include-canceled` / `--limit` / `--max-pages` / `--top` / `--no-cn` / `--interval` |
 | `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
 | `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
 
@@ -200,6 +201,14 @@ python wb.py feishu-vc-stats --begin 2026-09-17 --end 2026-09-23   # 指定区�
 python wb.py feishu-vc-stats --shops 9352,9356          # 只统计袁州1、袁州3（短名 袁州1 亦可）
 python wb.py feishu-vc-stats --days 7 --top 20          # 控制台只看前 20 名（CSV 仍写全量）
 python wb.py feishu-vc-stats --days 7 --by-prefix       # 按 vendorCode 的 4 位前缀码聚合
+# FBS「配送中」清单商品采集统计（只读；默认只统计「待发货」商品）
+python wb.py fbs-delivery                      # 全店全部「配送中」清单里的待发货商品，按中文名统计
+python wb.py fbs-delivery --shops 9352         # 只统计袁州1（也支持短名 袁州1）
+python wb.py fbs-delivery --days 3             # 只统计近 3 天创建的清单（默认 0=不过滤）
+python wb.py fbs-delivery --begin 2026-10-01 --end 2026-10-08   # 指定清单创建时间区间
+python wb.py fbs-delivery --item-state all --top 20   # 不过滤商品状态（含已取消/已售出），只看前 20 名
+python wb.py fbs-delivery --supply-state onway,complete       # 只统计指定状态的清单
+python wb.py fbs-delivery --include-canceled   # 在「待发货」基础上并入「已取消」
 python wb.py questions                     # 查询未处理提问（带中文名/标题/品牌/颜色/价格/描述/特征）
 python wb.py questions --no-detail         # 跳过商品详情拉取（只中文名，快）
 python wb.py questions --reply "..." --question-id <id>    # 回复单条

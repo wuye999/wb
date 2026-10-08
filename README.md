@@ -60,6 +60,7 @@ python wb.py orders                     # 订单查询（同步+查询今天）
 python wb.py questions                  # 买家未处理提问查询
 python wb.py appeals --days 5           # WB 平台投诉单：未处理(等待回复) + 剩余天数=5 → 明细 + 去重商品编号行 + CSV
 python wb.py feishu-vc-stats             # 只读：飞书「订单登记」近7天按供应商代码(BCS编号)统计单数降序（跨店合并；--days/--date/--begin/--end/--shops/--by-prefix）
+python wb.py fbs-delivery                # 只读：WB FBS「配送中」清单及其全部商品采集+统计（默认商品状态=待发货 shipment；--shops/--days/--begin/--end/--item-state/--supply-state/--top）
 
 # ▸ 每日新订单处理（2026-09-10 拆分为两个独立脚本；先 A 后 B 保证库存SKU 正确）
 python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→轮询确认预报成功→物流交运（零飞书依赖；轮询 1 请求/轮）

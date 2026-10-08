@@ -10,6 +10,7 @@ from .order import (
     mabang_stock,
     feishu_register,
     feishu_vc_stats,
+    fbs_delivery,
     orders,
 )
 
@@ -48,6 +49,14 @@ class OrderService:
     def count_register_by_vendor(self, args: Any) -> int:
         """飞书「订单登记」按供应商代码统计单数（只读）"""
         return feishu_vc_stats.run(args)
+
+    def collect_delivery_goods(self, args: Any) -> int:
+        """WB FBS「配送中」清单及其商品采集与统计（只读）"""
+        return fbs_delivery.run(args)
+
+    def collect_delivery_goods_data(self, **kwargs) -> dict:
+        """★ 门面库入口（跨域只经门面）：WB FBS「配送中」清单商品采集统计（只读）。"""
+        return fbs_delivery.delivery_goods(**kwargs)
 
     def feishu_register_stats(self, days: int = 7, begin: str = "", end: str = "",
                               date: str = "", shops: Any = None, url: str = "",
@@ -95,6 +104,10 @@ def run_mabang_stock_daily(args):
 
 def run_feishu_vc_stats(args):
     return order_svc.count_register_by_vendor(args)
+
+
+def run_fbs_delivery(args):
+    return order_svc.collect_delivery_goods(args)
 
 
 def feishu_register_stats(**kwargs):

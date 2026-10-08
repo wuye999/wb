@@ -458,6 +458,42 @@ python wb.py feishu-vc-stats --days 7 --by-prefix   # 换个视角：按 vendorC
   top = [(x["rank"], x["key"], x["orders"], x["cn"]) for x in r["rows"][:10]]
   ```
 
+## 11d. WB FBS「配送中」清单商品统计（fbs-delivery，只读）
+
+> 用途：把 WB 卖家后台 **FBS「配送中」**下所有清单里的商品汇总起来，看「哪些商品要发货、各有多少」。
+> **只读**（不触发任何写操作），遍历各店拉取 → 过滤 → 按商品中文名统计 → 控制台汇总 + CSV。
+
+```bash
+python wb.py fbs-delivery                      # 全部店铺、全部「配送中」清单，只统计「待发货(shipment)」商品
+python wb.py fbs-delivery --shops 9352         # 只看袁州1（也支持短名 袁州1；逗号分隔多店）
+python wb.py fbs-delivery --days 3             # 只统计近 3 天创建的清单（默认 0 = 不过滤时间）
+python wb.py fbs-delivery --begin 2026-10-01 --end 2026-10-08   # 指定清单创建时间区间（闭区间）
+python wb.py fbs-delivery --item-state all     # 不过滤商品状态（含已取消/已售出），看全貌
+python wb.py fbs-delivery --supply-state onway,complete          # 只看指定状态的清单
+python wb.py fbs-delivery --include-canceled   # 在「待发货」基础上并入「已取消(cancel)」
+python wb.py fbs-delivery --top 20             # 控制台只看前 20 名中文名（CSV 仍写全量）
+python wb.py fbs-delivery --shops 9352 --limit 3 --no-cn   # 冒烟：每店只处理 3 个清单、不解析中文名
+```
+
+- **接口**：`GET portal/supplies/delivery`（清单列表，游标分页）→ 对每张清单再 `GET portal/supplies/{supplyID}/orders/delivery`（商品明细）。
+- **⚠ 关键口径**：商品明细接口返回该清单下**全部**订单（**含已取消 / 已售出**），所以**默认只保留 `shipment`（「待发货」）**。
+  商品级状态实测枚举：`shipment`(待发货) / `sold`(已售出) / `cancel`(已取消) / `readyForPickup`(到达收货点) / `reshipment`(等待重新发货) / `sorted`(分拣完成)。
+  清单级状态：`complete`(正在处理中) / `onway`(前往接待处途中) / `reshipment` / `sort`(分拣中)。
+- **时间基准** = 清单的 `createdAt`（UTC）；闭区间；不传 `--days/--date/--begin/--end` 即**不过滤**（拿当前全部配送中）。
+  `--end` 必须与 `--begin`/`--date` 同用（单独给会报错退出）。
+- **中文名**：由 vendorCode 反查本地映射真源（优先级 `vc_override` > `vc_known` > 前缀码兜底），
+  查不到归 `(中文名未知)` 桶并排在最后；`--no-cn` 可跳过解析（更快）。
+- **聚合口径**：商品数 = 明细行数；供应商代码数 = 去重 vendorCode；清单数 = 去重 supplyID。
+- **输出**：控制台「排名 | 商品中文名 | 供应商代码数 | 商品数 | 清单数 | 涉及店铺」+ 可复制的去重 vendorCode / nmId 行；
+  CSV 落 `data/logs/配送中商品明细_*.csv`（逐商品）与 `data/logs/配送中按中文名统计_*.csv`。
+- 脚本内嵌调用（免 CLI）：
+  ```python
+  from wb_ops.services.order.fbs_delivery import delivery_goods
+  r = delivery_goods(item_states="shipment", shops="9352")   # 也支持 days=/begin=/end=/date=
+  for row in r["by_cn"][:10]:
+      print(row["rank"], row["cn"], row["item_count"], row["shops"])
+  ```
+
 ## 12. 买家提问查询 + AI 回复（前台 / 后台两种模式，二选一）
 
 ### 查询（两种模式的基础，自动关联商品信息）

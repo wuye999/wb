@@ -43,7 +43,7 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 50 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 51 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
@@ -53,11 +53,11 @@ class TestAllCommands(unittest.TestCase):
             "dimension", "dims-check", "banned", "clean", "price-review",
             "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
             "mabang-forecast", "feishu-register", "mabang-stock-register",
-            "mabang-stock-daily", "feishu-vc-stats", "mabang-process", "cookies-update",
+            "mabang-stock-daily", "feishu-vc-stats", "fbs-delivery", "mabang-process", "cookies-update",
             "cookie-refresh-wb",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 50)
+        self.assertEqual(len(subcommands), 51)
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -1267,6 +1267,120 @@ class TestAllCommands(unittest.TestCase):
         self.assertEqual(bc[(9352, 1)]["建议关闭数"], 0)              # 合计达标 → 不关
         self.assertEqual(bc[(9352, 1)]["是否整活动建议关闭"], "")
         self.assertEqual(bc[(9352, 2)]["建议关闭数"], 0)              # 暂停 → 不算建议关闭
+
+    def test_36c_fbs_delivery_offline(self):
+        """fbs-delivery 离线断言（**不联网**）：清单/商品解析、状态过滤、时间窗口、分页防死循环、聚合。
+
+        数据形态取自 HAR 抓包样本（wb订单列表配送中.har / wb订单列表配送中2.har）：
+        商品级状态实测分布 readyForPickup×3 / cancel×3 / shipment×1 / sold×1。
+        口径（2026-10-08 与用户确认）：默认只统计 `shipment`（「待发货」）；时间基准 = 清单 createdAt；
+        `orders/delivery` 返回该清单下全部订单（含已取消），必须按 state.code 过滤。
+        """
+        from wb_ops.adapters import wb_supply_client as sup
+        from wb_ops.services.order import fbs_delivery as fd
+
+        # ① 清单解析（supplyID / createdAt / state / 件数）
+        ps = fd.parse_supply({
+            "supplyID": "WB-GI-287405573", "name": "Заказ",
+            "createdAt": "2026-10-03T10:42:05Z",
+            "state": {"code": "onway", "title": "前往接待处途中"},
+            "ordersCnt": 8, "parcelsCnt": 1, "boxesCnt": 1,
+            "warehouse": "莫斯科仓库",
+            "destinationWarehouse": {"name": "Москва"},
+        })
+        self.assertEqual(ps["supply_id"], "WB-GI-287405573")
+        self.assertEqual(ps["created_day"], "2026-10-03")
+        self.assertEqual(ps["state_code"], "onway")
+        self.assertEqual(ps["orders_cnt"], 8)
+        self.assertEqual(ps["dest_name"], "Москва")
+
+        # ② 商品解析（article = vendorCode）
+        po = fd.parse_order({
+            "id": 5932144473, "nmId": 1357061934, "article": "BCS-OTRE-191868961",
+            "title": "Шапка оверсайз", "size": "60-62", "price": "607 ₽",
+            "convertedPrice": "46.61 ¥", "stickerID": 58617520011,
+            "state": {"code": "shipment", "title": "待发货"},
+            "createdAt": "2026-10-02T05:41:25Z", "isCanceled": False, "isTransferred": True,
+        }, "WB-GI-287405573")
+        self.assertEqual(po["vc"], "BCS-OTRE-191868961")
+        self.assertEqual(po["nm_id"], "1357061934")
+        self.assertEqual(po["state_code"], "shipment")
+        self.assertEqual(po["supply_id"], "WB-GI-287405573")
+        self.assertEqual(po["created_day"], "2026-10-02")
+        self.assertTrue(po["is_transferred"])
+        self.assertFalse(po["is_canceled"])
+        # 缺字段容错
+        empty = fd.parse_order({}, "S0")
+        self.assertEqual((empty["vc"], empty["state_code"], empty["order_id"]), ("", "", ""))
+
+        # ③ 状态过滤：默认只留 shipment；include_canceled 并入 cancel；all = 不过滤
+        self.assertEqual(fd.parse_states(""), {"shipment"})
+        self.assertEqual(fd.parse_states("shipment,cancel"), {"shipment", "cancel"})
+        self.assertEqual(fd.parse_states("all"), set())
+        self.assertEqual(fd.parse_states("shipment", include_canceled=True), {"shipment", "cancel"})
+        self.assertTrue(fd.match_state("shipment", {"shipment"}))
+        self.assertFalse(fd.match_state("sold", {"shipment"}))
+        self.assertTrue(fd.match_state("sold", set()))          # 空集 = 不过滤
+
+        # ④ 时间窗口：全空 = 不过滤；闭区间；只给 end 报错
+        self.assertEqual(fd.resolve_window(), ("", ""))
+        self.assertEqual(fd.resolve_window(date="2026-10-3"), ("2026-10-03", "2026-10-03"))
+        self.assertEqual(fd.resolve_window(begin="2026-10-01", end="2026-10-05"),
+                         ("2026-10-01", "2026-10-05"))
+        with self.assertRaises(ValueError):
+            fd.resolve_window(end="2026-10-05")
+        self.assertTrue(fd.in_window("2026-10-03", "", ""))     # 不过滤
+        self.assertTrue(fd.in_window("2026-10-03", "2026-10-01", "2026-10-05"))
+        self.assertFalse(fd.in_window("2026-09-30", "2026-10-01", "2026-10-05"))
+        self.assertFalse(fd.in_window("", "2026-10-01", "2026-10-05"))   # 无日期不命中
+
+        # ⑤ 分页：游标推进到底 + 游标不变即停（防死循环）——mock 掉 wb_client.request
+        seq = []
+
+        def fake_request(session, method, url, **kw):
+            if "supplies/delivery" in url:
+                seq.append(kw.get("params", {}).get("next"))
+                if len(seq) == 1:
+                    return {"data": {"supplies": [{"supplyID": "S1"}], "next": "CUR1"}}
+                return {"data": {"supplies": [{"supplyID": "S2"}], "next": 0}}
+            return {"data": {"orders": [{"id": 1}], "next": 0}}
+
+        orig = sup.wb_api.request
+        try:
+            sup.wb_api.request = fake_request
+            got = sup.iter_delivery_supplies(object(), max_pages=5)
+            self.assertEqual([s["supplyID"] for s in got], ["S1", "S2"])
+            self.assertEqual(seq, [0, "CUR1"])                  # 首请求 next=0（对齐抓包），次页用游标
+
+            # 游标恒不变 → 第 2 页后立即停止（不会翻满 max_pages）
+            seq.clear()
+            sup.wb_api.request = lambda session, method, url, **kw: {
+                "data": {"supplies": [{"supplyID": "X"}], "next": "SAME"}}
+            got2 = sup.iter_delivery_supplies(object(), max_pages=9)
+            self.assertEqual(len(got2), 2)
+        finally:
+            sup.wb_api.request = orig
+
+        # ⑥ 中文名聚合：商品数降序 + 未归类桶置尾 + vc/清单去重口径
+        orders = [
+            {"vc": "BCS-AAAA-1", "cn": "甲", "supply_id": "S1", "shop_name": "袁州1", "nm_id": "1"},
+            {"vc": "BCS-AAAA-1", "cn": "甲", "supply_id": "S1", "shop_name": "袁州2", "nm_id": "1"},
+            {"vc": "BCS-BBBB-2", "cn": "乙", "supply_id": "S2", "shop_name": "袁州1", "nm_id": "2"},
+            {"vc": "BCS-CCCC-3", "cn": fd.NO_CN, "supply_id": "S2", "shop_name": "袁州1", "nm_id": "3"},
+        ]
+        agg = fd.aggregate_by_cn(orders)
+        self.assertEqual([(r["cn"], r["item_count"], r["vc_count"], r["supply_count"]) for r in agg],
+                         [("甲", 2, 1, 1), ("乙", 1, 1, 1), (fd.NO_CN, 1, 1, 1)])
+        self.assertEqual([r["rank"] for r in agg], [1, 2, 3])
+        self.assertEqual(agg[0]["shops"], ["袁州1", "袁州2"])
+        self.assertTrue(str(agg[-1]["cn"]).startswith("("))     # 未归类桶恒排最后
+
+        # ⑦ 店铺过滤：ID / 短名双认；空 = 全部
+        shops = [{"shopId": 9352, "shopName": "袁州1"}, {"shopId": 9353, "shopName": "袁州2"}]
+        self.assertEqual([s["shopName"] for s in fd.select_shops(shops, "9352")], ["袁州1"])
+        self.assertEqual([s["shopName"] for s in fd.select_shops(shops, "袁州2")], ["袁州2"])
+        self.assertEqual(len(fd.select_shops(shops, "9352,袁州2")), 2)
+        self.assertEqual(len(fd.select_shops(shops, "")), 2)
 
 
 if __name__ == "__main__":

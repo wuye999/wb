@@ -10,7 +10,7 @@
 ├── wb.py                    ★ 统一入口（薄启动器 → wb_ops.cli.main）
 ├── wb_ops/                  ★ 核心库（Python 包）
 │   ├── __init__.py            版本号 + 公共导出
-│   ├── cli.py                 ★ 统一 CLI 调度器（45 个子命令动态延迟分发）
+│   ├── cli.py                 ★ 统一 CLI 调度器（51 个子命令动态延迟分发）
 │   ├── config.py              非敏感配置：路径常量（BASE_DIR→data/）、默认阈值、VC_PREFIX_RE
 │   ├── credentials.py         ★ 统一凭证加载中枢（读 data/credentials.json）
 │   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8 / print_write_hint
@@ -29,6 +29,7 @@
 │   │   └── nm_resolver.py     NmResolver：nmId → 供应商代码/中文名 本地真源反查（多域共用，不联网核实）
 │   ├── adapters/              ★ 外部系统通信适配层
 │   │   ├── wb_client.py       WB 卖家后台 API 客户端（会话维护、原生改价改折扣与 fetch_canceled_ids 归位）
+│   │   ├── wb_supply_client.py WB FBS「配送中」适配器（portal supplies/delivery 清单＋清单商品明细，游标分页防死循环）
 │   │   ├── wb_ads_client.py   WB 广告推广 cmp 域客户端（adverts 活动列表＋活动内被推广商品，只读）
 │   │   ├── bcs_client.py      BCS 云端 API 客户端（Bearer + X-Limit-Key 与退避重试）
 │   │   ├── mabang_client.py   马帮 ERP API 客户端（三域会话、订单替换、预报交运）
@@ -63,6 +64,7 @@
 │       │   ├── mabang_stock.py 马帮库存表登记与管理
 │       │   ├── feishu_register.py 飞书订单去重登记
 │       │   ├── feishu_vc_stats.py 飞书「订单登记」按供应商代码统计单数（只读，跨店合并降序）
+│       │   ├── fbs_delivery.py WB FBS「配送中」清单及商品采集统计（只读，按商品中文名聚合）
 │       │   ├── orders.py      WB 订单查询与同步
 │       ├── replicate/         搬家上架、库存改价与清理业务实现
 │       │   ├── ops.py         一键操作门面编排
@@ -85,7 +87,7 @@
 │           ├── ai_reply_test.py AI 回复效果测试
 │           └── complaints.py  WB 平台投诉单查询（未处理/剩余天数 → 去重商品编号）
 ├── tests/                    ★ 自动化测试套件
-│   ├── test_all_commands.py   覆盖全部 45 个 CLI 命令 / 54 个用例的集成测试（100% PASS，全量约 5 分钟）
+│   ├── test_all_commands.py   覆盖全部 51 个 CLI 命令的集成测试（100% PASS，全量约 5 分钟）
 │   └── run_tests.py           按需测试选择器（--changed / --cmd / --help-smoke，日常只跑改动相关）
 ├── data/                     ★ 统一数据目录（本地专属，不进 git）
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
@@ -117,7 +119,7 @@
 
 ```
 表现与调度层 (Presentation)
-  └── cli.py（动态按需延迟加载路由，49 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+  └── cli.py（动态按需延迟加载路由，51 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
         │ 动态调度 (Command DTO)
         ▼
 业务用例服务层 (Services)

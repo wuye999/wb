@@ -337,6 +337,26 @@ def build_parser():
     p.add_argument("--url", default="", help="飞书表格地址（可选，默认读配置 feishu.base_url）")
     p.add_argument("--table", default="订单登记", help="表名（默认 订单登记）")
 
+    p = sub.add_parser("fbs-delivery",
+                       help="只读：WB FBS「配送中」清单及其全部商品采集+统计（按清单 createdAt 时段、"
+                            "商品状态默认 shipment=待发货；控制台汇总 + CSV 明细）")
+    p.add_argument("--shops", default="", help="店铺过滤，逗号分隔，支持店铺ID或短名（默认全部已填 cookie 店铺）")
+    p.add_argument("--days", type=int, default=0, help="近 N 天（按清单 createdAt；0=不过滤，默认）")
+    p.add_argument("--date", default="", help="单天 YYYY-MM-DD（等价 --begin=--end）")
+    p.add_argument("--begin", default="", help="区间开始 YYYY-MM-DD（单独给按单天处理）")
+    p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）")
+    p.add_argument("--item-state", default="shipment",
+                   help="商品级状态过滤，逗号分隔（默认 shipment=待发货；all=不过滤；"
+                        "可选 cancel/sold/readyForPickup/reshipment/sorted）")
+    p.add_argument("--supply-state", default="",
+                   help="清单级状态过滤，逗号分隔（默认不过滤；可选 complete/onway/reshipment/sort）")
+    p.add_argument("--include-canceled", action="store_true", help="把 cancel 并入 --item-state（默认排除已取消）")
+    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 个清单（0=不限）")
+    p.add_argument("--max-pages", type=int, default=50, help="清单/商品列表翻页安全上限（默认 50，防死循环）")
+    p.add_argument("--top", type=int, default=0, help="控制台按中文名只显示前 N 名（0=全部；CSV 始终全量）")
+    p.add_argument("--no-cn", action="store_true", help="不解析商品中文名（供应商代码仍解析）")
+    p.add_argument("--interval", type=float, default=0.3, help="清单间/店铺间请求间隔秒（默认 0.3）")
+
     p = sub.add_parser("mabang-process", aliases=["order-pipeline"],
                        help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运→飞书登记（登记含只匹配未进预报流程的订单）")
     p.add_argument("--days", type=int, default=1, help="查询最近 N 天待处理订单（默认 1）")

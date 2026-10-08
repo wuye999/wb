@@ -60,9 +60,10 @@ class MappingRepository:
 
     @classmethod
     def load_boss(cls) -> List[Dict[str, Any]]:
-        """商品价格表 → [{idx, sku, cn, dp(双倍售价), img, floor, prefix}]
-        新表 7 列：图片/SKU/中文名/双倍售价/尺寸/最低售价/前缀码。
-        支持 D 列公式（=F{行}*2 等）；NOTEBOOK 为普通商品行（前缀 NBTB），与其他一致。"""
+        """商品价格表 → [{idx, sku, cn, dp(双倍售价), img, floor, prefix, stock_sku}]
+        Sheet1 列：图片/SKU/中文名/双倍售价/尺寸/最低售价/前缀码/库存SKU。
+        支持 D 列公式（=F{行}*2 等）；NOTEBOOK 为普通商品行（前缀 NBTB），与其他一致。
+        `stock_sku` = 第 8 列「库存SKU」（马帮侧 SKU，缺列/空值返回 ""）。"""
         if not os.path.exists(config.BOSS_XLSX):
             return []
         import openpyxl
@@ -78,6 +79,7 @@ class MappingRepository:
             if isinstance(dp, str) and dp.startswith("="):
                 dp = cls._resolve_dp(dp, ws, row[0].row)
             prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
+            stock_sku = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
             items.append({
                 "idx": len(items) + 1,
                 "sku": sku,
@@ -86,6 +88,7 @@ class MappingRepository:
                 "img": str(row[0].value).strip() if row[0].value else "",
                 "floor": int(dp) if dp is not None else None,
                 "prefix": prefix,
+                "stock_sku": stock_sku,
             })
         wb.close()
         return items
