@@ -112,6 +112,11 @@ def _item_matches_filter(item: ProductRatingItem, args: Any) -> bool:
     if min_feedbacks is not None and item.feedback_count < min_feedbacks:
         return False
 
+    # 差评筛选 (1星 或 2星)
+    if getattr(args, "negative", False):
+        if item.one_star <= 0 and item.two_star <= 0:
+            return False
+
     # 1 星筛选
     if getattr(args, "one_star", False) and item.one_star <= 0:
         return False
@@ -119,7 +124,30 @@ def _item_matches_filter(item: ProductRatingItem, args: Any) -> bool:
     if min_one_star > 0 and item.one_star < min_one_star:
         return False
 
+    # 2 星筛选
+    if getattr(args, "two_star", False) and item.two_star <= 0:
+        return False
+
+    # 指定星级评论筛选 (如 --stars 1,2)
+    stars_opt = getattr(args, "stars", "")
+    if stars_opt:
+        want_stars = {int(x.strip()) for x in str(stars_opt).split(",") if x.strip().isdigit()}
+        matched_star = False
+        if 1 in want_stars and item.one_star > 0:
+            matched_star = True
+        if 2 in want_stars and item.two_star > 0:
+            matched_star = True
+        if 3 in want_stars and item.three_star > 0:
+            matched_star = True
+        if 4 in want_stars and item.four_star > 0:
+            matched_star = True
+        if 5 in want_stars and item.five_star > 0:
+            matched_star = True
+        if not matched_star:
+            return False
+
     # 评分精确匹配 (如 --rating 1 或 1.0)
+
     exact_rating = getattr(args, "rating", None)
     if exact_rating is not None:
         if abs(item.feedback_rating - float(exact_rating)) > 0.05:
@@ -274,7 +302,11 @@ def run(args: Any) -> int:
     stop_one_star = False
     stop_feedback = False
 
-    if getattr(args, "one_star", False) or getattr(args, "min_one_star", 0) > 0:
+    if getattr(args, "negative", False) or getattr(args, "two_star", False) or getattr(args, "stars", ""):
+        order_field = "feedbackCount"
+        order_mode = "desc"
+        stop_feedback = True
+    elif getattr(args, "one_star", False) or getattr(args, "min_one_star", 0) > 0:
         order_field = "oneStar"
         order_mode = "desc"
         stop_one_star = True
@@ -282,6 +314,7 @@ def run(args: Any) -> int:
         # 评分为 1 的商品
         order_field = "oneStar"
         order_mode = "desc"
+
 
     matched_items: List[ProductRatingItem] = []
     total_scanned = 0

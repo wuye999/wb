@@ -297,7 +297,12 @@ def build_parser():
     p.add_argument("--min-rating", type=float, default=None, help="最低评分（>=）")
     p.add_argument("--max-rating", type=float, default=None, help="最高评分（<=，如 1 或 2 筛选低分商品）")
     p.add_argument("--one-star", action="store_true", help="筛选存在 1 星评论的商品（oneStar >= 1）")
+    p.add_argument("--two-star", action="store_true", help="筛选存在 2 星评论的商品（twoStar >= 1）")
+    p.add_argument("--negative", "--bad", action="store_true", dest="negative",
+                   help="筛选存在差评的商品（即 1 星或 2 星差评数 >= 1）")
+    p.add_argument("--stars", default="", help="指定星级评论筛选（逗号分隔，如 1,2 筛选含 1 星或 2 星差评的商品）")
     p.add_argument("--min-one-star", type=int, default=0, help="筛选 1 星评论数 >= N 的商品")
+
     p.add_argument("--min-feedbacks", type=int, default=1, help="最低评价总数（默认 1，仅看有评价商品；设为 0 含无评价）")
     p.add_argument("--days", type=int, default=365, help="统计天数跨度（默认 365 天）")
     p.add_argument("--name", default="", help="按产品中文名包含筛选")
