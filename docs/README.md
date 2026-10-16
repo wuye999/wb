@@ -37,7 +37,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 模块分层、职责设计、解耦成果与数据流转规则 |
 | [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范：分层依赖、单文件拆分标准、类型与并发规范、新功能 6 步扩展流程、按需测试门禁 |
 | [REUSE_GUIDE.md](REUSE_GUIDE.md) | ★ 开发复用指南：**能做 X 用哪个模块/函数**速查表、可抄代码模板、复用铁律、一键重扫公共 API |
-| [CLI.md](CLI.md) | 51 个子命令全集参数、示例、退出码；Python 库调用方式 |
+| [CLI.md](CLI.md) | 52 个子命令全集参数、示例、退出码；Python 库调用方式 |
 | [USAGE.md](USAGE.md) | 按情景分步操作（初始化/刷新凭证/上新/改价/促销/折扣/清理/每日自动） |
 | [CREDENTIALS.md](CREDENTIALS.md) | 两套鉴权、凭证结构、如何刷新、失效表现、安全 |
 

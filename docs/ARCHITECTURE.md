@@ -10,7 +10,7 @@
 ├── wb.py                    ★ 统一入口（薄启动器 → wb_ops.cli.main）
 ├── wb_ops/                  ★ 核心库（Python 包）
 │   ├── __init__.py            版本号 + 公共导出
-│   ├── cli.py                 ★ 统一 CLI 调度器（51 个子命令动态延迟分发）
+│   ├── cli.py                 ★ 统一 CLI 调度器（52 个子命令动态延迟分发）
 │   ├── config.py              非敏感配置：路径常量（BASE_DIR→data/）、默认阈值、VC_PREFIX_RE
 │   ├── credentials.py         ★ 统一凭证加载中枢（读 data/credentials.json）
 │   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8 / print_write_hint
@@ -62,7 +62,8 @@
 │       │   ├── mabang.py      马帮待处理订单匹配更换
 │       │   ├── mabang_process.py 马帮全链路自动化一体
 │       │   ├── mabang_stock.py 马帮库存表登记与管理
-│       │   ├── feishu_register.py 飞书订单去重登记
+│       │   ├── feishu_register.py 飞书订单去重登记（含全表分页读 `_record_list_all`/`scan_order_ids`）
+│       │   ├── feishu_register_dedup.py 飞书「订单登记」存量重复清理（保留最早一条，dry-run 默认）
 │       │   ├── feishu_vc_stats.py 飞书「订单登记」按供应商代码统计单数（只读，跨店合并降序）
 │       │   ├── fbs_delivery.py WB FBS「配送中」清单及商品采集统计（只读，按商品中文名聚合）
 │       │   ├── orders.py      WB 订单查询与同步
@@ -87,7 +88,7 @@
 │           ├── ai_reply_test.py AI 回复效果测试
 │           └── complaints.py  WB 平台投诉单查询（未处理/剩余天数 → 去重商品编号）
 ├── tests/                    ★ 自动化测试套件
-│   ├── test_all_commands.py   覆盖全部 51 个 CLI 命令的集成测试（100% PASS，全量约 5 分钟）
+│   ├── test_all_commands.py   覆盖全部 52 个 CLI 命令的集成测试（100% PASS，全量约 5 分钟）
 │   └── run_tests.py           按需测试选择器（--changed / --cmd / --help-smoke，日常只跑改动相关）
 ├── data/                     ★ 统一数据目录（本地专属，不进 git）
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
@@ -119,7 +120,7 @@
 
 ```
 表现与调度层 (Presentation)
-  └── cli.py（动态按需延迟加载路由，51 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+  └── cli.py（动态按需延迟加载路由，52 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
         │ 动态调度 (Command DTO)
         ▼
 业务用例服务层 (Services)
@@ -303,6 +304,7 @@ wb.py feishu-vc-stats ⑤ 只读统计（可按需/编排调用）：读「订�
 | 2026-09-17 | **飞书登记口径改造**：① 数据源由单一 orderalllist 改为 **orderalllist 最近500 + 待处理订单（tabId=7）两路合并去重**（只做了匹配、未进预报/上传/交运流程的订单只出现在待处理列表，仅按 orderalllist 会漏登；`--no-pending` 可关闭）；② **库存SKU 改为以本地商品价格表「库存SKU」列（第 8 列）为准，查不到一律留空**，不再回写马帮系统匹配值（消除 `BCS-xxx-40-56`、`ETPB-PINK` 等非法/错位值）；③ 商品中文名一律取本地映射表（查不到留空但**仍登记**）；④ 登记日志把「真排除」与「字段留空」分开计数，避免把仍登记的单误读成被排除。 |
 | 2026-09-21 | **纠偏双写修复（vc_override → vc_known）**：`mapping_sync.set_vc_override` 原为 `if v in known: known[v]["cn"] = c`，仅当 vc 已在已知池时才回写，导致**前缀码匹配不到的「怪 vc」**（随机前缀、含 `/` 的旧格式）名字只存于 `vc_override.json` —— 该文件丢失即纠偏失效、重建时掉进「未映射商品」。现改为**无条件 upsert 已知池**（新增私有帮助函数 `_sync_known_on_rename`：已存在只更新 `cn` 并保留原 dp/sku/尺寸/source；不存在则按新中文名从商品价格表补 `dp/sku`、标 `source="人工纠偏"`），日志新增「已知池同步：新建 X / 更新 Y」；一次性回填存量 override 进 known（新建 4 条，known 5973→5977，复核 **150/150 仅靠 known 即可取名**）；`test_29` 同步断言已知池写入并在 finally 清理 known 残留。 |
 | 2026-09-21 | **改价自动审核修复（`price --auto-review` 静默失效）**：`services/replicate/ops_executor.py` 的 `_auto_review_shop` 直接调用 `price_review.fetch_all_quarantine/apply_prices`，但该模块**从未 import `price_review`** —— NameError 被 `except Exception` 吞掉，表现为 `[自动审核] 店铺 X 失败: name 'price_review' is not defined`，降价 30-49.9% 的隔离区商品**价格永不生效**（须手工补跑 `price-review --apply`）。修复按 REUSE_GUIDE 铁律 3（跨域只能经 `*_svc.py` 门面）落地：① `discount_svc.apply_new_prices_by_nmids(shop, nm_ids)` 新增**跨域门面方法**（内部封装隔离区拉取 + 按 nmID 精确匹配 + 提交审核，只审本次改价命中的项）；② `_auto_review_shop` 改为懒加载门面调用，并删除 `ops_executor` 中因此闲置的 `wb_api` 导入；③ 新增离线回归用例 `test_09b_price_auto_quarantine_apply`（mock 断言只提交命中 id、历史遗留待审不误审、隔离区未生成时返回 0）。 |
+| 2026-10-13 | **飞书「订单登记」重复写入修复 + 存量清理（`feishu-register-dedup` 新增）**：`feishu_register.fetch_existing_order_ids` 旧实现只调一次 `+record-list --format ndjson` 且**省略 `--limit`/`--offset`、不读 manifest `has_more`** ⇒ lark-cli 按 ndjson 默认上限 2000 条、按插入序（最早在前）只返回第一页。「订单登记」表记录数越过 2000 行（约 2026-10-01）后，去重集被**冻结**在「最老 2000 行的 1991 个唯一编号」，其后每次 `mabang-process` / `feishu-register` 都把已登记订单判为未登记而重复写入（实测 6429 行仅 3496 个唯一订单编号、837 个编号重复、多余 2923 行，最多 `5923036047` 出现 15 次）。修复：① 分页读表实现**收敛为一份** `feishu_register._record_list_all(base_token, table_id, field_ids=None)`（`--limit 2000 --offset` + manifest `has_more`/`next_offset`，临时文件带 pid+页码；`has_more` 无 `next_offset` 或空页报 has_more 即中止，宁报错不漏读），`mabang_stock`（删本地同名实现）/`feishu_vc_stats`/`mabang_stock_daily` 改为复用；② 新增 `scan_order_ids()` 返回 `{ids,total,empty,unique,dup_ids,dup_rows}`，`fetch_existing_order_ids` 委托之，`run()` 打印「表内记录 N 行 / 唯一订单编号 M 个」并对表内既有重复打 `[警告]`（截断与重复两类问题下次自曝）；③ `run()` 的 `todo` 增加**本批 `seen` 去重**（表内 existing + 本批 seen 双重防护）；④ 新增 `wb.py feishu-register-dedup` 存量清理命令（全表分页读 → 按订单编号分组 → 每组保留表内最早一条、其余 `+record-delete --yes` ≤100/批；**默认 dry-run** 并落 `data/logs/飞书订单登记去重_*.csv` 保留/删除明细，`--apply` 才删，`--limit` 限量；幂等可续跑）。新增 `services/order/feishu_register_dedup.py`，CLI 命令数 51 → 52。 |
 | 2026-09-21 | **vendorCode 前缀正则放宽（收编「多变体序号」尾段，每店 55 条未映射清零）**：形如 `BCS-FZMG-334862442-2` / `BCS-ZZMX-191868961-15` 的卡（前缀后多一段 `-N`）与旧正则 `^BCS-([A-Z]{4})-(?:(?:ozon-card-)?\d+\|[^/]+/\d+)$`（要求「数字结尾 / 含斜杠」）不匹配 → `mapping.py` 前缀自动补录、`mapping_excel.py` 前缀兜底、`mapping_repo` 名称解析兜底**三处全部落空** ⇒ 三店各 55 条（ZZMX 15 / FZMG 10 / GYDX 10 / MQXJ 10 / PPYD 10，三店同一批）永久滞留「未映射商品」，既无中文名也无目标价、无法参与改价与价格核对。修复：`config.VC_PREFIX_RE` 尾部追加 `(?:-\d+)*`，并保留原有三种格式兼容；`merge` 复跑后单店「未映射 55 → **0**」、聚合总表在架归属 5944 → **5999**。新增离线用例 `test_01b_vc_prefix_tail_format_mapping`（断言新格式命中且 9 类非法格式仍被拒）。⚠ 放宽后归属完全按前缀走：其中 `FZMG` 组 10 张子卡俄文标题为「触摸夜灯/台灯」而其前缀在价格表对应「仿真玫瑰花藤」，**疑似前缀挂错/货不对板**，需人工看图确认后再纠偏或下架（其余 GYDX→感应灯 / MQXJ→毛球修剪器 / PPYD→拍拍夜灯 / ZZMX→针织帽 标题与归属一致）。 |
 
 ## 九、外部依赖与运行环境

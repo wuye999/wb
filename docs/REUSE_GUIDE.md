@@ -24,8 +24,11 @@
 | **折扣 < N 的商品列表**（降序接口覆盖不到低折扣侧） | `WBClient(shop).fetch_discount_goods_asc(threshold=N, limit=0)`（`sortOrder=1` 升序，首条 ≥N 即截断） | 同上 |
 | 查某店 WB 已取消订单号集合 | `wb_client.fetch_canceled_ids(shop_id, max_pages=10)` | 同上 |
 | 投诉单（列表 + 详情含商品 nmId） | `callcenter_client.fetch_appeals(session, ...)` / `fetch_appeal_detail(session, id)` | `adapters/callcenter_client.py` |
+| **WB 商品链接评分与评价**（只读，按评分/1星筛选，级联价格表） | `wb_feedback_client.iter_feedback_products(...)` / `ratings.run(args)` | `adapters/wb_feedback_client.py` ｜ `services/support/ratings.py` |
 | **BCS 一切操作**（店铺/商品/仓库/改价/库存/下架/上架/同步） | `BCSClient()` 的 19 个方法（见 3.5） | `adapters/bcs_client.py` |
-| **读飞书多维表格全量记录**（自动翻页，防 ndjson 2000 条截断） | `_record_list_all(base_token, table_id)` → `list[dict]`（每行含 `record_id` + `fields`）；单元格值用 `_sv(v)` 归一化 | `services/order/mabang_stock.py` |
+
+| **读飞书多维表格全量记录**（自动翻页，防 ndjson 2000 条截断） | `_record_list_all(base_token, table_id, field_ids=None)` → `list[dict]`（每行含 `record_id` + `fields`；`field_ids` 可只投影需要的列）；单元格值用 `_flat_cell(v)`（同 `mabang_stock._sv(v)`）归一化 | `services/order/feishu_register.py`（唯一分页读表实现，`mabang_stock`/`feishu_vc_stats`/`mabang_stock_daily` 均复用） |
+| **飞书「订单登记」订单编号去重集 + 重复统计** | `scan_order_ids(base_token, table_id)` → `{ids, total, empty, unique, dup_ids, dup_rows}`；`fetch_existing_order_ids(...)` = `scan_order_ids(...)["ids"]` | 同上 |
 | 飞书表格地址/表名 → `base_token` / `table_id` | `resolve_base(url)` / `resolve_table(base_token, name)`；默认地址 `credentials.get().feishu_base_url()` | `services/order/feishu_register.py` |
 | 飞书底层调用（其余 `lark-cli base` 子命令） | `_lark(args, payload=None, timeout=120)`（payload 走临时文件，结尾自动 `--as user`） | 同上 |
 | **飞书「订单登记」按供应商代码统计单数**（跨店合并、降序） | `vc_order_stats(days=, begin=, end=, date=, shops=, by_prefix=, with_cn=)` → dict | `services/order/feishu_vc_stats.py` |
@@ -51,7 +54,7 @@
 ## 二、5 分钟上手
 
 ```bash
-python wb.py --help                      # 51 个命令一览（或看 docs/CLI.md）
+python wb.py --help                      # 52 个命令一览（或看 docs/CLI.md）
 python wb.py shops                       # 验证凭证链路（BCS 通）
 python tests/run_tests.py --changed      # 只跑「本次改动相关」的测试（见第六节）
 ```
@@ -182,7 +185,8 @@ python tests/run_tests.py --changed      # 只跑「本次改动相关」的测�
 | `discount_svc.py` | `run_cli`（discount/discount-wb/discount-scan）`run_promo_apply` `run_promo_goods` `run_promo_gap` `run_discount_bcs` `run_price_review`；类方法 `apply_new_prices_by_nmids(shop, nm_ids)`（**跨域门面**：按 nmID 精确「应用新价格」，供 replicate 域 `price --auto-review` 调用，只审命中的待审项、不误审历史遗留） | `discount/`：`promo.py`（报名）`adverts.py`（广告推广商品查询 + `shop_adverted` 库入口）`promo_gap.py`（推广×销量双向错配审计）`price_review.py`（隔离区审核）`discount_bcs.py`（BCS 慢速改折扣） |
 | `order_svc.py` | `run_orders` `run_mabang_orders` `run_mabang_forecast` `run_feishu_register` `run_mabang_process` `run_mabang_stock_register` `run_mabang_stock_daily` `run_feishu_vc_stats` `run_fbs_delivery`；类方法 `feishu_register_stats(...)`（**跨域门面**：飞书「订单登记」统计库入口，供 discount 域 `promo-gap` 调用）`collect_delivery_goods_data(...)`（FBS 配送中统计库入口） | `order/`：`orders.py` `mabang.py` `mabang_process.py` `mabang_stock.py` `mabang_stock_daily.py` `feishu_register.py` `feishu_vc_stats.py`（按供应商代码统计单数）`fbs_delivery.py`（FBS 配送中清单商品统计） |
 | `replicate_svc.py` | `run_price` `run_stock` `run_trash` `run_replicate` `run_import_shelve` `run_dimension` `run_dims_check` `run_banned` `run_clean` `run_remote_wh` `run_shelve` `run_shelve_old` | `replicate/`：`ops.py`（薄门面）+ `ops_plan.py`（**计划构造，无副作用**）+ `ops_executor.py`（**分批执行/审计**）+ `dimension.py` `dims_check.py` `banned.py` `clean.py` `replicate.py` `import_shelve.py` `foreign_table.py` `wb_card.py` `remote_wh.py` `shelve_new.py`（新版批量接口） `shelve_old.py`（旧版上品建卡） `shelve_common.py`（上架公共解析） |
-| `support_svc.py` | `run_questions` `run_questions_watch` `run_ai_test` `run_appeals`；类方法 `generate_ai_reply` / `load_replied` / `save_replied` / `load_shown` / `save_shown` | `support/`：`questions.py` `questions_watch.py` `ai_reply_test.py` `complaints.py` |
+| `support_svc.py` | `run_questions` `run_questions_watch` `run_ai_test` `run_appeals` `run_ratings`；类方法 `generate_ai_reply` / `load_replied` / `save_replied` / `load_shown` / `save_shown` | `support/`：`questions.py` `questions_watch.py` `ai_reply_test.py` `complaints.py` `ratings.py` |
+
 
 > 门面里对外函数统一「薄转发」写法：`def run_xxx(args): return xxx_svc.method(args)`；领域实现内部 `run(args)` 返回 `0/1/130`。
 

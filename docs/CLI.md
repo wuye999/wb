@@ -70,8 +70,12 @@
 | `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
 | `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
 | `questions-watch` | 买家提问实时监听（双模式：**front=前台AI** 打印提问/商品信息到控制台与日志、前台手动回复；**back=后台AI** 常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` |
+| `chat-watch` | **AI 售后客服**：买家聊天实时监听（双模式：**front=前台AI** 打印买家消息/商品信息到控制台与日志、不发送；**back=后台AI** 常驻轮询 + LLM 自动生成俄语回复并发送）。定位=不暴露 AI、软性拒退换、其余问题模糊拖延。**平台未读标记不可用**（实测恒 0），故以「最后一条来自买家 + eventID 去重 + 时间窗」为准 | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` / `--limit` / `--history-limit` / `--since-hours`（默认 72）/ `--max-turns` |
+| `chats` | 查询 WB 买家聊天会话与消息历史（**只读**，用于上线前验证与排障；含 最新消息/待回复/未读数/nmId/供应商代码/中文名） | `--shops` / `--limit` / `--chat-id` / `--history` / `--since-hours` / `--no-detail` |
 | `appeals` | WB 平台**投诉单查询（只读）**：未处理=「等待回复」(`status_id=1`)，`--days N` 按**剩余天数恰好=N**（平台字段 `decide_counter`）筛选；逐条调详情取商品编号（nmId 仅在详情的 `brands[].products[].nmid`）；**用本地真源把 nmId 反查为供应商代码 vendorCode**（本店快照 → 映射表两级，查不到标注「本地真源未收录」，不联网核实）；输出控制台明细表 + **去重 nmId 行 + 去重 vendorCode 行** + CSV；⚠ 调详情可能被平台标记「已读」（浏览副作用，不改业务状态） | `--shops` / `--days` / `--type` / `--limit` / `--no-cn` |
+| `ratings` | WB **商品链接评分与买家评价查询（只读）**：支持按评分（`--rating 1` / `--max-rating 2`）、店铺（`--shops`）、1星评论（`--one-star`）、评价总数门槛等灵活筛选；**级联匹配商品价格表**补齐中文名、双倍售价、尺寸、前缀码；输出控制台预览并自动导出 CSV 与带格式的 Excel 报表 | `--shops` / `--rating` / `--min-rating` / `--max-rating` / `--one-star` / `--min-one-star` / `--min-feedbacks` / `--days` / `--name` / `--prefix` / `--vc` / `--limit` / `--out` |
 | `ai-test` | 离线对照测试 AI 客服回复效果（读取本地问答数据集测试 prompt，不调外网） | `--qa <json文件路径>` |
+
 | `remote-wh` | 成都仓库（国内仓）商品永久删除（dry-run 默认；`--apply --yes` 真正执行） | `--shops` / `--interval` / `--parallel` / `--apply` / `--yes` |
 | `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
 | `cookie-refresh-wb` | 无头浏览器刷新 WB 会话（401 根因=浏览器指纹信标门槛，纯脚本凭证不可独立续期；Playwright 无头持久化 context 播种既有登录态→等 validate→收割全量 cookie 回写 credentials.json；wb_client 遇 401 亦自动触发同机制重试一次） | `--shops`(店铺id逗号分隔) / `--headed`(首次播种被拒时人工登录) / `--apply` |
@@ -87,6 +91,7 @@
 | `mabang-process` | **马帮订单处理一体（零飞书依赖）**：匹配商品→预报单生成→依次上传（自动发货，config 只取一次）→**轮询确认预报成功**（预扫描 `status=1` 建店铺映射 + 每轮仅 `status=3`，判据同上）→物流交运→飞书登记（URL 读配置 feishu.base_url，--url 可覆盖）；过滤/幂等机制与 mabang-orders+mabang-forecast 一致；超时时仅对已确认成功的批次所属店铺交运（**店铺级粒度**，失败优先），飞书登记照常执行 | `--days` / `--page-size` / `--wait` / `--upload-timeout` / `--poll-interval` / `--url` / `--table` / `--apply` |
 | `feishu-register` | 新订单登记到飞书多维表格「订单登记」（数据源=**orderalllist 最近 500 条全状态订单 + 待处理订单两路合并**，按订单编号去重只登记新增；`--no-pending` 可关闭合并）：VC→中文名→下单店 wb编号→**库存SKU（本地商品价格表「库存SKU」列，查不到留空）**→WB链接；`--scope all --date/--begin/--end` 补录历史全部状态订单（orderalllist 忽略服务端日期过滤，本地按 paidTime 筛） | `--url`(可选，默认读配置 feishu.base_url) / `--table`(默认 订单登记) / `--scope latest\|pending\|all`(默认 latest) / `--date` / `--begin` / `--end` / `--apply` |
 | `feishu-vc-stats` | **只读**：读飞书「订单登记」→ 按**供应商代码（`BCS编号` = vendorCode）跨店合并**统计「**单数**」（= 登记记录条数；另附「件数」= `订单量` 求和）→ **降序**输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）。未命中原因（无日期/不在窗口/店铺被过滤）显式标注；`BCS编号` 为空的记录归入 `(无BCS编号)` 桶不丢弃 | `--days`(默认7，含今天) / `--date` / `--begin` / `--end` / `--shops`(支持 `9352` 或 `袁州1`) / `--top` / `--by-prefix` / `--no-cn` / `--url` / `--table` |
+| `feishu-register-dedup` | **存量修复**（2026-10-13 新增）：清理「订单登记」表内**重复订单编号**。全表分页读 → 按 `订单编号` 分组 → 每组**保留表内最早一条**（读取即插入顺序），其余 `+record-delete`（≤100/批）；`订单编号` 为空的行不动、单独计数。**默认 dry-run**（只出统计 + `data/logs/飞书订单登记去重_*.csv` 保留/删除明细），`--apply` 才真删；幂等可续跑（每次实时重算分组，删到一半失败直接重跑） | `--url` / `--table`(默认 订单登记) / `--apply` / `--limit N`(本次最多删 N 行，0=不限) |
 | `fbs-delivery` | **只读**：WB FBS「配送中」→ 遍历各店拉取**全部清单**及每张清单下**全部商品**（`portal/supplies/delivery` + `portal/supplies/{supplyID}/orders/delivery`，游标分页），按**清单 createdAt 时段 / 商品状态 / 店铺**筛选 → 按「**商品中文名**」统计（vc→中文名走本地映射真源；查不到归 `(中文名未知)` 桶置尾）→ 控制台汇总 + 两份 CSV（明细 + 按中文名统计，写 `data/logs/配送中*_*.csv`）。⚠ 商品明细接口返回该清单下**全部**订单（**含已取消/已售出**），**默认只保留 `shipment`（待发货）**；聚合口径：商品数=明细行数、供应商代码数=去重 vendorCode、清单数=去重 supplyID | `--shops` / `--days`(默认0=不过滤) / `--date` / `--begin` / `--end` / `--item-state`(默认 shipment；all=不过滤) / `--supply-state` / `--include-canceled` / `--limit` / `--max-pages` / `--top` / `--no-cn` / `--interval` |
 | `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
 | `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
@@ -201,6 +206,9 @@ python wb.py feishu-vc-stats --begin 2026-09-17 --end 2026-09-23   # 指定区�
 python wb.py feishu-vc-stats --shops 9352,9356          # 只统计袁州1、袁州3（短名 袁州1 亦可）
 python wb.py feishu-vc-stats --days 7 --top 20          # 控制台只看前 20 名（CSV 仍写全量）
 python wb.py feishu-vc-stats --days 7 --by-prefix       # 按 vendorCode 的 4 位前缀码聚合
+python wb.py feishu-register-dedup                      # dry-run：全表分页读并报告重复订单编号（不删任何记录）
+python wb.py feishu-register-dedup --apply              # 真删：每组保留表内最早一条，其余删除（先看 CSV 报告再执行）
+python wb.py feishu-register-dedup --limit 500 --apply  # 限制单次最多删 500 行（分次推进）
 # FBS「配送中」清单商品采集统计（只读；默认只统计「待发货」商品）
 python wb.py fbs-delivery                      # 全店全部「配送中」清单里的待发货商品，按中文名统计
 python wb.py fbs-delivery --shops 9352         # 只统计袁州1（也支持短名 袁州1）
@@ -215,12 +223,26 @@ python wb.py questions --reply "..." --question-id <id>    # 回复单条
 python wb.py questions-watch                # 前台AI：常驻监听，新提问打印到控制台与 data/logs/questions_front_*.log，前台手动回复（默认）
 python wb.py questions-watch --once         # 前台AI跑一轮（展示，不提交）
 python wb.py questions-watch --mode back --apply --interval 90   # 后台AI：常驻轮询 + LLM 自动提交（需配 ai.api_key）
+python wb.py chats --shops 9352                     # 只读：列出买家聊天会话（最新消息/待回复/nmId/供应商代码/中文名）
+python wb.py chats --shops 9352 --chat-id <uuid> --history 10   # 只读：看指定会话最近 10 条消息历史
+python wb.py chat-watch --once --shops 9352 --since-hours 900   # 前台AI跑一轮（展示买家消息+商品信息，不发送）
+python wb.py chat-watch --apply --interval 90       # 后台AI：常驻轮询 + LLM 自动回复买家聊天（需配 ai.api_key）
 python wb.py ai-test                            # 离线运行客服问答效果对比评测（不联网）
 python wb.py appeals --days 5                   # ⚠ 未处理投诉 + 剩余天数恰好=5 → 明细表 + 去重 nmId 行 + 去重 vendorCode 行 + CSV
 python wb.py appeals                            # 全部未处理投诉（不限剩余天数）
 python wb.py appeals --shops 9353 --no-cn       # 只看袁州2，不解析中文名（仍解析供应商代码）
 python wb.py appeals --type in --limit 10       # 每店最多拉 10 条列表（可能不完整，仅做快照式抽查）
+# 商品链接评分与买家评价查询（只读；自动关联价格表双倍售价、尺寸、前缀码，生成 CSV 与 Excel）
+python wb.py ratings                            # 全店评分查询（默认有评价商品 feedbackCount>=1，近365天）
+python wb.py ratings --shops 9352               # 只查袁州1
+python wb.py ratings --rating 1                 # 筛选评分为 1 的商品
+python wb.py ratings --one-star                 # 筛选含有 1 星差评的商品（智能以 1星倒序并快速截断）
+python wb.py ratings --max-rating 2             # 筛选评分 <= 2 的低分预警商品
+python wb.py ratings --min-one-star 3           # 筛选 1 星评论数 >= 3 的严重差评商品
+python wb.py ratings --name 牙膏                # 按产品中文名筛选
+python wb.py ratings --out data/logs/差评.xlsx   # 自定义导出文件路径
 python wb.py remote-wh                          # 预览成都仓库（国内仓）待删除商品
+
 python wb.py remote-wh --apply --yes            # 执行永久删除成都仓库商品（不可逆确认）
 
 # 运维

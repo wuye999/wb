@@ -65,6 +65,8 @@
 
 > 商汤日日新公测期免费（每 5 小时 1500 次），注册 platform.sensenova.cn → 控制台 → API Keys 创建 `sk-` 开头密钥即可。
 
+> 📌 `questions-watch`（买家提问）与 `chat-watch`（买家聊天/售后客服）**共用同一个 `ai` 配置块**，无需新增配置；两者提示词均**内置在代码**（`adapters/llm_client.py` / `services/support/chat_prompts.py`），不落入 `credentials.json`。
+
 ## 二、两套鉴权体系
 
 ### A. BCS 云端 API（wb.bcserp.com/prod-api）

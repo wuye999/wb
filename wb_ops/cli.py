@@ -255,6 +255,30 @@ def build_parser():
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
     p.add_argument("--once", action="store_true", help="只跑一轮就退出（测试用）")
 
+    p = sub.add_parser("chat-watch", help="AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=后台AI自动回复；默认只展示）")
+    p.add_argument("--interval", type=int, default=0, help="轮询间隔秒（默认取 credentials 的 ai.watch_interval，90）")
+    p.add_argument("--mode", choices=["front", "back"], default="front",
+                   help="front=前台AI（展示买家消息/商品信息，不发送）；back=后台AI（LLM 生成并发送）")
+    p.add_argument("--apply", action="store_true", help="等价 --mode back（后台AI自动发送，需配 ai.api_key）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--once", action="store_true", help="只跑一轮就退出（测试用）")
+    p.add_argument("--limit", type=int, default=20, help="每店最多取 N 个会话（默认 20）")
+    p.add_argument("--history-limit", type=int, default=50, dest="history_limit", help="会话历史拉取条数（默认 50）")
+    p.add_argument("--since-hours", type=int, default=72, dest="since_hours",
+                   help="只处理最近 N 小时内的买家消息（默认 72；0=不限，会补回历史旧账）")
+    p.add_argument("--max-turns", type=int, default=3, dest="max_turns", help="拼进提示词的最近对话轮数（默认 3）")
+
+    p = sub.add_parser("chats", help="查询 WB 买家聊天会话与消息历史（只读，用于验证/排障）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+    p.add_argument("--limit", type=int, default=20, help="每店最多取 N 个会话（默认 20）")
+    p.add_argument("--chat-id", default="", dest="chat_id", help="只看指定会话 chatID")
+    p.add_argument("--history", type=int, default=0,
+                   help="展示最近 N 条消息历史（默认仅在指定 --chat-id 时展示 10 条）")
+    p.add_argument("--since-hours", type=int, default=0, dest="since_hours",
+                   help="只列出最新消息在最近 N 小时内的会话（0=不限，默认）")
+    p.add_argument("--no-detail", action="store_true", dest="no_detail",
+                   help="跳过 WB 商品详情拉取（只显示本地中文名，速度快）")
+
     p = sub.add_parser("appeals", help="查询 WB 平台投诉单（只读；未处理/剩余天数筛选，输出去重商品编号与供应商代码）")
     p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部已填 cookie 店铺）")
     p.add_argument("--days", type=int, default=0,
@@ -265,6 +289,23 @@ def build_parser():
     p.add_argument("--limit", type=int, default=0, help="每店最多拉取 N 条投诉列表（0=不限，翻页到底）")
     p.add_argument("--no-cn", action="store_true",
                    help="不解析商品中文名（供应商代码仍会解析；本地真源查不到的商品标注「本地真源未收录」）")
+
+    p = sub.add_parser("ratings", aliases=["feedbacks", "product-ratings"],
+                       help="查询商品链接评分与评价情况（只读；支持按评分/店铺/1星评论筛选，导出包含价格表数据的报表）")
+    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔（默认全部）")
+    p.add_argument("--rating", type=float, default=None, help="精确筛选指定评分（如 1 或 1.0）")
+    p.add_argument("--min-rating", type=float, default=None, help="最低评分（>=）")
+    p.add_argument("--max-rating", type=float, default=None, help="最高评分（<=，如 1 或 2 筛选低分商品）")
+    p.add_argument("--one-star", action="store_true", help="筛选存在 1 星评论的商品（oneStar >= 1）")
+    p.add_argument("--min-one-star", type=int, default=0, help="筛选 1 星评论数 >= N 的商品")
+    p.add_argument("--min-feedbacks", type=int, default=1, help="最低评价总数（默认 1，仅看有评价商品；设为 0 含无评价）")
+    p.add_argument("--days", type=int, default=365, help="统计天数跨度（默认 365 天）")
+    p.add_argument("--name", default="", help="按产品中文名包含筛选")
+    p.add_argument("--prefix", default="", help="按 4 位前缀码筛选")
+    p.add_argument("--vc", default="", help="按 vendorCode 筛选")
+    p.add_argument("--limit", type=int, default=0, help="每店最多拉取商品条数（0=不限）")
+    p.add_argument("--out", default="", help="自定义导出文件路径（支持 .csv / .xlsx）")
+
 
     p = sub.add_parser("ai-test", help="离线用 data/ai_test_qa.json 对照测试 AI 客服回复（不联网）")
     p.add_argument("--qa", default=config.AI_TEST_QA, help="测试数据集 json（默认 data/ai_test_qa.json）")
@@ -306,7 +347,13 @@ def build_parser():
                    help="不合并「待处理订单」数据源（默认 scope=latest 会合并 orderalllist + 待处理订单，"
                         "让只匹配但未进预报/上传/交运流程的订单也能登记）")
 
-
+    p = sub.add_parser("feishu-register-dedup",
+                       help="存量修复：「订单登记」表内重复订单编号清理"
+                            "（按订单编号分组，每组保留表内最早一条、其余删除；dry-run 默认）")
+    p.add_argument("--url", default="", help="飞书多维表格地址（可选，默认读配置 feishu.base_url）")
+    p.add_argument("--table", default="订单登记", help="表格名（默认 订单登记）")
+    p.add_argument("--apply", action="store_true", help="真正删除重复记录（默认 dry-run 只出报告）")
+    p.add_argument("--limit", type=int, default=0, help="本次最多删除 N 行（0=不限）")
 
     p = sub.add_parser("mabang-stock-register",
                        help="拉取马帮全部库存 SKU → 全量重建飞书「马帮库存登记表」（含附件列「图」）")

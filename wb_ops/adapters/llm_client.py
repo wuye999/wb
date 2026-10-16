@@ -33,11 +33,17 @@ class LLMClient:
         self.model = model or DEFAULT_MODEL
         self.max_tokens = max_tokens
 
-    def generate_reply(self, question: str, product_info: str, custom_system_prompt: Optional[str] = None) -> Optional[str]:
+    def generate_messages(self, system_prompt: str, user_prompt: str,
+                          temperature: float = 0.6) -> Optional[str]:
+        """通用对话补全：直接下发 system/user 两条消息（供售后客服等自定义 prompt 场景）。
+
+        与 `generate_reply` 复用同一 transport / 超时 / 异常处理，行为一致。
+        """
+        return self._chat(system_prompt, user_prompt, temperature)
+
+    def _chat(self, system_prompt: str, user_prompt: str, temperature: float = 0.6) -> Optional[str]:
         if not self.api_key:
             return None
-        sys_p = custom_system_prompt or SYSTEM_PROMPT
-        user = f"商品信息：\n{product_info}\n\n买家问题：\n{question}"
         try:
             resp = requests.post(
                 self.base_url,
@@ -45,10 +51,10 @@ class LLMClient:
                 json={
                     "model": self.model,
                     "messages": [
-                        {"role": "system", "content": sys_p},
-                        {"role": "user", "content": user},
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
                     ],
-                    "temperature": 0.6,
+                    "temperature": temperature,
                     "max_tokens": self.max_tokens,
                 },
                 timeout=300,
@@ -60,3 +66,10 @@ class LLMClient:
             return content.strip() or None
         except Exception:
             return None
+
+    def generate_reply(self, question: str, product_info: str, custom_system_prompt: Optional[str] = None) -> Optional[str]:
+        if not self.api_key:
+            return None
+        sys_p = custom_system_prompt or SYSTEM_PROMPT
+        user = f"商品信息：\n{product_info}\n\n买家问题：\n{question}"
+        return self._chat(sys_p, user)

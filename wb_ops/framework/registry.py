@@ -36,7 +36,7 @@ class CommandRegistry:
 
 registry = CommandRegistry()
 
-# 注册全部 51 个命令的动态模块映射
+# 注册全部 54 个命令的动态模块映射
 registry.register("shops", "wb_ops.adapters.bcs_client", "print_shops")
 registry.register("fetch", "wb_ops.services.catalog_svc", "run_fetch")
 registry.register("mapping", "wb_ops.services.catalog_svc", "run_mapping")
@@ -71,11 +71,16 @@ registry.register("price-review", "wb_ops.services.discount_svc", "run_price_rev
 registry.register("orders", "wb_ops.services.order_svc", "run_orders")
 registry.register("questions", "wb_ops.services.support_svc", "run_questions")
 registry.register("questions-watch", "wb_ops.services.support_svc", "run_questions_watch")
+registry.register("chat-watch", "wb_ops.services.support_svc", "run_chat_watch")
+registry.register("chats", "wb_ops.services.support_svc", "run_chats")
 registry.register("ai-test", "wb_ops.services.support_svc", "run_ai_test")
 registry.register("appeals", "wb_ops.services.support_svc", "run_appeals")
+registry.register("ratings", "wb_ops.services.support_svc", "run_ratings", alias="product-ratings")
 registry.register("mabang-orders", "wb_ops.services.order_svc", "run_mabang_orders")
+
 registry.register("mabang-forecast", "wb_ops.services.order_svc", "run_mabang_forecast")
 registry.register("feishu-register", "wb_ops.services.order_svc", "run_feishu_register")
+registry.register("feishu-register-dedup", "wb_ops.services.order_svc", "run_feishu_register_dedup")
 registry.register("mabang-stock-register", "wb_ops.services.order_svc", "run_mabang_stock_register")
 registry.register("mabang-stock-daily", "wb_ops.services.order_svc", "run_mabang_stock_daily")
 registry.register("feishu-vc-stats", "wb_ops.services.order_svc", "run_feishu_vc_stats")

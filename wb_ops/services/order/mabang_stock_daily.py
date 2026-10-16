@@ -17,7 +17,8 @@ DATE_COL_RE = re.compile(r"^(\d{1,2})月(\d{1,2})日新订单量$")
 
 def read_orders_daily(base_token, orders_table_id, begin, end):
     """读「订单登记」→ {date: {库存SKU: 总件数}}；无库存SKU 的订单单独计数"""
-    from .mabang_stock import _record_list_all, _sv
+    from .feishu_register import _record_list_all
+    from .mabang_stock import _sv
     daily, no_sku = {}, Counter()
     for d in _record_list_all(base_token, orders_table_id):
         fields = d.get("fields") or d
@@ -38,7 +39,8 @@ def read_orders_daily(base_token, orders_table_id, begin, end):
 
 def read_stock_records(base_token, table_id):
     """读「马帮库存登记表」→ [(record_id, 库存SKU, fields_dict)]"""
-    from .mabang_stock import _record_list_all, _sv
+    from .feishu_register import _record_list_all
+    from .mabang_stock import _sv
     res = []
     for d in _record_list_all(base_token, table_id):
         rid = d.get("record_id")

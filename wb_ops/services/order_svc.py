@@ -9,6 +9,7 @@ from .order import (
     mabang_process,
     mabang_stock,
     feishu_register,
+    feishu_register_dedup,
     feishu_vc_stats,
     fbs_delivery,
     orders,
@@ -29,6 +30,10 @@ class OrderService:
     def register_to_feishu(self, args: Any) -> int:
         """马帮订单登记到飞书多维表格"""
         return feishu_register.run(args)
+
+    def dedup_feishu_register(self, args: Any) -> int:
+        """飞书「订单登记」存量重复清理（按订单编号分组，保留表内最早一条）"""
+        return feishu_register_dedup.run(args)
 
     def process_pipeline(self, args: Any) -> int:
         """马帮订单一体化管道：匹配→预报→发货→交运"""
@@ -88,6 +93,10 @@ def run_mabang_forecast(args):
 
 def run_feishu_register(args):
     return order_svc.register_to_feishu(args)
+
+
+def run_feishu_register_dedup(args):
+    return order_svc.dedup_feishu_register(args)
 
 
 def run_mabang_process(args):

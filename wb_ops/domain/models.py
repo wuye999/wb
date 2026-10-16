@@ -252,3 +252,28 @@ class ShelveItem:
     images: str = ""                             # 附图分号拼接 (可选，旧接口需要)
     extra: Dict[str, Any] = field(default_factory=dict)
 
+
+@dataclass(slots=True, frozen=True)
+class ProductRatingItem:
+    """商品链接评分与买家评价领域实体"""
+    shop_id: int
+    shop_name: str
+    nm_id: int
+    vendor_code: str
+    name: str = ""                               # 平台商品标题（俄语）
+    rating: float = 0.0                          # 卡片质量评分 (1-10)
+    feedback_rating: float = 0.0                 # 买家评价评分 (0-5.0)
+    feedback_count: int = 0                      # 评价总数
+    one_star: int = 0                            # 1星评价数
+    two_star: int = 0                            # 2星评价数
+    three_star: int = 0                          # 3星评价数
+    four_star: int = 0                           # 4星评价数
+    five_star: int = 0                           # 5星评价数
+    is_shadowed: bool = False                    # 是否被平台屏蔽
+    cn_name: str = ""                            # 产品中文名（商品价格表）
+    price: Optional[float] = None                # 售价（商品价格表双倍售价）
+    dimensions: str = ""                         # 尺寸（商品价格表）
+    prefix: str = ""                             # vendorCode前缀码（商品价格表）
+    source_wb: str = "商品评分API"               # wb编号来源
+
+

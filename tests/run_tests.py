@@ -43,12 +43,13 @@ CATALOG_CMDS = ["fetch", "mapping", "mapping-import", "mapping-check", "mismatch
                 "review", "merge", "mapping-rename", "shops-mapping"]
 DISCOUNT_CMDS = ["discount", "promo-apply", "promo-goods", "promo-gap", "discount-bcs", "price-review"]
 ORDER_CMDS = ["orders", "mabang-orders", "mabang-forecast", "feishu-register",
+              "feishu-register-dedup",
               "mabang-stock-register", "mabang-stock-daily", "feishu-vc-stats", "fbs-delivery",
               "mabang-process", "promo-gap"]
 REPLICATE_CMDS = ["price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs", "trash",
                   "replicate", "import-shelve", "dimension",
                   "dims-check", "banned", "clean", "remote-wh", "shelve", "shelve-old"]
-SUPPORT_CMDS = ["questions", "questions-watch", "ai-test", "appeals"]
+SUPPORT_CMDS = ["questions", "questions-watch", "ai-test", "appeals", "chat-watch", "chats", "ratings"]
 
 PATH_HINTS = [
     # 注册与声明类：只影响解析/注册/新增模型 → 冒烟即可
@@ -58,9 +59,16 @@ PATH_HINTS = [
     ("wb_ops/framework/registry.py", ["SMOKE"]),
     ("wb_ops/domain/", ["SMOKE"]),
     # 业务实现（按域定向）
+    ("wb_ops/services/support/ratings.py", ["ratings"]),
+    ("wb_ops/adapters/wb_feedback_client.py", ["ratings"]),
     ("wb_ops/services/support/complaints.py", ["appeals"]),
+    ("wb_ops/services/support/chat_watch.py", ["chat-watch"]),
+    ("wb_ops/services/support/chat_inspect.py", ["chats"]),
+    ("wb_ops/services/support/chat_prompts.py", ["chat-watch"]),
+    ("wb_ops/adapters/chat_client.py", ["chat-watch", "chats"]),
     ("wb_ops/adapters/callcenter_client.py", ["appeals"]),
     ("wb_ops/services/support/", SUPPORT_CMDS),
+
     ("wb_ops/services/replicate/dims_check.py", ["dims-check"]),
     ("wb_ops/services/replicate/dimension.py", ["dimension"]),
     ("wb_ops/services/replicate/banned.py", ["banned"]),
@@ -97,7 +105,8 @@ PATH_HINTS = [
     ("wb_ops/services/order/mabang_process.py", ["mabang-process"]),
     ("wb_ops/services/order/mabang_stock", ["mabang-stock-register", "mabang-stock-daily", "feishu-vc-stats"]),
     ("wb_ops/services/order/mabang.py", ["mabang-orders", "mabang-forecast", "mabang-process"]),
-    ("wb_ops/services/order/feishu_register.py", ["feishu-register", "feishu-vc-stats"]),
+    ("wb_ops/services/order/feishu_register_dedup.py", ["feishu-register-dedup"]),
+    ("wb_ops/services/order/feishu_register.py", ["feishu-register", "feishu-vc-stats", "feishu-register-dedup"]),
     ("wb_ops/services/order/feishu_vc_stats.py", ["feishu-vc-stats"]),
     ("wb_ops/services/order/fbs_delivery.py", ["fbs-delivery"]),
     ("wb_ops/services/order/", ORDER_CMDS),
@@ -109,11 +118,11 @@ PATH_HINTS = [
     ("wb_ops/services/support_svc.py", SUPPORT_CMDS),
     # 适配器
     ("wb_ops/adapters/mabang_client.py", ORDER_CMDS),
-    ("wb_ops/adapters/wb_client.py", ["discount", "promo-goods", "promo-gap", "banned", "dims-check", "appeals", "questions", "orders"]),
+    ("wb_ops/adapters/wb_client.py", ["discount", "promo-goods", "promo-gap", "banned", "dims-check", "appeals", "questions", "orders", "chat-watch", "chats"]),
     ("wb_ops/adapters/wb_ads_client.py", ["promo-goods", "promo-gap"]),
     ("wb_ops/adapters/bcs_client.py", ["shops", "fetch", "stock", "price"]),
     ("wb_ops/adapters/task_runner.py", ["fetch", "orders"]),
-    ("wb_ops/adapters/llm_client.py", ["questions-watch", "ai-test"]),
+    ("wb_ops/adapters/llm_client.py", ["questions-watch", "ai-test", "chat-watch"]),
     ("wb_ops/adapters/cookies.py", ["cookies-update"]),
     ("wb_ops/adapters/cookie_bridge.py", ["cookie-refresh-wb"]),
     ("wb_ops/adapters/", ["SMOKE"]),

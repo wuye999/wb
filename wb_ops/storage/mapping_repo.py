@@ -121,6 +121,53 @@ class MappingRepository:
             return {}
 
     @classmethod
+    def load_boss_details(cls) -> Dict[str, Dict[str, Any]]:
+        """从商品价格表加载完整商品详情索引（按 4 位前缀码与中文名双向索引）。
+
+        返回:
+            {
+                "by_prefix": {prefix: {"sku", "cn", "dp", "dim", "price", "prefix", "stock_sku"}},
+                "by_cn": {cn: {"sku", "cn", "dp", "dim", "price", "prefix", "stock_sku"}}
+            }
+        """
+        if not os.path.exists(config.BOSS_XLSX):
+            return {"by_prefix": {}, "by_cn": {}}
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
+            ws = wb["Sheet1"]
+            by_prefix = {}
+            by_cn = {}
+            for row in ws.iter_rows(min_row=2):
+                sku = str(row[1].value).strip() if len(row) > 1 and row[1].value else ""
+                cn = str(row[2].value).strip() if len(row) > 2 and row[2].value else ""
+                if not sku and not cn:
+                    continue
+                dp = row[3].value if len(row) > 3 else None
+                dim = str(row[4].value).strip() if len(row) > 4 and row[4].value else ""
+                price = row[5].value if len(row) > 5 else None
+                prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
+                stock_sku = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
+                item = {
+                    "sku": sku,
+                    "cn": cn,
+                    "dp": dp,               # 双倍售价 (用户指定口径)
+                    "dim": dim,             # 尺寸
+                    "price": price,         # 最低售价
+                    "prefix": prefix,       # vendorCode前缀码
+                    "stock_sku": stock_sku,
+                }
+                if prefix and prefix not in by_prefix:
+                    by_prefix[prefix] = item
+                if cn and cn not in by_cn:
+                    by_cn[cn] = item
+            wb.close()
+            return {"by_prefix": by_prefix, "by_cn": by_cn}
+        except Exception:
+            return {"by_prefix": {}, "by_cn": {}}
+
+
+    @classmethod
     def build_vc_resolver(cls) -> Tuple[Callable[[str, str], str], Dict[str, str]]:
         """构建毫秒级商品中文名反查解析器。
         

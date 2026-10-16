@@ -416,6 +416,11 @@ python wb.py mabang-forecast --check --status 99          #    只看「预报�
 
 # 补录历史订单（全部状态，指定日期/区间）
 python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-05 --apply
+
+# 存量修复：清理「订单登记」表内重复订单编号（dry-run 默认，先看报告再 --apply）
+python wb.py feishu-register-dedup                      # 只读全表 → 报告重复编号/多余行 + 落 CSV，不删任何记录
+python wb.py feishu-register-dedup --apply              # 真删：每个订单编号保留表内最早一条，其余删除（≤100/批）
+python wb.py feishu-register-dedup --limit 500 --apply  # 限制单次最多删 500 行（分次推进）
 ```
 
 - ⚠ 口径（2026-09-10 拆分）：**`mabang-process` 与 `feishu-register` 完全独立**——前者只做马帮处理（匹配/预报/上传/交运，零飞书调用），后者只做飞书登记（orderalllist 最近 500 条全状态订单 + 待处理订单两路合并，订单编号去重只登新增；`--no-pending` 可关闭合并）。只处理 `shop_map` 内店铺（其他员工的马帮店铺如 子龙2/子龙 不在本环境处理，由其在自己环境运行）；**已取消订单（WB 门户 portal/fbs/orders/canceled 逐店查询）排除在登记/预报/上传/交运之外**（取消单不出现在马帮列表，属防御性过滤，逐店查询失败时降级跳过）；**价格表缺库存 SKU 的订单（NO_SKU）只登记/匹配、不进批次/上传/交运**，执行时逐单打印并导出 `data/logs/缺库存SKU订单_*.csv`，需人工处理。
@@ -423,6 +428,8 @@ python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-0
 - 🔬 抓包实测补充（2026-09-30，`api/网络请求/马帮预报列表查询 待上传、上传中.har`）：① `uploadForecastBatch` 响应**只有** `{"success":true,"message":"批次已插入上传队列，请5-10分后查看预报结果"}` —— **无任务 id / 无进度字段**，故完成判定只能靠列表轮询；② 上传后 **≤0.3s 行级 `status` 即由 1 变 2（上传中）**；③ 「上传中」期间 `successNum` **恒为 0**（没有「部分完成」判据），成功后才 `successNum==total` 且 `handoverNumber` 回填；④ `getForecastConfig` 模板与批次无关，**上传前只取一次**（脚本已同步为循环外取一次，N 批省 N−1 次请求）；⑤ 四个统计（waitTotal/succesTotal/failTotal/historyTotal）为**全局值、不随 tab 变**，且 `waitTotal` 把 status=1（排队）与 status=2（上传中）一并计数；⑥ 轮询节奏已精简为「预扫描 status=1 一次 + 每轮仅 status=3 一次」，`status=5` 兜底限频（连续 3 轮未命中或过半超时各一次）。
 - 前置：`data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）为最新值；飞书鉴权走 `lark-cli` 用户身份。
 - 口径：只处理 shop_map 内店铺（马帮 子龙主2/子龙主2（1）/子龙主2（2）↔ 袁州1/2/3）；订单编号为飞书去重键，重复不登记；wb编号 = **下单店铺自己的码**（非映射表主店码）；库存SKU = **本地商品价格表「库存SKU」列（第 8 列）**，查不到一律留空（含只匹配未进预报/上传/交运流程的订单；不再回写马帮系统的匹配值，避免 `BCS-xxx-40-56` 这类非法值）；中文名一律以本地映射表为准（查不到留空但**仍登记**）。
+- ⚠ 去重集**必须全表分页读取**（`feishu_register.scan_order_ids` / `_record_list_all`，`--limit 2000 --offset` 按 manifest `has_more` 翻页）。**2026-10 事故**：旧实现只读 lark-cli ndjson 第一页（省略 `--limit` 时默认 2000 条、按插入序最早在前、不读 `has_more`），表记录数越过 2000 行（约 2026-10-01）后去重集被冻结在「最老 2000 行的 1991 个编号」，导致其后每次运行都把已登记订单判为「未登记」而重复写入（实测表内 6429 行仅 3496 个唯一订单编号、837 个编号重复、最多 `5923036047` 出现 15 次）。读取侧已修复，且 `feishu-register` 现在会打印「表内记录 N 行 / 唯一订单编号 M 个」并在发现重复时 `[警告]` 提示；**存量重复用 `wb.py feishu-register-dedup` 清理**（默认 dry-run，每组保留最早一条）。
+- ⚠ `feishu-register-dedup` 的删除**不可逆**（`+record-delete --yes`，飞书无回收站）：先跑默认 dry-run 核对数字并留存 `data/logs/飞书订单登记去重_*.csv`（完整保留/删除明细）再 `--apply`；命令天然幂等，删到一半失败直接重跑即可续删。
 - 每步产出 CSV 报告（`data/logs/马帮订单匹配_* / 马帮预报批次_* / 飞书订单登记_*.csv`）；某步失败即中止后续。
 - 飞书侧结构：「订单登记」表（明细，日期精确到分钟/店铺短名/中文名/**库存SKU**/wb编号/商品链接/订单量/下单日期公式字段）+「销量看板」仪表盘（实时聚合图表：每天×中文名柱状图、中文名与商品(链接)排行，手工改动也自动反映）。
 - 马帮库存登记：`python wb.py mabang-stock-register --apply` 全量重建「马帮库存登记表」（马帮全部库存SKU 的库存总量/状态/附件列「图」；⚠ 重建会**清空全部记录**，各日订单量列与「总新增订单量」一并被清空，需重跑 `mabang-stock-daily` 回填）；每日新订单量列（时间段管理）：`python wb.py mabang-stock-daily --begin 2026-09-08 --apply`（**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列、补建至 `--end` 的缺列；**`--end` 必须与 `--begin`/`--date` 同用，单独使用会报错退出**；不带参数则只建今天列、更新全部已有列、不删列。填充=有单写数量、**无单即清空（含残留旧值）**；同步更新「总新增订单量」列=**当前所有存活日期列之和**）。
@@ -539,6 +546,23 @@ python wb.py appeals --no-cn         # 不解析中文名（供应商代码仍�
 - ⚠ 纯只读，无 `--apply`：不写 BCS、不改价格/库存/商品。cookie 失效（403/登录页）→ `python wb.py cookies-update <抓包md>`。
 
 
+
+## 12c. AI 售后客服（买家聊天自动回复，chat-watch / chats）
+
+> 场景：WB 后台「与买家沟通(chat-with-clients)」里的买家聊天（多含退货/换货/退款/投诉/物流等售后诉求）。用 AI 自动回复，定位 = **不暴露 AI、软性拒绝退货换货、其余问题模糊拖延（踢皮球）**。
+
+```bash
+python wb.py chats --shops 9352                       # 只读：列会话（最新消息 / 待回复 / nmId / 供应商代码 / 中文名）
+python wb.py chats --shops 9352 --chat-id <uuid> --history 10   # 看指定会话最近 10 条消息历史
+python wb.py chat-watch --once --shops 9352 --since-hours 900   # 前台AI跑一轮（展示买家消息+商品信息，不发送）
+python wb.py chat-watch --apply --interval 90                   # 后台AI常驻：LLM 生成俄语回复并自动发送
+```
+- ✅ 日志：前台 `data/logs/chat_watch_front_*.log`；后台 `data/logs/chat_watch_*.csv`（时间/店铺/会话ID/nmId/买家消息/AI回复/结果）；只读查询落 `data/logs/买家聊天_*.csv`。
+- 📌 **触发口径**：只处理「**最新一条来自买家**」的会话消息，并叠加**时间窗**（`--since-hours`，默认 **72 小时**；0=不限）。⚠ **平台未读标记不可用**——实测所有会话 `unreadCount` 恒为 0、unread 接口 `messageCount=0`，故不以「未读」为闸门；用「最后一条来自买家 + eventID 去重 + 时间窗」三件套。
+- 📌 **去重**：键 = `店铺ID|会话ID` → 最新处理的买家消息 `eventID`；前台记 `data/state/chat_front_shown.json`，后台记 `data/state/chat_replied.json`（**仅 `--apply` 且发送成功才写**）。同一会话同一条消息不会重复回复。
+- 📌 **商品信息**：由消息内 `goodCard.nmID` 经本地真源反查供应商代码 → 中文名，再拉 basket `card.json`（标题/颜色/价格/描述/特征）拼进提示词（与 `questions` 同款）。
+- ⚠ **公开发言**：先 `--once`（前台展示 / 后台 dry-run）人工抽查话术，确认 OK 再 `--apply` 常驻。`chat-watch` 复用 `credentials.json` 的 `ai` 配置块（无需新增配置）；提示词内置在代码 `wb_ops/services/support/chat_prompts.py`。
+- ⚠ 消息接口走 `seller-chat.wildberries.ru` 域，与 `questions`/`appeals` 同用 WB cookie 三件套；cookie 失效同 `python wb.py cookies-update <抓包md>`。
 
 ## 13. 每日自动运行（仅当已主动创建计划任务）
 

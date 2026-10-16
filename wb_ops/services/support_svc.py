@@ -38,6 +38,16 @@ class CustomerSupportService:
         from .support import questions_watch
         return questions_watch.run(args)
 
+    def watch_and_reply_chats(self, args: Any) -> int:
+        """运行买家聊天（售后客服）自动轮询监控"""
+        from .support import chat_watch
+        return chat_watch.run(args)
+
+    def list_chats(self, args: Any) -> int:
+        """运行买家聊天会话只读查询（验证/排障）"""
+        from .support import chat_inspect
+        return chat_inspect.run(args)
+
     def test_ai_dialog(self, args: Any) -> int:
         """测试大模型客服对话应答"""
         from .support import ai_reply_test
@@ -47,6 +57,11 @@ class CustomerSupportService:
         """运行 WB 平台投诉单查询（只读：未处理 + 剩余天数筛选）"""
         from .support import complaints
         return complaints.run(args)
+
+    def list_product_ratings(self, args: Any) -> int:
+        """运行 WB 商品链接评分与买家评价查询（只读：多维筛选 + 价格表级联匹配）"""
+        from .support import ratings
+        return ratings.run(args)
 
 
 support_svc = CustomerSupportService()
@@ -60,10 +75,22 @@ def run_questions_watch(args):
     return support_svc.watch_and_auto_reply(args)
 
 
+def run_chat_watch(args):
+    return support_svc.watch_and_reply_chats(args)
+
+
+def run_chats(args):
+    return support_svc.list_chats(args)
+
+
 def run_ai_test(args):
     return support_svc.test_ai_dialog(args)
 
 
 def run_appeals(args):
     return support_svc.list_pending_appeals(args)
+
+
+def run_ratings(args):
+    return support_svc.list_product_ratings(args)
 

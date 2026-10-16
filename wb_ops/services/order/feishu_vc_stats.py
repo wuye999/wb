@@ -14,7 +14,8 @@ wb_ops 飞书「订单登记」按供应商代码(BCS编号)统计单数并降�
 
 数据源与鉴权：飞书多维表格，经 `lark-cli`（`--as user`，无需另配 token）读取。复用：
 - `services/order/feishu_register.resolve_base / resolve_table`（地址与表名 → token/id）
-- `services/order/mabang_stock._record_list_all / _sv`（**分页**读全表，防 ndjson 2000 条截断）
+- `services/order/feishu_register._record_list_all`（**分页**读全表，防 ndjson 2000 条截断）
+- `services/order/mabang_stock._sv`（单元格取值）
 
 可编程调用（供其它脚本 import；全部显式关键字参数）：
     from wb_ops.services.order.feishu_vc_stats import vc_order_stats
@@ -36,8 +37,8 @@ from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
 from wb_ops.storage.mapping_repo import MappingRepository
-from .feishu_register import resolve_base, resolve_table
-from .mabang_stock import _record_list_all, _sv
+from .feishu_register import resolve_base, resolve_table, _record_list_all
+from .mabang_stock import _sv
 
 DATE_FMT = "%Y-%m-%d"
 DEFAULT_TABLE = "订单登记"
@@ -231,7 +232,7 @@ def read_register_rows(base_token: str, table_id: str, begin: str = "", end: str
                        ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """读「订单登记」全量记录 → 本地过滤 → (命中行, 统计)。
 
-    复用 `mabang_stock._record_list_all`（分页，防 ndjson 2000 条截断）。
+    复用 `feishu_register._record_list_all`（分页，防 ndjson 2000 条截断）。
     `stats` 显式记录各类未命中原因，**不静默丢弃**：
       {'总记录','无日期','日期不在窗口','店铺被过滤','无BCS编号'}
     （`无BCS编号` 的记录**仍保留**，会归入 `(无BCS编号)` 桶参与统计。）

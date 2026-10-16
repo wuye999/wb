@@ -8,7 +8,6 @@ wb_ops 马帮库存登记：拉取马帮全部库存 SKU → 全量重建飞书�
 写入：全量重建（先清空表再写入），图片下载后经 +record-upload-attachment 传「图」附件列
 约定：默认 dry-run；--apply 真正执行；库存总量可为负，原样写入
 """
-import json
 import os
 import shutil
 import tempfile
@@ -20,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from wb_ops import common
 from wb_ops import credentials
 from wb_ops.adapters import mabang_client as mbc   # 马帮 HTTP 原语（唯一实现，勿经服务层转发模块调用）
-from .feishu_register import _lark, resolve_base, resolve_table
+from .feishu_register import _lark, resolve_base, resolve_table, _record_list_all
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -64,41 +63,12 @@ def fetch_stock_list(cred):
     return mbc.fetch_stock_list(cred)
 
 
-def _record_list_all(base_token, table_id):
-    """分页读全表 → list[dict]（lark-cli ndjson 单次上限 2000，按 manifest 翻页）"""
-    rows, offset, page = [], 0, 0
-    while True:
-        out = os.path.join(tempfile.gettempdir(), f"_mbstock_rl_{os.getpid()}_{page}.ndjson")
-        man_path = out.replace(".ndjson", ".manifest.json")
-        for p in (out, man_path):
-            if os.path.exists(p):
-                os.remove(p)
-        man = _lark(["+record-list", "--base-token", base_token, "--table-id", table_id,
-                     "--limit", "2000", "--offset", str(offset),
-                     "--format", "ndjson", "--output", out, "--overwrite"])
-        if os.path.exists(out):
-            with open(out, encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        rows.append(json.loads(line))
-        for p in (out, man_path):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-        if not man.get("has_more"):
-            return rows
-        nxt = man.get("next_offset")
-        if nxt in (None, ""):
-            raise RuntimeError(f"record-list 报告 has_more 但未给 next_offset"
-                               f"（已读 {len(rows)} 条），为避免漏读已中止")
-        offset, page = int(nxt), page + 1
-        time.sleep(0.3)
-
-
 def _read_all_record_ids(base_token, table_id):
-    """读全表现有记录 ID 列表（清空前用；分页防截断）"""
+    """读全表现有记录 ID 列表（清空前用；分页防截断）
+
+    `_record_list_all` 已收敛到 `feishu_register`（唯一分页读表实现，防 ndjson 2000 条截断），
+    本模块经 `from .feishu_register import _record_list_all` 复用。
+    """
     return [str(d["record_id"]) for d in _record_list_all(base_token, table_id)
             if d.get("record_id")]
 

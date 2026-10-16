@@ -14,6 +14,11 @@ wb_ops 马帮订单登记到飞书多维表格「订单登记」（原 爆品登
        wb编号=下单店铺快照 vendorCode→nmId（≠映射表主店码）；商品链接=WB 详情页
        订单量=订单摘要件数（解析不到默认 1）
   3. 按「订单编号」去重：已登记的不重复登记
+     ⚠ 去重集必须**全表分页读取**（scan_order_ids / _record_list_all）。
+     2026-10 事故：旧实现只读 ndjson 第一页（默认上限 2000 条、按插入序最早在前），
+     表记录数过 2000 行后去重集被冻结在「最老 2000 行的 1991 个编号」，
+     导致新登记订单每次运行都被判为未登记而重复写入（实测 6429 行仅 3496 个唯一编号）。
+     存量清理见 wb.py feishu-register-dedup。
   4. dry-run 默认；--apply 经 lark-cli record-batch-create 写入（≤200/批）
 
 变量：--url 表格地址、--table 表格名（不硬编码）。
@@ -24,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 
 from wb_ops import config
@@ -86,35 +92,103 @@ def resolve_table(base_token, table_name):
     raise RuntimeError(f"表格「{table_name}」不存在；现有表格: {names}")
 
 
+ORDER_ID_FIELD = "订单编号"
+
+
+def _record_list_all(base_token, table_id, field_ids=None):
+    """分页读飞书表全部记录 → list[dict]（每行含 record_id + fields）。
+
+    为什么必须分页：lark-cli `+record-list --format ndjson` **单次上限 2000 条**
+    （help：`--limit ... 1-2000 for ndjson; omitted limit uses 2000`），且默认按
+    插入顺序（最早在前）返回。只读第一页会静默截断 —— 本文件 2026-10 的
+    「订单登记重复写入」事故即由此而来（表过 2000 行后去重集被冻结）。
+    本函数按 manifest 的 has_more/next_offset 翻页读完为止。
+
+    Args:
+        base_token / table_id: 表定位。
+        field_ids: 可选字段投影（列名或列 id），非空时逐项 --field-id 以减小 ndjson 体积。
+
+    Returns:
+        list[dict]：每行形如 {"record_id": ..., "fields": {列名: 值}}。
+
+    Raises:
+        RuntimeError: manifest 报 has_more 却无 next_offset、或某页 0 行却报 has_more
+            —— 宁可报错中止也不静默漏读。
+    """
+    rows, offset, page = [], 0, 0
+    while True:
+        # 临时文件带 pid + 页码：并发/重入不互相覆盖（旧实现固定名 _lark_existing.ndjson）
+        out = os.path.join(tempfile.gettempdir(), f"_lark_rl_{os.getpid()}_{page}.ndjson")
+        man_path = out.replace(".ndjson", ".manifest.json")
+        for p in (out, man_path):
+            if os.path.exists(p):
+                os.remove(p)
+        cmd = ["+record-list", "--base-token", base_token, "--table-id", table_id,
+               "--limit", "2000", "--offset", str(offset),
+               "--format", "ndjson", "--output", out, "--overwrite"]
+        for fid in (field_ids or []):
+            cmd += ["--field-id", fid]
+        man = _lark(cmd)                      # 带 --output 的调用返回裸 manifest JSON
+        before = len(rows)
+        if os.path.exists(out):
+            with open(out, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+        for p in (out, man_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        if not man.get("has_more"):
+            return rows
+        nxt = man.get("next_offset")
+        if nxt in (None, ""):
+            raise RuntimeError(f"record-list 报告 has_more 但未给 next_offset"
+                               f"（已读 {len(rows)} 条），为避免漏读已中止")
+        if len(rows) == before:
+            raise RuntimeError(f"record-list 第 {page + 1} 页返回 0 行却报告 has_more，"
+                               f"异常中止（已读 {len(rows)} 条）")
+        offset, page = int(nxt), page + 1
+        time.sleep(0.3)
+
+
+def _flat_cell(v):
+    """单元格值 → 去空格字符串（兼容 list/dict 富文本）"""
+    if isinstance(v, list):
+        v = "".join(str(x.get("text", x) if isinstance(x, dict) else x) for x in v)
+    return "" if v is None else str(v).strip()
+
+
+def scan_order_ids(base_token, table_id):
+    """全表分页读「订单编号」→ 去重集合 + 重复统计（run 去重与存量清理共用）。
+
+    返回 dict:
+        ids      set[str]   非空订单编号集合（去重依据）
+        total    int        表内记录总行数
+        empty    int        「订单编号」为空的行数（不计入 ids）
+        unique   int        非空唯一订单编号个数
+        dup_ids  dict       重复编号 → 出现次数（仅 >1）
+        dup_rows int        多余重复行数（sum(次数-1)）
+    """
+    rows = _record_list_all(base_token, table_id, field_ids=[ORDER_ID_FIELD])
+    counts, empty = {}, 0
+    for row in rows:
+        v = _flat_cell((row.get("fields") or row).get(ORDER_ID_FIELD))
+        if not v:
+            empty += 1
+            continue
+        counts[v] = counts.get(v, 0) + 1
+    dup_ids = {k: n for k, n in counts.items() if n > 1}
+    return {"ids": set(counts), "total": len(rows), "empty": empty,
+            "unique": len(counts), "dup_ids": dup_ids,
+            "dup_rows": sum(n - 1 for n in dup_ids.values())}
+
+
 def fetch_existing_order_ids(base_token, table_id):
-    """已登记订单编号集合（去重依据）"""
-    # lark-cli --output 会生成 .manifest.json 附属文件且不允许覆盖，固定文件名 + --overwrite
-    tmp_out = os.path.join(config.LOG_DIR, "_lark_existing.ndjson")
-    _lark(["+record-list", "--base-token", base_token, "--table-id", table_id,
-           "--field-id", "订单编号", "--format", "ndjson", "--output", tmp_out,
-           "--overwrite"])
-    ids = set()
-    if os.path.exists(tmp_out):
-        with open(tmp_out, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                v = row.get("fields", row).get("订单编号")
-                if isinstance(v, list):
-                    v = "".join(str(x) for x in v)
-                if v:
-                    ids.add(str(v).strip())
-    for p in (tmp_out, tmp_out.replace(".ndjson", ".manifest.json")):
-        try:
-            os.remove(p)
-        except OSError:
-            pass
-    return ids
+    """已登记订单编号集合（去重依据）——全表分页读取，防 2000 条截断。"""
+    return scan_order_ids(base_token, table_id)["ids"]
 
 def batch_create(base_token, table_id, records):
     """写入记录（≤200/批，串行）；返回写入条数"""
@@ -319,12 +393,29 @@ def run(args):
         print("[完成] 无可登记订单")
         return 0
 
-    existing = fetch_existing_order_ids(base_token, table_id)
-    print(f"\n[去重] 表内已有订单编号 {len(existing)} 条")
-    todo = [r for r in records if str(r["订单编号"]) not in existing]
+    scan = scan_order_ids(base_token, table_id)
+    existing = scan["ids"]
+    print(f"\n[去重] 表内记录 {scan['total']} 行 ｜ 唯一订单编号 {scan['unique']} 个"
+          f" ｜ 空编号 {scan['empty']} 行")
+    if scan["dup_ids"]:
+        top = sorted(scan["dup_ids"].items(), key=lambda kv: -kv[1])[:5]
+        print(f"[警告] 表内已存在重复订单编号 {len(scan['dup_ids'])} 个"
+              f"（多余 {scan['dup_rows']} 行）：" + "、".join(f"{k}×{n}" for k, n in top) +
+              " —— 建议执行 `python wb.py feishu-register-dedup` 清理")
+    # 双重去重：① 表内已登记（existing）② 本批 records 自身（seen）
+    seen, todo, dup_in_batch = set(), [], 0
+    for r in records:
+        k = str(r["订单编号"])
+        if k in existing:
+            continue
+        if k in seen:
+            dup_in_batch += 1
+            continue
+        seen.add(k)
+        todo.append(r)
     dup = len(records) - len(todo)
     print(f"[圈定] 目标店铺订单 {len(records)} 单：将登记 {len(todo)} 单，"
-          f"已登记跳过 {dup} 单；真排除: " +
+          f"已登记跳过 {dup - dup_in_batch} 单，本批内重复 {dup_in_batch} 单；真排除: " +
           (" / ".join(f"{k}={v}" for k, v in sorted(skip.items())) or "无") +
           ("；字段留空: " + " / ".join(f"{k}={v}" for k, v in sorted(notice.items())) if notice else ""))
     # 供调用方（如 mabang-process / 人工）读取本次新登记订单

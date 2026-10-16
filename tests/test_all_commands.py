@@ -43,7 +43,7 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 51 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 55 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
@@ -51,13 +51,15 @@ class TestAllCommands(unittest.TestCase):
             "price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs", "trash", "replicate", "import-shelve",
             "promo-apply", "promo-goods", "promo-gap", "discount", "discount-wb", "discount-scan", "discount-bcs",
             "dimension", "dims-check", "banned", "clean", "price-review",
-            "orders", "questions", "questions-watch", "appeals", "ai-test", "mabang-orders",
-            "mabang-forecast", "feishu-register", "mabang-stock-register",
+            "orders", "questions", "questions-watch", "chat-watch", "chats", "appeals", "ratings", "ai-test",
+            "mabang-orders",
+            "mabang-forecast", "feishu-register", "feishu-register-dedup", "mabang-stock-register",
             "mabang-stock-daily", "feishu-vc-stats", "fbs-delivery", "mabang-process", "cookies-update",
             "cookie-refresh-wb",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 51)
+        self.assertEqual(len(subcommands), 55)
+
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
                 res = self._run_cmd([subcmd, "--help"], expect_code=0)
@@ -944,6 +946,14 @@ class TestAllCommands(unittest.TestCase):
         self.assertIn("dry-run", res.stdout)
         self.assertNotIn("[合并]", res.stdout)
 
+    def test_34c_feishu_register_dedup_dry_run(self):
+        # 存量清理命令默认 dry-run：全表分页读 + 打印统计；不传 --apply 不得删除任何记录
+        res = self._run_cmd(["feishu-register-dedup"], expect_code=0)
+        self.assertIn("[表格]", res.stdout)
+        self.assertIn("[统计]", res.stdout)                    # 证明全表分页读通（防 2000 截断）
+        self.assertTrue("[重复]" in res.stdout or "无重复记录" in res.stdout)
+        self.assertNotIn("[写入] 开始删除", res.stdout)         # dry-run 绝不删除
+
     def test_35_mabang_stock_register_dry_run(self):
         res = self._run_cmd(["mabang-stock-register"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
@@ -1382,8 +1392,149 @@ class TestAllCommands(unittest.TestCase):
         self.assertEqual(len(fd.select_shops(shops, "9352,袁州2")), 2)
         self.assertEqual(len(fd.select_shops(shops, "")), 2)
 
+    # ---------------- 10. AI 售后客服（买家聊天） ----------------
+    def test_47_chats_list_readonly(self):
+        """chats 只读命令：列出会话（不发送、不标记已读）。"""
+        res = self._run_cmd(["chats", "--shops", "9352", "--limit", "3", "--no-detail"], expect_code=0)
+        self.assertIn("会话", res.stdout)
+
+    def test_48_chat_watch_front_once(self):
+        """chat-watch 前台模式 --once：只展示不发送（对齐 questions-watch）。"""
+        res = self._run_cmd(["chat-watch", "--once", "--shops", "9352"], expect_code=0)
+        self.assertIn("--once", res.stdout)
+
+    def test_48b_chatwatch_payload_offline(self):
+        """chat-watch 离线断言（**不联网**）：发送体构造 + 上下文轮次整理 + user prompt 组装。
+
+        发送体关键字段（HAR 实测）：sign=会话级 sellerSign、sender.name=店铺名、
+        recipients[0].name=买家名、addTime=clientCreatedAt=当前毫秒。
+        """
+        from wb_ops.adapters import chat_client as cc
+        from wb_ops.services.support import chat_prompts as cp
+
+        captured = {}
+        orig = cc.wb_api.request
+
+        def _fake(session, method, url, **kw):
+            captured.update(method=method, url=url, json=kw.get("json"))
+            return {"chatID": "C1", "sign": "SIGN"}
+
+        try:
+            cc.wb_api.request = _fake
+            d = cc.send_message(object(), "C1", "текст", "Магазин", "Ника", "SIGN", now_ms=123)
+        finally:
+            cc.wb_api.request = orig
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertTrue(captured["url"].endswith("/chat/v5/seller/send"))
+        body = captured["json"]
+        self.assertEqual(body["chatID"], "C1")
+        self.assertEqual(body["sign"], "SIGN")
+        self.assertEqual(body["addTime"], 123)
+        self.assertEqual(body["clientCreatedAt"], 123)
+        self.assertEqual(body["sender"], {"name": "Магазин", "type": "seller"})
+        self.assertEqual(body["recipients"], [{"type": "client", "name": "Ника"}])
+        self.assertEqual(body["message"]["text"], "текст")
+        self.assertEqual(body["message"]["actionType"], "create")
+        self.assertEqual(d.get("chatID"), "C1")
+
+        # 会话列表响应顶层即数组 → list_chats 直接返回列表
+        cc.wb_api.request = lambda session, method, url, **kw: [{"chatID": "C1"}]
+        try:
+            self.assertEqual(cc.list_chats(object()), [{"chatID": "C1"}])
+        finally:
+            cc.wb_api.request = orig
+
+        # recent_turns：倒序 events → 旧→新，排除最新一条
+        events = [
+            {"isOwn": False, "message": {"text": "m3"}},   # 最新，应排除
+            {"isOwn": True, "message": {"text": "m2"}},
+            {"isOwn": False, "message": {"text": "m1"}},
+        ]
+        self.assertEqual(cp.recent_turns(events, max_turns=2), ["买家：m1", "卖家：m2"])
+        self.assertEqual(cc.latest_event(events)["message"]["text"], "m3")
+        self.assertEqual(cc.latest_seller_sign([{"sellerSign": "SS"}]), "SS")
+        self.assertTrue(cc.chat_needs_reply({"lastEvent": {"isOwn": False}}))
+        self.assertFalse(cc.chat_needs_reply({"lastEvent": {"isOwn": True}}))
+
+        up = cp.build_user_prompt("商品信息X", "最新问题", cp.recent_turns(events, 2))
+        self.assertIn("【需要你回复的买家最新消息】", up)
+        self.assertIn("最新问题", up)
+        self.assertIn("买家：m1", up)
+        # 售后提示词必须含拒退/不暴露 AI 约束
+        self.assertIn("绝不", cp.CHAT_SYSTEM_PROMPT)
+
+    def test_55_ratings_readonly(self):
+        """测试 ratings 命令只读帮助与核心解析过滤逻辑"""
+        res = self._run_cmd(["ratings", "--help"], expect_code=0)
+        self.assertIn("ratings", res.stdout)
+        self.assertIn("--rating", res.stdout)
+        self.assertIn("--one-star", res.stdout)
+
+        from unittest import mock
+        from types import SimpleNamespace
+        from wb_ops.services.support import ratings
+
+        fake_prods = [
+            {
+                "nmId": 1334298573,
+                "vendorCode": "BCS-PUSQ-90960182",
+                "name": "测试商品1",
+                "rating": 10,
+                "feedbackRating": {"current": 1.0},
+                "feedbackCount": {"current": 2},
+                "oneStar": {"current": 2},
+                "twoStar": {"current": 0},
+                "threeStar": {"current": 0},
+                "fourStar": {"current": 0},
+                "fiveStar": {"current": 0},
+            },
+            {
+                "nmId": 9999999999,
+                "vendorCode": "BCS-NONE-11111111",
+                "name": "测试商品2",
+                "rating": 9,
+                "feedbackRating": {"current": 5.0},
+                "feedbackCount": {"current": 10},
+                "oneStar": {"current": 0},
+                "twoStar": {"current": 0},
+                "threeStar": {"current": 0},
+                "fourStar": {"current": 0},
+                "fiveStar": {"current": 10},
+            }
+        ]
+
+        with mock.patch("wb_ops.adapters.wb_feedback_client.iter_feedback_products", return_value=iter(fake_prods)), \
+                mock.patch("wb_ops.services.support.ratings._export_csv") as mock_csv, \
+                mock.patch("wb_ops.services.support.ratings._export_excel") as mock_excel:
+            args = SimpleNamespace(
+                shops="9352",
+                rating=1.0,
+                min_rating=None,
+                max_rating=None,
+                one_star=True,
+                min_one_star=0,
+                min_feedbacks=1,
+                days=30,
+                name="",
+                prefix="",
+                vc="",
+                limit=0,
+                out="",
+            )
+            ret = ratings.run(args)
+            self.assertEqual(ret, 0)
+            self.assertTrue(mock_csv.called)
+            items = mock_csv.call_args[0][0]
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0].vendor_code, "BCS-PUSQ-90960182")
+            self.assertEqual(items[0].feedback_rating, 1.0)
+            self.assertEqual(items[0].one_star, 2)
+            self.assertEqual(items[0].source_wb, "商品评分API")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 
 
