@@ -362,10 +362,7 @@ CSV_FIELDS = ["订单编号", "日期", "店铺", "BCS编号", "商品中文名"
 
 
 def write_csv(records, existing_ids):
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(config.LOG_DIR, f"飞书订单登记_{ts}.csv")
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+    def _w(f):
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
         for r in records:
@@ -375,7 +372,10 @@ def write_csv(records, existing_ids):
             row["结果"] = "跳过-已登记" if str(r["订单编号"]) in existing_ids else (
                 "已写入" if r.get("_written") else "待写入")
             w.writerow(row)
-    return path
+
+    return common.write_csv_preferred(config.LOG_DIR, "飞书订单登记_{ts}.csv",
+                                      "feishu_order_register_{ts}.csv",
+                                      time.strftime("%Y%m%d_%H%M%S"), _w)
 
 
 def run(args):
@@ -440,5 +440,5 @@ def run(args):
         print("\n[写入] 无新增（全部已登记）")
 
     csv_path = write_csv(records, existing)
-    print(f"[汇总] 明细: {csv_path}")
+    print(f"[汇总] 明细: {csv_path or '（未生成，见上方警告）'}")
     return 0

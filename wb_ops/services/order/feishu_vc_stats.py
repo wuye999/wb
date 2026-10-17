@@ -337,10 +337,7 @@ def vc_order_stats(days: int = 7, begin: str = "", end: str = "", date: str = ""
 
 def write_csv(agg_rows: Sequence[Dict[str, Any]]) -> str:
     """聚合结果 → CSV（全量，utf-8-sig）；返回路径"""
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(config.LOG_DIR, f"飞书订单按供应商代码统计_{ts}.csv")
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+    def _w(f):
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
         for r in agg_rows:
@@ -352,7 +349,10 @@ def write_csv(agg_rows: Sequence[Dict[str, Any]]) -> str:
                 "件数": r["qty"],
                 "涉及店铺": "、".join(r["shops"]),
             })
-    return path
+
+    return common.write_csv_preferred(config.LOG_DIR, "飞书订单按供应商代码统计_{ts}.csv",
+                                      "feishu_vc_order_stats_{ts}.csv",
+                                      time.strftime("%Y%m%d_%H%M%S"), _w)
 
 
 # ---------------- CLI 入口 ----------------

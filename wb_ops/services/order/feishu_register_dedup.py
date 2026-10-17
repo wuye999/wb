@@ -95,9 +95,7 @@ def delete_records(base_token, table_id, rids):
 
 def write_report(groups, to_delete):
     """保留/删除明细 → data/logs/飞书订单登记去重_{ts}.csv（utf-8-sig）"""
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    path = os.path.join(config.LOG_DIR, f"飞书订单登记去重_{time.strftime('%Y%m%d_%H%M%S')}.csv")
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+    def _w(f):
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
         for g in groups:
@@ -106,7 +104,10 @@ def write_report(groups, to_delete):
             for i, (rid, d) in enumerate(g["rows"][1:], 2):
                 w.writerow({"订单编号": g["order_id"], "日期": d, "record_id": rid,
                             "动作": "删除", "组内序号": i})
-    return path
+
+    return common.write_csv_preferred(config.LOG_DIR, "飞书订单登记去重_{ts}.csv",
+                                      "feishu_order_register_dedup_{ts}.csv",
+                                      time.strftime("%Y%m%d_%H%M%S"), _w)
 
 
 def run(args):

@@ -87,6 +87,7 @@ python tests/run_tests.py --changed      # 只跑「本次改动相关」的测�
 | `extract_wb_nm` | `(vc)` | 从 vendorCode 提 WB 原始 nmId（纯数字才有效，否则 None） |
 | `jwt_payload` | `(jwt)` | 解 JWT payload（取 Z-Sid 等） |
 | `print_write_hint` | `()` | 写操作未加 `--sync` 时的统一提示（写命令末尾调用） |
+| `write_csv_preferred` | `(log_dir, name_cn, name_alias, ts, writer)` | **报告 CSV 落盘统一入口**：先用中文名（`{ts}` 占位），被环境按文件名拦截（实测含 `马帮`/`飞书`/`库存SKU` 的名字抛 `PermissionError`）时自动回退 ASCII 别名并打印 `[提示]`；两者都失败只告警、返回 `""`，**不中断主业务流程**。`writer(f)` 负责写表头+数据行 |
 | `CookieExpiredError` | 类 | **403 = cookie 失效**；店循环里 `except` 它并 `continue` |
 | `UA` | 常量 | 与 WB 后台一致的 UA（`make_session` 已用） |
 

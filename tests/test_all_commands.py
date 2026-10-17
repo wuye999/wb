@@ -574,6 +574,52 @@ class TestAllCommands(unittest.TestCase):
         res = self._run_cmd(["mabang-orders", "--days", "1"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
 
+    def test_23b_mabang_orders_csv_fallback_unit(self):
+        """离线单测：中文报告名被环境按文件名拦截时，自动回退 ASCII 别名且不影响主流程。
+
+        同时校验：两种命名都失败时 write_csv 返回 ""（不抛异常），
+        避免「报告写不出来 → 整个订单链路中止」。
+        """
+        import csv as _csv
+        import shutil
+        import tempfile
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        rec = {"status": "REPLACE", "order_id": "421000001", "platform_order_id": "P-1",
+               "shop_bcs": "袁州1", "shop": "9352", "paid_time": "2026-10-17 09:00:00",
+               "vc": "BCS-AAAA-100000001", "cn_name": "测试品", "matched_sku": "SKU-1",
+               "expected_sku": "SKU-1", "note": "字符串一致"}
+        real_open = open
+        tmp = tempfile.mkdtemp()
+        try:
+            # ① 仅拦中文名 → 应回退到 ASCII 别名并正常落盘
+            def block_cn(path, *a, **kw):
+                if "马帮订单匹配" in str(path):
+                    raise PermissionError(13, "Permission denied", str(path))
+                return real_open(path, *a, **kw)
+
+            with mock.patch("builtins.open", side_effect=block_cn), \
+                    mock.patch.object(mabang.config, "LOG_DIR", tmp):
+                path = mabang.write_csv([rec])
+            self.assertTrue(path, "中文名被拦后应回退成功并返回实际路径")
+            self.assertIn("mabang_order_match_", os.path.basename(path))
+            with real_open(path, encoding="utf-8-sig") as f:
+                rows = list(_csv.DictReader(f))
+            self.assertEqual(rows[0]["订单ID"], "421000001")
+            self.assertEqual(rows[0]["状态"], "REPLACE")
+
+            # ② 两种命名都被拦 → 返回 ""（不抛异常，主链路继续）
+            def block_all(path, *a, **kw):
+                raise PermissionError(13, "Permission denied", str(path))
+
+            with mock.patch("builtins.open", side_effect=block_all), \
+                    mock.patch.object(mabang.config, "LOG_DIR", tmp):
+                self.assertEqual(mabang.write_csv([rec]), "",
+                                 "全部失败时应静默降级返回空路径")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_24_mabang_forecast_check(self):
         res = self._run_cmd(["mabang-forecast", "--check"], expect_code=0)
         self.assertIn("预报批次", res.stdout)

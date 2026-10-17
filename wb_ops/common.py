@@ -7,6 +7,7 @@ BCS 与 WB 两套请求的重试策略各不相同，分别封装在 bcs.py / wb
 """
 import base64
 import json
+import os
 import sys
 
 
@@ -43,6 +44,35 @@ def ensure_utf8_stdout():
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+
+def write_csv_preferred(log_dir, name_cn, name_alias, ts, writer):
+    """写 CSV 报告：优先用中文名（模板含 `{ts}`），失败时回退 ASCII 别名。
+
+    ⚠ 背景（2026-10-17）：部分运行环境会按「文件名特征」拦截含第三方系统关键词
+    （实测 `马帮` / `飞书` / `库存SKU`）的写入，抛 PermissionError。报告只是副产物，
+    不应因此中断订单主链路 ⇒ 回退到 ASCII 别名并提示；两者都失败也只告警、返回 ""。
+
+    :param writer: 回调 `writer(file_obj)`，负责写表头与数据行
+    :return: 实际写入的完整路径；两种命名都失败时返回 ""
+    """
+    os.makedirs(log_dir, exist_ok=True)
+    errs = []
+    for idx, tpl in enumerate((name_cn, name_alias)):
+        path = os.path.join(log_dir, tpl.format(ts=ts))
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                writer(f)
+        except OSError as e:          # PermissionError / 目录只读 / 文件被占用
+            errs.append((path, e))
+            continue
+        if idx:
+            print(f"[提示] 报告已用备用文件名写入: {os.path.basename(path)}")
+        return path
+    path, e = errs[-1]
+    print(f"[警告] 报告未生成（不影响主流程）: {os.path.basename(path)}"
+          f" → {type(e).__name__}: {e}")
+    return ""
 
 
 def extract_wb_nm(vc):

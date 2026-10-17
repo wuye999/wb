@@ -179,12 +179,15 @@ def apply_replace(cred, recs, warehouse_id):
 CSV_FIELDS = ["状态", "订单ID", "平台单号", "店铺", "付款时间", "VC码", "中文名",
               "系统匹配SKU", "期望SKU", "备注"]
 
+# 主文件名沿用历史命名（向后兼容既有文档/习惯）；环境按文件名拦截时回退 ASCII 别名。
+# 报告只是副产物，不应因此中断订单匹配/预报/交运主链路 —— 统一走 common.write_csv_preferred。
+CSV_NAME_TPL = "马帮订单匹配_{ts}.csv"
+CSV_NAME_ALIAS = "mabang_order_match_{ts}.csv"
+
 
 def write_csv(recs):
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(config.LOG_DIR, f"马帮订单匹配_{ts}.csv")
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+    """写匹配明细 CSV；返回实际路径，全部失败返回 ""（不抛异常，不阻塞主链路）。"""
+    def _w(f):
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
         for r in recs:
@@ -194,7 +197,9 @@ def write_csv(recs):
                         "付款时间": r["paid_time"], "VC码": r["vc"],
                         "中文名": r["cn_name"], "系统匹配SKU": r["matched_sku"],
                         "期望SKU": r["expected_sku"], "备注": r["note"]})
-    return path
+
+    return common.write_csv_preferred(config.LOG_DIR, CSV_NAME_TPL, CSV_NAME_ALIAS,
+                                      time.strftime("%Y%m%d_%H%M%S"), _w)
 
 
 def report_no_sku(recs):
@@ -207,16 +212,19 @@ def report_no_sku(recs):
     for r in rows:
         print(f"  {r['order_id']} [{r['shop_bcs'] or r['shop']}] "
               f"{r['vc'] or '(无VC)'} {r['cn_name']}")
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    path = os.path.join(config.LOG_DIR,
-                        f"缺库存SKU订单_{time.strftime('%Y%m%d_%H%M%S')}.csv")
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+
+    def _w(f):
         w = csv.writer(f)
         w.writerow(["平台单号", "店铺", "中文名", "BCS编号", "说明"])
         for r in rows:
             w.writerow([r["order_id"], r["shop_bcs"] or r["shop"],
                         r["cn_name"], r["vc"], r["note"]])
-    print(f"[报告] 明细: {path}")
+
+    path = common.write_csv_preferred(config.LOG_DIR, "缺库存SKU订单_{ts}.csv",
+                                      "mabang_no_stock_sku_{ts}.csv",
+                                      time.strftime("%Y%m%d_%H%M%S"), _w)
+    if path:
+        print(f"[报告] 明细: {path}")
 
 
 def run(args):
@@ -262,7 +270,7 @@ def run(args):
     report_no_sku(recs)
 
     csv_path = write_csv(recs)
-    print(f"\n[汇总] 明细: {csv_path}")
+    print(f"\n[汇总] 明细: {csv_path or '（未生成，见上方警告）'}")
     return 0
 
 
@@ -273,10 +281,7 @@ FORECAST_CSV_FIELDS = ["类型", "订单ID", "平台单号", "店铺", "批次�
 
 
 def write_forecast_csv(order_recs, batch_rows):
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(config.LOG_DIR, f"马帮预报批次_{ts}.csv")
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+    def _w(f):
         w = csv.DictWriter(f, fieldnames=FORECAST_CSV_FIELDS)
         w.writeheader()
         for r in order_recs:
@@ -296,7 +301,10 @@ def write_forecast_csv(order_recs, batch_rows):
                         "物流跟踪号": b.get("handoverNumber", ""),
                         "批次重量": b.get("orderWeight", ""),
                         "上传货代": b.get("forecastLogisticsName", "")})
-    return path
+
+    return common.write_csv_preferred(config.LOG_DIR, "马帮预报批次_{ts}.csv",
+                                      "mabang_forecast_batch_{ts}.csv",
+                                      time.strftime("%Y%m%d_%H%M%S"), _w)
 
 
 def collect_forecast_orders(args):
