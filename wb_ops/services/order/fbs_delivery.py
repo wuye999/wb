@@ -363,12 +363,14 @@ def delivery_goods(**kwargs) -> Dict[str, Any]:
 
 # ---------------- 输出 ----------------
 def write_csv(orders: Sequence[Dict[str, Any]], by_cn: Sequence[Dict[str, Any]]) -> Tuple[str, str]:
-    """明细 + 按中文名统计 → 两个 CSV（utf-8-sig，写 config.LOG_DIR）；返回 (明细路径, 统计路径)。"""
-    os.makedirs(config.LOG_DIR, exist_ok=True)
+    """明细 + 按中文名统计 → 两个 CSV（utf-8-sig，写 config.LOG_DIR）；返回 (明细路径, 统计路径)。
+
+    走 `common.write_csv_preferred`：环境按文件名拦截（实测 2026-10-17：
+    「配送中商品明细_*.csv」被拒）时自动回退 ASCII 别名，两者都失败返回 ""。
+    """
     ts = time.strftime("%Y%m%d_%H%M%S")
-    detail_path = os.path.join(config.LOG_DIR, f"配送中商品明细_{ts}.csv")
-    stat_path = os.path.join(config.LOG_DIR, f"配送中按中文名统计_{ts}.csv")
-    with open(detail_path, "w", newline="", encoding="utf-8-sig") as f:
+
+    def _detail(f):
         w = csv.DictWriter(f, fieldnames=CSV_DETAIL_FIELDS)
         w.writeheader()
         for o in orders:
@@ -386,7 +388,8 @@ def write_csv(orders: Sequence[Dict[str, Any]], by_cn: Sequence[Dict[str, Any]])
                 "是否已交接": "是" if o.get("is_transferred") else "否",
                 "商品创建时间": o.get("created_at", ""),
             })
-    with open(stat_path, "w", newline="", encoding="utf-8-sig") as f:
+
+    def _stat(f):
         w = csv.DictWriter(f, fieldnames=CSV_STAT_FIELDS)
         w.writeheader()
         for r in by_cn:
@@ -396,6 +399,11 @@ def write_csv(orders: Sequence[Dict[str, Any]], by_cn: Sequence[Dict[str, Any]])
                 "商品数": r["item_count"], "清单数": r["supply_count"],
                 "涉及店铺": "、".join(r["shops"]),
             })
+
+    detail_path = common.write_csv_preferred(
+        config.LOG_DIR, "配送中商品明细_{ts}.csv", "fbs_delivery_detail_{ts}.csv", ts, _detail)
+    stat_path = common.write_csv_preferred(
+        config.LOG_DIR, "配送中按中文名统计_{ts}.csv", "fbs_delivery_by_cn_{ts}.csv", ts, _stat)
     return detail_path, stat_path
 
 
@@ -477,6 +485,6 @@ def run(args: Any) -> int:
         print(f"\n[警告] {len(r['errors'])} 个清单拉取失败（已跳过，不影响其它数据）")
 
     detail_path, stat_path = write_csv(rows, by_cn)
-    print(f"\n[日志] 明细 {len(rows)} 行 → {detail_path}")
-    print(f"[日志] 按中文名统计 {len(by_cn)} 行 → {stat_path}")
+    print(f"\n[日志] 明细 {len(rows)} 行 → {detail_path or '（未生成，见上方警告）'}")
+    print(f"[日志] 按中文名统计 {len(by_cn)} 行 → {stat_path or '（未生成，见上方警告）'}")
     return 0

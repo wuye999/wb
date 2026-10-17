@@ -115,10 +115,9 @@ def run(args):
         print(f"  状态分类计数: {sc_map}")
 
     if rows:
-        os.makedirs(config.LOG_DIR, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(config.LOG_DIR, f"订单查询_{ts}.csv")
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+
+        def _w(f):
             w = csv.DictWriter(f, fieldnames=["订单号", "店铺", "规格ID", "nmID", "供应商编码",
                                               "供应商状态", "WB状态", "折算金额", "币种",
                                               "仓库", "创建时间", "状态分类"])
@@ -138,7 +137,10 @@ def run(args):
                     "创建时间": r.get("createdAt"),
                     "状态分类": r.get("orderStatusCategory"),
                 })
-        print(f"\n[日志] {path}")
+
+        path = common.write_csv_preferred(config.LOG_DIR, "订单查询_{ts}.csv",
+                                          "orders_query_{ts}.csv", ts, _w)
+        print(f"\n[日志] {path or '（未生成，见上方警告）'}")
     else:
         print("\n[完成] 该日期区间无订单")
 
