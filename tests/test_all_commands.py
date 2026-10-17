@@ -841,6 +841,50 @@ class TestAllCommands(unittest.TestCase):
         self.assertFalse(res["done"])
         self.assertEqual(calls.count(5), 1, "status=5 兜底应限频为一次")
 
+    def test_25j_mabang_process_fail_early_unit(self):
+        """离线单测：failTotal 上涨 ⇒ 立刻核实 status=99 定性失败并早退，不空等到超时。
+
+        复现 2026-10-17 袁州1 29 单场景：批次落在 status=99，但轮询只看 status=3，
+        旧逻辑要等满 900s 才定性（白等 40+ 轮）；修复后应在 failTotal 一涨就收口。
+        """
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        fr = {"batchNo": "B1", "shopId": "袁州1", "status": 99,
+              "total": 29, "successNum": 0, "failNum": 29}
+        state = {"r3": 0, "fail": 0}
+        calls = []
+
+        def fake_find(cred, batch_nos, status, rows_per_page=200, max_pages=50):
+            calls.append(status)
+            if status == 3:
+                state["r3"] += 1
+                if state["r3"] >= 2:          # 第 2 轮起平台把该批次计入失败
+                    state["fail"] = 1
+                return self._fb(stats={"failTotal": state["fail"], "waitTotal": 0})
+            if status == 99:
+                return self._fb(found={"B1": fr}, stats={"failTotal": state["fail"]})
+            return self._fb(stats={"failTotal": 0})      # status=1 预扫描
+
+        clock = {"v": 0}
+
+        def fake_time():
+            clock["v"] += 20
+            return clock["v"]
+
+        with mock.patch.object(mabang, "find_batches", side_effect=fake_find), \
+                mock.patch.object(mabang.time, "sleep", lambda *_: None), \
+                mock.patch.object(mabang.time, "time", fake_time):
+            res = mabang.wait_upload_done(None, ["B1"], timeout=900, interval=20)
+
+        self.assertFalse(res["done"])
+        self.assertEqual(res["failed"], {"B1"})
+        self.assertEqual(res["still"], set(), "已定性失败的批次不算未完成")
+        self.assertEqual(res["reason"], "failed")
+        self.assertEqual(calls.count(99), 1, "应对 status=99 核实一次")
+        self.assertLessEqual(calls.count(3), 3,
+                             "failTotal 上涨后应早退，不应跑满 900s/45 轮")
+
     def test_25i_mabang_forecast_config_cached_unit(self):
         """离线单测：upload_forecast_batch 的 getForecastConfig 模板循环外只取一次。"""
         from unittest import mock

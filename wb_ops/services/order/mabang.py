@@ -457,6 +457,9 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
       主循环：每轮只查一次 status=3（仅对未成功批次），命中即成功；
       status=5 兜底：仅当「连续 3 轮 status=3 未命中」或「已耗时 ≥ 超时一半」时
               各触发一次（限频，避免每轮往返）；
+      **失败早退（2026-10-17）**：`failTotal` 相对上轮上涨 ⇒ 立刻查一次 status=99
+              核实目标批次，命中即判失败并「不再空等」——旧逻辑只查 status=3，
+              失败批次要等到满 900s 超时才定性（实测白等 40+ 轮空转）；
       超时定性：先 best-effort 补查一次 status=1 补齐缺失映射，再查一次 status=99。
 
     Returns:
@@ -552,6 +555,23 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
         if prev_fail is not None and fail_now > prev_fail:
             print(f"  [⚠ 告警] failTotal 上涨：{prev_fail} → {fail_now}"
                   f"（疑似批次上传失败，请留意）")
+            # 立刻核实：目标批次是否已进「预报失败(99)」列表 —— 命中即早退，不空等到超时。
+            # 背景（2026-10-17）：失败批次会直接落 status=99，既不进 status=3 也不再有
+            # status=1 快照，旧逻辑只能死等满 900s 超时才去定性，白等 40+ 轮空转。
+            pend99 = want - success - failed
+            if pend99:
+                try:
+                    r99 = find_batches(cred, pend99, status=99, rows_per_page=rows_per_page)
+                    if r99["stats"]:
+                        last_stats = r99["stats"]
+                    for bn, row in r99["found"].items():
+                        failed.add(bn)
+                        rows[bn] = row
+                        store_of.setdefault(bn, row.get("shopId"))
+                        print(f"  [✗ 失败] {bn}[{row.get('shopId') or '-'}] 已进入「预报失败」"
+                              f"列表（失败 {row.get('failNum')}/{row.get('total')} 单），停止等待")
+                except Exception as e:
+                    print(f"  [警告] status=99 核实异常（{str(e)[:80]}），继续轮询 ...")
         prev_fail = fail_now
 
         still = want - success
@@ -570,6 +590,12 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
             print(f"  [完成] 全部 {len(want)} 个批次已确认预报成功（耗时 {elapsed}s）")
             return {"done": True, "success": success, "failed": set(), "still": set(),
                     "store_of": store_of, "rows": rows, "stats": last_stats, "reason": "ok"}
+        # 未成功批次里若已无「未知态」（剩下的都已定性失败），无需再等 —— 立即收口
+        if not (still - failed):
+            print(f"  [完成等待] 成功 {len(success)} / 失败 {len(failed)} / 未完成 0"
+                  f"（耗时 {elapsed}s，失败批次已定性，不再空等超时）")
+            return {"done": False, "success": success, "failed": failed, "still": set(),
+                    "store_of": store_of, "rows": rows, "stats": last_stats, "reason": "failed"}
         if elapsed >= timeout:
             break
         time.sleep(interval)

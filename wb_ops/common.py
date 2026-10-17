@@ -35,13 +35,18 @@ def to_int(v, default=0):
 
 
 def ensure_utf8_stdout():
-    """Windows 控制台强制 UTF-8 输出（避免中文乱码）。库环境下无 reconfigure 时静默跳过。"""
+    """Windows 控制台强制 UTF-8 输出（避免中文乱码）。库环境下无 reconfigure 时静默跳过。
+
+    ⚠ 同时**开启行缓冲**：`python wb.py xxx > log.txt` 时 stdout 默认是 8KB 全缓冲，
+    长任务（如马帮上传轮询最长 15 分钟）期间日志迟迟不落盘，外部看起来就像「卡住」。
+    行缓冲后每行即 flush，重定向文件/管道也能实时观察进度。
+    """
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except Exception:
         pass
     try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except Exception:
         pass
 
