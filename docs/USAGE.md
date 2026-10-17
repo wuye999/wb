@@ -477,6 +477,7 @@ python wb.py fbs-delivery --shops 9352         # 只看袁州1（也支持短名
 python wb.py fbs-delivery --days 3             # 只统计近 3 天创建的清单（默认 0 = 不过滤时间）
 python wb.py fbs-delivery --begin 2026-10-01 --end 2026-10-08   # 指定清单创建时间区间（闭区间）
 python wb.py fbs-delivery --item-state all     # 不过滤商品状态（含已取消/已售出），看全貌
+python wb.py fbs-delivery --item-state shipment,expectedSorting   # 待发货 + 等待分拣（2026-10-17 实测状态码 inventory：cancel/sold/readyForPickup/sorted(已分拣)/expectedSorting(等待分拣)/shipment(待发货)）
 python wb.py fbs-delivery --supply-state onway,complete          # 只看指定状态的清单
 python wb.py fbs-delivery --include-canceled   # 在「待发货」基础上并入「已取消(cancel)」
 python wb.py fbs-delivery --top 20             # 控制台只看前 20 名中文名（CSV 仍写全量）

@@ -399,7 +399,8 @@ def build_parser():
     p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）")
     p.add_argument("--item-state", default="shipment",
                    help="商品级状态过滤，逗号分隔（默认 shipment=待发货；all=不过滤；"
-                        "可选 cancel/sold/readyForPickup/reshipment/sorted）")
+                        "可选 cancel/sold/readyForPickup/reshipment/sorted/"
+                        "expectedSorting=等待分拣）")
     p.add_argument("--supply-state", default="",
                    help="清单级状态过滤，逗号分隔（默认不过滤；可选 complete/onway/reshipment/sort）")
     p.add_argument("--include-canceled", action="store_true", help="把 cancel 并入 --item-state（默认排除已取消）")
