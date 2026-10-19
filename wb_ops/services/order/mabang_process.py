@@ -5,7 +5,11 @@ wb_ops 马帮订单处理一体脚本：
 （上传后一次 status=1 预扫描建店铺映射；此后每轮仅查 status=3，命中「预报成功」即完成，
 兼容 status=5 历史归档；超时经 status=99 定性失败）→ 物流交运 → 自动登记飞书
 过滤机制与既有流程一致：shop_map 店铺过滤 / 取消单排除（WB 门户）/
-NO_SKU（价格表缺库存SKU）只匹配不预报 / 幂等跳过（已预报、已交运）
+NO_SKU（价格表缺库存SKU）只匹配不预报 /
+REPLACE_FAIL（步骤①更换库存SKU失败，网络类异常已重试1次）：同样只匹配不预报——
+本轮失败单ID经 args.replace_fail_order_ids 传给步骤②按订单ID排除（**仅本链路内**，
+单独跑 mabang-forecast 不做该排除）；飞书登记照常 /
+幂等跳过（已预报、已交运）
 轮询超时或接口异常时：经 status=99 定性为「预报失败」的批次其订单不交运（标 跳过-预报失败），
 其余未完成批次订单标 跳过-上传未完成（均**店铺级**粒度，失败优先）——飞书登记照常执行；
 两者稍后重跑本命令可幂等补齐
@@ -36,6 +40,10 @@ def run(args):
     if code:
         print("[中止] 商品匹配失败，后续步骤不执行")
         return code
+    replace_fail_ids = list(getattr(ns_match, "replace_fail_order_ids", None) or [])
+    if replace_fail_ids:
+        print(f"\n[提示] 步骤① 更换失败 {len(replace_fail_ids)} 单 → REPLACE_FAIL："
+              "本轮不进预报/交运（飞书登记照常）")
 
     # ② 生成预报单 → 依次上传（自动发货）→ 物流交运
     print("\n" + "#" * 72)
@@ -45,7 +53,8 @@ def run(args):
                             apply=args.apply, check=False,
                             wait=args.wait, upload_waiting=False,
                             upload_timeout=getattr(args, "upload_timeout", None),
-                            poll_interval=getattr(args, "poll_interval", None))
+                            poll_interval=getattr(args, "poll_interval", None),
+                            replace_fail_order_ids=replace_fail_ids)
     code = mabang.run_forecast(ns_fc)
     if code:
         print("[中止] 预报/交运失败")
@@ -56,9 +65,11 @@ def run(args):
     print("# 步骤 ③ 新订单登记飞书（最近500条去重，只登新增）")
     print("#" * 72)
     url = args.url or credentials.get().feishu_base_url()
+    fail_tail = (f"；更换失败 {len(replace_fail_ids)} 单未预报/交运"
+                 if replace_fail_ids else "")
     if not url:
         print("[提示] 未提供 --url 且配置 feishu.base_url 缺失，跳过飞书登记")
-        print(f"\n[完成] 马帮订单处理耗时 {time.time() - t0:.0f}s")
+        print(f"\n[完成] 马帮订单处理耗时 {time.time() - t0:.0f}s{fail_tail}")
         return 0
     ns_reg = SimpleNamespace(url=url, table=args.table, days=args.days,
                              page_size=args.page_size, scope="latest",
@@ -72,5 +83,5 @@ def run(args):
     except Exception as e:
         print(f"[警告] 飞书登记异常（马帮处理已完成）: {str(e)[:120]}")
 
-    print(f"\n[完成] 马帮订单处理+飞书登记耗时 {time.time() - t0:.0f}s")
+    print(f"\n[完成] 马帮订单处理+飞书登记耗时 {time.time() - t0:.0f}s{fail_tail}")
     return 0

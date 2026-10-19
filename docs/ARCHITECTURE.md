@@ -256,10 +256,13 @@ wb.py daily          ⑩ morning=报名+改价（含价格审核）/ check=只�
 
 ```
 wb.py mabang-orders   ① VC→映射表中文名→价格表库存SKU → replaceOrderItem 强制更换（先匹配）
+                        失败（超时/连接类已重试 1 次）→ 标 REPLACE_FAIL + 导出 `更换失败订单_*.csv`；
+                        失败单ID 写入 args.replace_fail_order_ids 供下一步排除
 wb.py feishu-register ② 登记飞书「订单登记」（数据源=orderalllist 最近500 + 待处理订单两路合并，
                         订单编号去重；只匹配未进预报/上传/交运的单也登记；
                         库存SKU=本地商品价格表「库存SKU」列（查不到留空）；中文名=本地映射表；排除已取消订单）
 wb.py mabang-forecast ③ 生成预报批次（已预报跳过）→ aamz 上传（config 模板只取一次）→ 上传后 status=1 预扫描建店铺映射 + 每轮仅查 status=3 确认「预报成功」（兼容 status=5 归档；status=5 限频兜底；超时经 status=99 定性失败，失败批次订单不交运）→ 物流交运（已选跳过）
+                        ⚠ 经 mabang-process 调用时按 `args.replace_fail_order_ids` 排除步骤①更换失败的单（单独执行不做该排除）
                       ④ 归属统计（店铺×中文名单量 CSV）
 wb.py feishu-vc-stats ⑤ 只读统计（可按需/编排调用）：读「订单登记」→ 按 `BCS编号`（= vendorCode）
                         跨店合并统计单数 → 降序输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）
@@ -306,6 +309,7 @@ wb.py feishu-vc-stats ⑤ 只读统计（可按需/编排调用）：读「订�
 | 2026-09-21 | **改价自动审核修复（`price --auto-review` 静默失效）**：`services/replicate/ops_executor.py` 的 `_auto_review_shop` 直接调用 `price_review.fetch_all_quarantine/apply_prices`，但该模块**从未 import `price_review`** —— NameError 被 `except Exception` 吞掉，表现为 `[自动审核] 店铺 X 失败: name 'price_review' is not defined`，降价 30-49.9% 的隔离区商品**价格永不生效**（须手工补跑 `price-review --apply`）。修复按 REUSE_GUIDE 铁律 3（跨域只能经 `*_svc.py` 门面）落地：① `discount_svc.apply_new_prices_by_nmids(shop, nm_ids)` 新增**跨域门面方法**（内部封装隔离区拉取 + 按 nmID 精确匹配 + 提交审核，只审本次改价命中的项）；② `_auto_review_shop` 改为懒加载门面调用，并删除 `ops_executor` 中因此闲置的 `wb_api` 导入；③ 新增离线回归用例 `test_09b_price_auto_quarantine_apply`（mock 断言只提交命中 id、历史遗留待审不误审、隔离区未生成时返回 0）。 |
 | 2026-10-13 | **飞书「订单登记」重复写入修复 + 存量清理（`feishu-register-dedup` 新增）**：`feishu_register.fetch_existing_order_ids` 旧实现只调一次 `+record-list --format ndjson` 且**省略 `--limit`/`--offset`、不读 manifest `has_more`** ⇒ lark-cli 按 ndjson 默认上限 2000 条、按插入序（最早在前）只返回第一页。「订单登记」表记录数越过 2000 行（约 2026-10-01）后，去重集被**冻结**在「最老 2000 行的 1991 个唯一编号」，其后每次 `mabang-process` / `feishu-register` 都把已登记订单判为未登记而重复写入（实测 6429 行仅 3496 个唯一订单编号、837 个编号重复、多余 2923 行，最多 `5923036047` 出现 15 次）。修复：① 分页读表实现**收敛为一份** `feishu_register._record_list_all(base_token, table_id, field_ids=None)`（`--limit 2000 --offset` + manifest `has_more`/`next_offset`，临时文件带 pid+页码；`has_more` 无 `next_offset` 或空页报 has_more 即中止，宁报错不漏读），`mabang_stock`（删本地同名实现）/`feishu_vc_stats`/`mabang_stock_daily` 改为复用；② 新增 `scan_order_ids()` 返回 `{ids,total,empty,unique,dup_ids,dup_rows}`，`fetch_existing_order_ids` 委托之，`run()` 打印「表内记录 N 行 / 唯一订单编号 M 个」并对表内既有重复打 `[警告]`（截断与重复两类问题下次自曝）；③ `run()` 的 `todo` 增加**本批 `seen` 去重**（表内 existing + 本批 seen 双重防护）；④ 新增 `wb.py feishu-register-dedup` 存量清理命令（全表分页读 → 按订单编号分组 → 每组保留表内最早一条、其余 `+record-delete --yes` ≤100/批；**默认 dry-run** 并落 `data/logs/飞书订单登记去重_*.csv` 保留/删除明细，`--apply` 才删，`--limit` 限量；幂等可续跑）。新增 `services/order/feishu_register_dedup.py`，CLI 命令数 51 → 52。 |
 | 2026-09-21 | **vendorCode 前缀正则放宽（收编「多变体序号」尾段，每店 55 条未映射清零）**：形如 `BCS-FZMG-334862442-2` / `BCS-ZZMX-191868961-15` 的卡（前缀后多一段 `-N`）与旧正则 `^BCS-([A-Z]{4})-(?:(?:ozon-card-)?\d+\|[^/]+/\d+)$`（要求「数字结尾 / 含斜杠」）不匹配 → `mapping.py` 前缀自动补录、`mapping_excel.py` 前缀兜底、`mapping_repo` 名称解析兜底**三处全部落空** ⇒ 三店各 55 条（ZZMX 15 / FZMG 10 / GYDX 10 / MQXJ 10 / PPYD 10，三店同一批）永久滞留「未映射商品」，既无中文名也无目标价、无法参与改价与价格核对。修复：`config.VC_PREFIX_RE` 尾部追加 `(?:-\d+)*`，并保留原有三种格式兼容；`merge` 复跑后单店「未映射 55 → **0**」、聚合总表在架归属 5944 → **5999**。新增离线用例 `test_01b_vc_prefix_tail_format_mapping`（断言新格式命中且 9 类非法格式仍被拒）。⚠ 放宽后归属完全按前缀走：其中 `FZMG` 组 10 张子卡俄文标题为「触摸夜灯/台灯」而其前缀在价格表对应「仿真玫瑰花藤」，**疑似前缀挂错/货不对板**，需人工看图确认后再纠偏或下架（其余 GYDX→感应灯 / MQXJ→毛球修剪器 / PPYD→拍拍夜灯 / ZZMX→针织帽 标题与归属一致）。 |
+| 2026-10-19 | **马帮「更换失败」闸门（`REPLACE_FAIL`）**：事故背景——步骤① `apply_replace` 失败时只改 `note` 不改 `status`，而步骤② 重新拉单重新 classify 只按 `REPLACE` 圈定，导致 9 单（全是 `api.mabangerp.com` Read timed out，系统匹配 SKU 仍是 `BCS-xxx` 形态）**更换失败后照样被预报+交运**，存在错货风险。修复：① 失败单标 `REPLACE_FAIL` + 中文备注 + 专表 `更换失败订单_*.csv`（ASCII 回退 `mabang_replace_fail_*`）；② 网络类异常（Timeout/ConnectionError/5xx）重试 1 次，确定性错误（orderItemId 数量异常、库存 SKU 未找到、业务码异常）不重试；③ 失败单ID 经 `args.replace_fail_order_ids` 从① 传到②，`collect_forecast_orders` 按订单ID 排除（不进批次/上传/交运，飞书登记照常）；④ **单独执行 `mabang-forecast` 不做该判定**（避免马帮列表滞后误排除）。新增离线用例 `test_25k/25l/34d`。 |
 
 ## 九、外部依赖与运行环境
 

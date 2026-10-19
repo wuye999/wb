@@ -885,6 +885,154 @@ class TestAllCommands(unittest.TestCase):
         self.assertLessEqual(calls.count(3), 3,
                              "failTotal 上涨后应早退，不应跑满 900s/45 轮")
 
+    def test_25k_mabang_process_replace_retry_unit(self):
+        """离线单测：更换失败 → REPLACE_FAIL（不进预报/交运）+ 网络类异常重试1次 + 失败专表。
+
+        覆盖 2026-10-19 事故：9 单 `Read timed out` 更换失败后仍被预报/交运。
+        """
+        import csv as _csv
+        import shutil
+        import tempfile
+
+        import requests
+        from unittest import mock
+        from wb_ops.services.order import mabang
+
+        def _rec(oid, sku):
+            return {"status": "REPLACE", "order_id": oid, "platform_order_id": "P-" + oid,
+                    "shop": "袁州1(9352)", "shop_bcs": "袁州1", "paid_time": "2026-10-19 09:00",
+                    "vc": "BCS-AAAA-1", "cn_name": "测试品", "matched_sku": "BCS-AAAA-1",
+                    "expected_sku": sku, "note": ""}
+
+        recs = [_rec("101", "SKU-1"), _rec("102", "SKU-2"), _rec("103", "SKU-3")]
+        attempts = {"101": 0, "102": 0, "103": 0}
+
+        def fake_items(cred, oid):
+            attempts[oid] += 1
+            if oid == "101" and attempts[oid] == 1:
+                raise requests.exceptions.ReadTimeout("read timed out")
+            if oid == "102":
+                raise RuntimeError("orderItemId 数量=2，需人工处理")
+            return ["item-" + oid]
+
+        def fake_stock(cred, sku, wh, page_size=20):
+            return None if sku == "SKU-3" else {"id": 900 + int(sku[-1]), "stockSku": sku}
+
+        tmp = tempfile.mkdtemp()
+        real_open = open
+        try:
+            def block_cn(path, *a, **kw):
+                if "更换失败订单" in str(path):
+                    raise PermissionError(13, "Permission denied", str(path))
+                return real_open(path, *a, **kw)
+
+            with mock.patch.object(mabang, "fetch_order_item_ids", side_effect=fake_items), \
+                    mock.patch.object(mabang, "search_stock", side_effect=fake_stock), \
+                    mock.patch.object(mabang, "replace_order_item") as mrep, \
+                    mock.patch.object(mabang.time, "sleep", lambda *_: None):
+                ok, fail = mabang.apply_replace({}, recs, 1457537)
+
+            self.assertEqual((ok, fail), (1, 2))
+            self.assertEqual(recs[0]["status"], "REPLACE", "重试成功应保持 REPLACE")
+            self.assertIn("重试成功", recs[0]["note"])
+            self.assertEqual(recs[1]["status"], "REPLACE_FAIL")
+            self.assertIn("更换失败", recs[1]["note"])
+            self.assertEqual(recs[2]["status"], "REPLACE_FAIL")
+            self.assertIn("未找到库存", recs[2]["note"])
+            self.assertEqual(attempts["101"], 2, "ReadTimeout 应重试一次")
+            self.assertEqual(attempts["102"], 1, "确定性错误不应重试")
+            self.assertEqual(mrep.call_count, 1, "只有重试成功那单真正提交了更换")
+
+            # 失败专表：中文名被文件名策略拦截 → 回退 ASCII 别名，且只含 2 行失败明细
+            with mock.patch.object(mabang.config, "LOG_DIR", tmp), \
+                    mock.patch("builtins.open", side_effect=block_cn):
+                path = mabang.report_replace_fail(recs)
+            self.assertIn("mabang_replace_fail_", os.path.basename(path))
+            with real_open(path, encoding="utf-8-sig") as f:
+                rows = list(_csv.DictReader(f))
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(r["失败原因"].startswith("更换失败") for r in rows))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_25l_mabang_process_chain_exclude_unit(self):
+        """离线单测：① 失败单ID 传给②按ID排除；单独跑 forecast（无该属性）不受影响。"""
+        import contextlib
+        import io as _io
+        from types import SimpleNamespace
+        from unittest import mock
+        from wb_ops.services.order import mabang, mabang_process
+
+        def mk_order(oid):
+            return {"id": oid, "shopIdText": "9352", "platformOrderId": "P-" + oid,
+                    "paidTime": "2026-10-19 09:00:00"}
+
+        def mk_rec(oid):
+            return {"status": "REPLACE", "order_id": oid, "platform_order_id": "P-" + oid,
+                    "shop": "袁州1(9352)", "shop_bcs": "袁州1", "paid_time": "2026-10-19 09:00",
+                    "vc": "BCS-AAAA-1", "cn_name": "测试品", "matched_sku": "BCS-AAAA-1",
+                    "expected_sku": "SKU-1", "note": ""}
+
+        cred = {"shop_map": {"9352": "袁州1(9352)"}, "warehouse_id": 1457537}
+        captured = {}
+
+        def fake_apply(_cred, recs, _wh):
+            recs[0]["status"] = "REPLACE_FAIL"
+            recs[0]["note"] = "更换失败: Read timed out"
+            return 0, 1
+
+        args = SimpleNamespace(days=1, page_size=100, apply=True, wait=0,
+                               upload_timeout=None, poll_interval=None,
+                               url="http://feishu.example/base",
+                               table="订单登记", no_pending=False)
+        buf = _io.StringIO()
+        with mock.patch.object(mabang, "_mabang_cred", return_value=cred), \
+                mock.patch.object(mabang, "_api_ready", return_value=True), \
+                mock.patch.object(mabang, "fetch_pending_orders",
+                                  return_value=[mk_order("101")]), \
+                mock.patch.object(mabang, "classify", return_value=[mk_rec("101")]), \
+                mock.patch.object(mabang, "apply_replace", side_effect=fake_apply), \
+                mock.patch.object(mabang, "report_no_sku"), \
+                mock.patch.object(mabang, "report_replace_fail"), \
+                mock.patch.object(mabang, "write_csv", return_value=""), \
+                mock.patch.object(mabang, "run_forecast",
+                                  side_effect=lambda ns: captured.update(ns=ns) or 0), \
+                mock.patch.object(mabang_process.feishu_register, "run", return_value=0), \
+                mock.patch.object(mabang_process.credentials, "get",
+                                  return_value=SimpleNamespace(feishu_base_url=lambda: "http://x")), \
+                contextlib.redirect_stdout(buf):
+            code = mabang_process.run(args)
+        out = buf.getvalue()
+        self.assertEqual(code, 0)
+        self.assertEqual(captured["ns"].replace_fail_order_ids, ["101"],
+                         "步骤① 的失败单ID 应传给步骤②")
+        self.assertIn("更换失败 1 单", out)
+        self.assertIn("更换失败 1 单未预报/交运", out)
+
+        def run_collect(with_ids):
+            a = SimpleNamespace(days=1, page_size=100)
+            if with_ids:
+                a.replace_fail_order_ids = ["101"]
+            b = _io.StringIO()
+            with mock.patch.object(mabang, "_mabang_cred", return_value=cred), \
+                    mock.patch.object(mabang, "fetch_pending_orders",
+                                      return_value=[mk_order("101"), mk_order("102")]), \
+                    mock.patch.object(mabang, "classify",
+                                      return_value=[mk_rec("101"), mk_rec("102")]), \
+                    mock.patch.object(mabang, "report_no_sku"), \
+                    mock.patch("wb_ops.adapters.wb_client.fetch_canceled_ids",
+                               return_value=set()), \
+                    contextlib.redirect_stdout(b):
+                target, _c = mabang.collect_forecast_orders(a)
+            return [r["order_id"] for r in target], b.getvalue()
+
+        ids_with, out_with = run_collect(True)
+        self.assertEqual(ids_with, ["102"], "更换失败单应被排除出可预报")
+        self.assertIn("更换失败=1", out_with)
+        ids_alone, _ = run_collect(False)
+        self.assertEqual(ids_alone, ["101", "102"],
+                         "单独跑 mabang-forecast（无该属性）不应排除任何单")
+
     def test_25i_mabang_forecast_config_cached_unit(self):
         """离线单测：upload_forecast_batch 的 getForecastConfig 模板循环外只取一次。"""
         from unittest import mock
@@ -1043,6 +1191,39 @@ class TestAllCommands(unittest.TestCase):
         self.assertIn("[统计]", res.stdout)                    # 证明全表分页读通（防 2000 截断）
         self.assertTrue("[重复]" in res.stdout or "无重复记录" in res.stdout)
         self.assertNotIn("[写入] 开始删除", res.stdout)         # dry-run 绝不删除
+
+    def test_34d_feishu_register_inventory_sku_unit(self):
+        """离线单测：登记「库存SKU」取本地价格表（cn2sku），绝不取马帮系统匹配值。"""
+        import tempfile
+        from types import SimpleNamespace
+        from unittest import mock
+        from wb_ops.services.order import feishu_register
+
+        order = {"id": "421000001", "shopIdText": "9352", "platformOrderId": "6060000001",
+                 "paidTime": "2026-10-19 09:00:00",
+                 "order_ellipsis_other_title": "商品编号*数量:BCS-AAAA-100000001*1",
+                 "order_ellipsis_title": "商品编号*数量:BCS-WRNG-999*1"}   # 系统匹配是错的
+        args = SimpleNamespace(scope="pending", days=1, page_size=100, no_pending=True,
+                               date="", begin="", end="")
+        tmp = tempfile.mkdtemp()
+        with mock.patch.object(feishu_register.mabang, "_mabang_cred",
+                               return_value={"shop_map": {"9352": "袁州1(9352)"}}), \
+                mock.patch.object(feishu_register.mabang, "fetch_pending_orders",
+                                  return_value=[order]), \
+                mock.patch.object(feishu_register.mabang, "load_local_mapping",
+                                  return_value=({"BCS-AAAA-100000001": "测试品"},
+                                                {"测试品": "SKU-LOCAL-1"})), \
+                mock.patch.object(feishu_register.config, "shop_json_path",
+                                  return_value=os.path.join(tmp, "absent.json")), \
+                mock.patch("wb_ops.adapters.wb_client.fetch_canceled_ids",
+                           return_value=set()):
+            records, _skip, _notice, _cred = feishu_register.build_records(args)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["库存SKU"], "SKU-LOCAL-1",
+                         "库存SKU 必须来自本地价格表")
+        self.assertNotEqual(records[0]["库存SKU"], "BCS-WRNG-999",
+                            "不得回写马帮系统匹配值")
 
     def test_35_mabang_stock_register_dry_run(self):
         res = self._run_cmd(["mabang-stock-register"], expect_code=0)

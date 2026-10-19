@@ -153,24 +153,57 @@ def classify(orders, vc2cn, cn2sku, shop_map):
     return recs
 
 
+STATUS_REPLACE_FAIL = "REPLACE_FAIL"   # 更换库存SKU 失败：与 NO_SKU 同待遇（只登记不预报/交运）
+REPLACE_RETRY = 1                      # 超时/连接类异常重试次数
+REPLACE_RETRY_DELAY = 2                # 重试前等待秒数
+
+
+def _retryable(e):
+    """仅「超时 / 连接失败 / 5xx」可重试；确定性错误（业务码异常、SKU 未找到等）一律不重试。"""
+    if isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        return True
+    resp = getattr(e, "response", None)
+    return (isinstance(e, requests.exceptions.HTTPError)
+            and resp is not None and resp.status_code >= 500)
+
+
 def apply_replace(cred, recs, warehouse_id):
-    """对所有 REPLACE 订单强制执行更换；返回（成功数，失败数）"""
+    """对所有 REPLACE 订单强制执行更换；返回（成功数，失败数）。
+
+    失败时把 `status` 改成 `REPLACE_FAIL`（区别于「计划更换」），并保留中文备注；
+    网络类异常（Read timed out 等）整段重试 `REPLACE_RETRY` 次，减少假失败导致漏发。
+    """
     ok = fail = 0
     for rec in recs:
         if rec["status"] != "REPLACE":
             continue
-        try:
-            ids = fetch_order_item_ids(cred, rec["order_id"])
-            if len(ids) != 1:
-                raise RuntimeError(f"orderItemId 数量={len(ids)}，需人工处理")
-            stock = search_stock(cred, rec["expected_sku"], warehouse_id)
-            if stock is None:
-                raise RuntimeError(f"马帮未找到库存 SKU {rec['expected_sku']}")
-            replace_order_item(cred, ids[0], stock["id"], warehouse_id)
-            rec["note"] = f"已更换 -> {stock['stockSku']}(stockId={stock['id']})"
-            ok += 1
-        except Exception as e:
-            rec["note"] = f"更换失败: {str(e)[:80]}"
+        err = None
+        for attempt in range(REPLACE_RETRY + 1):
+            try:
+                ids = fetch_order_item_ids(cred, rec["order_id"])
+                if len(ids) != 1:
+                    raise RuntimeError(f"orderItemId 数量={len(ids)}，需人工处理")
+                stock = search_stock(cred, rec["expected_sku"], warehouse_id)
+                if stock is None:
+                    raise RuntimeError(f"马帮未找到库存 SKU {rec['expected_sku']}")
+                replace_order_item(cred, ids[0], stock["id"], warehouse_id)
+                suffix = "（首次异常，重试成功）" if attempt else ""
+                rec["note"] = f"已更换 -> {stock['stockSku']}(stockId={stock['id']}){suffix}"
+                ok += 1
+                err = None
+                break
+            except Exception as e:          # noqa: BLE001 —— 逐单兜底，失败不中断整批
+                err = e
+                if attempt < REPLACE_RETRY and _retryable(e):
+                    print(f"  [重试] {rec['order_id']} 更换异常"
+                          f"（{type(e).__name__}: {str(e)[:60]}），{REPLACE_RETRY_DELAY}s 后重试 ...")
+                    time.sleep(REPLACE_RETRY_DELAY)
+                    continue
+                break
+        if err is not None:
+            rec["status"] = STATUS_REPLACE_FAIL
+            suffix = "（已重试1次）" if _retryable(err) else ""
+            rec["note"] = f"更换失败: {str(err)[:80]}{suffix}"
             fail += 1
         time.sleep(REQUEST_INTERVAL)
     return ok, fail
@@ -227,8 +260,41 @@ def report_no_sku(recs):
         print(f"[报告] 明细: {path}")
 
 
+def report_replace_fail(recs):
+    """REPLACE_FAIL 明细报告（控制台 + CSV）：本轮更换失败、未进预报/交运，需人工处理。
+
+    与 NO_SKU 同待遇：只登记/匹配，不进批次生成/上传/交运。
+    """
+    rows = [r for r in recs if r.get("status") == STATUS_REPLACE_FAIL]
+    if not rows:
+        return ""
+    print(f"\n[⚠ 需人工处理] 库存SKU 更换失败 {len(rows)} 单"
+          "（本轮不进预报/交运；飞书登记照常）：")
+    for r in rows:
+        print(f"  {r['order_id']} [{r['shop_bcs'] or r['shop']}] "
+              f"{r['vc'] or '(无VC)'} {r['cn_name']} | {r['note']}")
+
+    def _w(f):
+        w = csv.writer(f)
+        w.writerow(["订单ID", "平台单号", "店铺", "中文名", "BCS编号",
+                    "期望SKU", "系统匹配SKU", "失败原因"])
+        for r in rows:
+            w.writerow([r["order_id"], r["platform_order_id"] or "",
+                        r["shop_bcs"] or r["shop"], r["cn_name"], r["vc"],
+                        r["expected_sku"], r["matched_sku"], r["note"]])
+
+    path = common.write_csv_preferred(config.LOG_DIR, "更换失败订单_{ts}.csv",
+                                      "mabang_replace_fail_{ts}.csv",
+                                      time.strftime("%Y%m%d_%H%M%S"), _w)
+    if path:
+        print(f"[报告] 更换失败明细: {path}")
+    return path
+
+
 def run(args):
     common.ensure_utf8_stdout()
+    # 跨步骤契约：本轮「更换失败」的订单ID，供 mabang-process 传给步骤②排除（单独跑则无人读取）
+    setattr(args, "replace_fail_order_ids", [])
     cred = _mabang_cred()
     warehouse_id = int(cred.get("warehouse_id") or 1457537)
     shop_map = cred["shop_map"]
@@ -263,11 +329,16 @@ def run(args):
         n = stat.get("REPLACE", 0)
         print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；仓库 {warehouse_id}）...")
         ok, fail = apply_replace(cred, recs, warehouse_id)
-        print(f"  更换成功 {ok} / 失败 {fail}")
+        tail = "（失败单已标 REPLACE_FAIL，本轮不进预报/交运）" if fail else ""
+        print(f"  更换成功 {ok} / 失败 {fail}{tail}")
+        # 供 mabang-process 步骤②按订单ID排除（此处赋值须早于下方报告/CSV）
+        setattr(args, "replace_fail_order_ids",
+                [str(r["order_id"]) for r in recs if r["status"] == STATUS_REPLACE_FAIL])
     else:
         print("\n（dry-run 模式未做任何更换；确认无误后加 --apply 执行）")
 
     report_no_sku(recs)
+    report_replace_fail(recs)
 
     csv_path = write_csv(recs)
     print(f"\n[汇总] 明细: {csv_path or '（未生成，见上方警告）'}")
@@ -324,6 +395,14 @@ def collect_forecast_orders(args):
     for r in recs:
         if r["status"] != "REPLACE":
             other[r["status"]] = other.get(r["status"], 0) + 1
+    # 步骤① 更换失败的单：仅当 mabang-process 把失败ID传进来才排除
+    # （单独跑 mabang-forecast 时 args 上无此属性 ⇒ 行为与旧版完全一致，不做 matched_sku 自检）
+    fail_ids = {str(x) for x in (getattr(args, "replace_fail_order_ids", None) or ())}
+    if fail_ids:
+        hit = [r for r in target if str(r["order_id"]) in fail_ids]
+        if hit:
+            target = [r for r in target if str(r["order_id"]) not in fail_ids]
+            other["更换失败"] = other.get("更换失败", 0) + len(hit)
     # 已取消订单排除（WB 门户取消单；马帮不同步取消单，防御性过滤）
     from wb_ops.adapters import wb_client as wb_api
     canceled = set()
