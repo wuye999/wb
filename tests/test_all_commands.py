@@ -1356,6 +1356,25 @@ class TestAllCommands(unittest.TestCase):
         self.assertIn("dry-run", res.stdout)
         self.assertIn("BCS-CUSTOM-SPECIAL-12345", res.stdout)
 
+    def test_41b_shelve_old_basket_path_unit(self):
+        """离线单测：basket 分片表对齐官方插件 65 区间；vol 越界回退表尾分片（不再 768 外推）。
+
+        背景（2026-10-19）：旧表只到 `24965→60` 且越界用 768 步长外推，vol>24965 会算出
+        不存在的 61/62… 分片（card.json / 图片全 404）。官方 1.3.4 扩到 65 区间且越界回退表尾。
+        """
+        from wb_ops.adapters import wb_client as wc
+
+        self.assertEqual(len(wc._BASKET_TABLE), 65)
+        self.assertEqual(wc._BASKET_TABLE[-1], (28805, "65"))
+        cases = {
+            1931583426: "https://basket-53.wbbasket.ru/vol19315/part1931583/1931583426",
+            1457749715: "https://basket-47.wbbasket.ru/vol14577/part1457749/1457749715",
+            1939999999: "https://basket-53.wbbasket.ru/vol19399/part1939999/1939999999",
+            2900000000: "https://basket-65.wbbasket.ru/vol29000/part2900000/2900000000",
+        }
+        for nm, want in cases.items():
+            self.assertEqual(wc.basket_base(nm), want, f"nm={nm}")
+
     def test_42_shelve_backend_interchangeable(self):
         # 验证 replicate 与 import_shelve 可平滑无缝将 shelve_backend 切换为 shelve_old
         from wb_ops.services.replicate import replicate, import_shelve

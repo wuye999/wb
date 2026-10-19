@@ -378,23 +378,24 @@ _BASKET_TABLE = [
     (11909, "43"), (12677, "44"), (13445, "45"), (14213, "46"), (14981, "47"), (15749, "48"),
     (16517, "49"), (17285, "50"), (18053, "51"), (18821, "52"), (19589, "53"), (20357, "54"),
     (21125, "55"), (21893, "56"), (22661, "57"), (23429, "58"), (24197, "59"), (24965, "60"),
+    (25733, "61"), (26501, "62"), (27269, "63"), (28037, "64"), (28805, "65"),
 ]
 
 
 def basket_base(nm_id):
-    """nmId → basket CDN 基础路径（card.json 基于它）"""
+    """nmId → basket CDN 基础路径（card.json / 图片基于它）。
+
+    分片表对齐官方插件 1.3.4（权威来源：插件 sourcemap → wbBasketUrl.ts，65 个区间）；
+    旧版只到 `24965→60` 并用 768 步长外推，vol > 24965 会算出并不存在的 61/62/… 分片。
+    越界（vol > 28805）按官方 `resolveNmBasketBucket` 行为**回退到表尾分片**（65），不再外推。
+    """
     n = int(nm_id)
     vol, part = n // 100000, n // 1000
-    basket = None
+    basket = _BASKET_TABLE[-1][1]          # 越界回退 = 表尾分片
     for threshold, no in _BASKET_TABLE:
         if vol <= threshold:
             basket = no
             break
-    if not basket:
-        # 超过已知表格时按 WB 标准步长 768 动态外推（对齐 45-api-wb.js 的 768 步长）
-        last_thresh, last_no = _BASKET_TABLE[-1]
-        b_num = int(last_no) + max(1, (vol - last_thresh + 767) // 768)
-        basket = f"{b_num:02d}"
     return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{n}"
 
 
