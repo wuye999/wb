@@ -9,7 +9,11 @@ from typing import Dict, List, Any, Tuple, Callable
 from .. import config
 from ..framework.safe_io import atomic_dump_json, safe_load_json
 from .boss_price import (CachedDpReader, floor_price, resolve_formula,
-                         to_number, warn_unresolved)
+                         to_number, warn_unresolved, boss_columns)
+from ..framework.xlsx_headers import (COL_ACTUAL_PRICE, COL_CN, COL_H, COL_L, COL_NM,
+                                      COL_SHOP_CNY_RE, COL_VC, COL_W, COL_WT,
+                                      HeaderError, find_col, find_col_re,
+                                      warn_missing)
 
 
 
@@ -61,80 +65,96 @@ class MappingRepository:
     def load_boss(cls) -> List[Dict[str, Any]]:
         """商品价格表 → [{idx, sku, cn, dp(实际售价), img, floor, prefix, stock_sku}]
 
-        Sheet1 列：图片/SKU/中文名/实际售价/尺寸/最低售价/前缀码/库存SKU。
-        D 列「实际售价」可写数值或公式（`=F2*2` / `=F2` / `=$F$2*2` / `=ROUND(F2*1.3,2)`）；
+        列全部**按表头名定位**（不依赖列位，用户可随意插列/挪列）：
+        产品图片 / 卖家SKU / 产品中文名 / 实际售价 / 尺寸 / 最低售价 / vendorCode前缀码 / 库存SKU。
+        「实际售价」可写数值或公式（`=F2*2` / `=F2` / `=$F$2*2` / `=ROUND(F2*1.3,2)`）；
         公式不可解析时回退 Excel 缓存值，仍取不到则 dp/floor=None 并打印 [警告]（不再静默空价）。
-        `floor` = math.floor(实际售价)，即店铺整数价口径。
-        `stock_sku` = 第 8 列「库存SKU」（马帮侧 SKU，缺列/空值返回 ""）。"""
+        缺「实际售价」列 → HeaderError（fail-fast，避免改价/上架全部跳过）。
+        `floor` = math.floor(实际售价)，即店铺整数价口径。"""
         if not os.path.exists(config.BOSS_XLSX):
             return []
         import openpyxl
         wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=False)
-        ws = wb["Sheet1"]
-        cache = CachedDpReader(config.BOSS_XLSX)
-        items: List[Dict[str, Any]] = []
-        by_cache: List[Tuple] = []
-        missing: List[Tuple] = []
         try:
-            for row in ws.iter_rows(min_row=2):
-                sku = str(row[1].value).strip() if row[1].value else ""
-                cn = str(row[2].value).strip() if row[2].value else ""
-                if not sku and not cn:
-                    continue
-                raw = row[3].value
-                dp = to_number(raw)
-                if dp is None and isinstance(raw, str) and raw.strip().startswith("="):
-                    dp = cls._resolve_dp(raw, ws, row[0].row)
-                    if dp is None:
-                        dp = to_number(cache.get(row[0].row))
-                        (by_cache if dp is not None else missing).append(
-                            (row[0].row, sku, raw))
-                elif dp is None and raw not in (None, ""):
-                    missing.append((row[0].row, sku, raw))
-                prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
-                stock_sku = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
-                items.append({
-                    "idx": len(items) + 1,
-                    "sku": sku,
-                    "cn": cn,
-                    "dp": dp,
-                    "img": str(row[0].value).strip() if row[0].value else "",
-                    "floor": floor_price(dp),
-                    "prefix": prefix,
-                    "stock_sku": stock_sku,
-                })
+            ws = wb["Sheet1"]
+            cols = boss_columns(ws, config.BOSS_XLSX)
+            i_img, i_sku, i_cn = cols["img"], cols["sku"], cols["cn"]
+            i_dp, i_prefix, i_stock = cols["dp"], cols["prefix"], cols["stock_sku"]
+            cache = CachedDpReader(config.BOSS_XLSX, col=i_dp + 1)
+            items: List[Dict[str, Any]] = []
+            by_cache: List[Tuple] = []
+            missing: List[Tuple] = []
+
+            def val(row, i):
+                return row[i].value if i is not None and len(row) > i else None
+
+            try:
+                for row in ws.iter_rows(min_row=2):
+                    sku = str(val(row, i_sku) or "").strip()
+                    cn = str(val(row, i_cn) or "").strip()
+                    if not sku and not cn:
+                        continue
+                    raw = val(row, i_dp)
+                    dp = to_number(raw)
+                    if dp is None and isinstance(raw, str) and raw.strip().startswith("="):
+                        dp = cls._resolve_dp(raw, ws, row[0].row)
+                        if dp is None:
+                            dp = to_number(cache.get(row[0].row))
+                            (by_cache if dp is not None else missing).append(
+                                (row[0].row, sku, raw))
+                    elif dp is None and raw not in (None, ""):
+                        missing.append((row[0].row, sku, raw))
+                    items.append({
+                        "idx": len(items) + 1,
+                        "sku": sku,
+                        "cn": cn,
+                        "dp": dp,
+                        "img": str(val(row, i_img) or "").strip(),
+                        "floor": floor_price(dp),
+                        "prefix": str(val(row, i_prefix) or "").strip().upper(),
+                        "stock_sku": str(val(row, i_stock) or "").strip(),
+                    })
+            finally:
+                cache.close()
         finally:
-            cache.close()
             wb.close()
         warn_unresolved(config.BOSS_XLSX, by_cache, missing)
         return items
 
     @staticmethod
     def load_prefix_map() -> Dict[str, Any]:
-        """从商品价格表加载 4 位前缀码映射"""
+        """从商品价格表加载 4 位前缀码映射（列按表头名定位）。"""
 
         if not os.path.exists(config.BOSS_XLSX):
             return {}
+        wb = None
         try:
             import openpyxl
             wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
             ws = wb["Sheet1"]
+            cols = boss_columns(ws, config.BOSS_XLSX)
+            i_sku, i_cn, i_dp, i_prefix = cols["sku"], cols["cn"], cols["dp"], cols["prefix"]
             pmap = {}
             for row in ws.iter_rows(min_row=2):
-                sku = str(row[1].value).strip() if row[1].value else ""
-                cn = str(row[2].value).strip() if row[2].value else ""
+                get = lambda i: row[i].value if i is not None and len(row) > i else None
+                sku = str(get(i_sku) or "").strip()
+                cn = str(get(i_cn) or "").strip()
                 if not sku and not cn:
                     continue
-                prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
+                prefix = str(get(i_prefix) or "").strip().upper()
                 if not prefix:
                     continue
-                dp = row[3].value
+                dp = get(i_dp)
                 if prefix not in pmap:
                     pmap[prefix] = {"sku": sku, "cn": cn, "dp": dp}
-            wb.close()
             return pmap
+        except HeaderError:
+            raise                       # 表头错误必须冒泡，不能被下面的宽 except 吞掉
         except Exception:
             return {}
+        finally:
+            if wb is not None:
+                wb.close()
 
     @classmethod
     def load_boss_details(cls) -> Dict[str, Dict[str, Any]]:
@@ -148,26 +168,32 @@ class MappingRepository:
         """
         if not os.path.exists(config.BOSS_XLSX):
             return {"by_prefix": {}, "by_cn": {}}
+        wb = None
         try:
             import openpyxl
             wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
             ws = wb["Sheet1"]
+            cols = boss_columns(ws, config.BOSS_XLSX)
+            i_sku, i_cn, i_dp = cols["sku"], cols["cn"], cols["dp"]
+            i_dim, i_price = cols["dim"], cols["price"]
+            i_prefix, i_stock = cols["prefix"], cols["stock_sku"]
             by_prefix = {}
             by_cn = {}
             for row in ws.iter_rows(min_row=2):
-                sku = str(row[1].value).strip() if len(row) > 1 and row[1].value else ""
-                cn = str(row[2].value).strip() if len(row) > 2 and row[2].value else ""
+                get = lambda i: row[i].value if i is not None and len(row) > i else None
+                sku = str(get(i_sku) or "").strip()
+                cn = str(get(i_cn) or "").strip()
                 if not sku and not cn:
                     continue
-                dp = row[3].value if len(row) > 3 else None
-                dim = str(row[4].value).strip() if len(row) > 4 and row[4].value else ""
-                price = row[5].value if len(row) > 5 else None
-                prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
-                stock_sku = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
+                dp = get(i_dp)
+                dim = str(get(i_dim) or "").strip()
+                price = get(i_price)
+                prefix = str(get(i_prefix) or "").strip().upper()
+                stock_sku = str(get(i_stock) or "").strip()
                 item = {
                     "sku": sku,
                     "cn": cn,
-                    "dp": dp,               # 实际售价（价格表 D 列，用户维护；店铺价 = floor）
+                    "dp": dp,               # 实际售价（价格表「实际售价」列，用户维护；店铺价 = floor）
                     "dim": dim,             # 尺寸
                     "price": price,         # 最低售价
                     "prefix": prefix,       # vendorCode前缀码
@@ -177,10 +203,14 @@ class MappingRepository:
                     by_prefix[prefix] = item
                 if cn and cn not in by_cn:
                     by_cn[cn] = item
-            wb.close()
             return {"by_prefix": by_prefix, "by_cn": by_cn}
+        except HeaderError:
+            raise                       # 表头错误必须冒泡
         except Exception:
             return {"by_prefix": {}, "by_cn": {}}
+        finally:
+            if wb is not None:
+                wb.close()
 
 
     @classmethod
@@ -244,18 +274,23 @@ class MappingRepository:
                 wb = openpyxl.load_workbook(config.MAPPING_XLSX, data_only=True)
                 if "映射总表" in wb.sheetnames:
                     ws = wb["映射总表"]
-                    headers = [str(c.value or "") for c in ws[1]]
-                    if "vendorCode" in headers:
-                        i_cn, i_vc = headers.index("产品中文名"), headers.index("vendorCode")
-                        i_dp = headers.index("双倍售价") if "双倍售价" in headers else None
-                        i_sp = next((i for i, h in enumerate(headers)
-                                     if re.match(r"^店铺\d+价格\(CNY\)$", h)), None)
-                        i_disc = headers.index("折扣%") if "折扣%" in headers else None
-                        i_nm = headers.index("WB商品码") if "WB商品码" in headers else None
-                        i_l = headers.index("尺寸长(cm)") if "尺寸长(cm)" in headers else None
-                        i_w = headers.index("尺寸宽(cm)") if "尺寸宽(cm)" in headers else None
-                        i_h = headers.index("尺寸高(cm)") if "尺寸高(cm)" in headers else None
-                        i_wt = headers.index("毛重(kg)") if "毛重(kg)" in headers else None
+                    headers = [str(c.value or "").strip() for c in ws[1]]
+                    if COL_VC in headers:
+                        i_cn, i_vc = headers.index(COL_CN), headers.index(COL_VC)
+                        # 价格列只认新名「实际售价」；旧表缺列时告警降级（不能 raise：
+                        # merge→calc_new_vcs→load_known_vcs 会经过这里，硬失败会阻塞自愈）
+                        i_dp = find_col(headers, COL_ACTUAL_PRICE)
+                        if i_dp is None:
+                            warn_missing("价格映射表·映射总表", config.MAPPING_XLSX, headers,
+                                         COL_ACTUAL_PRICE,
+                                         hint="dp 全部为空；请运行 wb.py merge 重建映射表")
+                        i_sp = find_col_re(headers, COL_SHOP_CNY_RE)
+                        i_disc = find_col(headers, "折扣%")
+                        i_nm = find_col(headers, COL_NM)
+                        i_l = find_col(headers, COL_L)
+                        i_w = find_col(headers, COL_W)
+                        i_h = find_col(headers, COL_H)
+                        i_wt = find_col(headers, COL_WT)
                         for r in ws.iter_rows(min_row=2, values_only=True):
                             vc = r[i_vc]
                             if vc:

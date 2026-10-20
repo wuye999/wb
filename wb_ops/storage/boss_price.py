@@ -19,6 +19,9 @@ import re
 import sys
 from typing import Any, List, Optional, Tuple
 
+from ..framework.xlsx_headers import (COL_ACTUAL_PRICE, COL_CN, find_col,
+                                      read_headers, require_col)
+
 # 单元格引用：F2 / $F$2 / F$2 / $F2（前后不能紧邻字母数字，避免误伤函数名/数字）
 _CELL_RE = re.compile(r"(?<![A-Z0-9_])\$?([A-Z]{1,3})\$?(\d{1,7})(?![0-9A-Z])")
 # ROUND(表达式, 位数) —— 仅支持逗号分隔
@@ -31,6 +34,31 @@ _FUNC_RE = re.compile(r"[A-Z_][A-Z0-9_.]*\s*\(")
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub,
         ast.Mult: operator.mul, ast.Div: operator.truediv,
         ast.USub: operator.neg, ast.UAdd: operator.pos}
+
+# 商品价格表（BOSS_XLSX）列名 → 逻辑字段（按表头名定位，不依赖列位）
+BOSS_COLUMNS = {
+    "img": "产品图片",
+    "sku": "卖家SKU",
+    "cn": COL_CN,
+    "dp": COL_ACTUAL_PRICE,
+    "dim": "尺寸",
+    "price": "最低售价",
+    "prefix": "vendorCode前缀码",
+    "stock_sku": "库存SKU",
+}
+
+
+def boss_columns(ws, path: str, required=("sku", "cn", "dp")):
+    """解析商品价格表表头 → {逻辑字段: 列索引}；required 缺列抛 HeaderError。
+
+    列位可任意调整（用户会插列/挪列），一律按表头名定位。
+    """
+    headers = read_headers(ws)
+    cols = {}
+    for key, name in BOSS_COLUMNS.items():
+        cols[key] = (require_col(headers, name, "商品价格表", path)
+                     if key in required else find_col(headers, name))
+    return cols
 
 
 def to_number(v: Any) -> Optional[float]:

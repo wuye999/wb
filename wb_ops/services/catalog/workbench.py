@@ -68,7 +68,7 @@ def _single_group_html(g):
     return f'''
 <div class="grp single" id="boss-{b["idx"]}">
   <div class="ghead"><span class="idx">#{b["idx"]}</span> <b>{escape(b["cn"])}</b>
-    <span class="sku">{escape(b["sku"])}</span> <span class="dp">双倍售价 ¥{b["dp"]}</span>
+    <span class="sku">{escape(b["sku"])}</span> <span class="dp">实际售价 ¥{b["dp"]}</span>
     <span class="kw">关键词: {escape(", ".join(keywords.keywords_for(b["cn"])) or "无")}</span>
     <span class="picked"></span> {pick_state}</div>
   {miss_html}
@@ -81,7 +81,7 @@ def _todo_group_html(b):
     return f'''
 <div class="grp todo" id="boss-{b["idx"]}">
   <div class="ghead">⚠ 待核查 #{b["idx"]} <b>{escape(b["cn"])}</b> <span class="sku">{escape(b["sku"])}</span>
-    <span class="dp">双倍售价 ¥{b["dp"]}</span></div>
+    <span class="dp">实际售价 ¥{b["dp"]}</span></div>
   <div class="hint">店铺中无价格 {b["floor"]}/{b["floor"] + 1} 元的商品 → 可能未上架/价格特殊/漏配。
      若你已知对应 vendorCode，可在此填写（逗号分隔）：</div>
   <input class="manual" placeholder="BCS-XXXX-123456789, BCS-YYYY-987654321">

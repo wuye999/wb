@@ -22,7 +22,7 @@ from wb_ops.adapters import bcs_client as bcs
 from wb_ops.adapters import wb_client
 from wb_ops.framework.safe_io import safe_load_json, atomic_dump_json
 from wb_ops.storage.mapping_repo import MappingRepository
-from wb_ops.storage.boss_price import floor_price
+from wb_ops.storage.boss_price import boss_columns, floor_price
 from wb_ops import config
 from wb_ops import common
 from .wb_card import (
@@ -412,21 +412,29 @@ def load_boss_shelve_dict() -> Dict[str, Dict[str, Any]]:
     if not os.path.exists(config.BOSS_XLSX):
         return {}
     wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=True)
-    ws = wb.active
-    boss = {}
-    for r in range(2, ws.max_row + 1):
-        cn = ws.cell(r, 3).value
-        if cn:
-            cn = str(cn).strip()
-            boss[cn] = {
-                "sku": ws.cell(r, 2).value,
-                "cn": cn,
-                "dp": ws.cell(r, 4).value,
-                "dims": str(ws.cell(r, 5).value or "").strip(),
-                "prefix": str(ws.cell(r, 7).value or "").strip().upper(),
-            }
-    wb.close()
-    return boss
+    try:
+        ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.active
+        cols = boss_columns(ws, config.BOSS_XLSX, required=("cn", "sku", "dp"))
+        i_cn, i_sku, i_dp = cols["cn"], cols["sku"], cols["dp"]
+        i_dim, i_prefix = cols["dim"], cols["prefix"]
+        boss = {}
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            def cell(i):
+                return r[i] if i is not None and i < len(r) else None
+
+            cn = cell(i_cn)
+            if cn:
+                cn = str(cn).strip()
+                boss[cn] = {
+                    "sku": cell(i_sku),
+                    "cn": cn,
+                    "dp": cell(i_dp),
+                    "dims": str(cell(i_dim) or "").strip(),
+                    "prefix": str(cell(i_prefix) or "").strip().upper(),
+                }
+        return boss
+    finally:
+        wb.close()
 
 
 def load_shelve_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:

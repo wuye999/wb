@@ -17,6 +17,8 @@ import openpyxl
 
 from wb_ops import config
 from wb_ops.framework.safe_io import safe_load_json
+from wb_ops.framework.xlsx_headers import (COL_ACTUAL_PRICE, COL_CN, COL_VC,
+                                           find_col, warn_missing)
 from wb_ops.services.catalog import mapping
 PRICE_DEV_TOL = 5  # 价格偏差阈值（元）
 
@@ -27,23 +29,27 @@ def load_mapping_rows():
     rows = []
     if "映射总表" in wb.sheetnames:
         ws = wb["映射总表"]
-        headers = [str(c.value or "") for c in ws[1]]
+        headers = [str(c.value or "").strip() for c in ws[1]]
         idx = {h: i for i, h in enumerate(headers)}
-        need = ["产品中文名", "vendorCode"]
+        need = [COL_CN, COL_VC]
         if not all(k in idx for k in need):
             wb.close()
-            raise RuntimeError("映射总表缺少必需列（产品中文名/vendorCode），请先 merge 重建映射表")
+            raise RuntimeError(f"映射总表缺少必需列（{COL_CN}/{COL_VC}），请先 merge 重建映射表")
         price_col = f"店铺{mapping.shop_id()}价格(CNY)"
         if price_col not in idx:
             print(f"⚠ [警告] 映射总表缺少价格列「{price_col}」（主店可能已变化），价格偏差检测将失效，请重新 fetch + merge")
+        i_dp = find_col(headers, COL_ACTUAL_PRICE)
+        if i_dp is None:
+            warn_missing("价格映射表·映射总表", config.MAPPING_XLSX, headers, COL_ACTUAL_PRICE,
+                         hint="dp 为空，价格偏差检测将失效；请运行 wb.py merge 重建")
         for r in ws.iter_rows(min_row=2, values_only=True):
-            vc = r[idx["vendorCode"]]
+            vc = r[idx[COL_VC]]
             if not vc:
                 continue
             rows.append({
-                "cn": r[idx["产品中文名"]] or "",
+                "cn": r[idx[COL_CN]] or "",
                 "vc": str(vc),
-                "dp": r[idx["双倍售价"]] if "双倍售价" in idx else None,
+                "dp": r[i_dp] if i_dp is not None else None,
                 "price": r[idx[price_col]] if price_col in idx else None,
                 "discount": r[idx["折扣%"]] if "折扣%" in idx else None,
                 "club": r[idx["club折扣%"]] if "club折扣%" in idx else None,
@@ -107,7 +113,7 @@ def analyze(rows, union_prices, boss_prefix=None):
                 floor_p = int(float(r["dp"]))
                 cur = int(float(r["price"]))
                 if abs(cur - floor_p) >= PRICE_DEV_TOL:
-                    r["flag_price"] = f"主店价 {cur} ≠ floor双倍售价 {floor_p}"
+                    r["flag_price"] = f"主店价 {cur} ≠ floor实际售价 {floor_p}"
                     issues.append({"vc": r["vc"], "cn": r["cn"], "type": "price_dev",
                                    "desc": f"{r['flag_price']}（偏差 {cur - floor_p}）"})
             except (TypeError, ValueError):
@@ -154,7 +160,7 @@ def render_html(rows, issues):
     <div class="vc">{escape(r["vc"])}</div>
     <div class="ru">{escape(r["title"] or "")}</div>
     <div class="meta">
-      双倍售价 <b class="dp">¥{r["dp"]}</b> · 主店价 <b>¥{r["price"]}</b>
+      实际售价 <b class="dp">¥{r["dp"]}</b> · 主店价 <b>¥{r["price"]}</b>
       {f'· 折扣 {r["discount"]}%' if r["discount"] not in (None, "") else ""}
       {f'· club {r["club"]}%' if r["club"] not in (None, "") else ""}
       {f'· 库存 {r["stock"]}' if r["stock"] not in (None, "") else ""}

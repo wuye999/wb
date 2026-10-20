@@ -10,6 +10,9 @@ import re
 from collections import defaultdict
 import openpyxl
 from wb_ops import config
+from wb_ops.framework.xlsx_headers import (COL_ACTUAL_PRICE, COL_CN, COL_H, COL_IMG,
+                                           COL_L, COL_NM, COL_TITLE, COL_VC, COL_W,
+                                           COL_WT, find_col, warn_missing)
 
 IMG_COL = 9  # 主图链接列（做超链接）
 NMID_COL = 16  # WB商品码列（做超链接）
@@ -29,13 +32,17 @@ def stock_summary(r):
 
 
 def detail_headers(main_sid=None):
-    """映射总表 16 列（13 主数据 + 创建时间/更新时间/WB商品码） + 店铺覆盖列"""
+    """映射总表 16 列（13 主数据 + 创建时间/更新时间/WB商品码） + 店铺覆盖列
+
+    第 3 列（C 列）为价格列 = `COL_ACTUAL_PRICE`（实际售价）；`row_for()` 写第 3 个元素，
+    两处必须保持一致（读取端按列名定位，不依赖位置）。
+    """
     sid = main_sid if main_sid is not None else (config.MAIN_SHOP or "")
 
     return [
-        '产品中文名', 'vendorCode', '双倍售价', f'店铺{sid}价格(CNY)', '折扣%', 'club折扣%',
-        '库存', '俄文标题', '主图链接', '尺寸长(cm)', '尺寸宽(cm)', '尺寸高(cm)', '毛重(kg)',
-        '创建时间', '更新时间', 'WB商品码',
+        COL_CN, COL_VC, COL_ACTUAL_PRICE, f'店铺{sid}价格(CNY)', '折扣%', 'club折扣%',
+        '库存', COL_TITLE, COL_IMG, COL_L, COL_W, COL_H, COL_WT,
+        '创建时间', '更新时间', COL_NM,
     ]
 
 
@@ -213,7 +220,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
 
     # Sheet4 待核查清单
     ws4 = wb.create_sheet("待核查清单")
-    ws4.append(["商品SKU", "产品中文名", "双倍售价", "问题说明"])
+    ws4.append(["商品SKU", COL_CN, COL_ACTUAL_PRICE, "问题说明"])
     picked_cn = set()
     for item in list(result_list) + list(extra_entries):
         if item.get("vendorCodes"):
@@ -225,7 +232,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
                         "商品价格表有该商品但映射表无归属 vendorCode → 需人工核对补录（可能未上架/价格特殊/漏配）"])
     for item in extra_entries:
         if item.get("dp") is None:
-            note = (item.get("note", "") or "") + " → 需补填双倍售价并确认型号分组"
+            note = (item.get("note", "") or "") + " → 需补填实际售价并确认型号分组"
             ws4.append([item.get("sku"), item.get("cn"), item.get("dp"), note])
     for i, w in enumerate([14, 30, 10, 70], 1):
         ws4.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
@@ -282,7 +289,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
 
 
 SINGLE_SHOP_HEADERS = [
-    '产品中文名', 'vendorCode', '双倍售价', '本店售价(CNY)', '折扣%', 'club折扣%',
+    COL_CN, COL_VC, COL_ACTUAL_PRICE, '本店售价(CNY)', '折扣%', 'club折扣%',
     '本店库存', '本店nmId', '俄文标题', '主图链接',
     '尺寸长(cm)', '尺寸宽(cm)', '尺寸高(cm)', '毛重(kg)',
     '创建时间', '更新时间', '匹配类型'
@@ -388,7 +395,7 @@ def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=N
                     known[vc] = {"cn": cn, "dp": dp, "sku": boss_row.get("sku", ""), "source": "前缀自动"}
                     known_updated = True
 
-        # 用 boss 最新售价覆盖双倍售价
+        # 用 boss 最新售价覆盖实际售价
         if cn in boss_by_cn:
             b = boss_by_cn[cn]
             if b.get("dp") is not None:
@@ -441,30 +448,41 @@ def load_single_shop_rows(sid, shop_name=None):
     mapped = {}
     if "在架映射明细" in wb.sheetnames:
         ws = wb["在架映射明细"]
-        headers = [str(c.value or "") for c in ws[1]]
-        idx = {h: i for i, h in enumerate(headers)}
+        headers = [str(c.value or "").strip() for c in ws[1]]
+        icol = {h: i for i, h in enumerate(headers)}      # 一律按列名定位，无位置兜底
+        if find_col(headers, COL_VC) is None:
+            warn_missing("单店表·在架映射明细", p, headers, COL_VC,
+                         hint="无法按 vendorCode 建键，本店明细按空处理（请运行 wb.py shops-mapping 重建）")
+        if find_col(headers, COL_ACTUAL_PRICE) is None:
+            warn_missing("单店表·在架映射明细", p, headers, COL_ACTUAL_PRICE,
+                         hint="dp 将为空；merge 会用商品价格表按中文名回填，请运行 wb.py merge 重建")
+
+        def cell(r, name):
+            i = icol.get(name)
+            return r[i] if i is not None and i < len(r) else None
+
         for r in ws.iter_rows(min_row=2, values_only=True):
-            vc = r[idx.get("vendorCode", 1)]
+            vc = cell(r, COL_VC)
             if not vc:
                 continue
             mapped[str(vc)] = {
-                "cn": r[idx.get("产品中文名", 0)] or "",
+                "cn": cell(r, COL_CN) or "",
                 "vc": str(vc),
-                "dp": r[idx.get("双倍售价", 2)] if "双倍售价" in idx else None,
-                "price": r[idx.get("本店售价(CNY)", 3)] if "本店售价(CNY)" in idx else None,
-                "discount": r[idx.get("折扣%", 4)] if "折扣%" in idx else None,
-                "club": r[idx.get("club折扣%", 5)] if "club折扣%" in idx else None,
-                "stock": r[idx.get("本店库存", 6)] if "本店库存" in idx else None,
-                "nmId": r[idx.get("本店nmId", 7)] if "本店nmId" in idx else None,
-                "title": r[idx.get("俄文标题", 8)] if "俄文标题" in idx else "",
-                "img": r[idx.get("主图链接", 9)] if "主图链接" in idx else "",
-                "L": r[idx.get("尺寸长(cm)", 10)] if "尺寸长(cm)" in idx else None,
-                "W": r[idx.get("尺寸宽(cm)", 11)] if "尺寸宽(cm)" in idx else None,
-                "H": r[idx.get("尺寸高(cm)", 12)] if "尺寸高(cm)" in idx else None,
-                "weight": r[idx.get("毛重(kg)", 13)] if "毛重(kg)" in idx else None,
-                "createAt": r[idx.get("创建时间", 14)] if "创建时间" in idx else None,
-                "updateAt": r[idx.get("更新时间", 15)] if "更新时间" in idx else None,
-                "match_type": r[idx.get("匹配类型", 16)] if "匹配类型" in idx else "",
+                "dp": cell(r, COL_ACTUAL_PRICE),
+                "price": cell(r, "本店售价(CNY)"),
+                "discount": cell(r, "折扣%"),
+                "club": cell(r, "club折扣%"),
+                "stock": cell(r, "本店库存"),
+                "nmId": cell(r, "本店nmId"),
+                "title": cell(r, COL_TITLE) or "",
+                "img": cell(r, COL_IMG) or "",
+                "L": cell(r, COL_L),
+                "W": cell(r, COL_W),
+                "H": cell(r, COL_H),
+                "weight": cell(r, COL_WT),
+                "createAt": cell(r, "创建时间"),
+                "updateAt": cell(r, "更新时间"),
+                "match_type": cell(r, "匹配类型") or "",
             }
     unmapped = []
     if "未映射在架商品" in wb.sheetnames:

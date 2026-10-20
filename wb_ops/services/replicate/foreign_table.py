@@ -7,19 +7,14 @@ import math
 import openpyxl
 
 from wb_ops import common
+from wb_ops.framework.xlsx_headers import (COL_ACTUAL_PRICE, COL_CN, COL_H, COL_IMG,
+                                           COL_L, COL_NM, COL_TITLE, COL_VC, COL_W,
+                                           COL_WT, LEGACY_ACTUAL_PRICE,
+                                           find_col, require_col)
 from wb_ops.services.replicate import replicate
 
-# 他人表「映射总表」Sheet 用到的列名（按表头定位，缺列容错）
-COL_CN = "产品中文名"
-COL_VC = "vendorCode"
-COL_DP = "双倍售价"
-COL_TITLE = "俄文标题"
-COL_IMG = "主图链接"
-COL_L = "尺寸长(cm)"
-COL_W = "尺寸宽(cm)"
-COL_H = "尺寸高(cm)"
-COL_WT = "毛重(kg)"
-COL_NM = "WB商品码"  # 他人店铺当前可靠 nmId（抓取上品数据必须项，无此列跳过）
+# 他人表「映射总表」Sheet 用到的列名（按表头定位）
+COL_DP = COL_ACTUAL_PRICE
 
 OZON_BADGE = "ozon-card"
 
@@ -44,7 +39,7 @@ def vc_tail_badge(vc):
 
 def load_foreign(xlsx_path):
     """解析他人映射表「映射总表」Sheet → (items, bad_vcs, no_nm_count)
-    items: [{cn, vc, k, nm, dp, title_ru, img, L, W, H, weight}]，同原始 WB 码 k 去重（优先双倍售价非空行）
+    items: [{cn, vc, k, nm, dp, title_ru, img, L, W, H, weight}]，同原始 WB 码 k 去重（优先实际售价非空行）
       k: = common.extract_wb_nm(vc)，供应商代码里的原始 WB 商品码（跨店铺防重复上架判断的核心键）
       nm: = 他人表「WB商品码」列（他人店铺当前可靠 nmId，新上架 API 提交抓取的 sku，必须非空且纯数字）
     bad_vcs: 供应商代码无法提取原始 WB 码的异常行
@@ -55,12 +50,12 @@ def load_foreign(xlsx_path):
         wb.close()
         raise RuntimeError(f"{xlsx_path} 缺少「映射总表」Sheet（需同项目生成的映射表格式）")
     ws = wb["映射总表"]
-    headers = [str(c.value or "") for c in ws[1]]
+    headers = [str(c.value or "").strip() for c in ws[1]]
 
     def idx(name):
-        return headers.index(name) if name in headers else None
+        return find_col(headers, name)
 
-    i_cn, i_vc, i_dp = idx(COL_CN), idx(COL_VC), idx(COL_DP)
+    i_cn, i_vc = idx(COL_CN), idx(COL_VC)
     i_title, i_img = idx(COL_TITLE), idx(COL_IMG)
     i_l, i_w, i_h, i_wt = idx(COL_L), idx(COL_W), idx(COL_H), idx(COL_WT)
     i_nm = idx(COL_NM)
@@ -68,6 +63,13 @@ def load_foreign(xlsx_path):
     if i_vc is None or i_cn is None:
         wb.close()
         raise RuntimeError(f"表头缺少 {COL_VC}/{COL_CN} 列，无法解析")
+    # 价格列只认「实际售价」：他人表我们无法重建，缺列直接报错（避免逐行"价格缺失"的误导）
+    try:
+        i_dp = require_col(headers, COL_DP, "他人映射表·映射总表", xlsx_path)
+    except RuntimeError as e:
+        wb.close()
+        raise RuntimeError(f"{e}；他人表若为旧版（列名「{LEGACY_ACTUAL_PRICE}」），"
+                           f"请让对方把该列改名为「{COL_ACTUAL_PRICE}」后重导。") from None
     if i_nm is None:
         wb.close()
         print(f"[错误] 他人表缺少「{COL_NM}」列，无法读取抓取上品所需的可靠 WB商品码！按规则坚决跳过，无法导入。")

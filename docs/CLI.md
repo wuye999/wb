@@ -46,7 +46,7 @@
 | `trash` | 下架（不可逆；先清库存[WB 原生 portal stocks，随 stock 命令通道]再移回收站[BCS]） | 无 |
 | `dimension` | 批量改尺寸：默认读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；也可用 `--dims "长*宽*高/毛重"` 给选定的 vc 统一设自定义尺寸（有自定义用之、无则回退价格表）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--dims` / `--apply` / `--sync` |
 | `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次支持 50 个商品批量推送**，无需等待 WB 反爬抓取；包装尺寸优先读取价格映射表（绝不使用快照尺寸），商品价格表/card.json 兜底；前缀码智能匹配（中文名命中商品价格表前缀优先，原vc提取次之，随机兜底，均带 `BCS-` 前缀）；严格校验映射表「WB商品码」列（无商品码跳过）；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
-| `import-shelve` | 他人映射表导入上架：他人有我方无的商品上架到我的店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次 50 个商品批量推送**；**严格基于他人表「WB商品码」列比对差集与拉取商品**（绝不从 vendorCode 提取末尾数字，无商品码跳过）；前缀码我方价格表命中优先（均带 `BCS-` 前缀）；价格 = floor(双倍售价)；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
+| `import-shelve` | 他人映射表导入上架：他人有我方无的商品上架到我的店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次 50 个商品批量推送**；**严格基于他人表「WB商品码」列比对差集与拉取商品**（绝不从 vendorCode 提取末尾数字，无商品码跳过）；前缀码我方价格表命中优先（均带 `BCS-` 前缀）；价格 = floor(实际售价，他人表须为新列名)；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 | `shelve` | 新版批量上架：输入 WB 商品码（支持单码/多码/文件）自动上架到店铺；走 BCS 新版批量上品接口（`POST /products/batch/push`）；支持指定完整 VC、4位前缀码、价格、尺寸毛重（`--dims`）、目标店铺与库存；缺省参数智能从映射表、商品价格表与 card.json 补齐 | `[nms ...]` / `--nm` / `--vc` / `--prefix` / `--price` / `--dims` / `--shops` / `--stock` / `--cn` / `--file` / `--cn-stock` / `--interval` / `--apply` / `--sync` / `--no-verify` |
 | `shelve-old` | 旧版上架建卡：输入 WB 商品码自动上架到店铺；走 BCS 旧版上品建卡接口（`POST /system/wbCollection/wb/new`）；原生支持自定义完整 VC（不受前缀限制）、俄文标题/主图与规格建卡；支持单码/多码/文件；缺省参数智能补齐 | `[nms ...]` / `--nm` / `--vc` / `--prefix` / `--price` / `--dims` / `--shops` / `--stock` / `--cn` / `--file` / `--cn-stock` / `--interval` / `--apply` / `--sync` / `--no-verify` |
 
@@ -144,7 +144,7 @@ python wb.py replicate --vc BCS-XXX-123 --apply   # 单个 vc 补齐（目标店
 python wb.py replicate --shops 9353 --apply  # 只补指定店
 python wb.py replicate --cn-stock "感应灯:0,运动包:0" --apply  # 指定中文名上架库存（未指定用默认 999）
 
-# 他人映射表导入上架（他人有我方无，按 WB原始nmId 匹配；新 vc 我方前缀优先、价格=floor(双倍售价)）
+# 他人映射表导入上架（他人有我方无，按 WB原始nmId 匹配；新 vc 我方前缀优先、价格=floor(实际售价)）
 # 默认不自动同步（用本地快照判断，可能滞后）；加 --sync 才前置同步全部店铺 + 上架后复核并合并映射表
 python wb.py import-shelve 他人映射表.xlsx          # 预览差集清单（含前缀来源标注）
 python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤

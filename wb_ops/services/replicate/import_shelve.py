@@ -9,7 +9,7 @@ wb_ops 他人映射表导入上架（import-shelve）
 - 上架 API 抓取目标：新版批量上品接口（POST /products/batch/push）提交的 sku 必须为他人映射表的「WB商品码」列
   （他人店铺当前在售商品码，可实时拉取详情与主图）；必须非空且纯数字，无此码坚决跳过。
 - 前缀码决策：中文名匹配我方商品价格表前缀码优先 → 提取他人 vendorCode 4位前缀 → 随机 4 位大写字母（均自动拼接 BCS- 前缀）。
-- 价格：他人表「双倍售价」列，店铺价 = floor(双倍售价)（我方标准定价规则）。
+- 价格：他人表「实际售价」列，店铺价 = floor(实际售价)（我方标准定价规则）。
 - 包装尺寸：他人表（长/宽/高/毛重）→ 我方商品价格表同中文名兜底 → card.json 兜底。
 
 用法：wb.py import-shelve <他人映射表.xlsx> [--cn|--shops|--limit] [--apply] [--no-verify] [--interval S]
@@ -145,7 +145,7 @@ def run(args):
 
     # dry-run 清单
     print("\n" + "=" * 122)
-    print(f"{'原始WB码(查重)':<14}{'抓取WB码':<14}{'中文名':<16}{'双倍售价→店铺价':<18}{'库存':<6}{'提交前缀(来源)':<22}{'他人vc':<26}目标店")
+    print(f"{'原始WB码(查重)':<14}{'抓取WB码':<14}{'中文名':<16}{'实际售价→店铺价':<18}{'库存':<6}{'提交前缀(来源)':<22}{'他人vc':<26}目标店")
     print("-" * 122)
     for item, prefix, prefix_from in plans:
         dp = item["dp"]
@@ -208,9 +208,9 @@ def run(args):
 
         # 价格校验
         if dp is None or float(dp) <= 0:
-            print(f"  {tag} [失败] k={k} 双倍售价缺失或无效")
+            print(f"  {tag} [失败] k={k} 实际售价缺失或无效")
             writer.writerow([now, k, nm, cn, item["vc"], prefix, prefix_from,
-                             ",".join(map(str, target_shops)), "-", "-", "失败", "双倍售价缺失或无效"])
+                             ",".join(map(str, target_shops)), "-", "-", "失败", "实际售价缺失或无效"])
             fail += 1
             continue
 

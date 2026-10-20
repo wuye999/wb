@@ -67,7 +67,7 @@ def resolve_filters(args):
 
 
 def target_price(vc, state, boss, manual=None):
-    """目标价：--price 手动 > 商品价格表 floor(实际售价) > 映射表双倍售价快照 floor"""
+    """目标价：--price 手动 > 商品价格表 floor(实际售价) > 映射表实际售价快照 floor"""
     if manual is not None:
         return int(manual)
     cn = state.get(vc, {}).get("cn", "")
@@ -142,7 +142,7 @@ def plan_price(vcs, shops, state, boss, manual, discount, club, keep_price=False
             else:
                 p = target_price(vc, state, boss, manual)
                 if p is None:
-                    print(f"  [跳过] 店{sid} {vc} 无目标价（商品价格表无该商品且映射表双倍售价为空），用 --price 指定")
+                    print(f"  [跳过] 店{sid} {vc} 无目标价（商品价格表无该商品且映射表实际售价为空），用 --price 指定")
                     tracker.add(sid, vc, "无目标价")
                     continue
             items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),

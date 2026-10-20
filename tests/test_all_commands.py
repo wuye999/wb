@@ -1504,6 +1504,224 @@ class TestAllCommands(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_56a_merge_dp_header_new_unit(self):
+        """merge 读映射总表：价格列按「实际售价」表头定位（挪到非 C 列也能读到）。"""
+        import io as _io
+        import os
+        import shutil
+        import tempfile
+
+        import openpyxl
+        from unittest import mock
+        from wb_ops import config
+        from wb_ops.framework import xlsx_headers
+        from wb_ops.storage.mapping_repo import MappingRepository
+
+        xlsx_headers.reset_warnings()
+        tmp = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmp, "mapping.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "映射总表"
+            # 实际售价 故意放在第 5 列（非 C 列），验证不依赖位置
+            ws.append(["产品中文名", "vendorCode", "店铺9352价格(CNY)", "折扣%", "实际售价"])
+            ws.append(["测试品", "BCS-AAAA-1", 100, 10, 88.9])
+            wb.save(path)
+
+            with mock.patch.object(config, "MAPPING_XLSX", path), \
+                    mock.patch.object(MappingRepository, "load_vc_override", return_value={}):
+                state, _ex = MappingRepository.load_mapping_state()
+
+            self.assertEqual(state["BCS-AAAA-1"]["dp"], 88.9)
+            self.assertEqual(state["BCS-AAAA-1"]["shop_price"], 100)
+            self.assertEqual(state["BCS-AAAA-1"]["cn"], "测试品")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_56b_merge_dp_header_legacy_warn_unit(self):
+        """merge 读映射总表：只有旧列名「双倍售价」时不崩、dp=None，并给出可见警告。"""
+        import contextlib
+        import io as _io
+        import os
+        import shutil
+        import tempfile
+
+        import openpyxl
+        from unittest import mock
+        from wb_ops import config
+        from wb_ops.framework import xlsx_headers
+        from wb_ops.storage.mapping_repo import MappingRepository
+
+        xlsx_headers.reset_warnings()
+        tmp = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmp, "mapping_old.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "映射总表"
+            ws.append(["产品中文名", "vendorCode", "双倍售价", "店铺9352价格(CNY)"])
+            ws.append(["测试品", "BCS-AAAA-2", 88.9, 100])
+            wb.save(path)
+
+            err = _io.StringIO()
+            with mock.patch.object(config, "MAPPING_XLSX", path), \
+                    mock.patch.object(MappingRepository, "load_vc_override", return_value={}), \
+                    contextlib.redirect_stderr(err):
+                state, _ex = MappingRepository.load_mapping_state()
+
+            self.assertIsNone(state["BCS-AAAA-2"]["dp"])       # 只认新名
+            self.assertEqual(state["BCS-AAAA-2"]["shop_price"], 100)
+            msg = err.getvalue()
+            self.assertIn("实际售价", msg)
+            self.assertIn("双倍售价", msg)
+            self.assertIn("merge", msg)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_56c_merge_single_shop_dp_header_unit(self):
+        """merge 读单店表：价格列按「实际售价」表头定位；旧列名 → dp=None + 警告。"""
+        import contextlib
+        import io as _io
+        import os
+        import shutil
+        import tempfile
+
+        import openpyxl
+        from unittest import mock
+        from wb_ops import config
+        from wb_ops.framework import xlsx_headers
+        from wb_ops.services.catalog import mapping_excel
+
+        tmp = tempfile.mkdtemp()
+        try:
+            def build(name, dp_header):
+                p = os.path.join(tmp, name)
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "在架映射明细"
+                # 实际售价 放第 4 列（非第 3 列）
+                ws.append(["产品中文名", "vendorCode", "本店售价(CNY)", dp_header, "本店库存"])
+                ws.append(["测试品", "BCS-BBBB-1", 120, 88.9, 5])
+                wb.save(p)
+                return p
+
+            p_new = build("new.xlsx", "实际售价")
+            xlsx_headers.reset_warnings()
+            with mock.patch.object(config, "shop_mapping_xlsx",
+                                   lambda sid, name=None: p_new):
+                rows, _unmapped = mapping_excel.load_single_shop_rows(9352)
+            self.assertEqual(rows["BCS-BBBB-1"]["dp"], 88.9)
+            self.assertEqual(rows["BCS-BBBB-1"]["price"], 120)
+
+            p_old = build("old.xlsx", "双倍售价")
+            xlsx_headers.reset_warnings()
+            err = _io.StringIO()
+            with mock.patch.object(config, "shop_mapping_xlsx",
+                                   lambda sid, name=None: p_old), \
+                    contextlib.redirect_stderr(err):
+                rows_old, _u = mapping_excel.load_single_shop_rows(9352)
+            self.assertIsNone(rows_old["BCS-BBBB-1"]["dp"])
+            self.assertIn("实际售价", err.getvalue())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_57_importshelve_foreign_legacy_dp_raise_unit(self):
+        """import-shelve 读他人表：旧列名「双倍售价」→ 直接报错；新名挪位仍可读。"""
+        import os
+        import shutil
+        import tempfile
+
+        import openpyxl
+        from wb_ops.framework import xlsx_headers
+        from wb_ops.services.replicate import foreign_table
+        from wb_ops.framework.xlsx_headers import HeaderError
+
+        tmp = tempfile.mkdtemp()
+        try:
+            def build(name, dp_header):
+                p = os.path.join(tmp, name)
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "映射总表"
+                ws.append(["产品中文名", "vendorCode", dp_header, "WB商品码"])
+                ws.append(["他人品", "BCS-CCCC-1396678", 66.6, 1396678])
+                wb.save(p)
+                return p
+
+            xlsx_headers.reset_warnings()
+            with self.assertRaises((RuntimeError, HeaderError)) as ctx:
+                foreign_table.load_foreign(build("old.xlsx", "双倍售价"))
+            msg = str(ctx.exception)
+            self.assertIn("实际售价", msg)
+            self.assertIn("双倍售价", msg)
+            self.assertIn("实际表头", msg)
+
+            items, _bad, _no_nm = foreign_table.load_foreign(build("new.xlsx", "实际售价"))
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["dp"], 66.6)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_58_price_boss_dp_column_reorder_unit(self):
+        """price 读商品价格表：价格列按「实际售价」表头定位，四个读取点都位移仍正确。"""
+        import os
+        import shutil
+        import tempfile
+
+        import openpyxl
+        from unittest import mock
+        from wb_ops import config
+        from wb_ops.framework import xlsx_headers
+        from wb_ops.framework.xlsx_headers import HeaderError
+        from wb_ops.services.replicate import shelve_common
+        from wb_ops.storage.mapping_repo import MappingRepository
+
+        tmp = tempfile.mkdtemp()
+        try:
+            def build(name, headers, row):
+                p = os.path.join(tmp, name)
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Sheet1"
+                ws.append(headers)
+                ws.append(row)
+                wb.save(p)
+                return p
+
+            headers = ["产品图片", "卖家SKU", "产品中文名", "尺寸", "最低售价",
+                       "实际售价", "vendorCode前缀码", "库存SKU"]
+            row = ["", "SKU-9", "测试品", "10*10*10/0.1", 40, 88.9, "TEST", "s9"]
+            p_ok = build("boss_ok.xlsx", headers, row)
+
+            xlsx_headers.reset_warnings()
+            with mock.patch.object(config, "BOSS_XLSX", p_ok):
+                boss = MappingRepository.load_boss()
+                pmap = MappingRepository.load_prefix_map()
+                details = MappingRepository.load_boss_details()
+                shelve_dict = shelve_common.load_boss_shelve_dict()
+
+            self.assertEqual(boss[0]["dp"], 88.9)
+            self.assertEqual(boss[0]["floor"], 88)
+            self.assertEqual(boss[0]["stock_sku"], "s9")
+            self.assertEqual(pmap["TEST"]["dp"], 88.9)
+            self.assertEqual(details["by_cn"]["测试品"]["dp"], 88.9)
+            self.assertEqual(details["by_cn"]["测试品"]["price"], 40)   # 最低售价按列名取
+            self.assertEqual(shelve_dict["测试品"]["dp"], 88.9)
+
+            # 缺「实际售价」列 → 必须抛错（且不被 load_prefix_map 的宽 except 吞掉）
+            headers_bad = ["产品图片", "卖家SKU", "产品中文名", "尺寸", "最低售价",
+                           "vendorCode前缀码", "库存SKU"]
+            row_bad = ["", "SKU-9", "测试品", "10*10*10/0.1", 40, "TEST", "s9"]
+            p_bad = build("boss_bad.xlsx", headers_bad, row_bad)
+            with mock.patch.object(config, "BOSS_XLSX", p_bad):
+                with self.assertRaises(HeaderError):
+                    MappingRepository.load_boss()
+                with self.assertRaises(HeaderError):
+                    MappingRepository.load_prefix_map()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_43_legacy_payload_images_subject_id(self):
         # 验证旧接口 build_legacy_payload 在无外部图片与合成 detail 时，仍能保证图片非空且 subjectId 提取正确
         from wb_ops.domain.models import ShelveItem
