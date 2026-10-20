@@ -1621,6 +1621,9 @@ class TestAllCommands(unittest.TestCase):
         self.assertTrue(fd.match_state("shipment", {"shipment"}))
         self.assertFalse(fd.match_state("sold", {"shipment"}))
         self.assertTrue(fd.match_state("sold", set()))          # 空集 = 不过滤
+        # ★ camelCase 状态码必须能被小写的过滤集合命中（实测踩坑：expectedSorting 曾 0 命中）
+        self.assertTrue(fd.match_state("expectedSorting", fd.parse_states("expectedSorting")))
+        self.assertTrue(fd.match_state("readyForPickup", fd.parse_states("shipment,readyForPickup")))
 
         # ④ 时间窗口：全空 = 不过滤；闭区间；只给 end 报错
         self.assertEqual(fd.resolve_window(), ("", ""))

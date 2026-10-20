@@ -153,10 +153,15 @@ def parse_states(token: str, include_canceled: bool = False) -> Set[str]:
 
 
 def match_state(code: str, wanted: Set[str]) -> bool:
-    """wanted 为空 → 不过滤；否则要求 code ∈ wanted。"""
+    """wanted 为空 → 不过滤；否则要求 code ∈ wanted（**大小写不敏感**）。
+
+    ⚠ `parse_states` 会把入参统一小写，而接口返回的状态码是 camelCase
+    （`expectedSorting` / `readyForPickup` / `reshipment`）⇒ 必须在此处同样小写再比，
+    否则 `--item-state expectedSorting` 永远 0 命中（2026-10-19 实测踩坑）。
+    """
     if not wanted:
         return True
-    return (code or "") in wanted
+    return (code or "").lower() in wanted
 
 
 def select_shops(shops: Sequence[Dict[str, Any]], token: str) -> List[Dict[str, Any]]:
