@@ -399,16 +399,28 @@ def basket_base(nm_id):
     return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{n}"
 
 
-def fetch_card_json(nm_id):
-    """basket CDN card.json → dict；失败返回 None。"""
+CARD_RETRY = 3          # card.json 取用重试次数（CDN 偶发 ReadTimeout / SSLError / 边缘 404）
+CARD_RETRY_DELAY = 1.5  # 重试间隔（秒）
+
+
+def fetch_card_json(nm_id, retry: int = CARD_RETRY):
+    """basket CDN card.json → dict；全部重试失败才返回 None。
+
+    ⚠ 不要用「一次失败就 None」的写法：实测同一 URL 连测 5 次会出现
+    `200/200/ReadTimeout/200/200`，单次超时会让 上架/图片 链路误判「卡不存在」
+    （2026-10-19 排查 expectedSorting 时踩到）。重试覆盖 超时/连接错误/5xx/404 边缘缓存。
+    """
     url = f"{basket_base(nm_id)}/info/ru/card.json"
-    try:
-        resp = requests.get(url, headers={"User-Agent": common.UA}, timeout=30)
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except Exception:
-        return None
+    for attempt in range(max(1, int(retry))):
+        try:
+            resp = requests.get(url, headers={"User-Agent": common.UA}, timeout=30)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:                      # noqa: BLE001 —— 网络类异常统一重试
+            pass
+        if attempt < max(1, int(retry)) - 1:
+            time.sleep(CARD_RETRY_DELAY)
+    return None
 
 
 def card_color_names(card):
