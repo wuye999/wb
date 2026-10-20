@@ -54,7 +54,7 @@ from wb_ops.storage.mapping_repo import (
 
 
 def apply_latest_dp(result_list):
-    """用商品价格表最新双倍售价覆盖核对结果的 doublePrice（保证与商品价格表一致）"""
+    """用商品价格表最新实际售价覆盖核对结果的 doublePrice（dict 键沿用 doublePrice）"""
     boss = load_boss()
     dp_by_sku = {b["sku"]: b["dp"] for b in boss}
     n = 0
@@ -306,7 +306,10 @@ def auto_match(result_list, bcs):
         dp = item.get("doublePrice")
         if dp is None:
             continue
-        floor = int(dp)
+        try:
+            floor = math.floor(float(dp))
+        except (TypeError, ValueError):
+            continue
         pool = price_index.get(floor, []) + price_index.get(floor + 1, [])
         kws = keywords.keywords_for(item.get("cn") or "")
         pats = [re.compile(k, re.I) for k in kws]
@@ -377,7 +380,7 @@ def import_mapping(import_file, auto=False):
     bcs_data = load_bcs()
     result, n_dp = apply_latest_dp(result)
     if n_dp:
-        print(f"[双倍售价同步] 覆盖 {n_dp} 个商品为商品价格表最新值")
+        print(f"[实际售价同步] 覆盖 {n_dp} 个商品为商品价格表最新值")
     if auto:
         auto_map = auto_match(result, bcs_data)
         n_auto = 0

@@ -73,7 +73,7 @@
 | `chat-watch` | **AI 售后客服**：买家聊天实时监听（双模式：**front=前台AI** 打印买家消息/商品信息到控制台与日志、不发送；**back=后台AI** 常驻轮询 + LLM 自动生成俄语回复并发送）。定位=不暴露 AI、软性拒退换、其余问题模糊拖延。**平台未读标记不可用**（实测恒 0），故以「最后一条来自买家 + eventID 去重 + 时间窗」为准 | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` / `--limit` / `--history-limit` / `--since-hours`（默认 72）/ `--max-turns` |
 | `chats` | 查询 WB 买家聊天会话与消息历史（**只读**，用于上线前验证与排障；含 最新消息/待回复/未读数/nmId/供应商代码/中文名） | `--shops` / `--limit` / `--chat-id` / `--history` / `--since-hours` / `--no-detail` |
 | `appeals` | WB 平台**投诉单查询（只读）**：未处理=「等待回复」(`status_id=1`)，`--days N` 按**剩余天数恰好=N**（平台字段 `decide_counter`）筛选；逐条调详情取商品编号（nmId 仅在详情的 `brands[].products[].nmid`）；**用本地真源把 nmId 反查为供应商代码 vendorCode**（本店快照 → 映射表两级，查不到标注「本地真源未收录」，不联网核实）；输出控制台明细表 + **去重 nmId 行 + 去重 vendorCode 行** + CSV；⚠ 调详情可能被平台标记「已读」（浏览副作用，不改业务状态） | `--shops` / `--days` / `--type` / `--limit` / `--no-cn` |
-| `ratings` | WB **商品链接评分与买家评价查询（只读）**：支持按评分（`--rating 1` / `--max-rating 2`）、店铺（`--shops`）、1星评论（`--one-star`）、评价总数门槛等灵活筛选；**级联匹配商品价格表**补齐中文名、双倍售价、尺寸、前缀码；输出控制台预览并自动导出 CSV 与带格式的 Excel 报表 | `--shops` / `--rating` / `--min-rating` / `--max-rating` / `--one-star` / `--min-one-star` / `--min-feedbacks` / `--days` / `--name` / `--prefix` / `--vc` / `--limit` / `--out` |
+| `ratings` | WB **商品链接评分与买家评价查询（只读）**：支持按评分（`--rating 1` / `--max-rating 2`）、店铺（`--shops`）、1星评论（`--one-star`）、评价总数门槛等灵活筛选；**级联匹配商品价格表**补齐中文名、实际售价、尺寸、前缀码；输出控制台预览并自动导出 CSV 与带格式的 Excel 报表 | `--shops` / `--rating` / `--min-rating` / `--max-rating` / `--one-star` / `--min-one-star` / `--min-feedbacks` / `--days` / `--name` / `--prefix` / `--vc` / `--limit` / `--out` |
 | `ai-test` | 离线对照测试 AI 客服回复效果（读取本地问答数据集测试 prompt，不调外网） | `--qa <json文件路径>` |
 
 | `remote-wh` | 成都仓库（国内仓）商品永久删除（dry-run 默认；`--apply --yes` 真正执行） | `--shops` / `--interval` / `--parallel` / `--apply` / `--yes` |
@@ -232,7 +232,7 @@ python wb.py appeals --days 5                   # ⚠ 未处理投诉 + 剩余�
 python wb.py appeals                            # 全部未处理投诉（不限剩余天数）
 python wb.py appeals --shops 9353 --no-cn       # 只看袁州2，不解析中文名（仍解析供应商代码）
 python wb.py appeals --type in --limit 10       # 每店最多拉 10 条列表（可能不完整，仅做快照式抽查）
-# 商品链接评分与买家评价查询（只读；自动关联价格表双倍售价、尺寸、前缀码，生成 CSV 与 Excel）
+# 商品链接评分与买家评价查询（只读；自动关联价格表实际售价、尺寸、前缀码，生成 CSV 与 Excel）
 python wb.py ratings                            # 全店评分查询（默认有评价商品 feedbackCount>=1，近365天）
 python wb.py ratings --shops 9352               # 只查袁州1
 python wb.py ratings --rating 1                 # 筛选评分为 1 的商品

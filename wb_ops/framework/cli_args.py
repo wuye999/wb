@@ -33,7 +33,7 @@ def add_ops_args(p: argparse.ArgumentParser, *, with_price: bool = False, with_s
     p.add_argument("--sync", action="store_true",
                    help="执行后自动同步在架商品并合并映射表（默认不自动同步/不写后验证，仅打印提示）")
     if with_price:
-        p.add_argument("--price", type=int, help="目标价（默认 floor(商品价格表双倍售价)）")
+        p.add_argument("--price", type=int, help="目标价（默认 floor(商品价格表实际售价)）")
         p.add_argument("--discount", type=int, help="折扣 0-100（不传=不改）")
         p.add_argument("--club-discount", type=int, help="club折扣 0-100（不传=不改）")
         p.add_argument("--keep-price", action="store_true", help="价格保持当前值（只改折扣/俱乐部折扣）")

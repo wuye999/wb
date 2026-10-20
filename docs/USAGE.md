@@ -110,7 +110,7 @@ python wb.py shops-mapping --shop-id 9352
 ## 6. 改价 / 设折扣 / 库存 / 下架（两段式）
 
 ```bash
-# 改价（默认 floor 双倍售价；--price 手动；--discount 带折扣）
+# 改价（默认 floor 商品价格表实际售价；--price 手动；--discount 带折扣）
 python wb.py price --name 充电宝 --apply --yes
 python wb.py price --vc BCS-XXX --price 130 --discount 20 --apply --yes
 python wb.py price --vc BCS-XXX --discount 30 --keep-price --apply --yes   # 只改折扣不动价

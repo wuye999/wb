@@ -3,6 +3,7 @@
 wb_ops 操作计划生成与 dry-run 模块 (ops_plan)
 负责命令行筛选条件解析、目标价格与库存计算、跳过统计与变更计划构建。
 """
+import math
 import sys
 from collections import Counter
 from wb_ops.adapters import bcs_client as bcs
@@ -66,7 +67,7 @@ def resolve_filters(args):
 
 
 def target_price(vc, state, boss, manual=None):
-    """目标价：--price 手动 > 商品价格表 floor(双倍售价) > 映射表双倍售价 floor"""
+    """目标价：--price 手动 > 商品价格表 floor(实际售价) > 映射表双倍售价快照 floor"""
     if manual is not None:
         return int(manual)
     cn = state.get(vc, {}).get("cn", "")
@@ -75,7 +76,10 @@ def target_price(vc, state, boss, manual=None):
         return b["floor"]
     dp = state.get(vc, {}).get("dp")
     if dp is not None:
-        return int(dp)
+        try:
+            return math.floor(float(dp))
+        except (TypeError, ValueError):
+            return None
     return None
 
 

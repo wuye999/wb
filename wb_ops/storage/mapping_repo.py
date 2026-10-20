@@ -8,6 +8,8 @@ import re
 from typing import Dict, List, Any, Tuple, Callable
 from .. import config
 from ..framework.safe_io import atomic_dump_json, safe_load_json
+from .boss_price import (CachedDpReader, floor_price, resolve_formula,
+                         to_number, warn_unresolved)
 
 
 
@@ -47,50 +49,64 @@ class MappingRepository:
 
 
     @staticmethod
-    def _resolve_dp(formula, ws, row_idx):
-        """解析 D 列公式（如 =K57*2）：读目标单元格值 × 系数。失败返回 None"""
-        m = re.match(r'=([A-Z]+)(\d+)\s*\*\s*(\d+(?:\.\d+)?)', str(formula))
-        if m:
-            import openpyxl
-            col = openpyxl.utils.column_index_from_string(m.group(1))
-            target = ws.cell(row=int(m.group(2)), column=col).value
-            if isinstance(target, (int, float)):
-                return target * float(m.group(3))
-        return None
+    def _resolve_dp(formula, ws, row_idx=None):
+        """解析 D 列「实际售价」公式（`=F57*2` / `=F57` / `=$F$57*2` / `=ROUND(F57*1.3,2)`）。
+
+        无法解析返回 None，由 `load_boss()` 再回退 Excel 缓存值（data_only）。
+        实现见 `storage/boss_price.py`（受限求值，不执行任意函数）。
+        """
+        return resolve_formula(formula, ws)
 
     @classmethod
     def load_boss(cls) -> List[Dict[str, Any]]:
-        """商品价格表 → [{idx, sku, cn, dp(双倍售价), img, floor, prefix, stock_sku}]
-        Sheet1 列：图片/SKU/中文名/双倍售价/尺寸/最低售价/前缀码/库存SKU。
-        支持 D 列公式（=F{行}*2 等）；NOTEBOOK 为普通商品行（前缀 NBTB），与其他一致。
+        """商品价格表 → [{idx, sku, cn, dp(实际售价), img, floor, prefix, stock_sku}]
+
+        Sheet1 列：图片/SKU/中文名/实际售价/尺寸/最低售价/前缀码/库存SKU。
+        D 列「实际售价」可写数值或公式（`=F2*2` / `=F2` / `=$F$2*2` / `=ROUND(F2*1.3,2)`）；
+        公式不可解析时回退 Excel 缓存值，仍取不到则 dp/floor=None 并打印 [警告]（不再静默空价）。
+        `floor` = math.floor(实际售价)，即店铺整数价口径。
         `stock_sku` = 第 8 列「库存SKU」（马帮侧 SKU，缺列/空值返回 ""）。"""
         if not os.path.exists(config.BOSS_XLSX):
             return []
         import openpyxl
         wb = openpyxl.load_workbook(config.BOSS_XLSX, data_only=False)
         ws = wb["Sheet1"]
-        items = []
-        for row in ws.iter_rows(min_row=2):
-            sku = str(row[1].value).strip() if row[1].value else ""
-            cn = str(row[2].value).strip() if row[2].value else ""
-            if not sku and not cn:
-                continue
-            dp = row[3].value
-            if isinstance(dp, str) and dp.startswith("="):
-                dp = cls._resolve_dp(dp, ws, row[0].row)
-            prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
-            stock_sku = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
-            items.append({
-                "idx": len(items) + 1,
-                "sku": sku,
-                "cn": cn,
-                "dp": dp,
-                "img": str(row[0].value).strip() if row[0].value else "",
-                "floor": int(dp) if dp is not None else None,
-                "prefix": prefix,
-                "stock_sku": stock_sku,
-            })
-        wb.close()
+        cache = CachedDpReader(config.BOSS_XLSX)
+        items: List[Dict[str, Any]] = []
+        by_cache: List[Tuple] = []
+        missing: List[Tuple] = []
+        try:
+            for row in ws.iter_rows(min_row=2):
+                sku = str(row[1].value).strip() if row[1].value else ""
+                cn = str(row[2].value).strip() if row[2].value else ""
+                if not sku and not cn:
+                    continue
+                raw = row[3].value
+                dp = to_number(raw)
+                if dp is None and isinstance(raw, str) and raw.strip().startswith("="):
+                    dp = cls._resolve_dp(raw, ws, row[0].row)
+                    if dp is None:
+                        dp = to_number(cache.get(row[0].row))
+                        (by_cache if dp is not None else missing).append(
+                            (row[0].row, sku, raw))
+                elif dp is None and raw not in (None, ""):
+                    missing.append((row[0].row, sku, raw))
+                prefix = str(row[6].value).strip().upper() if len(row) > 6 and row[6].value else ""
+                stock_sku = str(row[7].value).strip() if len(row) > 7 and row[7].value else ""
+                items.append({
+                    "idx": len(items) + 1,
+                    "sku": sku,
+                    "cn": cn,
+                    "dp": dp,
+                    "img": str(row[0].value).strip() if row[0].value else "",
+                    "floor": floor_price(dp),
+                    "prefix": prefix,
+                    "stock_sku": stock_sku,
+                })
+        finally:
+            cache.close()
+            wb.close()
+        warn_unresolved(config.BOSS_XLSX, by_cache, missing)
         return items
 
     @staticmethod
@@ -151,7 +167,7 @@ class MappingRepository:
                 item = {
                     "sku": sku,
                     "cn": cn,
-                    "dp": dp,               # 双倍售价 (用户指定口径)
+                    "dp": dp,               # 实际售价（价格表 D 列，用户维护；店铺价 = floor）
                     "dim": dim,             # 尺寸
                     "price": price,         # 最低售价
                     "prefix": prefix,       # vendorCode前缀码

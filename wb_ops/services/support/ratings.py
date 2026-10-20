@@ -382,7 +382,7 @@ def run(args: Any) -> int:
                     five_star=five_s,
                     is_shadowed=is_shadowed,
                     cn_name=p_info.get("cn") or "",
-                    price=p_info.get("dp"),  # 售价取价格表双倍售价
+                    price=p_info.get("dp"),  # 售价取价格表实际售价（原始值，不取整）
                     dimensions=p_info.get("dim") or "",
                     prefix=p_info.get("prefix") or "",
                     source_wb="商品评分API",

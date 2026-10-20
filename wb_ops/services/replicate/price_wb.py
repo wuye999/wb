@@ -13,7 +13,7 @@ wb_ops WB 原生 dp-api 批量改价 (price_wb)
 
 定位：`price` 命令默认通道（2026-09-24 起，registry alias price-wb 同一实现）；
 BCS price/batch 原通道保留为 `price-bcs` 备用（ops.run("price")，未动）。
-Plan 层复用 ops_plan.plan_price（目标价：--price > 商品价格表 floor(双倍售价) > 映射表 dp）；
+Plan 层复用 ops_plan.plan_price（目标价：--price > 商品价格表 floor(实际售价) > 映射表 dp）；
 dry-run 复用 ops_plan.dry_run；≤原价/2 本地预拦截保留（WB quarantine hardLimit 同口径）；
 auto_review 照用 ops_executor._auto_review_shop（隔离区 price-review 本就是 dp-api 同域）。
 

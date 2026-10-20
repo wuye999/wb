@@ -22,6 +22,7 @@ from wb_ops.adapters import bcs_client as bcs
 from wb_ops.adapters import wb_client
 from wb_ops.framework.safe_io import safe_load_json, atomic_dump_json
 from wb_ops.storage.mapping_repo import MappingRepository
+from wb_ops.storage.boss_price import floor_price
 from wb_ops import config
 from wb_ops import common
 from .wb_card import (
@@ -245,7 +246,7 @@ def resolve_item_details(
     智能补全上架商品缺失字段：
     1. 校验 nm_id
     2. 中文名自动补全（若空则查本地映射表）
-    3. 价格自动补全（指定价格 > 映射表在架价/双倍价 > 价格表售价）
+    3. 价格自动补全（指定价格 > 映射表在架价/快照价 > 价格表实际售价 floor）
     4. 前缀码与完整 VC 自动推导（指定完整 VC 优先；或指定前缀码；或中文名价格表前缀；或随机 4 位）
     5. 尺寸重量自动补全（显式传入 > 价格映射表 > 价格表 > card.json 包装组）
     6. 标题与图片提取（从 card.json 获取并组装）
@@ -435,7 +436,7 @@ def load_shelve_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
       1. .json: List[dict] 结构或 List[nm] 数组
       2. .csv: 
          - 订单登记/筛选非我店订单 CSV（含 '商品中文名' 与 '现在商品的nmId' / 'VC' 列），
-           自动关联商品价格表推导新 VC (BCS-{前缀}-{原尾段})、双倍售价与包装尺寸；
+           自动关联商品价格表推导新 VC (BCS-{前缀}-{原尾段})、实际售价与包装尺寸；
          - 普通上架 CSV（含 nmId, price, vendorCode, cn 列）；
       3. .txt: 每行一个商品码
     返回: (file_items, raw_nms)
@@ -513,7 +514,7 @@ def load_shelve_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                 new_vc = f"BCS-{my_prefix}-{tail}" if my_prefix else orig_vc
 
                 dims_t = parse_dims_str(b["dims"]) if b else None
-                dp = float(b["dp"]) if (b and b["dp"] is not None) else None
+                dp = floor_price(b["dp"]) if (b and b["dp"] is not None) else None
 
                 file_items.append({
                     "nmId": int(cur_nm),

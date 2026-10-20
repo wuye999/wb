@@ -13,7 +13,7 @@
 | 拉某店 / 全店在架商品快照 | `products.fetch_shop(shop_id, out_file, no_sync)` / `products.fetch_all(no_sync)` | `services/catalog/products.py` |
 | 读某店快照（按 vendorCode 索引，已滤回收站） | `ProductSnapshotRepository.load_shop_rows(shop_id)` → `{vc: row}`；`load_shop_products(shop_id)` → 原始 list | `storage/product_repo.py` |
 | 读映射总表状态（vc → 中文名/双倍售价/店铺价/折扣/库存/nmId…） | `MappingRepository.load_mapping_state()` → `(state, excluded)` | `storage/mapping_repo.py` |
-| 读商品价格表（权威清单：SKU/中文名/双倍售价/尺寸/前缀码） | `MappingRepository.load_boss()` → `[{idx,sku,cn,dp,img,floor,prefix}]` | 同上 |
+| 读商品价格表（权威清单：SKU/中文名/实际售价/尺寸/前缀码） | `MappingRepository.load_boss()` → `[{idx,sku,cn,dp,img,floor,prefix}]` | 同上 |
 | **vendorCode → 中文名**反查（含纠偏池 + 前缀码兜底，毫秒级） | `MappingRepository.build_vc_resolver()` → `(resolve_cn(vc, title), vc_cn)` | 同上 |
 | **nmId → 供应商代码 vendorCode**（如投诉/订单只给 nmId） | 本店快照 `load_shop_rows` 反查 vc，兜底映射总表 `load_mapping_state()[0][vc]["nmId"]`（能同时给 vc+中文名） | `storage/nm_resolver.py` → `NmResolver(shop_id).resolve(nm_id)`（**只用本地真源，查不到就标注，不联网核实**） |
 | **nmId → 中文名**（按店；同一 vc 各店 nmId 不同） | 店快照 `load_shop_rows` 反查 vc → 再走上面的 resolver（模板 T3） | 同上（`NmResolver`，2026-09-23 起自 `services/support/complaints._LocalResolver` 上移共用） |

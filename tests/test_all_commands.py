@@ -424,6 +424,83 @@ class TestAllCommands(unittest.TestCase):
         self.assertEqual((ok2, fail2), (0, 0))
         self.assertEqual(calls, [])          # 全部被拦截 → 不发任何请求
 
+    def test_09f_price_boss_dp_formula_unit(self):
+        """price 目标价：商品价格表 D 列「实际售价」公式解析 + floor 口径（离线）。
+
+        覆盖 2026-10-20 口径变更：D 列由「双倍售价」改为「实际售价」，
+        不再假设 =F*2；需支持 =F2*2 / =F2 / =$F$2*2 / =ROUND(...) / 纯数值，
+        无法解析时回退 Excel 缓存值，两者皆无则 None 并告警。
+        """
+        import contextlib
+        import io as _io
+        import os
+        import shutil
+        import tempfile
+        from unittest import mock
+
+        import openpyxl
+        from wb_ops import config
+        from wb_ops.services.replicate import ops_plan
+        from wb_ops.storage.mapping_repo import MappingRepository
+
+        header = ["产品图片", "卖家SKU", "产品中文名", "实际售价", "尺寸",
+                  "最低售价", "vendorCode前缀码", "库存SKU"]
+        rows = [
+            ["", "SKU-1", "旧格式", "=F2*2", "10*10*10/0.1", 40.25, "AAAA", "s1"],
+            ["", "SKU-2", "无乘数", "=F3", "10*10*10/0.1", 41.525, "BBBB", "s2"],
+            ["", "SKU-3", "绝对引用", "=$F$4*2", "10*10*10/0.1", 39.775, "CCCC", "s3"],
+            ["", "SKU-4", "ROUND", "=ROUND(F5*1.3,2)", "10*10*10/0.1", 46.2, "DDDD", "s4"],
+            ["", "SKU-5", "走缓存", "=VLOOKUP(A2,A:F,6,0)", "10*10*10/0.1", 50, "EEEE", "s5"],
+            ["", "SKU-6", "纯数值", 100.75, "10*10*10/0.1", 60, "FFFF", "s6"],
+            ["", "SKU-7", "无缓存", "=IF(A2>0,1,2)", "10*10*10/0.1", 70, "GGGG", "s7"],
+        ]
+        wb_formula = openpyxl.Workbook()
+        ws = wb_formula.active
+        ws.title = "Sheet1"
+        ws.append(header)
+        for r in rows:
+            ws.append(r)
+
+        wb_cached = openpyxl.Workbook()
+        ws2 = wb_cached.active
+        ws2.title = "Sheet1"
+        ws2.append(header)
+        for r in rows:
+            ws2.append([r[0], r[1], r[2], None, r[4], r[5], r[6], r[7]])
+        ws2.cell(2, 4).value = 80.5      # =F2*2
+        ws2.cell(3, 4).value = 41.525    # =F3
+        ws2.cell(4, 4).value = 79.55     # =$F$4*2
+        ws2.cell(5, 4).value = 60.06     # =ROUND(...)
+        ws2.cell(6, 4).value = 88.88     # 仅走缓存兜底（故意与 F5*2 不同，便于区分来源）
+        # 第 8 行（=IF...）不写缓存 → 应得 None 并告警
+
+        tmp = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmp, "boss.xlsx")
+            wb_formula.save(path)
+            err = _io.StringIO()
+            with mock.patch("openpyxl.load_workbook",
+                            side_effect=lambda p, data_only=False, **kw:
+                            wb_cached if data_only else wb_formula), \
+                    mock.patch.object(config, "BOSS_XLSX", path), \
+                    contextlib.redirect_stderr(err):
+                boss = MappingRepository.load_boss()
+
+            self.assertEqual([b["dp"] for b in boss],
+                             [80.5, 41.525, 79.55, 60.06, 88.88, 100.75, None])
+            self.assertEqual([b["floor"] for b in boss],
+                             [80, 41, 79, 60, 88, 100, None])
+            self.assertIn("缓存", err.getvalue())          # 回退缓存 → 可见
+            self.assertIn("无法解析", err.getvalue())      # 彻底失败 → 可见
+
+            # 映射表快照 dp 兜底也必须是 floor（修 int("80.5") 崩溃）
+            self.assertEqual(
+                ops_plan.target_price("VC-X", {"VC-X": {"cn": "无", "dp": 88.9}}, [], None), 88)
+            self.assertIsNone(
+                ops_plan.target_price("VC-Y", {"VC-Y": {"cn": "无", "dp": "bad"}}, [], None))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_10b_stock_bcs_dry_run(self):
         """stock-bcs 备选通道：BCS stock/batchSetByChrtIdsBatch（dry-run 预览）。"""
         res = self._run_cmd(["stock-bcs", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
@@ -1386,6 +1463,46 @@ class TestAllCommands(unittest.TestCase):
         sig_new = inspect.signature(shelve_new.execute_shelve)
         sig_old = inspect.signature(shelve_old.execute_shelve)
         self.assertEqual(list(sig_new.parameters.keys()), list(sig_old.parameters.keys()))
+
+    def test_42b_shelve_file_dp_floor_unit(self):
+        """shelve --file：CSV 上架价按商品价格表「实际售价」floor（离线）。
+
+        口径 2026-10-20：D 列改为实际售价后，`shelve --file` 与 `price`/主链路口径统一为
+        floor(实际售价)——此前该分支直接 float(dp) 不取整（88.9 → 88.9，现 → 88）。
+        """
+        import os
+        import shutil
+        import tempfile
+        from unittest import mock
+
+        import openpyxl
+        from wb_ops import config
+        from wb_ops.services.replicate import shelve_common
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws.append(["产品图片", "卖家SKU", "产品中文名", "实际售价", "尺寸",
+                   "最低售价", "vendorCode前缀码", "库存SKU"])
+        ws.append(["", "SKU-9", "测试品", 88.9, "10*10*10/0.1", 40, "TEST", "s9"])
+
+        tmp = tempfile.mkdtemp()
+        try:
+            boss_path = os.path.join(tmp, "boss.xlsx")
+            wb.save(boss_path)
+            csv_path = os.path.join(tmp, "orders.csv")
+            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+                f.write("商品中文名,现在商品的nmId,VC\n测试品,123456,OTHER-1\n")
+
+            with mock.patch("openpyxl.load_workbook", return_value=wb), \
+                    mock.patch.object(config, "BOSS_XLSX", boss_path):
+                items, _raw = shelve_common.load_shelve_file(csv_path)
+
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["price"], 88)
+            self.assertIsInstance(items[0]["price"], int)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_43_legacy_payload_images_subject_id(self):
         # 验证旧接口 build_legacy_payload 在无外部图片与合成 detail 时，仍能保证图片非空且 subjectId 提取正确

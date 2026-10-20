@@ -271,7 +271,7 @@ class ProductRatingItem:
     five_star: int = 0                           # 5星评价数
     is_shadowed: bool = False                    # 是否被平台屏蔽
     cn_name: str = ""                            # 产品中文名（商品价格表）
-    price: Optional[float] = None                # 售价（商品价格表双倍售价）
+    price: Optional[float] = None                # 售价（商品价格表实际售价）
     dimensions: str = ""                         # 尺寸（商品价格表）
     prefix: str = ""                             # vendorCode前缀码（商品价格表）
     source_wb: str = "商品评分API"               # wb编号来源
