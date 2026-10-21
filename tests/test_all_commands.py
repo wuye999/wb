@@ -1722,6 +1722,46 @@ class TestAllCommands(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_59_feishu_register_cn_fallback_unit(self):
+        """feishu-register 填「商品中文名」三级回退：映射总表 → vc_known → 四位前缀码（离线）。
+
+        2026-10-20：商品下架后 vc 从映射总表消失，登记中文名变空（74 单黑丝假发）。
+        登记侧改为三级回退，仅为填名；马帮匹配/预报仍要求 vc 在映射表（在架）。
+        """
+        import os
+        import shutil
+        import tempfile
+
+        import openpyxl
+        from unittest import mock
+        from wb_ops import config
+        from wb_ops.services.order import feishu_register as fr
+        from wb_ops.storage.mapping_repo import MappingRepository
+
+        tmp = tempfile.mkdtemp()
+        try:
+            boss = os.path.join(tmp, "boss.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Sheet1"
+            ws.append(["产品图片", "卖家SKU", "产品中文名", "实际售价", "尺寸",
+                       "最低售价", "vendorCode前缀码", "库存SKU"])
+            ws.append(["", "SZLK-1", "手足裂口霜", 80, "10*10*10/0.1", 40, "WENR", "szlk"])
+            wb.save(boss)
+
+            known = {"BCS-BBBB-2": {"cn": "归属池品", "dp": 88}}
+            with mock.patch.object(config, "BOSS_XLSX", boss), \
+                    mock.patch.object(MappingRepository, "load_vc_known", return_value=known):
+                resolve = fr._cn_resolver({"BCS-AAAA-1": "映射表品"})
+                self.assertEqual(resolve("BCS-AAAA-1"), "映射表品")        # ① 映射总表优先
+                self.assertEqual(resolve("BCS-BBBB-2"), "归属池品")        # ② vc_known 兜底
+                self.assertEqual(resolve("BCS-WENR-999"), "手足裂口霜")    # ③ 前缀码兜底
+                self.assertIsNone(resolve("BCS-ZZZZ-123456"))              # 三级皆无
+                self.assertIsNone(resolve(""))
+                self.assertIsNone(resolve(None))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_43_legacy_payload_images_subject_id(self):
         # 验证旧接口 build_legacy_payload 在无外部图片与合成 detail 时，仍能保证图片非空且 subjectId 提取正确
         from wb_ops.domain.models import ShelveItem

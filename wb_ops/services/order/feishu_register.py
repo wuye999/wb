@@ -9,7 +9,8 @@ wb_ops 马帮订单登记到飞书多维表格「订单登记」（原 爆品登
           orderalllist 拉不到；--no-pending 可关闭该合并
   2. 逐单构建登记记录（**一律以本地数据为准**）：
        订单编号=平台单号（去重键）；日期=付款时间；店铺=shop_map 映射（袁州N(935x)）
-       BCS编号=vendorCode；商品中文名=本地映射表反查（查不到留空，仍登记）
+       BCS编号=vendorCode；商品中文名=**三级回退**反查（映射总表 → vc_known 归属池 → 四位前缀码；
+         三级都查不到才留空，仍登记）。仅用于填名，不影响马帮匹配/预报（那里依然要求 vc 在架）
        库存SKU=本地商品价格表「库存SKU」列（第 8 列）；查不到一律留空（不回写马帮系统匹配值）
        wb编号=下单店铺快照 vendorCode→nmId（≠映射表主店码）；商品链接=WB 详情页
        订单量=订单摘要件数（解析不到默认 1）
@@ -217,6 +218,44 @@ def parse_qty(p):
     return int(t) if (t or "").isdigit() else 1
 
 
+def _cn_resolver(vc2cn):
+    """飞书登记专用：vc → 中文名 三级回退（映射总表 → vc_known 归属池 → 四位前缀码）。
+
+    为什么需要：映射总表只含**当前在架**商品，商品一下架，vc 就从表里消失、
+    登记时中文名变空（2026-10-20：74 单黑丝假发受影响）；而 `vc_known.json`
+    是历史归属池，仍记得这些已下架商品的归属。
+    ⚠ 仅用于填「商品中文名」这一列；马帮匹配/预报仍要求 vc 在映射表（在架），
+    避免把已下架商品判成可发货。
+    """
+    from wb_ops.storage.mapping_repo import MappingRepository
+
+    cache = {"known": None, "prefix": None}
+
+    def resolve(vc):
+        vc = str(vc or "").strip()
+        if not vc:
+            return None
+        cn = vc2cn.get(vc)                              # ① 映射总表
+        if cn:
+            return cn
+        if cache["known"] is None:
+            cache["known"] = MappingRepository.load_vc_known()
+        cn = (cache["known"].get(vc) or {}).get("cn")   # ② vc_known 归属池
+        if cn:
+            return str(cn).strip()
+        if cache["prefix"] is None:
+            cache["prefix"] = MappingRepository.load_prefix_map()
+        m = re.match(config.VC_PREFIX_RE, vc) if config.VC_PREFIX_RE else None
+        if m:                                           # ③ 四位前缀码兜底
+            hit = cache["prefix"].get(m.group(1).upper()) or {}
+            if hit.get("cn"):
+                return str(hit["cn"]).strip()
+        return None
+
+    return resolve
+
+
+
 def _merge_pending(orders, cred, args):
     """把「待处理订单」（order.oTc tabId=7，最近 args.days 天）并入登记范围，按平台单号去重。
 
@@ -278,6 +317,7 @@ def build_records(args):
         return [], {"空": 0}, {}, cred
 
     vc2cn, cn2sku = mabang.load_local_mapping()
+    resolve_cn = _cn_resolver(vc2cn)      # 登记填名三级回退（映射表 → vc_known → 前缀码）
 
     # 各店快照 vendorCode→nmId（wb编号=下单店铺自己的码）
     shop_ids = {}
@@ -323,7 +363,7 @@ def build_records(args):
         if not p["platform_order_id"]:
             skip["无平台单号"] = skip.get("无平台单号", 0) + 1
             continue
-        cn = vc2cn.get(p["vc"])
+        cn = resolve_cn(p["vc"])
         if p["vc"] and cn is None:
             # 仍会登记（用户规则：以本地数据为准，查不到就留空），仅计数提示
             notice["VC不在映射表(仍登记·中文名留空)"] = notice.get("VC不在映射表(仍登记·中文名留空)", 0) + 1
