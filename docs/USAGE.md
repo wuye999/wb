@@ -503,6 +503,45 @@ python wb.py fbs-delivery --shops 9352 --limit 3 --no-cn   # 冒烟：每店只�
       print(row["rank"], row["cn"], row["item_count"], row["shops"])
   ```
 
+## 11e. WB「订单动态」按商品中文名统计退货率（order-stats，只读）
+
+> 用途：看**近一个月**各商品（按**中文名**）的下单量、退货量、退货率、完单口径退货率、未完结量。
+> **只读**（不触发任何写操作），逐店拉「订单动态」→ 按 created 精筛窗口 → vc→中文名 → 聚合 → **单个 xlsx 多 Sheet**。
+
+```bash
+python wb.py order-stats                          # 近 30 天（含今天）、全店 → data/logs/订单动态统计_<ts>.xlsx
+python wb.py order-stats --shops 9352,9353        # 只统计指定店铺（也支持短名 袁州1）
+python wb.py order-stats --days 7                 # 近 7 天
+python wb.py order-stats --begin 2026-09-01 --end 2026-09-30   # 历史区间（闭区间）
+python wb.py order-stats --top 20 --no-detail     # 控制台只看前 20 名、不写明细 Sheet（快）
+python wb.py order-stats --out _scratch/os.xlsx   # 指定输出路径
+```
+
+- **接口**：`POST seller-content .../content-analytics/api/v1/order-feed/orders`（body 带 `currentPeriod`，
+  游标 `data.pageInfo.cursor` 翻页，`limit=50`）。
+- **⚠ 关键口径**：接口 `currentPeriod` 实测按 **`order.updated`** 过滤（2026-10-27 实证：3 天窗口 65 行里
+  只有 7 行 `created` 在窗口内）⇒ 脚本把服务端结果只当**粗筛超集**，**再按 `created` 本地精筛**；
+  历史区间会把请求上界**自动放宽到今天**，避免「下单在窗口内、之后才变状态」的订单被服务端漏掉。
+- **订单数 = 明细行数（一行=一件）**，不按订单号去重（接口一行即一件商品；同一订单多件会占多行）。
+- **退货数** = `status ∈ {cancel, return, returnDefective}`；**未完结** = `status == created`；
+  退货率 = 退货数 / 订单数；完单口径退货率 = 退货数 / (订单数 − 未完结)，分母 ≤0 时单元格写 `-`。
+- **中文名**：vendorCode 反查本地映射真源（`vc_override` > `vc_known` > 前缀码兜底）；查不到归
+  `(中文名未知)` 桶并排最后。**库存SKU** 取 `data/商品价格表.xlsx`「库存SKU」列（按中文名）。
+- **未知状态不猜**：计入订单数，不进退货/未完结，控制台与 xlsx 元信息块都会显式列出。
+- **时区**：默认 `America/Los_Angeles`（对齐 WB 订单动态页，比北京时间晚约 15 小时）；`--timezone Asia/Shanghai` 可换。
+  「今天」的边界随之变化，控制台第一行会打印实际窗口。
+- **输出**：`汇总`（全店合计 + 合计行）+ 每店一个 Sheet + `订单明细`（逐行：店铺/订单号/状态/下单时间/价格等）；
+  百分比为数值 + `0.00%` 格式（可排序/透视）。
+- 脚本内嵌调用（免 CLI）：
+  ```python
+  from wb_ops.services.order.order_stats import order_stats
+  from wb_ops.services.order.order_stats_xlsx import write_xlsx
+  r = order_stats(days=30, shops=["9352"])          # 也支持 begin=/end=/date=/timezone=
+  for row in r["by_cn"][:10]:
+      print(row["rank"], row["cn"], row["orders"], row["returns"], row["rate"], row["rate_done"])
+  path = write_xlsx(r)
+  ```
+
 ## 12. 买家提问查询 + AI 回复（前台 / 后台两种模式，二选一）
 
 ### 查询（两种模式的基础，自动关联商品信息）

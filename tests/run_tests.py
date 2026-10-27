@@ -45,7 +45,7 @@ DISCOUNT_CMDS = ["discount", "promo-apply", "promo-goods", "promo-gap", "discoun
 ORDER_CMDS = ["orders", "mabang-orders", "mabang-forecast", "feishu-register",
               "feishu-register-dedup",
               "mabang-stock-register", "mabang-stock-daily", "feishu-vc-stats", "fbs-delivery",
-              "mabang-process", "promo-gap"]
+              "order-stats", "mabang-process", "promo-gap"]
 REPLICATE_CMDS = ["price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs", "trash",
                   "replicate", "import-shelve", "dimension",
                   "dims-check", "banned", "clean", "remote-wh", "shelve", "shelve-old"]
@@ -84,6 +84,7 @@ PATH_HINTS = [
     ("wb_ops/services/replicate/stock_wb.py", ["stock", "stock-wb"]),
     ("wb_ops/adapters/wb_stock_client.py", ["stock", "stock-wb"]),
     ("wb_ops/adapters/wb_supply_client.py", ["fbs-delivery"]),
+    ("wb_ops/adapters/wb_order_feed_client.py", ["order-stats"]),
     ("wb_ops/services/replicate/price_wb.py", ["price", "price-wb"]),
     ("wb_ops/services/replicate/ops", ["price", "stock", "trash"]),
     ("wb_ops/services/replicate/", REPLICATE_CMDS),
@@ -109,6 +110,8 @@ PATH_HINTS = [
     ("wb_ops/services/order/feishu_register.py", ["feishu-register", "feishu-vc-stats", "feishu-register-dedup"]),
     ("wb_ops/services/order/feishu_vc_stats.py", ["feishu-vc-stats"]),
     ("wb_ops/services/order/fbs_delivery.py", ["fbs-delivery"]),
+    ("wb_ops/services/order/order_stats_xlsx.py", ["order-stats"]),
+    ("wb_ops/services/order/order_stats.py", ["order-stats"]),
     ("wb_ops/services/order/", ORDER_CMDS),
     # 门面（薄转发，按域定向）
     ("wb_ops/services/catalog_svc.py", CATALOG_CMDS),

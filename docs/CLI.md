@@ -93,6 +93,7 @@
 | `feishu-vc-stats` | **只读**：读飞书「订单登记」→ 按**供应商代码（`BCS编号` = vendorCode）跨店合并**统计「**单数**」（= 登记记录条数；另附「件数」= `订单量` 求和）→ **降序**输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）。未命中原因（无日期/不在窗口/店铺被过滤）显式标注；`BCS编号` 为空的记录归入 `(无BCS编号)` 桶不丢弃 | `--days`(默认7，含今天) / `--date` / `--begin` / `--end` / `--shops`(支持 `9352` 或 `袁州1`) / `--top` / `--by-prefix` / `--no-cn` / `--url` / `--table` |
 | `feishu-register-dedup` | **存量修复**（2026-10-13 新增）：清理「订单登记」表内**重复订单编号**。全表分页读 → 按 `订单编号` 分组 → 每组**保留表内最早一条**（读取即插入顺序），其余 `+record-delete`（≤100/批）；`订单编号` 为空的行不动、单独计数。**默认 dry-run**（只出统计 + `data/logs/飞书订单登记去重_*.csv` 保留/删除明细），`--apply` 才真删；幂等可续跑（每次实时重算分组，删到一半失败直接重跑） | `--url` / `--table`(默认 订单登记) / `--apply` / `--limit N`(本次最多删 N 行，0=不限) |
 | `fbs-delivery` | **只读**：WB FBS「配送中」→ 遍历各店拉取**全部清单**及每张清单下**全部商品**（`portal/supplies/delivery` + `portal/supplies/{supplyID}/orders/delivery`，游标分页），按**清单 createdAt 时段 / 商品状态 / 店铺**筛选 → 按「**商品中文名**」统计（vc→中文名走本地映射真源；查不到归 `(中文名未知)` 桶置尾）→ 控制台汇总 + 两份 CSV（明细 + 按中文名统计，写 `data/logs/配送中*_*.csv`）。⚠ 商品明细接口返回该清单下**全部**订单（**含已取消/已售出**），**默认只保留 `shipment`（待发货）**；聚合口径：商品数=明细行数、供应商代码数=去重 vendorCode、清单数=去重 supplyID | `--shops` / `--days`(默认0=不过滤) / `--date` / `--begin` / `--end` / `--item-state`(默认 shipment；all=不过滤) / `--supply-state` / `--include-canceled` / `--limit` / `--max-pages` / `--top` / `--no-cn` / `--interval` |
+| `order-stats` | **只读**：WB「订单动态」（`seller-content .../order-feed/orders`）→ 时间窗内订单按**商品中文名**统计：**订单数**（=明细行数，一行=一件）/ **退货数**（`status` ∈ cancel/return/returnDefective）/ **退货率** / **完单口径退货率**（退货数÷(订单数−未完结)）/ **未完结(created)** / 涉及店铺 / 供应商代码数 / 库存SKU → **单个 xlsx 多 Sheet**（`汇总` + 每店一页 + `订单明细`）。默认近 30 天含今天；⚠ 接口 `currentPeriod` 实测按 **updated** 过滤，故服务端只做粗筛超集、本地再按 **created** 精筛（历史区间自动把请求上界放宽到今天，避免漏单） | `--shops` / `--days`(30) / `--date` / `--begin` / `--end` / `--timezone`(America/Los_Angeles) / `--page-size`(50) / `--max-pages`(200) / `--limit` / `--top` / `--no-cn` / `--quiet` / `--interval` / `--out` / `--no-detail` / `--detail-max-rows` / `--no-local-filter` |
 | `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
 | `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
 
@@ -217,6 +218,13 @@ python wb.py fbs-delivery --begin 2026-10-01 --end 2026-10-08   # 指定清单�
 python wb.py fbs-delivery --item-state all --top 20   # 不过滤商品状态（含已取消/已售出），只看前 20 名
 python wb.py fbs-delivery --supply-state onway,complete       # 只统计指定状态的清单
 python wb.py fbs-delivery --include-canceled   # 在「待发货」基础上并入「已取消」
+# 「订单动态」按商品中文名统计订单数/退货率（只读；输出 xlsx 多 Sheet）
+python wb.py order-stats                          # 近 30 天（含今天），全店 → data/logs/订单动态统计_<ts>.xlsx
+python wb.py order-stats --days 7 --top 20        # 近 7 天，控制台只看前 20 名（xlsx 仍全量）
+python wb.py order-stats --shops 9352             # 只统计袁州1（也支持短名 袁州1）
+python wb.py order-stats --begin 2026-09-01 --end 2026-09-30   # 历史区间（自动放宽请求上界防漏单）
+python wb.py order-stats --no-detail --out _scratch/os.xlsx    # 不写明细 Sheet + 指定输出路径
+python wb.py order-stats --timezone Asia/Shanghai --days 30    # 换窗口时区（默认 America/Los_Angeles）
 python wb.py questions                     # 查询未处理提问（带中文名/标题/品牌/颜色/价格/描述/特征）
 python wb.py questions --no-detail         # 跳过商品详情拉取（只中文名，快）
 python wb.py questions --reply "..." --question-id <id>    # 回复单条
@@ -322,6 +330,15 @@ for x in a["waste_rows"]:                               # 在推但该关（合�
     print(x["shop_name"], x["campaign_id"], x["nm"], x["vc"], x["orders"], x["verdict"])
 for x in a["waste_by_campaign"]:                        # 活动级：便于整活动关停
     print(x["campaign_id"], x["被推广商品数"], x["建议关闭数"], x["是否整活动建议关闭"])
+
+# 6. WB「订单动态」按商品中文名统计（只读；返回聚合结果 + 明细，可直接写 xlsx）
+from wb_ops.services.order.order_stats import order_stats
+from wb_ops.services.order.order_stats_xlsx import write_xlsx
+r = order_stats(days=30, shops=["9352"])                # 或 begin/end/date；timezone 默认 America/Los_Angeles
+print(r["begin"], r["end"], len(r["rows"]))             # 窗口（按 created）/ 明细行数
+for row in r["by_cn"][:10]:                             # 已按订单数降序、(中文名未知) 垫底
+    print(row["rank"], row["cn"], row["orders"], row["returns"], row["rate"], row["rate_done"])
+path = write_xlsx(r)                                    # data/logs/订单动态统计_<时间戳>.xlsx（汇总+每店+明细）
 ```
 
 > 每个模块内部函数签名在源码 docstring 中都有说明；CLI 是这些函数的薄封装。

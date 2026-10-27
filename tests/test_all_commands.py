@@ -43,7 +43,7 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 55 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 56 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
@@ -54,11 +54,11 @@ class TestAllCommands(unittest.TestCase):
             "orders", "questions", "questions-watch", "chat-watch", "chats", "appeals", "ratings", "ai-test",
             "mabang-orders",
             "mabang-forecast", "feishu-register", "feishu-register-dedup", "mabang-stock-register",
-            "mabang-stock-daily", "feishu-vc-stats", "fbs-delivery", "mabang-process", "cookies-update",
+            "mabang-stock-daily", "feishu-vc-stats", "fbs-delivery", "order-stats", "mabang-process", "cookies-update",
             "cookie-refresh-wb",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 55)
+        self.assertEqual(len(subcommands), 56)
 
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
@@ -2199,6 +2199,188 @@ class TestAllCommands(unittest.TestCase):
             self.assertEqual(items[0].feedback_rating, 1.0)
             self.assertEqual(items[0].one_star, 2)
             self.assertEqual(items[0].source_wb, "商品评分API")
+
+
+    # ---------------- 60. order-stats：订单动态按中文名统计（全离线） ----------------
+    def test_60_order_stats_offline(self):
+        """order-stats 离线断言：解析/状态归类/窗口/聚合/百分比边界/游标翻页/Sheet 命名/落盘。
+
+        样本形态取自 api/网络请求/wb订单动态 查询退货率.har（2026-10-27，袁州店）：
+        状态分布 cancel/buyout/created/return（另有 returnDefective）；
+        cursor = base64("<offset>:<时间>")，三页 50/100/150；
+        ⚠ currentPeriod 实测按 **updated** 过滤（3 天窗口 65 行中仅 7 行 created 在窗口内）。
+        """
+        import tempfile
+        from datetime import date, datetime
+        from unittest import mock
+
+        from wb_ops.adapters import wb_order_feed_client as feed
+        from wb_ops.services.order import order_stats as ostats
+        from wb_ops.services.order import order_stats_xlsx as oxlsx
+
+        # ① parse_row：完整样本 + 空对象容错
+        row = ostats.parse_row({
+            "product": {"id": 1585363941, "name": "Шапка зимняя", "subjectName": "保暖帽",
+                        "vendorCode": "BCS-ZZMX-1534011939", "productRating": 10},
+            "order": {"id": "eBu.r060644b97e4c4173952bc732e9922ce3.0.0",
+                      "created": "2026-10-21T01:27:34-07:00",
+                      "updated": "2026-10-26T21:20:26-07:00", "status": "buyout",
+                      "cancelType": "receipt",
+                      "price": {"seller": 49.19}, "size": {"title": "стандарт"},
+                      "warehouse": {"title": "склад продавца"},
+                      "destination": {"title": "Новосибирск"}},
+        })
+        self.assertEqual(row["created_day"], "2026-10-21")     # 前缀切片即该时区日期
+        self.assertEqual(row["order_no"], "eBu.r060644b97e4c4173952bc732e9922ce3")
+        self.assertEqual(row["vc"], "BCS-ZZMX-1534011939")
+        self.assertEqual(row["nm_id"], "1585363941")
+        self.assertEqual(row["kind"], "done")
+        self.assertEqual(row["cancel_type"], "receipt")
+        self.assertEqual(row["price"], 49.19)
+        empty = ostats.parse_row({})
+        self.assertEqual((empty["vc"], empty["status"], empty["created_day"]), ("", "", ""))
+        self.assertEqual(ostats.parse_row({"order": {"id": "x"}})["kind"], "unknown")
+
+        # ② classify_status：未知值不猜测
+        self.assertEqual(ostats.classify_status("buyout"), "done")
+        self.assertEqual(ostats.classify_status("created"), "pending")
+        for s in ("cancel", "return", "returnDefective", "RETURN", "Cancel"):
+            self.assertEqual(ostats.classify_status(s), "return", s)
+        for s in ("delivered", "", None, "sold"):
+            self.assertEqual(ostats.classify_status(s), "unknown", s)
+
+        # ③ resolve_window：默认近 30 天含今天（与 fbs-delivery 的"默认不过滤"不同）
+        t = date(2026, 10, 27)
+        self.assertEqual(ostats.resolve_window(today=t), ("2026-09-28", "2026-10-27"))
+        self.assertEqual(ostats.resolve_window(days=1, today=t), ("2026-10-27", "2026-10-27"))
+        self.assertEqual(ostats.resolve_window(begin="2026-10-01", end="2026-10-08"),
+                         ("2026-10-01", "2026-10-08"))
+        self.assertEqual(ostats.resolve_window(date="2026-10-3"), ("2026-10-03", "2026-10-03"))
+        self.assertEqual(ostats.resolve_window(begin="2026-10-08", end="2026-10-01"),
+                         ("2026-10-01", "2026-10-08"))
+        with self.assertRaises(ValueError):
+            ostats.resolve_window(end="2026-10-08")
+        with self.assertRaises(ValueError):
+            ostats.resolve_window(days=1, timezone="Mars/Base")
+        # 时区换算（本机无 tzdata，固定偏移 + LA 夏令时）：UTC 2026-10-27 06:00 → LA 10-26
+        self.assertEqual(ostats.tz_today("America/Los_Angeles", datetime(2026, 10, 27, 6, 0)),
+                         date(2026, 10, 26))
+        self.assertEqual(ostats.tz_today("Asia/Shanghai", datetime(2026, 10, 27, 6, 0)),
+                         date(2026, 10, 27))
+
+        # ④ aggregate_by_cn：计数/率/未归类桶置尾/分母≤0 → None
+        rows = [
+            {"cn": "感应灯", "vc": "A", "shop_label": "袁州1(9352)", "kind": "return"},
+            {"cn": "感应灯", "vc": "B", "shop_label": "袁州2(9353)", "kind": "done"},
+            {"cn": "感应灯", "vc": "B", "shop_label": "袁州2(9353)", "kind": "pending"},
+            {"cn": "感应灯", "vc": "B", "shop_label": "袁州2(9353)", "kind": "unknown"},
+            {"cn": "", "vc": "C", "shop_label": "袁州1(9352)", "kind": "done"},
+            {"cn": "全是未完结", "vc": "D", "shop_label": "袁州1(9352)", "kind": "pending"},
+        ]
+        agg = ostats.aggregate_by_cn(rows, {"感应灯": "gyd"})
+        self.assertEqual([x["cn"] for x in agg],
+                         ["感应灯", "全是未完结", "(中文名未知)"])
+        top = agg[0]
+        self.assertEqual((top["orders"], top["returns"], top["pending"], top["unknown"]), (4, 1, 1, 1))
+        self.assertEqual(top["vc_count"], 2)
+        self.assertEqual(top["shops"], ["袁州1(9352)", "袁州2(9353)"])
+        self.assertEqual(top["stock_sku"], "gyd")
+        self.assertAlmostEqual(top["rate"], 0.25)
+        self.assertAlmostEqual(top["rate_done"], 1 / 3)
+        self.assertEqual([x["rank"] for x in agg], [1, 2, 3])
+        pending_only = [x for x in agg if x["cn"] == "全是未完结"][0]
+        self.assertIsNone(pending_only["rate_done"])   # 分母=0 → xlsx 写 "-"
+
+        # ⑤ 游标翻页：mock wb_api.request（首页不带 cursor、次页带上一页 cursor）
+        bodies = []
+        pages = [
+            {"data": {"pageInfo": {"cursor": "NTA:MjAyNi0xMC0yNyAwNzoyNToxNg"},
+                      "orders": [{"order": {"id": "a.0.0"}}]}},
+            {"data": {"pageInfo": {"cursor": ""}, "orders": [{"order": {"id": "b.0.0"}}]}},
+        ]
+
+        def fake(session, method, url, **kw):
+            bodies.append(kw.get("json"))
+            return pages[len(bodies) - 1]
+
+        with mock.patch.object(feed.wb_api, "request", side_effect=fake):
+            got = list(feed.iter_orders(object(), "2026-09-28", "2026-10-27", limit=1, sleep=0))
+        self.assertEqual([x["order"]["id"] for x in got], ["a.0.0", "b.0.0"])
+        self.assertNotIn("cursor", bodies[0])
+        self.assertEqual(bodies[1]["cursor"], "NTA:MjAyNi0xMC0yNyAwNzoyNToxNg")
+        self.assertEqual(bodies[0]["currentPeriod"], {"start": "2026-09-28", "end": "2026-10-27"})
+        self.assertEqual(bodies[0]["timezone"], "America/Los_Angeles")
+        self.assertEqual(bodies[0]["orderBy"], {"field": "order.updated", "mode": "desc"})
+        self.assertFalse(bodies[0]["isDefective"])
+        self.assertEqual(feed.cursor_offset("NTA:MjAyNi0xMC0yNyAwNzoyNToxNg"), 50)
+
+        # cursor 恒不变 → 必须停（防死循环）
+        with mock.patch.object(feed.wb_api, "request",
+                               return_value={"data": {"pageInfo": {"cursor": "SAME"},
+                                                      "orders": [{"order": {"id": "x"}}]}}):
+            self.assertEqual(len(list(feed.iter_orders(object(), "a", "b", max_pages=9, sleep=0))), 2)
+        # 空页 → 停
+        with mock.patch.object(feed.wb_api, "request",
+                               return_value={"data": {"pageInfo": {"cursor": "C"}, "orders": []}}):
+            self.assertEqual(list(feed.iter_orders(object(), "a", "b", sleep=0)), [])
+        # 200 + error=true → 必须抛异常（不能当空数据处理）
+        with mock.patch.object(feed.wb_api, "request",
+                               return_value={"error": True, "errorText": "bad period"}):
+            with self.assertRaises(Exception):
+                list(feed.iter_orders(object(), "a", "b", sleep=0))
+
+        # ⑥ 店铺过滤接线（同域复用 fbs_delivery.select_shops）
+        shops = [{"shopId": 9352, "shopName": "袁州1"}, {"shopId": 9353, "shopName": "袁州2"}]
+        self.assertEqual([s["shopId"] for s in ostats.select_shops(shops, "9352,袁州2")], [9352, 9353])
+        self.assertEqual(len(ostats.select_shops(shops, "")), 2)
+        self.assertEqual(ostats.select_shops(shops, "9356"), [])
+
+        # ⑦ Sheet 命名：非法字符/截断/重名/撞预留名
+        used = {oxlsx.TITLE_SUMMARY.lower(), oxlsx.TITLE_DETAIL.lower()}
+        self.assertEqual(oxlsx.safe_sheet_name("袁州1/测试[1]:*?", set()), "袁州1_测试_1____")
+        self.assertLessEqual(len(oxlsx.safe_sheet_name("超长" * 40, set())), 31)
+        self.assertEqual(oxlsx.safe_sheet_name("汇总", used), "汇总(2)")
+        self.assertEqual(oxlsx.safe_sheet_name("袁州1", used), "袁州1")
+        self.assertEqual(oxlsx.safe_sheet_name("袁州1", used), "袁州1(2)")
+
+        # ⑧ write_xlsx 冒烟：临时目录落盘 → 回读校验结构与格式
+        import openpyxl
+        detail_row = {"shop_label": "袁州1(9352)", "shop_id": 9352, "order_id": "a.0.0",
+                      "order_no": "a", "created_day": "2026-10-21", "created": "2026-10-21T01:27:34-07:00",
+                      "updated": "2026-10-26T21:20:26-07:00", "status": "cancel", "kind": "return",
+                      "cancel_type": "receipt", "cn": "感应灯", "vc": "BCS-AAAA-1", "stock_sku": "gyd",
+                      "nm_id": "1", "title": "Лампа", "size": "стандарт", "price": 49.19,
+                      "warehouse": "склад", "dest": "Москва"}
+        res = {
+            "begin": "2026-09-28", "end": "2026-10-27", "timezone": "America/Los_Angeles",
+            "rows": [detail_row],
+            "by_cn": [{"rank": 1, "cn": "感应灯", "orders": 1, "returns": 1, "pending": 0,
+                       "unknown": 0, "vc_count": 1, "shops": ["袁州1(9352)"],
+                       "stock_sku": "gyd", "rate": 1.0, "rate_done": None}],
+            "by_cn_by_shop": {"袁州1(9352)": [{"rank": 1, "cn": "感应灯", "orders": 1, "returns": 1,
+                                               "pending": 0, "unknown": 0, "vc_count": 1,
+                                               "shops": ["袁州1(9352)"], "stock_sku": "gyd",
+                                               "rate": 1.0, "rate_done": None}]},
+            "per_shop": [{"shop": "袁州1", "shop_id": 9352, "label": "袁州1(9352)",
+                          "orders": 1, "returns": 1, "pending": 0, "unknown": 0, "error": ""}],
+            "by_shop": [{"shop_label": "袁州1(9352)", "orders": 1, "returns": 1}],
+            "status_counter": {"cancel": 1}, "unknown_status": {}, "out_of_window": 3,
+            "failed_shops": [], "dup_order_ids": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = oxlsx.write_xlsx(res, out=os.path.join(tmp, "t.xlsx"))
+            self.assertTrue(os.path.exists(path))
+            book = openpyxl.load_workbook(path)
+            self.assertEqual(book.sheetnames, ["汇总", "袁州1(9352)", "订单明细"])
+            ws = book["汇总"]
+            self.assertEqual([c.value for c in ws[1]], oxlsx.HEADERS)
+            self.assertEqual(ws["A2"].value, 1)
+            self.assertEqual(ws["E2"].number_format, "0.00%")
+            self.assertEqual(ws["F2"].value, "-")            # 分母≤0 → 文本 "-"
+            self.assertEqual(ws["B3"].value, "合计")          # 合计行
+            self.assertEqual(ws["C3"].value, 1)
+            self.assertEqual(book["订单明细"].max_row, 2)
+            self.assertEqual(book["订单明细"]["I2"].value, "退货")
 
 
 if __name__ == "__main__":

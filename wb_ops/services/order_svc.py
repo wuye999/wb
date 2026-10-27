@@ -12,6 +12,7 @@ from .order import (
     feishu_register_dedup,
     feishu_vc_stats,
     fbs_delivery,
+    order_stats,
     orders,
 )
 
@@ -62,6 +63,14 @@ class OrderService:
     def collect_delivery_goods_data(self, **kwargs) -> dict:
         """★ 门面库入口（跨域只经门面）：WB FBS「配送中」清单商品采集统计（只读）。"""
         return fbs_delivery.delivery_goods(**kwargs)
+
+    def collect_order_stats(self, args: Any) -> int:
+        """WB「订单动态」近一月订单按商品中文名统计（只读，输出 xlsx 多 Sheet）"""
+        return order_stats.run(args)
+
+    def order_stats_data(self, **kwargs) -> dict:
+        """★ 门面库入口（跨域只经门面）：WB「订单动态」按商品中文名统计（只读）。"""
+        return order_stats.order_stats(**kwargs)
 
     def feishu_register_stats(self, days: int = 7, begin: str = "", end: str = "",
                               date: str = "", shops: Any = None, url: str = "",
@@ -117,6 +126,10 @@ def run_feishu_vc_stats(args):
 
 def run_fbs_delivery(args):
     return order_svc.collect_delivery_goods(args)
+
+
+def run_order_stats(args):
+    return order_svc.collect_order_stats(args)
 
 
 def feishu_register_stats(**kwargs):

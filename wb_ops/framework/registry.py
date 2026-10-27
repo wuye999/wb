@@ -36,7 +36,7 @@ class CommandRegistry:
 
 registry = CommandRegistry()
 
-# 注册全部 54 个命令的动态模块映射
+# 注册全部子命令的动态模块映射（与 cli.py 的 subparser 一一对应，当前 56 个）
 registry.register("shops", "wb_ops.adapters.bcs_client", "print_shops")
 registry.register("fetch", "wb_ops.services.catalog_svc", "run_fetch")
 registry.register("mapping", "wb_ops.services.catalog_svc", "run_mapping")
@@ -85,6 +85,7 @@ registry.register("mabang-stock-register", "wb_ops.services.order_svc", "run_mab
 registry.register("mabang-stock-daily", "wb_ops.services.order_svc", "run_mabang_stock_daily")
 registry.register("feishu-vc-stats", "wb_ops.services.order_svc", "run_feishu_vc_stats")
 registry.register("fbs-delivery", "wb_ops.services.order_svc", "run_fbs_delivery")
+registry.register("order-stats", "wb_ops.services.order_svc", "run_order_stats")
 registry.register("mabang-process", "wb_ops.services.order_svc", "run_mabang_process", alias="order-pipeline")
 registry.register("cookies-update", "wb_ops.adapters.cookies", "run_cookies_update")
 registry.register("cookie-refresh-wb", "wb_ops.adapters.cookie_bridge", "run_cookie_refresh_wb")
