@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 wb_ops 批量操作执行器 (ops_executor)
-负责分批提交改价、改库存、下架操作（BCS 接口 + trash 清库存走 WB 原生 portal stocks），
-自动处理编码转换、日志记录与审核触发。
+负责分批提交改价、改库存、下架操作。
+下架（trash）两阶段：先清库存（WB 原生 portal stocks）→ 移回收站
+（默认 WB 原生 moveNmsToTrash；`trash-bcs` 是**旧通道，仅供排查，不作兜底**）。
+WB 通道失败或 cookie 过期时**不自动改走 BCS**，只报错。
+改价/改库存走 BCS 接口；自动处理编码转换、日志记录与审核触发。
 """
 import csv
 import glob
@@ -26,6 +29,8 @@ PRICE_CHUNK = 300
 STOCK_CHUNK = 200
 BATCH_SLEEP = 0.15
 SHOP_SLEEP = 0.6
+TRASH_CHUNK = 300        # 移回收站单批 nmID 上限（项目硬性 ≤300/批，WB/BCS 通用）
+TRASH_INTERVAL = 0.3     # 移回收站批间间隔（BCS 有 19s 限流窗口，用 --interval 21 规避）
 RESULT_CSV = config.RESULT_CSV
 ARCHIVE_DIR = os.path.join(os.path.dirname(RESULT_CSV), "archive")
 ARCHIVE_MAX_MB = 50            # 同月明细超过该体积也强制归档（防单月暴涨）
@@ -146,7 +151,14 @@ def _post(body, label):
         return False, f"FAIL: {e}"
 
 
-def run_apply(plans, action, auto_review=False):
+def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, interval=None):
+    """按计划执行写操作。
+
+    channel: 仅 trash 生效 —— "wb"=WB 原生 moveNmsToTrash（默认，见 ops._default_channel），
+             "bcs"=BCS clean/removeToTrash（trash-bcs 旧通道，仅供排查，**不作兜底**）。
+             WB 通道失败**不会**自动切到 bcs，只报错。其余 action 忽略该参数。
+    chunk/interval: 移回收站批大小与批间间隔（None=用模块常量）。
+    """
     ok = fail = 0
     skipped_bad = 0
     zero_items = []
@@ -205,6 +217,7 @@ def run_apply(plans, action, auto_review=False):
             zero_items.extend((sid, it["vc"], it.get("cn", ""), it.get("cur_amt"), it["amount"])
                               for it in p["items"] if it.get("orig_zero"))
         elif action == "trash":
+            tag = "trash_wb" if channel == "wb" else "trash_bcs"   # CSV「操作」列区分通道
             by_wh = {}
             for it in p["items"]:
                 for chrt, wh in it.get("stock_specs", []):
@@ -240,17 +253,55 @@ def run_apply(plans, action, auto_review=False):
                 print(f"  [清库存] 下架前已提交 {spec_total} 个规格库存归零（WB 原生 portal stocks）" +
                       (f"，{len(clear_fail)} 个失败" if clear_fail else ""))
             nms = p["nmIds"]
-            for i in range(0, len(nms), PRICE_CHUNK):
-                body = {"shopId": sid, "nmIds": nms[i:i + PRICE_CHUNK]}
-                ok_flag, msg = _post(body, f"trash 批{i // PRICE_CHUNK + 1}")
-                if ok_flag:
-                    ok += len(body["nmIds"])
+            step = int(chunk or TRASH_CHUNK)
+            gap = TRASH_INTERVAL if interval is None else float(interval)
+            if channel == "wb":
+                # 懒加载：与 stock_wb 同风格，避免把 wb_client 拖进所有 ops 命令的启动路径
+                from . import trash_wb as trash_wb_mod
+                shop = credentials.get().wb_shop(sid)
+                if not shop:
+                    print(f"  {RED}✗ 错误{RESET} 店{sid} 无 WB 凭证，本条通道无法下架"
+                          f"（{len(nms)} 个 nmID 计入失败）")
+                    print(f"    {RED}处置：先补该店 WB 凭证（python wb.py cookies-update）后重跑 trash。"
+                          f"不自动改走 BCS，也不建议用 trash-bcs 替代。{RESET}")
+                    fail += len(nms)
+                    results.extend([sid, nm, tag, "", "SKIP: 无 WB 凭证", ts] for nm in nms)
                 else:
-                    fail += len(body["nmIds"])
-                for nm in body["nmIds"]:
-                    results.append([sid, nm, action, "", msg, ts])
-                if i + PRICE_CHUNK < len(nms):
-                    time.sleep(BATCH_SLEEP)
+                    r = trash_wb_mod.move_nms(shop, nms,
+                                              chunk=step,
+                                              interval=gap)
+                    ok += r["ok"]
+                    fail += r["fail"]
+                    for d in r["details"]:
+                        results.append([sid, d["nmID"], tag, "",
+                                        "OK" if d["ok"] else f"FAIL: {d['msg']}", ts])
+                    bad = [d for d in r["details"] if not d["ok"]]
+                    if bad:
+                        for d in bad[:10]:
+                            print(f"    [失败] nmID={d['nmID']}: {d['msg']}")
+                        if len(bad) > 10:
+                            print(f"    ... 共 {len(bad)} 条")
+                        if not r.get("aborted"):
+                            print("  [提示] 若为「有库存/在途」原因，WB 会拒收：先归零库存后重跑")
+                    print(f"  [移回收站·WB原生] 成功 {r['ok']} · 失败 {r['fail']}"
+                          f"（{len(nms)} 个 nmID，{step}/批）")
+                    if r.get("aborted"):
+                        print(f"  {RED}✗ 错误{RESET} 店{sid} 移回收站中止：{r['aborted']}")
+                        print(f"    {RED}本店剩余 nmID 已计入失败。请修好 WB 会话"
+                              f"（cookie-refresh-wb / cookies-update）后重跑 trash；"
+                              f"不会自动改走 BCS。{RESET}")
+            else:
+                for i in range(0, len(nms), step):
+                    body = {"shopId": sid, "nmIds": nms[i:i + step]}
+                    ok_flag, msg = _post(body, f"trash_bcs 批{i // step + 1}")
+                    if ok_flag:
+                        ok += len(body["nmIds"])
+                    else:
+                        fail += len(body["nmIds"])
+                    for nm in body["nmIds"]:
+                        results.append([sid, nm, tag, "", msg, ts])
+                    if i + step < len(nms):
+                        time.sleep(gap)
             if clear_fail:
                 print(f"  {RED}⚠ [清库存失败] {len(clear_fail)} 个规格库存未清零仍已下架（可能 WB 受限/延迟）{RESET}")
                 print(f"    chrtId: {clear_fail[:10]}{'...' if len(clear_fail) > 10 else ''}")
@@ -268,9 +319,19 @@ def run_apply(plans, action, auto_review=False):
             w.writerow(["店铺", "ID(nmId/chrtId)", "操作", "目标值", "接口响应", "时间"])
         w.writerows(results)
     summary = f"结果: 成功 {ok} · 失败 {fail}"
+    if action == "trash" and channel == "wb":
+        summary += "（WB 通道按 nmID 计；BCS 通道按批计）"
     if skipped_bad:
         summary += f" · {RED}价格下限剔除 {skipped_bad}{RESET}"
     print(f"\n{summary}（明细已保存 {RESULT_CSV}）")
+
+    if action == "trash" and channel == "wb" and fail:
+        # WB 通道失败：只报错，不自动改走 BCS（BCS 限流/成功率均不可靠，不能当兜底）
+        print(f"{RED}★ WB 通道有 {fail} 条未成功下架 —— 请按上面的报错先修原因，再重跑 trash。"
+              f"{RESET}")
+        print(f"{RED}  常见原因：WB cookie/seller-lk 过期（wb.py cookies-update 或 "
+              f"cookie-refresh-wb）、商品有库存/在途被平台拒收（先归零库存）。{RESET}")
+        print(f"{RED}  本工具不会自动切换 trash-bcs，也不建议用它替代。{RESET}")
 
     if zero_items:
         print(f"\n{RED}⚠ [0 值商品报告] {len(zero_items)} 项操作前价格/库存为 0（WB 官方数据延迟或商品受限）{RESET}")

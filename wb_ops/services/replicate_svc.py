@@ -17,6 +17,7 @@ from .replicate import (
     ops,
     stock_wb,
     price_wb,
+    trash_wb,
 )
 
 
@@ -59,9 +60,9 @@ class ReplicationService:
         """违规受阻商品扫描与移入回收站"""
         return banned.run(args)
 
-    def handle_ops(self, action: str, args: Any) -> int:
-        """一键库存/下架操作 (stock / trash)"""
-        return ops.run(action, args)
+    def handle_ops(self, action: str, args: Any, channel: Any = None) -> int:
+        """一键库存/下架操作 (stock / trash)；channel: "wb"|"bcs"（None=按 action 取默认通道）"""
+        return ops.run(action, args, channel=channel)
 
     def run_stock_wb_native(self, args: Any) -> int:
         """改库存默认通道（2026-09-24 起）：WB 原生在线接口（portal stocks）；
@@ -88,6 +89,10 @@ class ReplicationService:
     def apply_prices_wb(self, shop: dict, items: list, **kw) -> dict:
         """跨域脚本入口（铁律 3）：单店批量改价（WB 原生 dp-api upload/task）"""
         return price_wb.apply_prices(shop, items, **kw)
+
+    def move_nms_wb(self, shop: dict, nm_ids: list, **kw) -> dict:
+        """跨域脚本入口（铁律 3）：单店批量移回收站（WB 原生 moveNmsToTrash）"""
+        return trash_wb.move_nms(shop, nm_ids, **kw)
 
 
 replicate_svc = ReplicationService()
@@ -122,7 +127,22 @@ def run_stock_bcs(args):
 
 
 def run_trash(args):
-    return replicate_svc.handle_ops("trash", args)
+    """[兼容] 下架（移回收站）；默认通道 = WB 原生 moveNmsToTrash（registry 已直接用 run_trash_wb）"""
+    return replicate_svc.handle_ops("trash", args, channel="wb")
+
+
+def run_trash_wb(args):
+    """[默认] WB 原生 moveNmsToTrash 移回收站（trash 与 trash-wb 命令）"""
+    return replicate_svc.handle_ops("trash", args, channel="wb")
+
+
+def run_trash_bcs(args):
+    """[旧通道] BCS clean/removeToTrash 移回收站（trash-bcs 命令）。
+
+    ⚠ 仅供排查/历史对照，**不是兜底策略**：BCS 有 19s 限流窗口、成功率不可靠。
+    WB 通道失败或 cookie 过期时，正确做法是修凭证后重跑 trash，而不是改走本命令。
+    """
+    return replicate_svc.handle_ops("trash", args, channel="bcs")
 
 
 def run_replicate(args):

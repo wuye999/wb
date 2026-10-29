@@ -78,7 +78,23 @@ def confirm_irreversible(action, amount, yes):
         return False
 
 
-def run(action, args):
+def _default_channel(action):
+    """默认执行通道（纯函数，便于单测）。
+
+    trash 默认 WB 原生 moveNmsToTrash（2026-10-29 起，替代 BCS clean/removeToTrash）；
+    price / stock 仍默认 BCS —— 它们的 WB 原生通道分别是 price_wb / stock_wb，
+    不走本模块的 run()。
+    """
+    return "wb" if action == "trash" else "bcs"
+
+
+def run(action, args, channel=None):
+    if channel is None:
+        channel = _default_channel(action)
+    if action == "trash":
+        print(f"通道: {'WB 原生 moveNmsToTrash' if channel == 'wb' else 'BCS clean/removeToTrash'}"
+              f"（先清库存 → 再移回收站）")
+
     for d in ("discount", "club_discount"):
         v = getattr(args, d, None)
         if v is not None and not (0 <= v <= 100):
@@ -126,7 +142,10 @@ def run(action, args):
         print("已取消，未执行任何操作")
         return
 
-    run_apply(plans, action, auto_review=getattr(args, "auto_review", False))
+    run_apply(plans, action, auto_review=getattr(args, "auto_review", False),
+              channel=channel,
+              chunk=getattr(args, "chunk", None),
+              interval=getattr(args, "interval", None))
     # 改价/库存/下架 --apply 提交后：默认不自动同步/写后验证/合并（WB/BCS 异步回填，当场验证不准）。
     # 只有加 --sync 才同步在架商品并增量合并映射表；否则仅打印提示。
     if action in ("price", "stock", "trash"):

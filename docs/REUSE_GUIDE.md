@@ -55,7 +55,7 @@
 ## 二、5 分钟上手
 
 ```bash
-python wb.py --help                      # 56 个命令一览（或看 docs/CLI.md）
+python wb.py --help                      # 58 个命令一览（或看 docs/CLI.md）
 python wb.py shops                       # 验证凭证链路（BCS 通）
 python tests/run_tests.py --changed      # 只跑「本次改动相关」的测试（见第六节）
 ```

@@ -43,12 +43,13 @@ class TestAllCommands(unittest.TestCase):
         return res
 
 
-    # ---------------- 1. 全部 56 个命令的帮助与解析测试 ----------------
+    # ---------------- 1. 全部 58 个命令的帮助与解析测试 ----------------
     def test_01_all_subcommand_helps(self):
         subcommands = [
             "shops", "fetch", "mapping", "mapping-import", "mapping-check",
             "mismatch-check", "review", "merge", "mapping-rename", "shops-mapping",
-            "price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs", "trash", "replicate", "import-shelve",
+            "price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs", "trash",
+            "trash-wb", "trash-bcs", "replicate", "import-shelve",
             "promo-apply", "promo-goods", "promo-gap", "discount", "discount-wb", "discount-scan", "discount-bcs",
             "dimension", "dims-check", "banned", "clean", "price-review",
             "orders", "questions", "questions-watch", "chat-watch", "chats", "appeals", "ratings", "ai-test",
@@ -58,7 +59,7 @@ class TestAllCommands(unittest.TestCase):
             "cookie-refresh-wb",
             "daily", "schedule", "remote-wh", "shelve", "shelve-old"
         ]
-        self.assertEqual(len(subcommands), 56)
+        self.assertEqual(len(subcommands), 58)
 
         for subcmd in subcommands:
             with self.subTest(command=subcmd):
@@ -172,6 +173,111 @@ class TestAllCommands(unittest.TestCase):
         from wb_ops.storage.nm_resolver import NmResolver
         info = NmResolver(9352, with_cn=True).resolve(999999999999)
         self.assertEqual(info, {"vc": "", "cn": "", "src": ""})
+
+    def test_01d_trash_wb_move_nms_offline(self):
+        """trash 的 WB 原生移回收站（moveNmsToTrash）离线断言（**不联网**）。
+
+        抓包依据 `api/网络请求/wb批量移至回收站.har`（2026-10-29）：
+        body 为裸数组 `[{"nmID": int}]`，响应 `{error, errorText, additionalErrors}`，
+        **不返回成功条数** ⇒ 只能按 nmID 逐条记账。
+        """
+        from wb_ops import common
+        from wb_ops.services.replicate import trash_wb as T
+
+        # ① 响应解析：仅列出的 nmID 为失败，未列出的视为成功
+        self.assertEqual(T.parse_move_response({"error": False, "additionalErrors": {}}, [1, 2]), {})
+        self.assertEqual(T.parse_move_response({"error": True, "errorText": "boom"}, [1, 2]),
+                         {1: "boom", 2: "boom"})
+        self.assertEqual(T.parse_move_response({"error": False, "additionalErrors": {"2": "有库存"}}, [1, 2]),
+                         {2: "有库存"})
+        self.assertEqual(
+            T.parse_move_response({"error": False, "additionalErrors": {
+                "errors": [{"params": {"1": "3"}, "trKey": "trDelivered"}]}}, [3, 4]),
+            {3: "trDelivered"})
+        # 无法归属到 nmID 的键 → 整批失败（保守，宁可报失败）
+        self.assertEqual(T.parse_move_response({"error": False, "additionalErrors": {"globalErr": "x"}}, [5, 6]),
+                         {5: "globalErr:x", 6: "globalErr:x"})
+
+        # ② 分批与 body 形状（700 条 → 300/300/100）
+        calls = []
+
+        def fake_post(session, url, payload, allow_400_json=True):
+            calls.append((url, payload))
+            return {"error": False, "additionalErrors": {}}
+
+        orig_ms, orig_post = T.wb_api.make_session, T.wb_api.request_post
+        T.wb_api.make_session = lambda shop, rv=None: object()
+        T.wb_api.request_post = fake_post
+        try:
+            r = T.move_nms({}, list(range(1, 701)), interval=0)
+            self.assertEqual((r["ok"], r["fail"]), (700, 0))
+            self.assertEqual([len(c[1]) for c in calls], [300, 300, 100])
+            self.assertTrue(calls[0][0].endswith("/source/v2/moveNmsToTrash"))
+            self.assertEqual(calls[0][1][0], {"nmID": 1})
+
+            # ③ chunk 超限被夹到 300；重复 nmID 去重
+            calls.clear()
+            r = T.move_nms({}, [9, 9, 8, 8, 7], chunk=1000, interval=0)
+            self.assertEqual([len(c[1]) for c in calls], [3])
+            self.assertEqual([d["nmID"] for d in r["details"]], [9, 8, 7])
+
+            # ④ 中途 cookie 失效：不外抛；已提交批次照实计 ok，剩余计失败
+            calls.clear()
+
+            def post_403(session, url, payload, allow_400_json=True):
+                calls.append(payload)
+                if len(calls) == 2:
+                    raise common.CookieExpiredError("403：cookie 已失效")
+                return {"error": False, "additionalErrors": {}}
+
+            T.wb_api.request_post = post_403
+            r = T.move_nms({}, list(range(1, 651)), interval=0)
+            self.assertEqual((r["ok"], r["fail"]), (300, 350))
+            self.assertTrue(r["aborted"])
+            self.assertIn("cookie 失效", r["details"][-1]["msg"])
+
+            # ⑤ 传输异常 → 该批全失败（不中断后续批）
+            calls.clear()
+
+            def post_boom(session, url, payload, allow_400_json=True):
+                raise RuntimeError("conn reset")
+
+            T.wb_api.request_post = post_boom
+            r = T.move_nms({}, [11, 12], interval=0)
+            self.assertEqual((r["ok"], r["fail"]), (0, 2))
+            self.assertIn("conn reset", r["details"][0]["msg"])
+        finally:
+            T.wb_api.make_session, T.wb_api.request_post = orig_ms, orig_post
+
+    def test_01e_default_warehouse_resolution(self):
+        """plan_trash 的默认仓库解析：known_warehouses.json 优先 → BCS API 兜底（离线）。"""
+        from wb_ops.services.replicate import ops_plan, shelve_common
+
+        orig_load = shelve_common.load_known_warehouses
+        orig_bcs = ops_plan.bcs.default_warehouse_id
+        try:
+            # ① 本地表命中 → 不请求 BCS
+            shelve_common.load_known_warehouses = lambda: {9352: 111111}
+
+            def _boom(sid):
+                raise AssertionError("本地表命中时不应调用 BCS")
+            ops_plan.bcs.default_warehouse_id = _boom
+            self.assertEqual(ops_plan._default_warehouse(9352), 111111)
+
+            # ② 本地表未覆盖 → 回落 BCS
+            shelve_common.load_known_warehouses = lambda: {}
+            ops_plan.bcs.default_warehouse_id = lambda sid: 222222
+            self.assertEqual(ops_plan._default_warehouse(9352), 222222)
+        finally:
+            shelve_common.load_known_warehouses = orig_load
+            ops_plan.bcs.default_warehouse_id = orig_bcs
+
+    def test_01f_ops_channel_default(self):
+        """默认通道映射：trash → wb（WB 原生）；price/stock → bcs（其 WB 通道走 price_wb/stock_wb）。"""
+        from wb_ops.services.replicate.ops import _default_channel
+        self.assertEqual(_default_channel("trash"), "wb")
+        self.assertEqual(_default_channel("price"), "bcs")
+        self.assertEqual(_default_channel("stock"), "bcs")
 
     # ---------------- 2. 账号与基础数据 ----------------
     def test_02_shops_list(self):
@@ -599,6 +705,12 @@ class TestAllCommands(unittest.TestCase):
     def test_11_trash_dry_run(self):
         res = self._run_cmd(["trash", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
         self.assertIn("dry-run", res.stdout)
+        self.assertIn("WB 原生 moveNmsToTrash", res.stdout)   # 默认通道 = WB 原生
+
+    def test_11b_trash_bcs_dry_run(self):
+        res = self._run_cmd(["trash-bcs", "--vc", "BCS-HAAJ-248364237", "--shops", "9352"], expect_code=0)
+        self.assertIn("dry-run", res.stdout)
+        self.assertIn("BCS clean/removeToTrash", res.stdout)  # 备用通道 = BCS
 
     # ---------------- 5. 商品搬家与清理 ----------------
     def test_12_replicate_dry_run(self):

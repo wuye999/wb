@@ -36,7 +36,7 @@ class CommandRegistry:
 
 registry = CommandRegistry()
 
-# 注册全部子命令的动态模块映射（与 cli.py 的 subparser 一一对应，当前 56 个）
+# 注册全部子命令的动态模块映射（与 cli.py 的 subparser 一一对应，当前 58 个）
 registry.register("shops", "wb_ops.adapters.bcs_client", "print_shops")
 registry.register("fetch", "wb_ops.services.catalog_svc", "run_fetch")
 registry.register("mapping", "wb_ops.services.catalog_svc", "run_mapping")
@@ -53,7 +53,9 @@ registry.register("price-bcs", "wb_ops.services.replicate_svc", "run_price")
 # stock 默认走 WB 原生在线接口（stock-wb 同一实现，显式别名）；stock-bcs = BCS 备选通道
 registry.register("stock", "wb_ops.services.replicate_svc", "run_stock_wb", alias="stock-wb")
 registry.register("stock-bcs", "wb_ops.services.replicate_svc", "run_stock")
-registry.register("trash", "wb_ops.services.replicate_svc", "run_trash")
+# trash 默认走 WB 原生 moveNmsToTrash（trash-wb 同一实现）；trash-bcs = BCS 备选通道
+registry.register("trash", "wb_ops.services.replicate_svc", "run_trash_wb", alias="trash-wb")
+registry.register("trash-bcs", "wb_ops.services.replicate_svc", "run_trash_bcs")
 registry.register("replicate", "wb_ops.services.replicate_svc", "run_replicate")
 registry.register("import-shelve", "wb_ops.services.replicate_svc", "run_import_shelve")
 registry.register("promo-apply", "wb_ops.services.discount_svc", "run_promo_apply")

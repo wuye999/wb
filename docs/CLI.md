@@ -8,7 +8,7 @@
 
 - **退出码**：`0` 正常（含 dry-run / 违规跳过）｜`1` 参数/环境错误｜`130` 中断。
 - **dry-run 默认**：所有写操作（改价/库存/下架/报名/折扣/清理）不加 `--apply` 只打印清单，不调写接口。
-- **不可逆确认**：`trash`、`stock --amount 0`、`banned --apply`（移回收站）执行时需 `--yes`（或交互输入 y）。
+- **不可逆确认**：`trash`（含 `trash-wb`/`trash-bcs`）、`stock --amount 0`、`banned --apply`（移回收站）执行时需 `--yes`（或交互输入 y）。
 - **严禁擅自写后验证与频繁同步（默认关闭，执行即结束）**：
   - **核心机理**：写后验证必须依赖 BCS 全量同步，若不同步拉取的快照只是修改前的旧数据；而 BCS 全量同步耗时极长（~40-50s/店），频繁全量同步极易引发平台接口风控与限流封禁。
   - **规则铁律**：**所有写操作（改价 price、改库存 stock、下架 trash、改折扣 discount、清理 clean、上架 replicate/import-shelve、改尺寸 dimension）默认绝不执行 BCS 同步、绝不执行写后验证、绝不自动合并映射表**。平台写接口返回成功即代表生效，命令执行完成打印提示后**直接结束**。
@@ -43,7 +43,9 @@
 | `stock` | 改库存（**默认 WB 原生在线接口**，2026-09-24 起；dry-run 默认，归零须 --yes） | `--amount N`（默认 0）/ `--chunk N`（默认 500，≤1000）/ `--interval S` / `--max-pages N` / `--resolve snapshot\|live` |
 | `stock-wb` | [别名] 与 `stock` 相同（WB 原生在线接口，显式点名通道） | 同 `stock` |
 | `stock-bcs` | [备选] 改库存走 BCS 接口（`stock/batchSetByChrtIdsBatch`，WB 原生不可用时的兜底） | `--amount N`（默认 0） |
-| `trash` | 下架（不可逆；先清库存[WB 原生 portal stocks，随 stock 命令通道]再移回收站[BCS]） | 无 |
+| `trash` | 下架（不可逆；先清库存[WB 原生 portal stocks]→ 移回收站[**默认 WB 原生 `moveNmsToTrash`**]） | 筛选 + `--apply`/`--yes`；`--chunk`（默认 300，≤300）/`--interval`（默认 0.3） |
+| `trash-wb` | [别名] 与 `trash` 相同（WB 原生 `moveNmsToTrash`，显式点名通道） | 同上 |
+| `trash-bcs` | [旧通道] 移回收站走 BCS `clean/removeToTrash`；**仅供排查，不作兜底**（BCS 有 19s 限流窗口、成功率不可靠）。WB 通道报错时应修凭证后重跑 `trash` | 同上 |
 | `dimension` | 批量改尺寸：默认读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；也可用 `--dims "长*宽*高/毛重"` 给选定的 vc 统一设自定义尺寸（有自定义用之、无则回退价格表）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--dims` / `--apply` / `--sync` |
 | `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次支持 50 个商品批量推送**，无需等待 WB 反爬抓取；包装尺寸优先读取价格映射表（绝不使用快照尺寸），商品价格表/card.json 兜底；前缀码智能匹配（中文名命中商品价格表前缀优先，原vc提取次之，随机兜底，均带 `BCS-` 前缀）；严格校验映射表「WB商品码」列（无商品码跳过）；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
 | `import-shelve` | 他人映射表导入上架：他人有我方无的商品上架到我的店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次 50 个商品批量推送**；**严格基于他人表「WB商品码」列比对差集与拉取商品**（绝不从 vendorCode 提取末尾数字，无商品码跳过）；前缀码我方价格表命中优先（均带 `BCS-` 前缀）；价格 = floor(实际售价，他人表须为新列名)；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
@@ -132,6 +134,7 @@ python wb.py stock --vc BCS-XXX-123 --shops 9352 --amount 50 --apply    # 单 vc
 python wb.py stock --name 短直假发 --amount 0 --resolve live --apply --yes  # chrtId 走 WB 实时列表解析（绕过快照滞后）
 python wb.py stock-bcs --name 短直假发 --amount 0 --apply --yes  # [备选] BCS 通道做同一件事
 python wb.py trash --vc BCS-XXX-123 --shops 9352 --apply --yes
+python wb.py trash-bcs --vc BCS-XXX-123 --shops 9352 --chunk 100 --interval 21 --apply --yes   # 旧通道，仅排查用
 python wb.py dimension                               # 预览：按价格表尺寸改全部店铺商品（dry-run）
 python wb.py dimension --name 育发液 --apply          # 只改中文名含「育发液」的商品
 python wb.py dimension --prefix ZLTH --apply --sync   # 指定前缀码 + 事后同步并合并映射表
@@ -270,7 +273,7 @@ python wb.py schedule --plan               # 【只读】预览将创建的任�
 ## 五、ops 安全机制（必读）
 
 1. **dry-run 默认**：不加 `--apply` 只打印清单。
-2. **不可逆确认**：`trash` / 库存归零 需 `--yes`。
+2. **不可逆确认**：`trash`（含 `trash-wb`/`trash-bcs`）/ 库存归零 需 `--yes`。
 3. **价格下限校验**：目标价 ≤ 原价÷2 → 自动剔除并报告（先提价再分步调价可规避）。
 4. **结果输出**：控制台 `✓/✗` + 汇总；明细追加写 `data/logs/ops_result.csv`（UTF-8-SIG）。
 5. **0 值商品**：照常提交 + 执行后红色 `[0 值商品报告]`，复查仍 0 属 WB 官方原因。

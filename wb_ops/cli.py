@@ -88,8 +88,21 @@ def build_parser():
     p = sub.add_parser("stock-bcs", help="[备选] 改库存走 BCS 接口（stock/batchSetByChrtIdsBatch，WB 原生不可用时的兜底）")
     _add_ops_args(p, with_stock=True)
 
-    p = sub.add_parser("trash", help="下架（移回收站，不可逆）")
+    p = sub.add_parser("trash", help="下架（默认 WB 原生 moveNmsToTrash 移回收站；先清库存；不可逆）")
     _add_ops_args(p)
+    p.add_argument("--chunk", type=int, default=300, help="每批移回收站条数（≤300，默认 300）")
+    p.add_argument("--interval", type=float, default=0.3, help="批间间隔秒")
+
+    p = sub.add_parser("trash-wb", help="[别名] 与 trash 相同（WB 原生 moveNmsToTrash，显式点名通道）")
+    _add_ops_args(p)
+    p.add_argument("--chunk", type=int, default=300, help="每批移回收站条数（≤300，默认 300）")
+    p.add_argument("--interval", type=float, default=0.3, help="批间间隔秒")
+
+    p = sub.add_parser("trash-bcs", help="[旧通道] 移回收站走 BCS 接口（clean/removeToTrash）；仅供排查，**不作兜底**（BCS 不可靠）")
+    _add_ops_args(p)
+    p.add_argument("--chunk", type=int, default=300, help="每批条数（≤300，默认 300）")
+    p.add_argument("--interval", type=float, default=0.3,
+                   help="批间间隔秒（BCS 有 19s 限流窗口，连续多批建议 21）")
 
     p = sub.add_parser("replicate", help="跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）")
     p.add_argument("--vc", default="", help="指定 vendorCode（逗号分隔）")

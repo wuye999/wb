@@ -46,7 +46,8 @@ ORDER_CMDS = ["orders", "mabang-orders", "mabang-forecast", "feishu-register",
               "feishu-register-dedup",
               "mabang-stock-register", "mabang-stock-daily", "feishu-vc-stats", "fbs-delivery",
               "order-stats", "mabang-process", "promo-gap"]
-REPLICATE_CMDS = ["price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs", "trash",
+REPLICATE_CMDS = ["price", "price-wb", "price-bcs", "stock", "stock-wb", "stock-bcs",
+                  "trash", "trash-wb", "trash-bcs",
                   "replicate", "import-shelve", "dimension",
                   "dims-check", "banned", "clean", "remote-wh", "shelve", "shelve-old"]
 SUPPORT_CMDS = ["questions", "questions-watch", "ai-test", "appeals", "chat-watch", "chats", "ratings"]
@@ -86,7 +87,8 @@ PATH_HINTS = [
     ("wb_ops/adapters/wb_supply_client.py", ["fbs-delivery"]),
     ("wb_ops/adapters/wb_order_feed_client.py", ["order-stats"]),
     ("wb_ops/services/replicate/price_wb.py", ["price", "price-wb"]),
-    ("wb_ops/services/replicate/ops", ["price", "stock", "trash"]),
+    ("wb_ops/services/replicate/trash_wb.py", ["trash", "trash-wb"]),
+    ("wb_ops/services/replicate/ops", ["price", "stock", "trash", "trash-wb", "trash-bcs"]),
     ("wb_ops/services/replicate/", REPLICATE_CMDS),
     ("wb_ops/services/discount/discount_bcs.py", ["discount-bcs"]),
     ("wb_ops/services/discount/price_review.py", ["price-review"]),

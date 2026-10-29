@@ -10,7 +10,7 @@
 ├── wb.py                    ★ 统一入口（薄启动器 → wb_ops.cli.main）
 ├── wb_ops/                  ★ 核心库（Python 包）
 │   ├── __init__.py            版本号 + 公共导出
-│   ├── cli.py                 ★ 统一 CLI 调度器（56 个子命令动态延迟分发）
+│   ├── cli.py                 ★ 统一 CLI 调度器（58 个子命令动态延迟分发）
 │   ├── config.py              非敏感配置：路径常量（BASE_DIR→data/）、默认阈值、VC_PREFIX_RE
 │   ├── credentials.py         ★ 统一凭证加载中枢（读 data/credentials.json）
 │   ├── common.py              共享工具：UA / CookieExpiredError / jwt_payload / to_int / stdout UTF-8 / print_write_hint
@@ -84,6 +84,7 @@
 │       │   ├── dims_check.py  偏差商品排查
 │       │   ├── clean.py       草稿箱/回收站清理
 │       │   ├── banned.py      被阻止商品移回收站
+│       │   ├── trash_wb.py    移回收站 WB 原生接口门面（moveNmsToTrash，按 nmID 记账）
 │       │   └── remote_wh.py   远端成都仓库处理
 │       └── support/           客服提问监控与自动回复业务实现
 │           ├── questions.py   买家提问抓取与人工回复
@@ -91,7 +92,7 @@
 │           ├── ai_reply_test.py AI 回复效果测试
 │           └── complaints.py  WB 平台投诉单查询（未处理/剩余天数 → 去重商品编号）
 ├── tests/                    ★ 自动化测试套件
-│   ├── test_all_commands.py   覆盖全部 56 个 CLI 命令的集成测试（100% PASS，全量约 5 分钟）
+│   ├── test_all_commands.py   覆盖全部 58 个 CLI 命令的集成测试（100% PASS，全量约 5 分钟）
 │   └── run_tests.py           按需测试选择器（--changed / --cmd / --help-smoke，日常只跑改动相关）
 ├── data/                     ★ 统一数据目录（本地专属，不进 git）
 │   ├── credentials.json       ★ 统一凭证（勿泄露 / 勿提交 git）
@@ -123,7 +124,7 @@
 
 ```
 表现与调度层 (Presentation)
-  └── cli.py（动态按需延迟加载路由，56 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
+  └── cli.py（动态按需延迟加载路由，58 个命令启动零业务依赖，防雪崩）/ daily.py / schedule.py
         │ 动态调度 (Command DTO)
         ▼
 业务用例服务层 (Services)
@@ -214,7 +215,7 @@
 6. **0 值商品是正常数据**（WB 延迟/受限）：照常修改并显式报告，复查仍 0 不反复操作。
 7. **删除/下架不可逆**：默认 dry-run，需 `--apply`；trash/库存归零还需 `--yes`。
 8. **店铺串行执行**（勿并行，实测并行触发限速慢 5 倍）；批量 ≤300/批、间隔 0.15-0.6s。
-9. **下架两阶段**：先清库存为 0，再移回收站；清库存失败仍下架但显式报告。
+9. **下架两阶段**：先清库存为 0（WB 原生 portal stocks），再移回收站（**默认 WB 原生 `moveNmsToTrash`**）；清库存失败仍下架但显式报告。计数口径：WB 通道**按 nmID**、BCS 通道按批（`ops_result.csv`「操作」列为 `trash_wb` / `trash_bcs`）。🔴 **WB 通道失败或 cookie 过期时只报错，不自动改走 BCS**；`trash-bcs` 是旧通道，仅供排查，**不作兜底**（BCS 有 19s 限流窗口、成功率不可靠）。
 10. **vendorCode 中段 4 字母**命中商品价格表前缀码 → 免人工审核自动补录（兼容 `BCS-{前缀}-{nm}`、`BCS-{前缀}-ozon-card-{nm}` 与 `BCS-{前缀}-{标识}/{nm}` 如 `BCS-QQNN-WRLINWI/1078999444`）。
 11. **改折扣同样触发价格审核**（实测 2026-08-20）：WB 按「新价相对原价降幅」判定，改价**或改折扣**降幅落入 30–49.9% → 进隔离区（quarantine），**必须** **`price-review --apply`「应用新价格」才生效**；>50% 直接被拒。因此**每次** **`promo-apply`** **/** **`discount --apply`** **之后必跑一次** **`price-review`**（dry-run 预览 → 有货再 `--apply`）。
 12. **上架** **`shopDatas[].nmId`** **提交前置空** **`null`**（BCS 插件 1.2.2，2026-08-26）：新版后端按 `nmId` 判「是否已有卡」，带值会被当「更新已有卡」处理导致上架失败；WB 原始 nmId 由 `sourceSku` 保留，勿在上架请求体携带。

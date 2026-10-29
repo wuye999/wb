@@ -75,7 +75,7 @@ python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25   # 指定时间
 #   逐个商品看缩略图（点击弹高清大图）与俄文标题是否和中文名一致
 #   点击标题（或左侧复选框）勾选「货不对板」（勾选状态浏览器本地保存，刷新不丢）
 # → 点「导出勾选 vc」下载 货不对板vc.json，或「复制 vc」复制逗号分隔列表
-python wb.py trash --vc <vc列表> --apply --yes   # 清空库存并移至回收站
+python wb.py trash --vc <vc列表> --apply --yes   # 清空库存并移至回收站（默认 WB 原生 moveNmsToTrash）
 
 # 纠偏改名（若商品不需要下架，仅是映射错了中文名）：
 python wb.py mapping-rename --vc BCS-XXX-123 --cn "正确中文名"   # 一键同步全店铺单表与聚合总表
