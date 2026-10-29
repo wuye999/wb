@@ -35,6 +35,7 @@ from wb_ops.services.catalog_svc import catalog_svc
 from wb_ops.domain.models import ShelveItem
 # 上架底层实现解耦：可在 shelve_new（新批量推送接口）与 shelve_old（旧版建卡接口）之间自由切换
 from . import shelve_new as shelve_backend
+from . import warehouse
 # from . import shelve_old as shelve_backend
 
 
@@ -58,7 +59,6 @@ CARD_INTERVAL = 0.5        # card.json 请求间隔（秒）
 
 DEFAULT_STOCK = 999        # 上架默认库存
 BATCH_SIZE = 50            # 新版批量上品单次最大商品数
-RE_REGION = re.compile(r"подольск|электросталь|хоругвино|колчанино|восток|север|юг", re.I)
 
 
 def parse_cn_stock(s):
@@ -120,44 +120,13 @@ def pick_source(vc, vc_rows, sid_main):
 
 
 # ---------------- 目标仓库 ----------------
-_warehouse_cache = {}
-# 账号级兜底仓库表：从 data/state/known_warehouses.json 读取（{"店铺ID": 仓库ID}），
-# 仅在「默认仓库 API 与仓库列表 API 都拿不到」时才使用；换账号只需更新该数据文件，代码不再写死。
-KNOWN_WAREHOUSES_JSON = os.path.join(config.STATE_DIR, "known_warehouses.json")
-
-
-def load_known_warehouses() -> Dict[int, int]:
-    """读取账号级兜底仓库表（缺失/损坏返回空 dict）。只接受纯数字键值。"""
-    if not os.path.exists(KNOWN_WAREHOUSES_JSON):
-        return {}
-    data = safe_load_json(KNOWN_WAREHOUSES_JSON, default={})
-    if not isinstance(data, dict):
-        return {}
-    out: Dict[int, int] = {}
-    for k, v in data.items():
-        try:
-            out[int(k)] = int(v)
-        except (TypeError, ValueError):
-            continue
-    return out
+# 2026-10-29：仓库 ID 统一由 WB 原生 offices/stores/short 解析（见 services/replicate/warehouse.py），
+# 本模块不再自行读 known_warehouses.json，也不再依赖 BCS 的 wbWarehouses 接口。
 
 
 def main_warehouse(sid, shops_data=None):
-    """店铺主仓库：默认仓库（莫斯科，config.DEFAULT_WAREHOUSE_NAME）→ 俄罗斯地区仓 → 兜底表。"""
-    if sid in _warehouse_cache:
-        return _warehouse_cache[sid]
-    # 1. 默认仓库（莫斯科）
-    wh_id = bcs.default_warehouse_id(sid)
-    # 2. 俄罗斯其他地区仓兜底（莫斯科之外，如 подольск 等；成都仓库=国内仓不参与）
-    if wh_id is None:
-        whs = bcs.fetch_warehouses(sid)
-        wh_id = next((w["id"] for w in whs if RE_REGION.search(w.get("name") or "")
-                      and "成都" not in (w.get("name") or "")), None)
-    # 3. 数据文件兜底（两个 API 都空返回时）
-    if wh_id is None:
-        wh_id = load_known_warehouses().get(sid)
-    _warehouse_cache[sid] = wh_id
-    return wh_id
+    """店铺主仓库 ID（莫斯科 → 俄罗斯地区仓 → None）。薄委托，签名保持不变。"""
+    return warehouse.resolve_warehouse(sid)
 
 
 

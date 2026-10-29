@@ -25,13 +25,13 @@ import os
 import time
 from datetime import datetime
 
-from wb_ops.adapters import bcs_client as bcs
 from wb_ops.adapters import wb_client as wb_api
 from wb_ops.adapters import wb_stock_client as wsc
 from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
 from . import ops
+from . import warehouse
 from .ops_plan import (
     RED, GREEN, YELLOW, RESET,
     load_state,
@@ -99,7 +99,7 @@ def build_plans(vcs, shops, state, amount, resolve="snapshot", max_pages=200):
             for vc in vcs:
                 tracker.add(sid, vc, "无 WB 凭证（credentials.json wb.shops 缺失/三件套不齐）")
             continue
-        wh = bcs.default_warehouse_id(sid)
+        wh = warehouse.resolve_warehouse(sid)
         if wh is None:
             print(f"  [警告] 店{sid} 未找到默认仓库「{config.DEFAULT_WAREHOUSE_NAME}」，该店库存操作跳过")
             continue

@@ -15,6 +15,7 @@
   - **对 AI 的硬性要求**：AI 在执行写操作后，**严禁自行触发 `fetch`、`merge` 或编写临时脚本去查询接口验证修改结果**！日常高频业务无需同步；只有极少数全局大盘点或用户显式要求时才由人工执行。
   - 例外（轻量复核）：`banned` 的 WB 原生复核（走 WB 原生 count，快且不做慢的 BCS 同步）与 `discount-scan` 的同接口回验，默认保留。
 - **仓库默认莫斯科**：改库存 / 下架清库存 / 回收站归零 / 上架等所有仓库操作**默认只操作「莫斯科仓库」**（`config.DEFAULT_WAREHOUSE_NAME`，按仓库 name 匹配），**成都仓库默认不操作**。成都仓库（国内仓）需单独用 `wb.py remote-wh` 命令处理；切换默认仓库改 `config.py` 的 `DEFAULT_WAREHOUSE_NAME`。
+- **仓库 ID 来源（2026-10-29 起）**：全部由 **WB 原生** `GET .../api/v3/portal/offices/stores/short` 解析（`services/replicate/warehouse.py:resolve_warehouse`：莫斯科仓 → 俄罗斯地区仓 → 无），**不再走 BCS**。因该接口需要 WB 会话，`stock`/`trash`/`replicate`/`shelve` 等命令在**该店 WB cookie 失效时会报错并跳过该店**（不再静默降级）。
 
 ## 二、子命令全表
 

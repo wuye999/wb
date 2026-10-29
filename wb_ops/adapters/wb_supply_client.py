@@ -22,13 +22,14 @@ wb_ops WB 原生卖家后台 FBS「配送中」适配器 (wb_supply_client)
 from typing import Any, Dict, List, Optional
 
 from wb_ops.adapters import wb_client as wb_api
+from wb_ops.adapters.wb_warehouse_client import STORES_SHORT_URL
 
 BASE = ("https://marketplace.wildberries.ru/ns/marketplace-app/"
         "marketplace-remote-wh/api/v3/portal")
 SUPPLIES_DELIVERY_URL = BASE + "/supplies/delivery"
 SUPPLY_ORDERS_TPL = BASE + "/supplies/{sid}/orders/delivery"
 ORDERS_COUNT_URL = BASE + "/fbs/orders/count"
-STORES_SHORT_URL = BASE + "/offices/stores/short"
+# 仓库/门店短列表已迁至 adapters/wb_warehouse_client.py（2026-10-29，避免同端点两处定义）
 
 PAGE_SIZE = 100          # 抓包实测 limit=100
 MAX_PAGES = 50           # 翻页安全上限（防死循环）
@@ -115,12 +116,12 @@ def fetch_orders_count(session) -> Dict[str, int]:
 
 
 def fetch_stores_short(session, delivery_type: int = 1) -> Dict[int, Dict[str, Any]]:
-    """仓库/门店短列表 → {id: {name, warehouseName, warehouseId}}（可选，中文化仓库名用）。"""
-    d = wb_api.request(session, "GET", STORES_SHORT_URL, params={"deliveryType": delivery_type})
+    """[已迁移] 仓库短列表请改用 `wb_warehouse_client.get_stores(shop)`。
+
+    保留本函数仅为向后兼容（全仓已无调用）：它与新客户端唯一区别是入参为 session 而非 shop，
+    无法复用同一实现，故此处直接按同端点透传，避免调用方 import 断裂。
+    """
+    d = wb_api.request(session, "GET", STORES_SHORT_URL,
+                       params={"deliveryType": delivery_type, "order": "asc"})
     rows = d.get("data") or []
-    out: Dict[int, Dict[str, Any]] = {}
-    for r in rows if isinstance(rows, list) else []:
-        rid = r.get("id")
-        if rid is not None:
-            out[rid] = r
-    return out
+    return {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id") is not None}

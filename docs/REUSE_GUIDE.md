@@ -159,7 +159,19 @@ python tests/run_tests.py --changed      # 只跑「本次改动相关」的测�
 
 **`bcs_client.py`（BCS 云端 ERP：Bearer + X-Limit-Key）** — `BCSClient()` 实例
 
-`request_json(method, url, retry=3, **kwargs)`（429 退避 / 401 明确报错）｜`get(url, retry)`｜`post(url, data, retry)`｜`fetch_shop_list()`｜`get_main_shop()`｜`fetch_shop_products(shop_id, filter_type='BASE')`｜`count_by_filter(shop_id)`｜`fetch_warehouses(shop_id)`｜`default_warehouse_id(shop_id)`｜`remove_to_trash(shop_id, nm_ids)`｜`batch_push_products(shop_configs, sku_prices, mode=1, carry_brand=1)`｜`sync_shop(shop_id, filter_type='ALL')`｜`wait_sync_done(task_id, shop_id, timeout, interval, quiet)`｜模块级 `print_shops(args)`
+`request_json(method, url, retry=3, **kwargs)`（429 退避 / 401 明确报错）｜`get(url, retry)`｜`post(url, data, retry)`｜`fetch_shop_list()`｜`get_main_shop()`｜`fetch_shop_products(shop_id, filter_type='BASE')`｜`count_by_filter(shop_id)`｜`remove_to_trash(shop_id, nm_ids)`｜`batch_push_products(shop_configs, sku_prices, mode=1, carry_brand=1)`｜`sync_shop(shop_id, filter_type='ALL')`｜`wait_sync_done(task_id, shop_id, timeout, interval, quiet)`｜模块级 `print_shops(args)`
+
+> 2026-10-29：`fetch_warehouses()` / `default_warehouse_id()` 已删除 —— 仓库 ID 改由 WB 原生接口解析（见下方 `wb_warehouse_client.py` + `services/replicate/warehouse.py`）。
+
+**`wb_warehouse_client.py`（WB 原生仓库/门店列表，2026-10-29）**
+
+`get_stores(shop, *, delivery_type=1, root_version=None)` → `list[dict]`（`GET .../portal/offices/stores/short?deliveryType=1&order=asc`，已过滤 `isDeleting`）｜常量 `STORES_SHORT_URL`
+
+> 🔴 响应里 **`id` 才是仓库 ID**（1929635）；叫 `warehouseId` 的字段是 officeId（211/3006477），勿混用。
+
+**`services/replicate/warehouse.py`（仓库 ID 唯一解析入口）**
+
+`resolve_warehouse(sid)`（莫斯科仓 → 俄罗斯地区仓 → `None`，进程内缓存仅成功值）｜`list_stores(sid)`｜`chengdu_warehouses()`（全部店铺成都仓）｜`clear_cache()`｜`RE_REGION` / `CHENGDU_NAME` / `DELIVERY_TYPE`
 
 **`mabang_client.py`（马帮 ERP，三域三套会话）**
 

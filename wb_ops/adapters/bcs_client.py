@@ -98,17 +98,9 @@ class BCSClient:
             raise PlatformApiError(f"countByFilter 失败 code={d.get('code')}")
         return d.get("data") or {}
 
-    def fetch_warehouses(self, shop_id: int) -> List[Dict[str, Any]]:
-        d = self.get(f"{self.base_url}/system/wbWarehouses/list?shopId={shop_id}")
-        if isinstance(d, list):
-            return d
-        return d.get("data") or d.get("rows") or []
-
-    def default_warehouse_id(self, shop_id: int) -> Optional[int]:
-        for w in self.fetch_warehouses(shop_id):
-            if config.DEFAULT_WAREHOUSE_NAME in (w.get("name") or ""):
-                return w.get("id")
-        return None
+    # 2026-10-29：fetch_warehouses() / default_warehouse_id() 已删除。
+    # 仓库 ID 统一改由 WB 原生接口获取（adapters/wb_warehouse_client.py +
+    # services/replicate/warehouse.py），不再依赖 BCS。
 
     def remove_to_trash(self, shop_id: int, nm_ids: List[int]) -> Dict[str, Any]:
         return self.post(f"{self.base_url}/shopKeeper/clean/removeToTrash",
@@ -163,8 +155,6 @@ fetch_shop_list = client.fetch_shop_list
 get_main_shop = client.get_main_shop
 fetch_shop_products = client.fetch_shop_products
 count_by_filter = client.count_by_filter
-fetch_warehouses = client.fetch_warehouses
-default_warehouse_id = client.default_warehouse_id
 remove_to_trash = client.remove_to_trash
 batch_push_products = client.batch_push_products
 sync_shop = client.sync_shop

@@ -7,7 +7,6 @@ wb_ops 一键操作框架：按映射表批量改价 / 改库存 / 下架（原 
 本模块作为业务门面，核心计划逻辑在 ops_plan，批处理执行在 ops_executor。
 """
 import sys
-from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
 from wb_ops.storage.product_repo import ProductSnapshotRepository
@@ -41,26 +40,9 @@ from .ops_executor import (
     run_apply,
 )
 
-_shop_warehouses_cache = {}
-
-
 def get_shops():
     """扫描 data/products/ 下 shop{id}_products_all.json → [店id]"""
     return ProductSnapshotRepository.shop_ids_from_disk()
-
-
-def _shop_warehouses(sid):
-    if sid in _shop_warehouses_cache:
-        return _shop_warehouses_cache[sid]
-    try:
-        whs = bcs.fetch_warehouses(sid)
-        out = [{"warehouseId": w.get("id"), "name": w.get("name", "")} for w in whs if w.get("id")]
-        _shop_warehouses_cache[sid] = out
-        return out
-    except Exception as e:
-        print(f"  [警告] 店{sid} 仓库列表获取失败：{e}")
-        _shop_warehouses_cache[sid] = []
-        return []
 
 
 def confirm_irreversible(action, amount, yes):

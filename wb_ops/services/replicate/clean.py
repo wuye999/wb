@@ -15,6 +15,7 @@ from wb_ops import config
 from wb_ops import credentials
 from wb_ops import common
 from wb_ops.adapters import wb_client as wb_api
+from . import warehouse
 WB_DELETE_NMS = "https://seller-content.wildberries.ru/ns/source/content-card/source/deleteNMsByIDs"
 WB_DELETE_UUID = "https://seller-content.wildberries.ru/ns/viewer/content-card/viewer/errorCard/deleteByNMUUID"
 WB_DELETE_ALL = "https://seller-content.wildberries.ru/ns/source/content-card/source/deleteAllSize"
@@ -66,7 +67,7 @@ def delete_all_size(session):
 def set_stock_zero(shop_id, row_map, nm_ids):
     results = {}
     # 归零一律用默认仓库（莫斯科）；成都仓库不操作
-    default_wh = bcs.default_warehouse_id(shop_id)
+    default_wh = warehouse.resolve_warehouse(shop_id)
     if default_wh is None:
         for nid in nm_ids:
             results[nid] = "err:无默认仓库"

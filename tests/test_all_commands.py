@@ -250,27 +250,96 @@ class TestAllCommands(unittest.TestCase):
             T.wb_api.make_session, T.wb_api.request_post = orig_ms, orig_post
 
     def test_01e_default_warehouse_resolution(self):
-        """plan_trash 的默认仓库解析：known_warehouses.json 优先 → BCS API 兜底（离线）。"""
-        from wb_ops.services.replicate import ops_plan, shelve_common
+        """仓库 ID 解析（WB 原生 offices/stores/short）：莫斯科 → 地区仓 → None（离线）。
 
-        orig_load = shelve_common.load_known_warehouses
-        orig_bcs = ops_plan.bcs.default_warehouse_id
+        2026-10-29 起不再依赖 BCS，也不再读 known_warehouses.json。
+        """
+        from wb_ops.services.replicate import warehouse as wh
+
+        orig = wh.list_stores
         try:
-            # ① 本地表命中 → 不请求 BCS
-            shelve_common.load_known_warehouses = lambda: {9352: 111111}
+            # ① 命中「莫斯科仓库」→ 取 id（不是 warehouseId/officeId）
+            wh._cache.clear()
+            wh.list_stores = lambda sid: [
+                {"id": 111, "name": "成都仓库", "warehouseName": "Chengdu"},
+                {"id": 222, "name": "莫斯科仓库", "warehouseName": "Москва (Белая дача)"},
+            ]
+            self.assertEqual(wh.resolve_warehouse(9352), 222)
 
-            def _boom(sid):
-                raise AssertionError("本地表命中时不应调用 BCS")
-            ops_plan.bcs.default_warehouse_id = _boom
-            self.assertEqual(ops_plan._default_warehouse(9352), 111111)
+            # ② 没有莫斯科 → 回落俄罗斯地区仓（俄文 warehouseName 也能命中），且排除成都
+            wh._cache.clear()
+            wh.list_stores = lambda sid: [
+                {"id": 333, "name": "成都仓库", "warehouseName": "Chengdu"},
+                {"id": 444, "name": "二号仓", "warehouseName": "Подольск"},
+            ]
+            self.assertEqual(wh.resolve_warehouse(9352), 444)
 
-            # ② 本地表未覆盖 → 回落 BCS
-            shelve_common.load_known_warehouses = lambda: {}
-            ops_plan.bcs.default_warehouse_id = lambda sid: 222222
-            self.assertEqual(ops_plan._default_warehouse(9352), 222222)
+            # ③ 全都不是主仓（只剩成都）→ None，且不缓存失败结果
+            wh._cache.clear()
+            wh.list_stores = lambda sid: [{"id": 333, "name": "成都仓库", "warehouseName": "Chengdu"}]
+            self.assertIsNone(wh.resolve_warehouse(9352))
+            self.assertEqual(wh._cache, {})
+
+            # ④ 无仓库列表（无 WB 凭证 / 接口失败）→ None
+            wh._cache.clear()
+            wh.list_stores = lambda sid: []
+            self.assertIsNone(wh.resolve_warehouse(9352))
+
+            # ⑤ 成功结果命中进程内缓存
+            wh._cache.clear()
+            calls = []
+            wh.list_stores = lambda sid: (calls.append(sid) or
+                                          [{"id": 222, "name": "莫斯科仓库"}])
+            wh.resolve_warehouse(9352)
+            wh.resolve_warehouse(9352)
+            self.assertEqual(len(calls), 1)
         finally:
-            shelve_common.load_known_warehouses = orig_load
-            ops_plan.bcs.default_warehouse_id = orig_bcs
+            wh.list_stores = orig
+            wh._cache.clear()
+
+    def test_01g_warehouse_client_field_trap(self):
+        """WB 仓库接口字段陷阱：必须取 `id`，不能取 `warehouseId`（后者是 officeId）（离线）。
+
+        抓包依据 api/网络请求/wb获取仓库id.har（2026-10-29）：
+        {"name":"莫斯科仓库","warehouseId":211,"id":1929635} —— 用错会清到错误仓库。
+        """
+        from wb_ops.adapters import wb_warehouse_client as wc
+
+        capture = {}
+
+        class _FakeSession:
+            pass
+
+        orig_ms, orig_req = wc.wb_api.make_session, wc.wb_api.request
+
+        def fake_request(session, method, url, **kw):
+            capture["url"] = url
+            capture["params"] = kw.get("params")
+            return {"error": False, "additionalErrors": {"errorCode": ""}, "data": [
+                {"name": "成都仓库", "warehouseName": "382850-Chengdu", "warehouseId": 3006477,
+                 "id": 1929632, "deliveryType": 1, "isDeleting": False},
+                {"name": "莫斯科仓库", "warehouseName": "Москва (Белая дача)", "warehouseId": 211,
+                 "id": 1929635, "deliveryType": 1, "isDeleting": False},
+                {"name": "删除中仓库", "warehouseName": "x", "warehouseId": 9,
+                 "id": 999999, "deliveryType": 1, "isDeleting": True},
+            ]}
+
+        try:
+            wc.wb_api.make_session = lambda shop, rv=None: _FakeSession()
+            wc.wb_api.request = fake_request
+            rows = wc.get_stores({"shopId": 9352})
+
+            self.assertTrue(capture["url"].endswith("/portal/offices/stores/short"))
+            self.assertEqual(capture["params"], {"deliveryType": 1, "order": "asc"})
+            # isDeleting 的条目被过滤
+            self.assertEqual([r["id"] for r in rows], [1929632, 1929635])
+            # 莫斯科仓取的是 id=1929635，而不是 warehouseId=211
+            msk = next(r for r in rows if r["name"] == "莫斯科仓库")
+            self.assertEqual(msk["id"], 1929635)
+            self.assertEqual(msk["warehouseId"], 211)
+            self.assertNotEqual(msk["id"], msk["warehouseId"])
+        finally:
+            wc.wb_api.make_session, wc.wb_api.request = orig_ms, orig_req
 
     def test_01f_ops_channel_default(self):
         """默认通道映射：trash → wb（WB 原生）；price/stock → bcs（其 WB 通道走 price_wb/stock_wb）。"""

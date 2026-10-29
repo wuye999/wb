@@ -25,6 +25,7 @@ from wb_ops.storage.mapping_repo import MappingRepository
 from wb_ops.storage.boss_price import boss_columns, floor_price
 from wb_ops import config
 from wb_ops import common
+from . import warehouse
 from .wb_card import (
     fetch_card_json,
     parse_package_info,
@@ -43,11 +44,7 @@ DETAIL_URL_TPL = (
 )
 
 DEFAULT_STOCK = 999
-RE_REGION = re.compile(r"подольск|электросталь|хоругвино|колчанино|восток|север|юг", re.I)
 RECORDS_JSON = os.path.join(config.STATE_DIR, "复制上架记录.json")
-KNOWN_WAREHOUSES_JSON = os.path.join(config.STATE_DIR, "known_warehouses.json")
-
-_warehouse_cache: Dict[int, int] = {}
 
 
 def parse_dims_str(s: str) -> Optional[Tuple[int, int, int, float]]:
@@ -95,38 +92,13 @@ def stock_for(cn: str, overrides: Optional[Dict[str, int]] = None, default: int 
     return default
 
 
-def load_known_warehouses() -> Dict[int, int]:
-    """读取账号级兜底仓库表（data/state/known_warehouses.json）"""
-    if not os.path.exists(KNOWN_WAREHOUSES_JSON):
-        return {}
-    data = safe_load_json(KNOWN_WAREHOUSES_JSON, default={})
-    if not isinstance(data, dict):
-        return {}
-    out: Dict[int, int] = {}
-    for k, v in data.items():
-        try:
-            out[int(k)] = int(v)
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
 def main_warehouse(sid: int, shops_data: Optional[Dict[int, Any]] = None) -> Optional[int]:
-    """获取指定店铺的主发货仓库（莫斯科仓 > 俄罗斯地区仓 > 兜底配置表）"""
-    if sid in _warehouse_cache:
-        return _warehouse_cache[sid]
-    wh_id = bcs.default_warehouse_id(sid)
-    if wh_id is None:
-        whs = bcs.fetch_warehouses(sid)
-        wh_id = next(
-            (w["id"] for w in whs if RE_REGION.search(w.get("name") or "") and "成都" not in (w.get("name") or "")),
-            None,
-        )
-    if wh_id is None:
-        wh_id = load_known_warehouses().get(sid)
-    if wh_id is not None:
-        _warehouse_cache[sid] = wh_id
-    return wh_id
+    """店铺主发货仓库 ID（莫斯科仓 → 俄罗斯地区仓 → None）。
+
+    2026-10-29：实现收敛到 `warehouse.resolve_warehouse`（WB 原生 offices/stores/short），
+    本函数仅保留为兼容薄委托（调用方签名不变）。
+    """
+    return warehouse.resolve_warehouse(sid)
 
 
 def load_records() -> Dict[str, Any]:

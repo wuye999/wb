@@ -6,10 +6,10 @@ wb_ops 操作计划生成与 dry-run 模块 (ops_plan)
 import math
 import sys
 from collections import Counter
-from wb_ops.adapters import bcs_client as bcs
 from wb_ops import config
 from wb_ops.storage.product_repo import ProductSnapshotRepository
 from wb_ops.storage.mapping_repo import MappingRepository
+from . import warehouse
 
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -203,22 +203,12 @@ def _group_warehouses(items):
 
 
 def _default_warehouse(sid):
-    """默认仓库解析：known_warehouses.json（账号级本地兜底表，零请求）优先 → BCS API 兜底。
+    """默认仓库 ID（莫斯科 → 俄罗斯地区仓 → None）。
 
-    2026-10-29：BCS token 过期时 bcs.default_warehouse_id() 会失败，导致下架静默变成
-    「只移回收站、不清库存」。改为本地表优先后，只要该表覆盖该店，整条下架链路不再依赖 BCS。
-
-    懒加载 shelve_common：ops_plan 是「无副作用计划层」，顶层 import 会把上架链路
-    （wb_card / boss_price 等）拖进所有 ops 命令；已确认 shelve_common 不 import ops，无循环。
+    2026-10-29：实现收敛到 `warehouse.resolve_warehouse`（WB 原生 offices/stores/short），
+    **不再依赖 BCS，也不再读 known_warehouses.json**。本函数仅保留为薄委托。
     """
-    try:
-        from .shelve_common import load_known_warehouses
-        wh = load_known_warehouses().get(int(sid))
-        if wh:
-            return wh
-    except Exception:
-        pass
-    return bcs.default_warehouse_id(sid)
+    return warehouse.resolve_warehouse(sid)
 
 
 def plan_stock(vcs, shops, state, amount):
@@ -228,7 +218,7 @@ def plan_stock(vcs, shops, state, amount):
         rows = load_shop_rows(sid)
         if rows is None:
             continue
-        default_wh = bcs.default_warehouse_id(sid)
+        default_wh = warehouse.resolve_warehouse(sid)
         if default_wh is None:
             print(f"  [警告] 店{sid} 未找到默认仓库「{config.DEFAULT_WAREHOUSE_NAME}」，该店库存操作跳过")
             continue

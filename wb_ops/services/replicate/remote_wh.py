@@ -11,7 +11,7 @@ wb_ops 远程仓（成都仓库）商品查询与删除
 - 删除:     DELETE 同 URL，body {"warehouseId":storeId,"chrtId":xxx}
      → 一次一条 chrtId；响应 error:false 即成功（不可逆，永久删除）
 
-鉴权：仓库列表走 BCS（bcs.py）；查询/删除走 WB 三件套（wb_api.py make_session）
+鉴权：仓库列表走 WB 原生（portal/offices/stores/short）；查询/删除走 WB 三件套（wb_api.py make_session）
 约定：dry-run 默认；--apply 执行（不可逆，须同时 --yes 确认）；每店处理完做写后复查。
 并发：--parallel N 跨店并行（店内串行，默认 1=串行），避免对 marketplace 同店并发触发限流。
 """
@@ -21,11 +21,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from wb_ops.adapters import bcs_client as bcs
 from wb_ops import common
 from wb_ops import config
 from wb_ops import credentials
 from wb_ops.adapters import wb_client as wb_api
+from . import warehouse
 
 STOCKS_URL = ("https://marketplace.wildberries.ru/ns/marketplace-app/"
               "marketplace-remote-wh/api/v3/portal/stocks")
@@ -38,9 +38,8 @@ fetch_canceled_ids = wb_api.fetch_canceled_ids
 
 
 def list_chengdu_warehouses():
-    """从 BCS 仓库列表筛出全部店铺「成都仓库」→ [{'shopId','id','name'}]"""
-    whs = bcs.fetch_warehouses(-1)  # shopId=-1 一次返回全部
-    return [w for w in whs if str(w.get("name", "")).strip() == CHENGDU_NAME]
+    """全部店铺的「成都仓库」→ [{'shopId','id','name'}]（WB 原生 offices/stores/short）。"""
+    return warehouse.chengdu_warehouses()
 
 
 def fetch_stocks(session, store_id, max_pages=200):
