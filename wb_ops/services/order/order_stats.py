@@ -4,7 +4,9 @@ wb_ops WB「订单动态」近一月订单按商品中文名统计（只读）
 
 用途：逐店拉取 WB 卖家后台「订单动态」(`order-feed/orders`) 时间窗内全部订单行，
 按 **商品中文名** 聚合出 订单数 / 退货数 / 退货率 / 完单口径退货率 / 未完结 / 涉及店铺 /
-供应商代码数 / 库存SKU，输出单个 xlsx 多 Sheet（汇总 + 每店 + 订单明细）。
+供应商代码数 / 库存SKU，输出单个 xlsx 多 Sheet（汇总 + 按供应商代码 + 每店 + 订单明细）。
+另按 **供应商代码(VC)** 跨店合并出独立子表：同一商品各店 vendorCode 相同、nmId 不同，
+`WB商品码` 列全量列出该 vc 涉及的所有 nmId（见 `order_stats_vc.py`）。
 
 口径（与用户确认，2026-10-27）：
 - **订单数 = 明细行数**（接口一行=一件商品，不按订单号去重）。
@@ -25,6 +27,8 @@ wb_ops WB「订单动态」近一月订单按商品中文名统计（只读）
     r = order_stats(days=30, shops="9352")
     for row in r["by_cn"]:
         print(row["rank"], row["cn"], row["orders"], row["rate"])
+    for row in r["by_vc"]:
+        print(row["rank"], row["vc"], row["orders"], ",".join(row["nm_ids"]))
 
 纯只读：不触发任何写操作，不做写后验证，不自动同步/合并映射表。
 """
@@ -40,6 +44,7 @@ from wb_ops.adapters import wb_order_feed_client as feed
 from wb_ops.storage.mapping_repo import MappingRepository
 
 from .fbs_delivery import NO_CN, load_cn_stock_sku, select_shops
+from .order_stats_vc import aggregate_by_vc, print_table as print_vc_table
 
 DATE_FMT = "%Y-%m-%d"
 DEFAULT_DAYS = 30
@@ -233,8 +238,8 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
     `local_filter=False` 时跳过 ②，此时口径 = 「窗口内有过状态变更的订单」（一般不要用）。
 
     返回 dict：{'begin','end','server_end','timezone','rows','per_shop','all_shops','by_cn',
-                 'by_cn_by_shop','by_shop','status_counter','unknown_status','out_of_window',
-                 'dup_order_ids','failed_shops'}
+                 'by_vc','by_cn_by_shop','by_shop','status_counter','unknown_status',
+                 'out_of_window','dup_order_ids','failed_shops'}
     """
     cred = credentials.get()
     all_shops = cred.wb_shops()
@@ -306,6 +311,7 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
         "begin": b, "end": e, "server_end": server_end, "timezone": timezone,
         "rows": rows, "per_shop": per_shop, "all_shops": pairs,
         "by_cn": aggregate_by_cn(rows, cn_stock_sku),
+        "by_vc": aggregate_by_vc(rows, cn_stock_sku),
         "by_cn_by_shop": {p["label"]: aggregate_by_cn(
             [x for x in rows if x["shop_label"] == p["label"]], cn_stock_sku)
             for p in per_shop},
@@ -397,6 +403,8 @@ def run(args: Any) -> int:
     if top and len(by_cn) > top:
         print(f"  ... 其余 {len(by_cn) - top} 个中文名见 xlsx")
 
+    print_vc_table(r["by_vc"], top)
+
     try:
         from .order_stats_xlsx import write_xlsx
         path = write_xlsx(r, out=getattr(args, "out", "") or "",
@@ -405,6 +413,7 @@ def run(args: Any) -> int:
     except ImportError as ex:
         print(f"[错误] 生成 xlsx 失败：{ex}（请用带 openpyxl 的 venv Python 运行）")
         return 1
-    print(f"\n[xlsx] 汇总 {len(by_cn)} 行 / 店铺 {len(r['by_shop'])} 家 / 明细 {len(rows)} 行 → "
+    print(f"\n[xlsx] 汇总 {len(by_cn)} 行 / 供应商代码 {len(r['by_vc'])} 个 / "
+          f"店铺 {len(r['by_shop'])} 家 / 明细 {len(rows)} 行 → "
           f"{path or '（未生成，见上方警告）'}")
     return 1 if failed and len(failed) == len(r["per_shop"]) else 0

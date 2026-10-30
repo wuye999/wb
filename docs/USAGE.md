@@ -528,9 +528,14 @@ python wb.py order-stats --out _scratch/os.xlsx   # 指定输出路径
 - **中文名**：vendorCode 反查本地映射真源（`vc_override` > `vc_known` > 前缀码兜底）；查不到归
   `(中文名未知)` 桶并排最后。**库存SKU** 取 `data/商品价格表.xlsx`「库存SKU」列（按中文名）。
 - **未知状态不猜**：计入订单数，不进退货/未完结，控制台与 xlsx 元信息块都会显式列出。
+- **按供应商代码（VC）**：同一商品在 6 家店 **vendorCode 相同、nmId 不同** ⇒ 额外产出**一张跨店
+  `按供应商代码` Sheet**，口径与中文名表完全一致（订单数/退货数/退货率/完单口径退货率/未完结/涉及店铺/
+  库存SKU），多一列 `WB商品码` 把该 vc 在各店的全部 nmId 逗号列出（自动换行）。`--top` 同时截断控制台
+  两张表（xlsx 始终全量）；vc 为空的订单归 `(无供应商代码)` 桶并排最后。
 - **时区**：默认 `America/Los_Angeles`（对齐 WB 订单动态页，比北京时间晚约 15 小时）；`--timezone Asia/Shanghai` 可换。
   「今天」的边界随之变化，控制台第一行会打印实际窗口。
-- **输出**：`汇总`（全店合计 + 合计行）+ 每店一个 Sheet + `订单明细`（逐行：店铺/订单号/状态/下单时间/价格等）；
+- **输出**：`汇总`（全店合计 + 合计行，按中文名）+ **`按供应商代码`**（跨店合并，同一 vc 各店 nmId 不同）
+  + 每店一个 Sheet（按中文名）+ `订单明细`（逐行：店铺/订单号/状态/下单时间/价格等）；
   百分比为数值 + `0.00%` 格式（可排序/透视）。
 - 脚本内嵌调用（免 CLI）：
   ```python
@@ -539,6 +544,8 @@ python wb.py order-stats --out _scratch/os.xlsx   # 指定输出路径
   r = order_stats(days=30, shops=["9352"])          # 也支持 begin=/end=/date=/timezone=
   for row in r["by_cn"][:10]:
       print(row["rank"], row["cn"], row["orders"], row["returns"], row["rate"], row["rate_done"])
+  for row in r["by_vc"][:10]:                       # 跨店按供应商代码（含该 vc 的全部 nmId）
+      print(row["rank"], row["vc"], row["orders"], row["returns"], row["rate"], row["nm_ids"])
   path = write_xlsx(r)
   ```
 

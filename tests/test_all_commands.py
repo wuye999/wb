@@ -341,6 +341,54 @@ class TestAllCommands(unittest.TestCase):
         finally:
             wc.wb_api.make_session, wc.wb_api.request = orig_ms, orig_req
 
+    def test_01h_mabang_mapping_header_based(self):
+        """马帮本地映射按**表头名**定位：把列顺序彻底打乱后仍能取到正确 中文名/库存SKU（离线）。
+
+        背景：旧实现硬编码 `r[1]/r[0]`（映射总表）与 `r[2]/r[7]`（商品价格表），
+        用户插列/挪列后会静默读错——轻则全部判 NO_SKU，重则把订单替换成错误 SKU。
+        """
+        import os
+        import shutil
+        import tempfile
+
+        from openpyxl import Workbook
+
+        from wb_ops import config as cfg
+        from wb_ops.services.order import mabang
+
+        tmp = tempfile.mkdtemp(prefix="wb_hdr_")
+        boss_xlsx = os.path.join(tmp, "boss.xlsx")
+        map_xlsx = os.path.join(tmp, "map.xlsx")
+        try:
+            # 商品价格表：库存SKU 放第 2 列、产品中文名 放最后（旧实现 r[2]/r[7] 必错）
+            wb = Workbook()
+            ws = wb.active
+            ws.append(["产品图片", "库存SKU", "卖家SKU", "实际售价", "尺寸",
+                       "最低售价", "vendorCode前缀码", "产品中文名"])
+            ws.append(["img", "TESTSKU-6161", "S-1", "=F2*2", "1*1*1/0.1",
+                       "10", "AAAA", "测试商品"])
+            wb.save(boss_xlsx)
+
+            # 映射总表：vendorCode 在前、产品中文名 在后（旧实现 r[0]/r[1] 会读反）
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "映射总表"
+            ws.append(["vendorCode", "产品中文名", "实际售价"])
+            ws.append(["BCS-AAAA-123", "测试商品", 10])
+            wb.save(map_xlsx)
+
+            old_boss, old_map = cfg.BOSS_XLSX, cfg.MAPPING_XLSX
+            cfg.BOSS_XLSX, cfg.MAPPING_XLSX = boss_xlsx, map_xlsx
+            try:
+                vc2cn, cn2sku = mabang.load_local_mapping()
+            finally:
+                cfg.BOSS_XLSX, cfg.MAPPING_XLSX = old_boss, old_map
+
+            self.assertEqual(vc2cn.get("BCS-AAAA-123"), "测试商品")
+            self.assertEqual(cn2sku.get("测试商品"), "TESTSKU-6161")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_01f_ops_channel_default(self):
         """默认通道映射：trash → wb（WB 原生）；price/stock → bcs（其 WB 通道走 price_wb/stock_wb）。"""
         from wb_ops.services.replicate.ops import _default_channel
@@ -2472,6 +2520,36 @@ class TestAllCommands(unittest.TestCase):
         pending_only = [x for x in agg if x["cn"] == "全是未完结"][0]
         self.assertIsNone(pending_only["rate_done"])   # 分母=0 → xlsx 写 "-"
 
+        # ④b aggregate_by_vc：跨店同 vc（不同 nmId）必须合并；无 vc 桶置尾；分母≤0 → None
+        from wb_ops.services.order import order_stats_vc as ovc
+        vc_rows = [
+            {"vc": "B", "nm_id": "1001", "cn": "感应灯", "shop_label": "袁州1(9352)", "kind": "return"},
+            {"vc": "B", "nm_id": "2002", "cn": "感应灯", "shop_label": "袁州2(9353)", "kind": "done"},
+            {"vc": "B", "nm_id": "2002", "cn": "感应灯", "shop_label": "袁州2(9353)", "kind": "pending"},
+            {"vc": "A", "nm_id": "9", "cn": "感应灯", "shop_label": "袁州1(9352)", "kind": "done"},
+            {"vc": "", "nm_id": "7", "cn": "", "shop_label": "袁州1(9352)", "kind": "done"},
+            {"vc": "D", "nm_id": "8", "cn": "全是未完结", "shop_label": "袁州1(9352)", "kind": "pending"},
+        ]
+        agg_v = ovc.aggregate_by_vc(vc_rows, {"感应灯": "gyd"})
+        self.assertEqual(ovc.NO_VC, "(无供应商代码)")
+        self.assertEqual([x["vc"] for x in agg_v], ["B", "A", "D", ovc.NO_VC])   # 无 vc 桶恒置尾
+        v0 = agg_v[0]
+        self.assertEqual((v0["orders"], v0["returns"], v0["pending"], v0["unknown"]), (3, 1, 1, 0))
+        self.assertEqual(v0["nm_ids"], ["1001", "2002"])          # 同 vc 跨店两个不同 nmId
+        self.assertEqual(v0["shops"], ["袁州1(9352)", "袁州2(9353)"])
+        self.assertEqual((v0["cn"], v0["stock_sku"]), ("感应灯", "gyd"))
+        self.assertAlmostEqual(v0["rate"], 1 / 3)
+        self.assertAlmostEqual(v0["rate_done"], 0.5)
+        self.assertEqual([x["rank"] for x in agg_v], [1, 2, 3, 4])
+        self.assertEqual(agg_v[3]["cn"], "")                      # --no-cn 场景不伪造 (中文名未知)
+        self.assertEqual(agg_v[3]["nm_ids"], ["7"])
+        self.assertIsNone([x for x in agg_v if x["vc"] == "D"][0]["rate_done"])   # 分母=0 → None
+        # nmId 数值感知排序（纯字典序会把 "999" 排在 "1001" 之后）
+        self.assertEqual(ovc.aggregate_by_vc([{"vc": "C", "nm_id": "1001"},
+                                              {"vc": "C", "nm_id": "999"}])[0]["nm_ids"], ["999", "1001"])
+        # 只给 status 不给 kind ⇒ 走 classify_status（函数内 import，同时验证无循环依赖）
+        self.assertEqual(ovc.aggregate_by_vc([{"vc": "E", "status": "cancel"}])[0]["returns"], 1)
+
         # ⑤ 游标翻页：mock wb_api.request（首页不带 cursor、次页带上一页 cursor）
         bodies = []
         pages = [
@@ -2523,6 +2601,8 @@ class TestAllCommands(unittest.TestCase):
         self.assertEqual(oxlsx.safe_sheet_name("汇总", used), "汇总(2)")
         self.assertEqual(oxlsx.safe_sheet_name("袁州1", used), "袁州1")
         self.assertEqual(oxlsx.safe_sheet_name("袁州1", used), "袁州1(2)")
+        self.assertEqual(oxlsx.safe_sheet_name(oxlsx.TITLE_VC, {oxlsx.TITLE_VC.lower()}),
+                         f"{oxlsx.TITLE_VC}(2)")
 
         # ⑧ write_xlsx 冒烟：临时目录落盘 → 回读校验结构与格式
         import openpyxl
@@ -2542,6 +2622,9 @@ class TestAllCommands(unittest.TestCase):
                                                "pending": 0, "unknown": 0, "vc_count": 1,
                                                "shops": ["袁州1(9352)"], "stock_sku": "gyd",
                                                "rate": 1.0, "rate_done": None}]},
+            "by_vc": [{"rank": 1, "vc": "BCS-AAAA-1", "cn": "感应灯", "orders": 1, "returns": 1,
+                       "pending": 0, "unknown": 0, "nm_ids": ["1"], "shops": ["袁州1(9352)"],
+                       "stock_sku": "gyd", "rate": 1.0, "rate_done": None}],
             "per_shop": [{"shop": "袁州1", "shop_id": 9352, "label": "袁州1(9352)",
                           "orders": 1, "returns": 1, "pending": 0, "unknown": 0, "error": ""}],
             "by_shop": [{"shop_label": "袁州1(9352)", "orders": 1, "returns": 1}],
@@ -2552,7 +2635,20 @@ class TestAllCommands(unittest.TestCase):
             path = oxlsx.write_xlsx(res, out=os.path.join(tmp, "t.xlsx"))
             self.assertTrue(os.path.exists(path))
             book = openpyxl.load_workbook(path)
-            self.assertEqual(book.sheetnames, ["汇总", "袁州1(9352)", "订单明细"])
+            self.assertEqual(book.sheetnames,
+                             ["汇总", "按供应商代码", "袁州1(9352)", "订单明细"])
+            # 「按供应商代码」Sheet：跨店合并、WB商品码 全量列出、百分比格式、合计行、冻结/换行
+            wsv = book[oxlsx.TITLE_VC]
+            self.assertEqual([c.value for c in wsv[1]], oxlsx.VC_HEADERS)
+            self.assertEqual(len(oxlsx.VC_WIDTHS), len(oxlsx.VC_HEADERS))
+            self.assertEqual((wsv["A2"].value, wsv["B2"].value, wsv["C2"].value),
+                             (1, "BCS-AAAA-1", "感应灯"))
+            self.assertEqual(wsv["F2"].number_format, "0.00%")     # 退货率：数值 + 百分比格式
+            self.assertEqual(wsv["G2"].value, "-")                 # 完单口径分母≤0 → 文本 "-"
+            self.assertEqual(wsv["J2"].value, "1")                 # WB商品码 全量列出
+            self.assertTrue(wsv["J2"].alignment.wrap_text)
+            self.assertEqual((wsv["B3"].value, wsv["D3"].value), ("合计", 1))   # 合计行
+            self.assertEqual(wsv.freeze_panes, "D2")
             ws = book["汇总"]
             self.assertEqual([c.value for c in ws[1]], oxlsx.HEADERS)
             self.assertEqual(ws["A2"].value, 1)

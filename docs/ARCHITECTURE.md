@@ -69,7 +69,8 @@
 │       │   ├── feishu_vc_stats.py 飞书「订单登记」按供应商代码统计单数（只读，跨店合并降序）
 │       │   ├── fbs_delivery.py WB FBS「配送中」清单及商品采集统计（只读，按商品中文名聚合）
 │       │   ├── order_stats.py  WB「订单动态」近一月订单按中文名统计（只读，订单数/退货率）
-│       │   ├── order_stats_xlsx.py order-stats 的 xlsx 多 Sheet 渲染（汇总 + 每店 + 明细）
+│       │   ├── order_stats_vc.py order-stats 的「按供应商代码」跨店聚合与控制台渲染（只读）
+│       │   ├── order_stats_xlsx.py order-stats 的 xlsx 多 Sheet 渲染（汇总 + 按供应商代码 + 每店 + 明细）
 │       │   ├── orders.py      WB 订单查询与同步
 │       ├── replicate/         搬家上架、库存改价与清理业务实现
 │       │   ├── ops.py         一键操作门面编排
@@ -316,6 +317,7 @@ wb.py feishu-vc-stats ⑤ 只读统计（可按需/编排调用）：读「订�
 | 2026-09-21 | **vendorCode 前缀正则放宽（收编「多变体序号」尾段，每店 55 条未映射清零）**：形如 `BCS-FZMG-334862442-2` / `BCS-ZZMX-191868961-15` 的卡（前缀后多一段 `-N`）与旧正则 `^BCS-([A-Z]{4})-(?:(?:ozon-card-)?\d+\|[^/]+/\d+)$`（要求「数字结尾 / 含斜杠」）不匹配 → `mapping.py` 前缀自动补录、`mapping_excel.py` 前缀兜底、`mapping_repo` 名称解析兜底**三处全部落空** ⇒ 三店各 55 条（ZZMX 15 / FZMG 10 / GYDX 10 / MQXJ 10 / PPYD 10，三店同一批）永久滞留「未映射商品」，既无中文名也无目标价、无法参与改价与价格核对。修复：`config.VC_PREFIX_RE` 尾部追加 `(?:-\d+)*`，并保留原有三种格式兼容；`merge` 复跑后单店「未映射 55 → **0**」、聚合总表在架归属 5944 → **5999**。新增离线用例 `test_01b_vc_prefix_tail_format_mapping`（断言新格式命中且 9 类非法格式仍被拒）。⚠ 放宽后归属完全按前缀走：其中 `FZMG` 组 10 张子卡俄文标题为「触摸夜灯/台灯」而其前缀在价格表对应「仿真玫瑰花藤」，**疑似前缀挂错/货不对板**，需人工看图确认后再纠偏或下架（其余 GYDX→感应灯 / MQXJ→毛球修剪器 / PPYD→拍拍夜灯 / ZZMX→针织帽 标题与归属一致）。 |
 | 2026-10-19 | **马帮「更换失败」闸门（`REPLACE_FAIL`）**：事故背景——步骤① `apply_replace` 失败时只改 `note` 不改 `status`，而步骤② 重新拉单重新 classify 只按 `REPLACE` 圈定，导致 9 单（全是 `api.mabangerp.com` Read timed out，系统匹配 SKU 仍是 `BCS-xxx` 形态）**更换失败后照样被预报+交运**，存在错货风险。修复：① 失败单标 `REPLACE_FAIL` + 中文备注 + 专表 `更换失败订单_*.csv`（ASCII 回退 `mabang_replace_fail_*`）；② 网络类异常（Timeout/ConnectionError/5xx）重试 1 次，确定性错误（orderItemId 数量异常、库存 SKU 未找到、业务码异常）不重试；③ 失败单ID 经 `args.replace_fail_order_ids` 从① 传到②，`collect_forecast_orders` 按订单ID 排除（不进批次/上传/交运，飞书登记照常）；④ **单独执行 `mabang-forecast` 不做该判定**（避免马帮列表滞后误排除）。新增离线用例 `test_25k/25l/34d`。 |
 | 2026-10-29 | **仓库 ID 全面改由 WB 原生接口获取（去 BCS 化）**：新增 `adapters/wb_warehouse_client.get_stores()`（`GET .../api/v3/portal/offices/stores/short?deliveryType=1&order=asc`，仅需 WB 三件套）与 `services/replicate/warehouse.py` 作为**唯一解析入口**；`shelve_common.main_warehouse` / `replicate.main_warehouse` / `ops_plan._default_warehouse` 三份重复实现收敛为薄委托；`plan_stock` / `stock_wb`（live 解析）/ `clean` / `remote-wh`（成都仓列举）四处直连 BCS 全部改走新入口；**删除 `bcs_client.fetch_warehouses()` / `default_warehouse_id()`**，`data/state/known_warehouses.json` 不再被读取。🔴 响应中 **`id` 才是仓库 ID（1929635 体系）**，同响应里的 `warehouseId` 是 officeId（211/3006477），混用会清到错误仓库且不报错（已加离线用例锁死）。行为变化：上架链路（replicate/shelve/import-shelve）从此需要该店 WB cookie，失败即报错跳过，不降级。 |
+| 2026-10-30 | **`order-stats` 新增跨店「按供应商代码(VC)」子表**：同一商品在 6 家店 **vendorCode 相同、nmId 不同**（实测 300 个 vc 中 85 个跨店、各带 2~6 个 nmId）⇒ 中文名视角看不到「这个 vc 到底退多少」。新增 `services/order/order_stats_vc.py`（`NO_VC` / `aggregate_by_vc` / `print_table`，`classify_status` 在函数体内 import 以避开与 `order_stats` 的循环依赖），`collect()` 返回新增 `by_vc`（`{rank,vc,cn,orders,returns,pending,unknown,nm_ids,shops,stock_sku,rate,rate_done}`，`nm_ids` 数值感知排序），`write_xlsx` 在 `汇总` 之后插入 `按供应商代码` Sheet（11 列：序号/供应商代码/商品中文名/订单数/退货数/退货率/完单口径退货率/未完结/涉及店铺/WB商品码/库存SKU，`WB商品码` 全量逗号列出并换行，`freeze_panes=D2`，筛选不含合计行），控制台同 `--top` 截断两张表。口径完全复用中文名视角（订单数=明细行数、退货=cancel/return/returnDefective、完单口径分母=订单数−未完结）。**CLI 命令数 58 不变**（只加 Sheet 与控制台输出，未加参数）；`order_stats.py` 410 → 419 行（本次仅 +10 行接线，**未顺带拆分**该文件）。 |
 
 ## 九、外部依赖与运行环境
 

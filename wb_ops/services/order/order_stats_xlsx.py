@@ -3,10 +3,14 @@
 wb_ops `order-stats` 的 xlsx 渲染（从 order_stats.py 拆出，守住单文件 300 行建议线）
 
 输出结构（单个 xlsx 多 Sheet）：
-    `汇总` → 每个店铺一页（按凭证/--shops 顺序）→ `订单明细`
+    `汇总` → `按供应商代码`（跨店合并）→ 每个店铺一页（按凭证/--shops 顺序）→ `订单明细`
 统计列（用户指定，勿改顺序）：
     序号 | 商品中文名 | 订单数 | 退货数 | 退货率 | 完单口径退货率 |
     未完结(已创建进行中) | 涉及店铺 | 供应商代码数 | 库存SKU
+`按供应商代码` 列（同口径，仅分组键换成 vendorCode）：
+    序号 | 供应商代码 | 商品中文名 | 订单数 | 退货数 | 退货率 | 完单口径退货率 |
+    未完结(已创建进行中) | 涉及店铺 | WB商品码 | 库存SKU
+    同一商品各店 vendorCode 相同、nmId 不同 ⇒ `WB商品码` 列出该 vc 涉及的全部 nmId。
 百分比一律写**数值 + number_format('0.00%')**（可排序/可透视），仅当分母 ≤0 时写文本 "-"。
 
 样式与 `services/support/ratings.py:_export_excel` 保持一致：
@@ -31,6 +35,13 @@ CENTER_COLS = (1, 3, 4, 5, 6, 7, 9, 10)
 LEFT_COLS = (2, 8)
 PCT_COLS = (5, 6)
 
+# 「按供应商代码」跨店 Sheet：同一 vc 各店 nmId 不同 ⇒ WB商品码 列全量逗号列出并换行
+VC_HEADERS = ["序号", "供应商代码", "商品中文名", "订单数", "退货数", "退货率",
+              "完单口径退货率", "未完结(已创建进行中)", "涉及店铺", "WB商品码", "库存SKU"]
+VC_WIDTHS = [6, 24, 30, 9, 9, 11, 16, 20, 46, 46, 20]
+VC_CENTER_COLS = (1, 4, 5, 6, 7, 8, 11)
+VC_WRAP_COLS = (9, 10)
+
 DETAIL_HEADERS = ["店铺", "店铺ID", "订单ID", "订单号", "下单日期", "下单时间", "更新时间",
                   "状态", "口径归类", "取消类型", "商品中文名", "供应商代码", "库存SKU",
                   "WB商品码", "俄文标题", "尺码", "售价(₽)", "仓库", "目的城市"]
@@ -38,6 +49,7 @@ DETAIL_WIDTHS = [14, 8, 36, 30, 11, 26, 26, 10, 10, 10, 30, 26, 16, 13, 34, 10, 
 KIND_CN = {"return": "退货", "pending": "未完结", "done": "完单", "unknown": "未知状态"}
 
 TITLE_SUMMARY, TITLE_DETAIL, TITLE_FALLBACK = "汇总", "订单明细", "店铺"
+TITLE_VC = "按供应商代码"
 ILLEGAL_SHEET_CHARS = set('[]:*?/\\')
 MAX_SHEET_LEN = 31
 DETAIL_WARN_ROWS = 50000
@@ -140,6 +152,53 @@ def _write_stat_sheet(ws: Worksheet, rows: Sequence[Dict[str, Any]],
     return n
 
 
+# ---------------- 「按供应商代码」Sheet ----------------
+def _write_vc_sheet(ws: Worksheet, rows: Sequence[Dict[str, Any]],
+                    shop_count: int = 0, nm_count: int = 0) -> int:
+    """写「按供应商代码」跨店统计表（表头 + 数据 + 合计行）；返回数据行数。"""
+    ws.append(VC_HEADERS)
+    for r in rows:
+        ws.append([r.get("rank", ""), r.get("vc", ""), r.get("cn", ""),
+                   r.get("orders", 0), r.get("returns", 0), None, None, r.get("pending", 0),
+                   "、".join(r.get("shops") or []), ",".join(r.get("nm_ids") or []),
+                   r.get("stock_sku", "")])
+        i = ws.max_row
+        _pct_cell(ws, i, 6, r.get("rate"))
+        _pct_cell(ws, i, 7, r.get("rate_done"))
+
+    n = len(rows)
+    for row in range(2, n + 2):
+        for col in range(1, len(VC_HEADERS) + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = _CELL_FONT
+            if col in VC_CENTER_COLS:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center",
+                                           wrap_text=(col in VC_WRAP_COLS))
+
+    # 合计行（两个率用合计重算，不是行内率求平均）
+    orders = sum(int(r.get("orders") or 0) for r in rows)
+    returns = sum(int(r.get("returns") or 0) for r in rows)
+    pending = sum(int(r.get("pending") or 0) for r in rows)
+    tr = n + 2
+    ws.append(["", "合计", "", orders, returns, None, None, pending,
+               f"共 {shop_count} 家" if shop_count else "",
+               f"共 {nm_count} 个" if nm_count else "", ""])
+    _pct_cell(ws, tr, 6, _rate(returns, orders))
+    _pct_cell(ws, tr, 7, _rate(returns, orders - pending))
+    for col in range(1, len(VC_HEADERS) + 1):
+        c = ws.cell(row=tr, column=col)
+        c.font = _TOTAL_FONT
+        c.fill = _TOTAL_FILL
+
+    _style_header(ws, len(VC_HEADERS))
+    _set_widths(ws, VC_WIDTHS)
+    ws.freeze_panes = "D2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(VC_HEADERS))}{n + 1}"
+    return n
+
+
 def _append_meta(ws: Worksheet, lines: Sequence[str]) -> None:
     """数据下方追加元信息块（空一行后逐行灰斜体）。"""
     start = ws.max_row + 2
@@ -197,6 +256,8 @@ def write_xlsx(result: Dict[str, Any], out: str = "", with_detail: bool = True,
         "未完结=created；退货率=退货数/订单数；完单口径退货率=退货数/(订单数-未完结)",
         "说明：完单口径分母≤0 时显示 '-'；未知状态计入订单数但不归类；"
         "(中文名未知) 桶恒排最后",
+        "按供应商代码：同一商品各店 vendorCode 相同、nmId 不同；"
+        "WB商品码 列列出该 vc 涉及的全部 nmId（(无供应商代码) 桶恒排最后）",
     ]
     if result.get("unknown_status"):
         ws_meta.append("未知状态：" + "、".join(f"{k}={v}" for k, v in result["unknown_status"].items()))
@@ -209,11 +270,17 @@ def write_xlsx(result: Dict[str, Any], out: str = "", with_detail: bool = True,
     wb = Workbook()
     ws0 = wb.active
     ws0.title = TITLE_SUMMARY
-    used = {TITLE_SUMMARY.lower(), TITLE_DETAIL.lower()}
+    used = {TITLE_SUMMARY.lower(), TITLE_DETAIL.lower(), TITLE_VC.lower()}
     total_vc = len({r.get("vc") for r in rows if r.get("vc")})
     _write_stat_sheet(ws0, result.get("by_cn") or [], total_vc=total_vc,
                       shop_count=len(result.get("by_shop") or []))
     _append_meta(ws0, ws_meta)
+
+    vc_rows = result.get("by_vc") or []
+    if vc_rows:      # 老调用方不传 by_vc 时不新增 Sheet（行为不变）
+        total_nm = len({str(r.get("nm_id")).strip() for r in rows if str(r.get("nm_id") or "").strip()})
+        _write_vc_sheet(wb.create_sheet(TITLE_VC), vc_rows,
+                        shop_count=len(result.get("by_shop") or []), nm_count=total_nm)
 
     by_cn_by_shop = result.get("by_cn_by_shop") or {}
     for p in result.get("per_shop") or []:

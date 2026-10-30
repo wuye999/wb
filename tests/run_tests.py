@@ -120,6 +120,7 @@ PATH_HINTS = [
     ("wb_ops/services/order/fbs_delivery.py", ["fbs-delivery"]),
     ("wb_ops/services/order/order_stats_xlsx.py", ["order-stats"]),
     ("wb_ops/services/order/order_stats.py", ["order-stats"]),
+    ("wb_ops/services/order/order_stats_vc.py", ["order-stats"]),
     ("wb_ops/services/order/", ORDER_CMDS),
     # 门面（薄转发，按域定向）
     ("wb_ops/services/catalog_svc.py", CATALOG_CMDS),

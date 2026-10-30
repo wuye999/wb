@@ -425,7 +425,7 @@ def build_parser():
 
     p = sub.add_parser("order-stats",
                        help="只读：WB「订单动态」近一月订单按商品中文名统计（订单数/退货数/退货率/"
-                            "完单口径退货率/未完结）→ xlsx 多 Sheet（汇总 + 每店 + 订单明细）")
+                            "完单口径退货率/未完结）→ xlsx 多 Sheet（汇总 + 按供应商代码 + 每店 + 订单明细）")
     p.add_argument("--shops", default="", help="店铺过滤，逗号分隔，支持店铺ID或短名（默认全部已填 cookie 店铺）")
     p.add_argument("--days", type=int, default=30, help="近 N 天（含今天，默认 30；仅当未给 --begin/--end/--date 时生效）")
     p.add_argument("--date", default="", help="单天 YYYY-MM-DD（等价 --begin=--end）")
@@ -437,7 +437,8 @@ def build_parser():
     p.add_argument("--page-size", type=int, default=50, help="每页条数（默认 50，抓包实测；服务端夹小会自动降级）")
     p.add_argument("--max-pages", type=int, default=200, help="每店翻页安全上限（默认 200，防死循环）")
     p.add_argument("--limit", type=int, default=0, help="每店最多拉取 N 行明细（0=不限）")
-    p.add_argument("--top", type=int, default=0, help="控制台按中文名只显示前 N 名（0=全部；xlsx 始终全量）")
+    p.add_argument("--top", type=int, default=0,
+                   help="控制台两张表（按中文名 / 按供应商代码）各只显示前 N 名（0=全部；xlsx 始终全量）")
     p.add_argument("--no-cn", action="store_true", help="不解析商品中文名（供应商代码仍解析）")
     p.add_argument("--quiet", action="store_true", help="不打印逐页翻页进度")
     p.add_argument("--interval", type=float, default=0.3, help="翻页/店铺间请求间隔秒（默认 0.3）")
