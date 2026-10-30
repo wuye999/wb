@@ -64,23 +64,38 @@ TITLE_SKU_RE = re.compile(r"数量:(.*)$")
 
 
 def load_local_mapping():
-    """返回 (vc2中文名, 中文名→库存SKU)；读 data/ 价格映射表 + 商品价格表"""
-    from openpyxl import load_workbook
-    wb = load_workbook(config.MAPPING_XLSX, read_only=True)
-    ws = wb["映射总表"]
-    vc2cn = {}
-    for r in ws.iter_rows(min_row=2, values_only=True):
-        if r[1]:
-            vc2cn[str(r[1]).strip()] = (str(r[0]).strip() if r[0] else "")
-    wb.close()
+    """返回 (vc→中文名, 中文名→库存SKU)。
 
-    wb = load_workbook(config.BOSS_XLSX, read_only=True)
-    ws = wb[wb.sheetnames[0]]
+    2026-10-29：改为**按表头名定位**，不再硬编码列号（旧实现读 `r[1]/r[0]` 与
+    `r[2]/r[7]`，一旦用户插列/挪列就会静默读错 —— 轻则全部判 NO_SKU，
+    重则把订单商品替换成错误 SKU，导致发错货）。
+      - vc→中文名：走 `MappingRepository.load_mapping_state()`（映射总表按表头定位，
+        并自动应用 `vc_override.json` 人工纠偏）
+      - 中文名→库存SKU：商品价格表按表头定位「产品中文名」+「库存SKU」两列
+        （`boss_columns`，缺列不 raise，只在缺「库存SKU」时告警）
+    """
+    from openpyxl import load_workbook
+    from wb_ops.storage.boss_price import boss_columns
+    from wb_ops.storage.mapping_repo import MappingRepository
+
+    state, _ = MappingRepository.load_mapping_state()
+    vc2cn = {str(vc).strip(): (st.get("cn") or "") for vc, st in state.items() if vc}
+
     cn2sku = {}
-    for r in ws.iter_rows(min_row=2, values_only=True):
-        if r[2] and r[7]:
-            cn2sku[str(r[2]).strip()] = str(r[7]).strip()
-    wb.close()
+    wb = load_workbook(config.BOSS_XLSX, read_only=True)
+    try:
+        ws = wb[wb.sheetnames[0]]
+        cols = boss_columns(ws, config.BOSS_XLSX, required=("cn",))
+        i_cn, i_stock = cols["cn"], cols["stock_sku"]
+        if i_stock is None:
+            print("[警告] 商品价格表缺少「库存SKU」列：所有订单将判 NO_SKU，请先补该列")
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            cn = r[i_cn] if i_cn is not None and len(r) > i_cn else None
+            sku = r[i_stock] if i_stock is not None and len(r) > i_stock else None
+            if cn and sku:
+                cn2sku[str(cn).strip()] = str(sku).strip()
+    finally:
+        wb.close()
     return vc2cn, cn2sku
 
 
