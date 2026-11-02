@@ -1,0 +1,14 @@
+[
+  {
+    "nmId": 123456789,
+    "vendorCode": "BCS-TEST-123456789",
+    "prefix": "TEST",
+    "cn": "示例商品",
+    "price": 59,
+    "length": 10,
+    "width": 20,
+    "height": 30,
+    "weight": 0.5,
+    "stock": 20
+  }
+]

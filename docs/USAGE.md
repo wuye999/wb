@@ -1,650 +1,221 @@
-# wb_ops · 日常情景使用流程（USAGE.md）
+# 日常操作流程
 
-> 按情景给「确定命令 + 预期输出 + 成功/失败判据」。所有命令在**仓库根目录**下执行；`python` 指你的 venv Python（作者示例路径 `C:\Users\madokka\.workbuddy\binaries\python\envs\default\Scripts\python.exe`，**换电脑请替换**，勿用系统 python）。
-> ⚠ 文中店铺 ID（9352 等）、店铺名（袁州1 等）均为**作者店铺示例**，换成你自己的（`wb.py shops` 可查）。
+命令均在项目根目录执行，店铺 ID `1001`、商品码 `123456789` 和商品名仅为示例。优先限定店铺和商品；不加 `--shops` 的命令通常会覆盖其全部可用店铺。完整参数见 [CLI](CLI.md)，配置见 [CONFIGURATION](CONFIGURATION.md)。
 
-## 0. 环境（每次会话先确认）
+## 看懂读写边界
 
-```bash
-python wb.py shops
-```
-- ✅ 成功：返回你的店铺列表（作者环境 3 行：袁州1(9352)/袁州2(9353)/袁州3(9356)）。
-- ❌ 失败：报 401/405 → 去 [CREDENTIALS.md](CREDENTIALS.md) 更新凭证。
+| 操作类型 | 命令 | 执行行为 |
+| --- | --- | --- |
+| 不联网的帮助/任务预览 | 任意 `--help`、daily/schedule 不加 --apply | 显示定义，不执行平台业务任务 |
+| 平台查询与报表 | shops、orders、dims-check、promo-goods、promo-gap、feishu-vc-stats、fbs-delivery、order-stats、chats、appeals、ratings | 读取对应平台，通常生成本地输出；orders 默认先同步订单 |
+| 本地工作台与映射 | mapping、review、mapping-check、mismatch-check、merge、mapping-import、mapping-rename、shops-mapping | 写本地 HTML、表格或状态，没有通用 --apply 保护；部分主店模式可能枚举 BCS 店铺 |
+| 数据更新 | fetch | 默认触发 WB→BCS 同步，再写本地快照；不是每次运行前的必选步骤 |
+| 业务写入 | 改价、库存、上架、清理、折扣、促销、订单处理、飞书写入、客服发送 | 默认预览，--apply 提交；范围和确认机制逐命令核对 |
+| 会话/AI | cookies-update、cookie-refresh-wb、ai-test、客服监听 | 可能回写凭证/状态或调用 LLM；细节见下文 |
 
----
+所有 WB/BCS 写入提交并记录结果后结束，不做写后查询，不追加同步或映射表合并。终端中的“提交成功”不是即时最终状态证明。本地日志、接口错误和任务号是本次汇报依据。
 
-## 1. 一次性初始化
+## 当前运行约定
 
-```bash
-# 1) 确认凭证齐全（BCS 三件套 + WB 各店铺三件套）
-python wb.py shops          # BCS 通
-python wb.py promo-apply    # WB 通（能拉出活动列表即正常，dry-run 无副作用）
-```
+涉及仓库的读取与修改，**默认且仅允许各店自己的莫斯科仓库 ID**。这包括库存、下架前清库存、回收站归零和上架；“全店”“全部商品”也只在莫斯科仓范围内操作。先核对仓库名称和 `id`，不跨店复用 ID，不把 office 字段 `warehouseId` 当成库存仓库；没有可确认的莫斯科仓时中止，不换成都或其他俄罗斯地区仓。详见 [仓库范围](CONFIGURATION.md#仓库范围仅允许莫斯科)。
 
-> ⚠ **默认不建立任何计划任务**：除非你主动要求「每日自动运行」，否则**不要**运行 `wb.py schedule`，日常一律手动执行命令即可（见下文各情景）。
+WB 凭证目前通过人工登录、手动抓包并写入维护；Playwright 尚未启动、浏览器自动续期未启用。鉴权失败时按 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式) 处理，包括受限浏览器打开 Network 的方法，不把启动自动浏览器作为默认排错步骤。
 
-```bash
-# 2) 【可选，仅当你明确需要"每日自动运行"时才执行】创建每日计划任务
-python wb.py schedule       # 创建 4 个任务（9:00 morning / 11/15/19 check）
-python wb.py schedule --remove   # 删除全部任务
-```
-- ✅ 若创建：`schtasks /Query` 能看到 WB_Daily_Morning 等 4 个任务，状态 OK。
+## 商品映射与人工审核
 
-## 2. 刷新鉴权凭证
+已有原 data 时，按需要生成工作台：
 
-```bash
-# WB cookie 失效（403）：重新抓包 → 存 md → 更新
-python wb.py cookies-update data/har/我的抓包.md
-
-# BCS token 失效（401）：编辑 data/credentials.json 的 bcs.token / limit_key
-```
-- ✅ 成功：`cookies-update` 打印 `✓ 袁州1 ... 已更新`；`wb.py shops` 恢复正常。
-- 📌 cookie 保鲜实测 ≥46 小时，建议每周刷新一次。
-
-## 3. 新商品上架 → 进映射表（免人工核对）
-
-1. 商品价格表该商品行填「vendorCode前缀码」：**4 位大写、全局唯一**（如 充电宝-绿 → `CDBL`）。
-2. 上架时 vendorCode 用 `BCS-{前缀}-{WB原始nmId}` 格式。
-3. 之后跑：
-```bash
-python wb.py fetch          # 同步+拉取
-python wb.py merge          # 前缀命中 → 自动补录进映射表
-```
-- ✅ 成功：merge 打印 `[前缀自动补录] N 个`，映射表新增对应 vc。
-
-## 4. 同步 / 新增商品（含人工审核）
-
-```bash
-python wb.py fetch                         # 同步+拉取全部店铺
-python wb.py mapping                       # 统一核对工作台（一页两区）
-# → 打开 data/workbench/价格映射核对工作台.html
-#   上半区勾选商品价格表商品→候选；下半区给未归属 vc 选归属/排除
-# → 点「导出核对结果 JSON」→ 保存为 统一审核.json
-python wb.py merge 统一审核.json            # 增量合并 → 映射表
-```
-- ✅ 成功：merge 打印 `合并完成`，映射表更新。
-
-## 5. 货不对板筛查（看图找「上架商品图片与中文名不符」的）
-
-```bash
-python wb.py mismatch-check             # 生成货不对板筛查工作台（全量，可按创建/上架时间筛选）
-python wb.py mismatch-check --days 2    # 只生成昨天+今天上架(创建)的商品（--days 1=仅今天）
-python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25   # 指定时间段
-# → 打开 data/workbench/货不对板筛查工作台.html
-#   顶部「中文名筛选」可多选只看某几个中文名（Ctrl/Cmd 点选，不选=全部）
-#   逐个商品看缩略图（点击弹高清大图）与俄文标题是否和中文名一致
-#   点击标题（或左侧复选框）勾选「货不对板」（勾选状态浏览器本地保存，刷新不丢）
-# → 点「导出勾选 vc」下载 货不对板vc.json，或「复制 vc」复制逗号分隔列表
-python wb.py trash --vc <vc列表> --apply --yes   # 清空库存并移至回收站（默认 WB 原生 moveNmsToTrash）
-
-# 纠偏改名（若商品不需要下架，仅是映射错了中文名）：
-python wb.py mapping-rename --vc BCS-XXX-123 --cn "正确中文名"   # 一键同步全店铺单表与聚合总表
-python wb.py mapping-rename --file 纠偏清单.json               # 批量纠偏更正
-```
-- ✅ 成功：工作台「共 N 条 · M 个中文名商品」；用 `--begin/--end/--days` 时会打印 `[时间段] 创建时间 X ~ Y → N 条`；无创建时间的商品在时间筛选时被过滤并提示「过滤了 N 行无创建时间」。
-- 📌 时间段依据映射表「映射总表」的**创建时间**（上架/建立时间，来自 BCS 快照经 merge 入库）；若映射表很久未 merge，该列可能缺失/滞后，提示重新 `fetch + merge`。
-- 📌 下架前先去 `--apply` 跑 dry-run 预览清单；`trash` 会自动先清库存再移回收站。
-- ⚠ **下架后不要跑 fetch 或 merge**：下架在平台侧已实时生效并清空库存。映射总表保留历史行完全不影响后续业务逻辑（后续批量改价等操作遇到已下架商品会自动跳过）。日常业务中绝对不要在下架后顺手跑 fetch+merge，避免频繁全量同步引发平台限流风控。
-
-## 5.1 店铺增删与单店映射表管理（独立单表 + 归档解耦）
-
-系统在 `data/shops/` 为每个活跃店铺维护各自独立的映射表（`shop_{id}_{name}.xlsx`），通过 `wb.py merge` 自动做 Outer Join 聚合成全景 `价格映射表.xlsx`。
-
-```bash
-# 1) 刷新全部店铺单表（或指定店铺单表）
-python wb.py shops-mapping
-python wb.py shops-mapping --shop-id 9352
-
-# 2) 新增店铺（例如新上店 9358）：
-#    a. 在 credentials.json 加入该店；
-#    b. python wb.py fetch --shop-id 9358 拉取在架快照；
-#    c. python wb.py merge 自动创建 shop_9358_xxx.xlsx 并并入总表（老商品自动挂载归属，零审核）。
-
-# 3) 停用 / 移除店铺（例如店 9356 被封或转出）：
-#    a. 直接将 data/shops/shop_9356_xxx.xlsx 移到 data/shops/_archive/；
-#    b. python wb.py merge 重新聚合；
-#    c. 聚合总表立刻剔除该店；该店独有的 VC 自然从总表中清除（“消失即移除”生效，ops 批量改价绝不发脏请求）；
-#    d. 若后续解封恢复：把文件移回 data/shops/ 再跑 merge 即可瞬间无损恢复。
+```powershell
+python run.py mapping
+python run.py review
+python run.py mapping-check --tol 5
+python run.py mismatch-check --cn "示例商品" --days 7
 ```
 
-## 6. 改价 / 设折扣 / 库存 / 下架（两段式）
+按输出路径打开 `data/workbench/` 中的 HTML，核对候选归属、图片、中文名或商品码。默认 mapping 和 review 的 VC 中心审核导出交给 merge；不同工作台的结果协议不能混用：
 
-```bash
-# 改价（默认 floor 商品价格表实际售价；--price 手动；--discount 带折扣）
-python wb.py price --name 充电宝 --apply --yes
-python wb.py price --vc BCS-XXX --price 130 --discount 20 --apply --yes
-python wb.py price --vc BCS-XXX --discount 30 --keep-price --apply --yes   # 只改折扣不动价
-
-# 库存
-python wb.py stock --name 冲牙器 --amount 0 --apply --yes
-python wb.py stock --name 冲牙器 --amount 999 --apply --yes
-
-# 下架（不可逆，自动先清库存）
-python wb.py trash --name 某商品 --apply --yes
-
-# 批量改尺寸（按商品价格表「尺寸」列 长*宽*高/毛重，改全部店铺对应中文名商品的包装尺寸，数值原样透传）
-python wb.py dimension                    # 预览（dry-run）
-python wb.py dimension --name 育发液 --apply   # 只改中文名含「育发液」的商品
-
-# 自定义尺寸/毛重：给选定的 vc 统一设指定值（必须用 --vc/--name/--prefix 圈定，避免误改全部）
-python wb.py dimension --vc BCS-XXX-123 --dims "8*14*26/0.3" --apply
-
-# ⚠ 仓库默认莫斯科：库存/下架清库存默认只操作「莫斯科仓库」，成都仓库不操作（成都用 wb.py remote-wh 单独处理）
-# ⚠ 严禁频繁同步与盲目写后验证：改价/库存/下架/折扣/清理/上架/改尺寸等所有写操作，执行完成即结束，默认【不同步、不写后验证、不自动合并映射表】。
-#    写后验证必须依赖 BCS 全量同步，不同步拉取的快照只是未修改前的旧数据；而全量同步耗时长且极易引发限流风控。
-#    AI 和用户绝对不要在每次写操作后顺手执行 fetch 或 merge！仅在极少数全局大盘点或用户显式手动要求时才跑。
-```
-- ✅ 成功：`结果: 成功 N · 失败 0`，明细在 `data/logs/ops_result.csv`。
-- 📌 每个命令先去 `--apply` 跑 dry-run 预览清单。
-
-## 6b. 跨店复制上架（replicate）——补齐只覆盖部分店铺的商品
-
-场景：某商品只在 1-4 家店在架，其余店没有 → 自动把它上架到缺失的店铺（vendorCode 与源店一致、价格=源店现价、库存 999、直上）。
-
-> ⚠ **默认不自动同步**：命令启动时**不会**自动同步/拉取店铺，默认用本地快照判断覆盖（可能滞后）。加 **`--sync`** 才会先同步+拉取全部店铺（WB→BCS，约 2 分钟），保证覆盖判断基于最新数据；**需最新务必加 `--sync`**。
-
-```bash
-python wb.py replicate                    # 预览全部部分覆盖商品（vc/中文名/源店/价格/目标店；不自动同步）
-python wb.py replicate --prefix ZLTH --apply --sync   # 按前缀码批量补齐（先同步最新快照）
-python wb.py replicate --name 冲牙器 --apply    # 按映射表中文名补齐
-python wb.py replicate --vc BCS-XXX-123 --apply # 单个 vc（目标店自动=缺失店）
-python wb.py replicate --shops 9353 --apply     # 只补指定店
-python wb.py replicate --cn-stock "感应灯:0,充电线:100" --apply   # 指定中文名上架库存
-```
-- 📌 **上架库存**：默认 999；`--cn-stock "中文名:库存,..."` 可指定任意中文名的上架库存（如无货商品传 `--cn-stock "感应灯:0,运动包:0"`）。
-- ✅ 成功判据：**目标店能查到该 vendorCode 即成功**；上架后价格/库存显示 None 属正常（WB 平台审核/回填延迟，等 1 小时甚至更久再核对数值）。
-- 📌 防重复四层（快照覆盖 → 本地记录 → 实时查重 → BCS 服务端幂等），重复执行安全，已存在的店自动跳过。
-- 📌 多目标店一次请求提交（BCS 已恢复多店一次提交：一个 vc 一次请求同时上架到全部目标店，提速；直接信任 code==200 即整批成功）。
-- 明细：`data/logs/复制上架_*.csv`；本地提交记录 `data/state/复制上架记录.json`。
-- 📌 上架后通常无需立刻同步；只有需要让新店商品立刻进映射表时才 `fetch && merge`（或用 `--sync`），否则下批 ops 会按本地快照/映射表走。
-
-## 6c. 他人映射表导入上架（import-shelve）——别人有、我没有的商品上架到我的店
-
-场景：拿到他人（同项目格式）映射表 → 按 **WB原始nmId**（vendorCode 末段数字，两代格式 `BCS-{随机4位}-{nm}` / `BCS-{前缀码}-{nm}` 通吃）比对，他人有、我方全部店铺全无的商品上架到我的店铺。
-
-> ⚠ **默认不自动同步**：命令启动时**不会**自动同步/拉取店铺，默认用本地快照判断差集（可能滞后）。加 **`--sync`** 才会先同步+拉取全部店铺（WB→BCS，约 2 分钟），保证差集判断基于最新数据（漏判会重复上架他人已有的商品）；**需最新务必加 `--sync`**。
-
-```bash
-python wb.py import-shelve 他人映射表.xlsx         # 预览差集清单（含前缀来源标注；不自动同步）
-python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
-python wb.py import-shelve 他人映射表.xlsx --shops 9353 --apply --sync   # 上架到指定店（先同步最新快照）
-python wb.py import-shelve 他人映射表.xlsx --apply --sync              # 全量上架到全部店（先同步）
-python wb.py import-shelve 他人映射表.xlsx --cn-stock "充电线:100" --apply   # 指定中文名上架库存
-```
-- 📌 **上架库存**：默认 999；`--cn-stock "中文名:库存,..."` 可指定任意中文名的上架库存（如无货商品传 `--cn-stock "感应灯:0,运动包:0"`）。
-- ✅ 成功判据：同 6b——目标店查到新 vendorCode 即成功（数值回填延迟同上）。
-- 📌 **新 vendorCode 规则**：他人表中文名精确命中我前缀码 → `BCS-{我的前缀}-{nmId}`（标注"我方"）；未命中 → 沿用他人 vc（标注"他人"）。**支持 `ozon-card-` 尾段**：他人 vc 为 `BCS-{前缀}-ozon-card-{WB商品码}` 时，我方生成的新 vc 保留该段，即 `BCS-{我的前缀}-ozon-card-{WB商品码}`（前缀识别与 merge 分类亦兼容——WB商品码仍取自「WB商品码」列，缺失照旧跳过）。
-- 📌 **价格** = `floor(他人表实际售价)`（我方标准定价规则）；他人表必须是新列名「实际售价」（旧名「双倍售价」已不兼容，会直接报错）；实际售价缺失的商品 dry-run 显示 `?`、执行时跳过。
-- 📌 防重复三层（我方快照 nm 集合 → 本地记录（nm 为键）→ 按新 vc 实时查重），重复执行安全。
-- 明细：`data/logs/导入上架_*.csv`。
-- ⚠ 他人表须为同项目生成的映射表格式（含「映射总表」Sheet）；中文名命中我价格表 → 上架后 merge 可前缀自动归属，未命中的沿用他人 vc（后续按普通新商品走核对流程）。
-
-## 6d. WB商品码批量上架（shelve）——输入 WB 商品码批量上架（新版批量接口）
-
-场景：输入 1 个或多个 WB 商品码（nmId），自动提取包装尺寸重量、商品名称、推导前缀码或由用户指定价格/前缀/尺寸/完整 VC，分批上架到指定或全部店铺（走 BCS 新版批量上品接口 `POST /products/batch/push`）。
-
-> ⚠ **默认不自动同步**：写操作执行完成即结束。加 **`--sync`** 才会先同步+拉取全部店铺。
-
-```bash
-# 1) 单品或多品预览（自动补齐尺寸重量、中文名与前缀码）
-python wb.py shelve 248364237 --price 59                                    # 单品预览
-python wb.py shelve 248364237 388854754 --price 66 --apply                 # 多商品批量执行
-
-# 2) 手动指定 4 位前缀码与尺寸重量
-python wb.py shelve 248364237 --prefix ABCD --dims "10*20*30/0.5" --apply   # 指定前缀与包装规格
-
-# 3) 手动指定完整自定义 VC 与目标店铺
-python wb.py shelve 248364237 --vc BCS-CUSTOM-12345 --shops 9352 --apply    # 指定完整 VC
-
-# 4) 从文件读取多商品码批量上架
-python wb.py shelve --file 商品码清单.txt --price 55 --apply                   # 从 txt 文件读取批量上架
-```
-- 📌 **智能补齐（优先级链）**：未指定的字段按「CLI 参数 → 本地映射总表 → 本地商品价格表 → WB CDN card.json / BCS 详情代理」自动推导补齐。
-- 📌 **分批推送**：新版批量上品接口单批次最多 50 个商品推送，自动分批并异步轮询上架任务状态。
-- 📌 **防重复记录**：上架记录写入 `data/state/复制上架记录.json`，支持 nmId 与 vc 双向索引查重。
-
-## 6e. WB商品码旧版上架建卡（shelve-old）——输入 WB 商品码批量建卡（旧版建卡接口）
-
-场景：新版批量接口异常或需要更精细控制建卡内容时，使用旧版上品建卡接口（`POST /system/wbCollection/wb/new`）。原生支持任意自定义完整 VC、原汁原味俄文标题、主图与规格建卡。
-
-```bash
-# 1) 旧版建卡接口基础使用
-python wb.py shelve-old 248364237 --price 59 --apply                       # 旧版建卡接口单品上架
-python wb.py shelve-old 248364237 388854754 --price 66 --apply             # 旧版多品上架
-
-# 2) 自定义完整 VC（不受 4 位前缀命名规则约束）
-python wb.py shelve-old 248364237 --vc BCS-SPECIAL-MYVC --apply            # 旧版原生透传任意自定义 VC
-
-# 3) 批量指定多店铺与文件输入
-python wb.py shelve-old --file 商品清单.txt --shops 9352,9353 --apply       # 指定多店铺与从文件导入
-```
-- 📌 **底层差异**：旧版接口为单品多店同步建卡模式，自动将 `shopDatas[0].nmId` 置空防覆盖，并携带完整的商品卡片信息。
-- 📌 **统一接口**：`shelve_old` 与 `shelve_new` 对外暴露完全一致的 `execute_shelve` 与 `shelve_product` 函数，上层调用无感切换。
-
-## 7. 促销报名（每日 9:00 自动）
-
-```bash
-python wb.py promo-apply              # 预览可报名活动
-python wb.py promo-apply --apply      # 执行（全部店铺报名）
-python wb.py promo-apply --shops 9352 --apply   # 只报指定店
-```
-- ✅ 成功：`[汇总] 可报名 N | 成功 M`；幂等（重复报名返回"已存在跳过"）。
-- 明细：`data/logs/报名结果_*.csv`。
-- ⚠ **报名后必跑价格审核**：参加活动会同步改折扣，改折扣降幅落 30-49.9% 的商品进 WB 隔离区（见第 10 节）→ 报名后执行 `python wb.py price-review`（dry-run 预览 → `--apply`），确保折扣生效。
-
-### 7.1 查看广告推广中的被推广商品（只读）
-
-> 注意区分：上面 7 是**促销活动报名**（seller 后台的活动日历）；这里是 **广告推广**（`cmp.wildberries.ru` 广告投放），两者是不同子系统。
-
-```bash
-python wb.py promo-goods                 # 全部店铺：列出每个推广活动里的商品
-python wb.py promo-goods --shops 9356     # 只查指定店
-python wb.py promo-goods --status 9       # 只看「在投」活动（默认 4,9,11 = 后台默认视图）
-python wb.py promo-goods --no-cn          # 不解析中文名，速度更快（供应商代码仍解析）
-```
-- 输出每行：`活动ID / 活动名 / 状态 / 结算方式 / 预算` + 商品级 `WB商品码(nm) / 供应商代码 / 中文名 / 俄文标题 / 类目 / 活动内库存`。
-- 末尾附**去重 WB商品码**与**去重供应商代码**的英文逗号分隔清单（可直接复制给其它命令用）。
-- 明细落盘：`data/logs/推广商品_*.csv`。
-- ⚠ 商品中文名/供应商代码**只用本地真源**（本店 BCS 快照 nmId→vc，兜底映射总表）；查不到的标注「本地真源未收录」，**不做联网核实**。本店快照不存在时会打 `[警告]` —— 需最新先跑 `python wb.py fetch`。
-- 全程**只读**：不报名、不改预算/竞价、不暂停活动。
-
-### 7.2 找出「该推没推」/「在推但该关」的商品（promo-gap，只读）
-
-> 🔴 **销量判据 = 该供应商代码在目标店铺（默认袁州1/2/3）的 7 天单数「合计」**，不是单店单数 ——
-> 同一供应商代码在各店的 `wb编号`(nmId) 不同，但它就是同一个商品，要**三店合计**够量才算「值得推广」。
-> 合计范围 = `--shops` 指定的目标店铺（默认三店）。⚠ 合计时一条登记记录只计一次（多店铺记录不重复计数）；
-> 「各店单数拆分」是另一个口径（按店各计一次），仅用于展示。
-
-```bash
-python wb.py promo-gap                          # 正向（默认）：该推没推（三店合计≥4 但某目标店没推）
-python wb.py promo-gap --mode waste             # 反向：在推但该关（三店合计<4 → 建议关闭清单）
-python wb.py promo-gap --mode both              # 两个方向一次跑完（飞书表只读一次）
-python wb.py promo-gap --min 6 --days 14        # 阈值 6、窗口近 14 天
-python wb.py promo-gap --shops 9352,9353,9356   # 指定目标店（= 合计范围；也可写短名 袁州1,袁州3）
-python wb.py promo-gap --mode waste --top 20    # 控制台只显示前 20（CSV 仍写全量）
+```powershell
+python run.py merge "_scratch/review.json"
+python run.py shops-mapping --shop-id 1001
+python run.py mapping-rename --vc "BCS-TEST-123456789" --cn "修正后的商品名"
 ```
 
-**正向 gap（该推没推）** —— 合计 ≥ 阈值，却在该目标店没推广，分两组：
-- 组①**可直接补推**：该店在架（有 nmId）→ 直接加推广；
-- 组②**需先上架**：该店快照查不到该供应商代码（已下架/未上架）→ 先上架再推。
-  ⚠ 飞书「店铺」是**下单店铺**，组②只表示该店快照未收录该 vc，需人工确认。
-- 注意：合计够的 vc 会对**每个未推的目标店**各产出一行（可能是「本店 0 单但别店卖得好」的拓店机会）。
+这些命令直接更新本地映射或状态。旧单店格式核对结果使用 `mapping-import 文件.json`，不要用它替代多店 review→merge 流程。`merge` 不从平台重新拉取商品，也不表示远端状态已经更新。
 
-**反向 waste（在推但该关）** —— 三店合计 < 阈值，则它在这三店**所有「在投」活动**里的推广都该关，分三类：
-- ①**建议关闭**：**在投（status=9）**活动里被推广，且该 vc 三店合计单数 < 阈值（含 0 单）；
-- ②**已暂停无需操作**：活动 status=11（或未识别状态）已停，仅计数不逐条列（不用去关）；
-- ③**无法判定**：被推广但 nm 本地真源反查不到供应商代码 → 无法关联销量，**不推断**，需人工判断。
-- 另出 **活动级汇总**（该活动共几件、几件建议关；全中则标「★ 整个活动建议关闭」→ 可整活动关停）
-  与 **商品级汇总**（该 nm 在本店出现在几个活动）。
+只有用户明确要求获取最新商品数据时，独立运行：
 
-- 输出：`data/logs/推广缺口_*.csv`（正向）、`data/logs/推广待关_*.csv`（反向逐行）、
-  `data/logs/推广待关_按活动汇总_*.csv`（反向活动级）。CSV 同时给出「三店合计单数 / 该店单数 / 各店单数拆分」。
-- ⚠ **反向最大风险**：商品在本店**刚上架/尚未起量**时也会被判为「建议关闭」，请结合上架时间人工判断。
-- ⚠ 若某店在飞书窗口内 0 条记录，反向会把该店全部在投商品判为「0 单该关」→ 脚本会打醒目告警，请先核对店铺短名。
-- 脚本内嵌调用：
-  ```python
-  from wb_ops.services.discount.promo_gap import promo_gap
-  r = promo_gap(days=7, min_orders=4, mode="both", shops=["9352"])
-  r["gap_rows"]; r["waste_rows"]; r["waste_by_campaign"]; r["stats"]
-  ```
-
-## 8. 折扣调整（默认 WB 原生批量）
-
-系统默认改折扣命令已全面切换为 **WB 原生批量方案**（零 BCS 依赖，分片提交，极速且不污染原价）：
-
-```bash
-# 1) 基础用法（全店 >50% → 50%）
-python wb.py discount                 # 预览全店 >50% 商品（WB 原生实时列表，从高到低，快）
-python wb.py discount --apply         # 执行批量修改（默认不做写后验证）
-
-# 2) 按品类中文名筛选（如：笔记本电脑）
-python wb.py discount --name 笔记本电脑 --threshold 55 --target 50   # 各店独立筛选：笔记本电脑且折扣 >55% 改为 50%
-python wb.py discount --name 笔记本电脑 --all --target 50          # 全量设置：所有店铺的笔记本电脑无条件改 50%
-
-# 3) 单个或多个 VC 精准修改
-python wb.py discount --vc BCS-HAAJ-248364237 --target 48         # 单个 VC 调整
-python wb.py discount --vc BCS-XXX-1,BCS-XXX-2 --target 45        # 多个 VC 批量调整
-
-# 4) 限定店铺与批次控制
-python wb.py discount --shops 9352 --limit 20 --chunk 50 --apply  # 仅操作指定店铺，自定义分批
-
-# 5) 双侧区间（>高折扣 或 <低折扣 都统一到目标值）——低折扣侧走 WB 折扣升序接口
-python wb.py discount --threshold 55 --below 40 --target 50      # 折扣>55% 或 <40% → 50%
-python wb.py discount --below 40 --target 50                     # 只改「折扣<40%」
-
-# 6) 【旧版按需保留】走 BCS 慢速全量改折扣（默认不启用）
-python wb.py discount-bcs --threshold -1 --target 50 --apply --sync
+```powershell
+python run.py fetch --shop-id 1001
+python run.py merge
 ```
 
-> 流程机制：
-> - **高折扣筛选模式**：WB 原生 `list/goods/filter`（`sort="discount", sortOrder=0`）从高到低查找 >阈值商品（首条 `<= threshold` 立即截断，性能极高）→ 本地快速匹配中文名/VC → WB 原生 `upload/task` 批量分批提交修改（默认每批 100 条）。
-> - **低折扣侧（`--below N`）**：同一接口改 `sortOrder=1` 从低到高查找 <阈值商品（首条 `>= threshold` 立即截断），与高折扣侧结果并集去重后一起提交（降序接口无法覆盖低折扣区间）。只给 `--below` 时**不再拉降序侧**（高折扣侧已关闭，硬拉会翻遍全量目录、单店数分钟）。
-> - **两阶段提交（2026-09-17 抓包修正，关键）**：`upload/task` 必须走两步才算落库 ——
->   ① `?checkChange=true` **预检**，只返回 `{"priceModal","quarantineModal"}`（降价提示 / 隔离区提示），**不产生任务号**；
->   ② `?checkChange=false` **真正提交**，返回 `{"id":<taskId>,"alreadyExists":bool}`。
->   脚本会自动「预检 → 自动确认 → 提交」，并在日志打印 `成功(taskId=… · 预检: 隔离区提示)`。⚠ 只有**拿到 taskId** 才算提交成功；taskId 为空/None 说明仍停在预检阶段（历史 bug，已修）。
-> - **指定 VC / 全量模式**：直接通过本地映射池与快照定位目标商品的在架 `nmID` → 打包提交 WB 原生批量接口，无需在 WB 全量翻页，毫秒级响应；该模式下**不再受折扣区间限制**（`--vc` 指向的商品无论当前折扣多少都会被改到目标值）。
-> - ⚠ **默认不做写后验证**：修改折扣后 WB 平台端需要一段时间才能异步生效入库，因此默认不做写后验证（避免因平台生效延迟产生误判或无意义等待）。
-> - ⚠ **改折扣后必跑价格审核（且要真的 `--apply`）**：`discount --apply` 之后**必跑 `python wb.py price-review`**（先 dry-run 预览、有货再 `--apply`）——降幅落 30-49.9% 区间的商品会进 WB 隔离区，**不「应用新价格」则新折扣不生效**（0%→49% 就属于这一档，实测隔离区会列出对应 nmID，详见第 10 节）。
+`fetch --no-sync` 只读取 BCS 现有缓存，不保证是最新数据；不要把它当成即时写后验证。
 
-## 9. 清理草稿箱 / 回收站
+如果已在 BCS 后台完成同步，直接运行以下两条命令，无需临时脚本或额外先运行 shops-mapping：
 
-```bash
-python wb.py clean --target all            # 预览
-python wb.py clean --target all --apply    # 执行：先草稿箱，后回收站
-```
-- 回收站规则：**一键清空**（`deleteAllSize`）——先对回收站里有库存的商品归零，再一键清空整店回收站；草稿箱按 UUID 逐条删除。
-- 📌 **回收站数量判据以 `countByFilter(TRASH)` 实时计数为准**（工具打印 `回收站 N 条（实时计数）`；`list(TRASH)` 是列表缓存，可能滞后于实时，两值不一致会打印提示）。清理**不强制 `--sync`**。
-- ⚠ **`deleteAllSize` 对有库存商品会失败**（返回 `error:true` + `StockCount>0`，报 `content.api.errors.source.whileDeleting`），需等库存清零后再重试。
-- 📌 一键清空后工具会复核实时计数 `before → after`；`after` 仍>0 为平台被拒删残留（有库存/在途/成都仓库存），订单完成后再清，**非命令失败**。
-- ✅ 成功：`[汇总-回收站] 共 N | 已删除 M | 已归零 Z`。
-
-> 📌 **写后合并（默认不执行）**：清理执行完成即代表结束，**默认不自动同步、不自动合并、不做写后验证**，严禁清理后擅自跑 `fetch` 或 `merge`。仅在极少数确实需要让 BCS 缓存立刻反映结果时才加 `--sync`（自动全店同步并增量合并，清理掉的商品将触发消失即移除）。
-
-## 9b. 查询并删除被阻止的商品（banned）
-
-> WB 会把违规/有问题的商品标记为「被阻止」（banned，卡片 flaws 含"被阻止"，后台「商品状态」页可查）。本功能查询这些商品并一键移到回收站（可恢复）。
-
-```bash
-python wb.py banned                        # 预览各店被阻止商品（vc/中文名/阻止原因）
-python wb.py banned --apply --yes          # 执行：全部移到回收站 + 自动复核
-python wb.py banned --shops 9352           # 只看指定店
-python wb.py banned --limit 10 --apply --yes   # 每店最多处理 10 个
-```
-- ✅ 成功：`[验证] bannedCard N → M`（前后对比）+ `已提交 N 个，仍留在被阻止列表 0 个`。
-- 📌 **移到回收站后可恢复**：误删可在 WB 后台「回收站」手动恢复；被阻止商品若有库存/在途可能移失败（打印失败原因），先归零库存（`wb.py stock`）再重跑。
-- ⚠ 纯 WB 接口（cookie 会话），无需 BCS 同步；自动复核也是 WB 侧 count + 列表，不触发 fetch。
-- 明细：`data/logs/被阻止商品_*.csv`（含店铺/ID/vendorCode/中文名/标题/阻止原因/结果）。
-
-## 9c. 查询 WB 尺寸/重量偏差待验证商品（dims-check）
-
-> WB 会把包装尺寸/重量有偏差的商品标记为需验证（“检查包装尺寸 / 请检查重量”）。本功能**只读**列出这批商品，按中文名筛选后，可把 vc 交给 `dimension --dims ...` 逐个测试合适尺寸。
-
-```bash
-python wb.py dims-check --type dims                   # 只读：尺寸偏差待验证商品（默认）
-python wb.py dims-check --type weight --shops 9352    # 只读：重量偏差待验证商品
-python wb.py dims-check --type all --shops 9352       # 尺寸+重量合并去重，标注「偏差类型」
-python wb.py dims-check --type weight --name 视黄醇面霜 # 重量偏差里筛中文名含「视黄醇面霜」
-```
-- 明细：`data/logs/[尺寸|重量|尺寸重量]偏差待验证_*.csv`（店铺/ID/偏差类型/vendorCode/中文名/标题/原因）。
-- 「偏差类型」取值：尺寸 / 重量 / 尺寸+重量（仅 `--type all` 时会有后两者）。
-- 提取测试用：`python wb.py dimension --vc <vc[,vc...]> --dims "长*宽*高/毛重" --apply`（默认 dry-run，确认后 --apply）。
-- ⚠ 纯只读，不改任何数据；纯 WB 接口（cookie 会话）。
-
-## 10. 价格审核（降价 / 改折扣 30-49.9% 进审查的商品）
-
-> ⚠ **触发源不止改价，改折扣（discount）同样触发**（实测 2026-08-20）：WB 价格审查按「**新价相对原价降幅**」判定，折扣降幅落入 30–49.9% 区间的商品也会进隔离区，必须「应用新价格」才生效。
-
-```bash
-python wb.py price-review              # 预览隔离区待审商品
-python wb.py price-review --apply      # 应用新价格（审核通过）
-python wb.py price-review --shops 9352 --apply   # 只审指定店
-```
-- 背景：改价**或改折扣**使新价较原价下降 **30–49.9%** 会进入 WB 价格审查（隔离区），**必须「应用新价格」才生效**；降价 **>50%** 会被 WB 直接拒绝。
-- ✅ 成功：`[汇总] 待审 N | 已应用新价格 M`；日志 `data/logs/价格审核_*.csv`。
-- 改价时自动审核：`python wb.py price --name 充电宝 --apply --yes --auto-review`（改价成功后自动匹配降价 30-49.9% 的商品并应用新价格，不误审历史遗留待审商品）。
-- ⚠ **日常必备动作**：每次 `promo-apply`（报名）或 `discount --apply`（改折扣）**之后，必跑一次 `price-review`**（先 dry-run 预览、有货再 `--apply`），否则本次降折扣触发的隔离区商品价格不生效。
-
-## 11. 订单查询
-
-```bash
-python wb.py orders                                   # 同步+查询今天订单
-python wb.py orders --begin 2026-08-17 --end 2026-08-20   # 指定日期区间
-python wb.py orders --days 7                          # 最近 7 天
-python wb.py orders --no-sync                         # 跳过同步，直接查缓存
-```
-- 流程：自动触发订单同步（`shopIds:[]`=全部店铺，异步任务约数秒）→ 轮询完成 → 查询订单列表 + 状态分类计数。
-- ✅ 成功：`[汇总] 订单 N 条`；日志 `data/logs/订单查询_*.csv`。
-- `--shops` 可限定同步范围与结果；`--page-size` 控制分页（默认 50）。
-
-## 11b. 马帮订单处理 与 飞书订单登记（两个独立脚本）【2026-09-10 拆分】
-
-> **两个独立脚本**：`mabang-process`（马帮处理，零飞书依赖）与 `feishu-register`（飞书登记，零马帮处理逻辑）。日常先跑 A 再跑 B，即可保证登记的库存SKU 为匹配后的正确值。
-
-```bash
-# A. 马帮订单处理一体（零飞书依赖）：匹配商品→预报单生成→依次上传（自动发货）→轮询确认预报成功→物流交运
-python wb.py mabang-process --apply                       # 匹配/预报/上传/轮询等待/交运 + 末尾自动登记飞书（URL 读配置）
-                                                          # 轮询节奏：上传后 status=1 预扫描一次（建店铺映射）→ 每轮仅 status=3
-
-# B. 飞书登记（独立）：拉取马帮最近 500 条全状态订单，按订单编号去重只登记新增
-python wb.py feishu-register                               # dry-run → 加 --apply 写入（URL 读配置）
-
-# 补充（排查/幂等确认）
-python wb.py mabang-forecast --check                      #    四 tab 概览：待预报1/预报成功3/预报失败99/历史预报5
-python wb.py mabang-forecast --check --status 3 --pages 1  #    只看「预报成功」明细（揽货批次号/批次状态/重量/货代/创建人/回传号）
-python wb.py mabang-forecast --check --status 99          #    只看「预报失败」明细（有失败批次时核查用）
-
-# 补录历史订单（全部状态，指定日期/区间）
-python wb.py feishu-register --url "<表格地址>" --scope all --date 2026-09-05 --apply
-
-# 存量修复：清理「订单登记」表内重复订单编号（dry-run 默认，先看报告再 --apply）
-python wb.py feishu-register-dedup                      # 只读全表 → 报告重复编号/多余行 + 落 CSV，不删任何记录
-python wb.py feishu-register-dedup --apply              # 真删：每个订单编号保留表内最早一条，其余删除（≤100/批）
-python wb.py feishu-register-dedup --limit 500 --apply  # 限制单次最多删 500 行（分次推进）
+```powershell
+python run.py fetch --no-sync
+python run.py merge
 ```
 
-- ⚠ 口径（2026-09-10 拆分）：**`mabang-process` 与 `feishu-register` 完全独立**——前者只做马帮处理（匹配/预报/上传/交运，零飞书调用），后者只做飞书登记（orderalllist 最近 500 条全状态订单 + 待处理订单两路合并，订单编号去重只登新增；`--no-pending` 可关闭合并）。只处理 `shop_map` 内店铺（其他员工的马帮店铺如 子龙2/子龙 不在本环境处理，由其在自己环境运行）；**已取消订单（WB 门户 portal/fbs/orders/canceled 逐店查询）排除在登记/预报/上传/交运之外**（取消单不出现在马帮列表，属防御性过滤，逐店查询失败时降级跳过）；**价格表缺库存 SKU 的订单（NO_SKU）只登记/匹配、不进批次/上传/交运**，执行时逐单打印并导出 `data/logs/缺库存SKU订单_*.csv`，需人工处理。**同类口径（2026-10-19 新增）**：步骤① 更换库存SKU 失败的订单标 `REPLACE_FAIL`（备注「更换失败: 原因」，网络类异常——如 `Read timed out`——自动重试 1 次；`orderItemId` 数量异常 / 库存 SKU 未找到等确定性错误不重试），**同样只登记/匹配、不进批次/上传/交运**，并导出 `data/logs/更换失败订单_*.csv`。该排除**仅在 `mabang-process` 链路内生效**（步骤①把失败单ID 经 `args.replace_fail_order_ids` 传给步骤②），单独跑 `mabang-forecast` 不做该判定。
-- ⚠ 口径（2026-09-30 修正）：**上传 ≠ 预报成功**。上传后批次先留在「待预报」列表（行级 status=2 上传中），**只有出现在「预报成功(status=3)」列表才算完成**（旧逻辑按「离开待上传列表」负向推断，分不清成功/失败）。`mabang-process`/`mabang-forecast` 现轮询 `status=3`（兼容 `status=5` 历史归档）确认后才交运；**超时经 `status=99` 定性为「预报失败」的批次，其订单不交运（CSV 标记 `跳过-预报失败`）**，未完成批次标 `跳过-上传未完成`，两者飞书登记照旧；因批次列表无订单级明细，跳过粒度是**店铺级**（失败优先）。
-- 🔬 抓包实测补充（2026-09-30，`api/网络请求/马帮预报列表查询 待上传、上传中.har`）：① `uploadForecastBatch` 响应**只有** `{"success":true,"message":"批次已插入上传队列，请5-10分后查看预报结果"}` —— **无任务 id / 无进度字段**，故完成判定只能靠列表轮询；② 上传后 **≤0.3s 行级 `status` 即由 1 变 2（上传中）**；③ 「上传中」期间 `successNum` **恒为 0**（没有「部分完成」判据），成功后才 `successNum==total` 且 `handoverNumber` 回填；④ `getForecastConfig` 模板与批次无关，**上传前只取一次**（脚本已同步为循环外取一次，N 批省 N−1 次请求）；⑤ 四个统计（waitTotal/succesTotal/failTotal/historyTotal）为**全局值、不随 tab 变**，且 `waitTotal` 把 status=1（排队）与 status=2（上传中）一并计数；⑥ 轮询节奏已精简为「预扫描 status=1 一次 + 每轮仅 status=3 一次」，`status=5` 兜底限频（连续 3 轮未命中或过半超时各一次）。
-- 前置：`data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）为最新值；飞书鉴权走 `lark-cli` 用户身份。
-- 口径：只处理 shop_map 内店铺（马帮 子龙主2/子龙主2（1）/子龙主2（2）↔ 袁州1/2/3）；订单编号为飞书去重键，重复不登记；wb编号 = **下单店铺自己的码**（非映射表主店码）；库存SKU = **本地商品价格表「库存SKU」列（第 8 列）**，查不到一律留空（含只匹配未进预报/上传/交运流程的订单；不再回写马帮系统的匹配值，避免 `BCS-xxx-40-56` 这类非法值）；中文名一律以本地映射表为准（查不到留空但**仍登记**）。
-- ⚠ 去重集**必须全表分页读取**（`feishu_register.scan_order_ids` / `_record_list_all`，`--limit 2000 --offset` 按 manifest `has_more` 翻页）。**2026-10 事故**：旧实现只读 lark-cli ndjson 第一页（省略 `--limit` 时默认 2000 条、按插入序最早在前、不读 `has_more`），表记录数越过 2000 行（约 2026-10-01）后去重集被冻结在「最老 2000 行的 1991 个编号」，导致其后每次运行都把已登记订单判为「未登记」而重复写入（实测表内 6429 行仅 3496 个唯一订单编号、837 个编号重复、最多 `5923036047` 出现 15 次）。读取侧已修复，且 `feishu-register` 现在会打印「表内记录 N 行 / 唯一订单编号 M 个」并在发现重复时 `[警告]` 提示；**存量重复用 `wb.py feishu-register-dedup` 清理**（默认 dry-run，每组保留最早一条）。
-- ⚠ `feishu-register-dedup` 的删除**不可逆**（`+record-delete --yes`，飞书无回收站）：先跑默认 dry-run 核对数字并留存 `data/logs/飞书订单登记去重_*.csv`（完整保留/删除明细）再 `--apply`；命令天然幂等，删到一半失败直接重跑即可续删。
-- 每步产出 CSV 报告（`data/logs/马帮订单匹配_* / 马帮预报批次_* / 飞书订单登记_*.csv`）；某步失败即中止后续。
-  - ⚠ **2026-10-17 起报告名带 ASCII 回退**：部分运行环境会按文件名特征拦截含第三方系统关键词（实测 `马帮` / `飞书` / `库存SKU`）的写入（`PermissionError`）。`common.write_csv_preferred()` 会先用历史中文名，被拦则自动改写 ASCII 别名并打印 `[提示] 报告已用备用文件名写入`：`mabang_order_match_*`（订单匹配）、`mabang_forecast_batch_*`（预报批次）、`feishu_order_register_*`（飞书登记）、`feishu_order_register_dedup_*`（去重）、`feishu_vc_order_stats_*`（供应商代码统计）、`mabang_no_stock_sku_*`（缺库存SKU）、`mabang_replace_fail_*`（更换失败）。**报告失败不再中断订单主链路**（两者都失败仅告警、返回空路径），订单匹配/预报/交运/登记照常执行。
-- 飞书侧结构：「订单登记」表（明细，日期精确到分钟/店铺短名/中文名/**库存SKU**/wb编号/商品链接/订单量/下单日期公式字段）+「销量看板」仪表盘（实时聚合图表：每天×中文名柱状图、中文名与商品(链接)排行，手工改动也自动反映）。
-- 马帮库存登记：`python wb.py mabang-stock-register --apply` 全量重建「马帮库存登记表」（马帮全部库存SKU 的库存总量/状态/附件列「图」；⚠ 重建会**清空全部记录**，各日订单量列与「总新增订单量」一并被清空，需重跑 `mabang-stock-daily` 回填）；每日新订单量列（时间段管理）：`python wb.py mabang-stock-daily --begin 2026-09-08 --apply`（**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列、补建至 `--end` 的缺列；**`--end` 必须与 `--begin`/`--date` 同用，单独使用会报错退出**；不带参数则只建今天列、更新全部已有列、不删列。填充=有单写数量、**无单即清空（含残留旧值）**；同步更新「总新增订单量」列=**当前所有存活日期列之和**）。
-- 接口细节见 `api/BCS_API完整文档_核对版.md` 第八章。
+先确认 fetch 成功退出，再运行 merge。任一店铺拉取失败时，成功店铺已更新，失败店铺保留原快照；失败名单写入 `data/state/多店铺同步状态.json`，命令以非零状态退出。处理错误并重新成功拉取前，不继续合并，以免混用新旧快照。
 
-## 11c. 飞书「订单登记」按供应商代码统计单数（feishu-vc-stats，只读）
+`merge` 会依据有效快照刷新各店本地映射，再合并总表。有效的空快照也会将该店单店表重建为空，移除旧商品覆盖；历史归属池不因此删除。缺失或损坏的快照不当作空店铺处理，会报错中止。这里的单店表刷新仅修改本地文件，不触发 BCS 同步。
 
-> 用途：看「最近这几天哪个货（供应商代码）卖得最多」。**只读**读飞书表，不写回任何地方。
+## 改价与库存
 
-```bash
-python wb.py feishu-vc-stats                        # 近 7 天（含今天），全部店铺，按单数降序
-python wb.py feishu-vc-stats --days 14              # 近 14 天
-python wb.py feishu-vc-stats --date 2026-09-22      # 单天
-python wb.py feishu-vc-stats --begin 2026-09-17 --end 2026-09-23   # 指定区间
-python wb.py feishu-vc-stats --shops 9352,9356      # 只统计袁州1、袁州3（也可写短名 袁州1,袁州3）
-python wb.py feishu-vc-stats --days 7 --top 20      # 控制台只看前 20（CSV 仍写全量）
-python wb.py feishu-vc-stats --days 7 --by-prefix   # 换个视角：按 vendorCode 的 4 位前缀码聚合
+先看预览，确认后才执行相同范围的写入：
+
+```powershell
+python run.py price --shops 1001 --name "示例商品"
+python run.py price --shops 1001 --name "示例商品" --apply --yes
+python run.py stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
+python run.py stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 --apply
 ```
 
-- **口径**：**单数 = 登记记录条数**（一条记录 = 一单中的一个商品）；另附「件数」= `订单量` 列求和作参考。
-  同一 vendorCode 在不同店铺的 `wb编号`(nmId) 不同，但**不论哪家店都累加进同一条**（跨店合并），
-  「涉及店铺」列只是展示与过滤用。
-- **时间基准列** = `日期`（= 付款时间）；窗口为闭区间；`--days 7` 表示 `今天-6 ~ 今天`（含今天）。
-  `--end` 必须与 `--begin`/`--date` 同用（单独给会报错退出）；只给 `--begin` 按单天处理。
-- 输出：控制台「排名 | 供应商代码 | 商品中文名 | 单数 | 件数 | 涉及店铺」+ 按单数降序的**可复制逗号清单**；
-  CSV 落 `data/logs/飞书订单按供应商代码统计_*.csv`（列：排名/BCS编号/商品中文名/单数/件数/涉及店铺）。
-- ⚠ 「供应商代码」在飞书表里的列名是 **`BCS编号`**（表内没有叫「供应商代码」的列）。
-- 未命中原因会显式打印（`无日期` / `日期不在窗口` / `店铺被过滤`），`BCS编号` 为空的记录归入 `(无BCS编号)` 桶，**不会静默丢弃**。
-- 脚本内嵌调用（免 CLI）：
-  ```python
-  from wb_ops.services.order.feishu_vc_stats import vc_order_stats
-  r = vc_order_stats(days=7, shops=["9352"], by_prefix=False)   # 也支持 begin=/end=/date=
-  top = [(x["rank"], x["key"], x["orders"], x["cn"]) for x in r["rows"][:10]]
-  ```
+改价默认使用价格表「实际售价」向下取整，`--price` 可指定整数目标价；只改折扣可以使用 `--keep-price --discount`。库存默认 amount=0，执行归零需 `--yes`，不要把没有 --amount 的命令当作补库存。
 
-## 11d. WB FBS「配送中」清单商品统计（fbs-delivery，只读）
+`stock` 默认使用本地映射筛选供应商代码，并从本地商品快照解析规格 ID（`--resolve snapshot`）。库存归零直接将目标规格设为 0，不需要先联网读取当前库存，即使本地库存已为 0 也照常提交。缺少仓库确认或任一规格 ID 时阻止该商品，预览和执行均以非零状态报告；不通过自动全量联网查询补齐。仓库 ID 仍需逐店确认，更新商品快照使用独立的 fetch/merge 流程。
 
-> 用途：把 WB 卖家后台 **FBS「配送中」**下所有清单里的商品汇总起来，看「哪些商品要发货、各有多少」。
-> **只读**（不触发任何写操作），遍历各店拉取 → 过滤 → 按商品中文名统计 → 控制台汇总 + CSV。
+`price/stock` 默认走 WB；`price-bcs/stock-bcs` 是另选的 BCS 通道。WB 凭证失效时先手动抓包更新，不要让 AI 自动换通道提交同一批可能已被接受的操作。实时库存取数也须限定莫斯科：`stock --resolve live` 的底层规格读取可返回账号级多仓数据，不能把这些结果直接拼成全仓任务；无法保证读取和计划范围仅为莫斯科时，不使用该路径执行。
 
-```bash
-python wb.py fbs-delivery                      # 全部店铺、全部「配送中」清单，只统计「待发货(shipment)」商品
-python wb.py fbs-delivery --shops 9352         # 只看袁州1（也支持短名 袁州1；逗号分隔多店）
-python wb.py fbs-delivery --days 3             # 只统计近 3 天创建的清单（默认 0 = 不过滤时间）
-python wb.py fbs-delivery --begin 2026-10-01 --end 2026-10-08   # 指定清单创建时间区间（闭区间）
-python wb.py fbs-delivery --item-state all     # 不过滤商品状态（含已取消/已售出），看全貌
-python wb.py fbs-delivery --item-state shipment,expectedSorting   # 待发货 + 等待分拣（2026-10-17 实测状态码 inventory：cancel/sold/readyForPickup/sorted(已分拣)/expectedSorting(等待分拣)/shipment(待发货)）
-python wb.py fbs-delivery --supply-state onway,complete          # 只看指定状态的清单
-python wb.py fbs-delivery --include-canceled   # 在「待发货」基础上并入「已取消(cancel)」
-python wb.py fbs-delivery --top 20             # 控制台只看前 20 名中文名（CSV 仍写全量）
-python wb.py fbs-delivery --shops 9352 --limit 3 --no-cn   # 冒烟：每店只处理 3 个清单、不解析中文名
+部分大幅降价会被 WB 的隔离区规则限制；查看本次跳过和错误原因，不通过反复重跑绕过。明确需要审核新价格时，可单独预览/执行 `price-review`；用户明确要求整合审核时才使用支持它的 `--auto-review`。
+
+## 发布商品与跨店补齐
+
+```powershell
+python run.py publish 123456789 --shops 1001 --price 59 --dims "10*20*30/0.5" --stock 20
+python run.py create-cards 123456789 --shops 1001 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20
+python run.py publish --file "examples/publish.example.json" --shops 1001
+python run.py replicate --shops 1001 --name "示例商品" --limit 1
+python run.py import-publish "_scratch/foreign.xlsx" --shops 1001 --limit 1
 ```
 
-- **接口**：`GET portal/supplies/delivery`（清单列表，游标分页）→ 对每张清单再 `GET portal/supplies/{supplyID}/orders/delivery`（商品明细）。
-- **⚠ 关键口径**：商品明细接口返回该清单下**全部**订单（**含已取消 / 已售出**），所以**默认只保留 `shipment`（「待发货」）**。
-  商品级状态实测枚举：`shipment`(待发货) / `sold`(已售出) / `cancel`(已取消) / `readyForPickup`(到达收货点) / `reshipment`(等待重新发货) / `sorted`(分拣完成)。
-  清单级状态：`complete`(正在处理中) / `onway`(前往接待处途中) / `reshipment` / `sort`(分拣中)。
-- **时间基准** = 清单的 `createdAt`（UTC）；闭区间；不传 `--days/--date/--begin/--end` 即**不过滤**（拿当前全部配送中）。
-  `--end` 必须与 `--begin`/`--date` 同用（单独给会报错退出）。
-- **中文名**：由 vendorCode 反查本地映射真源（优先级 `vc_override` > `vc_known` > 前缀码兜底），
-  查不到归 `(中文名未知)` 桶并排在最后；`--no-cn` 可跳过解析（更快）。
-- **聚合口径**：商品数 = 明细行数；供应商代码数 = 去重 vendorCode；清单数 = 去重 supplyID。
-- **输出**：控制台「排名 | 商品中文名 | 供应商代码数 | 商品数 | 清单数 | 涉及店铺」+ 可复制的去重 vendorCode / nmId 行；
-  CSV 落 `data/logs/配送中商品明细_*.csv`（逐商品）与 `data/logs/配送中按中文名统计_*.csv`。
-- 脚本内嵌调用（免 CLI）：
-  ```python
-  from wb_ops.services.order.fbs_delivery import delivery_goods
-  r = delivery_goods(item_states="shipment", shops="9352")   # 也支持 days=/begin=/end=/date=
-  for row in r["by_cn"][:10]:
-      print(row["rank"], row["cn"], row["item_count"], row["shops"])
-  ```
+这些示例均为预览，需要真实提交时另外加 `--apply`。发布默认库存是 999；需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。
 
-## 11e. WB「订单动态」按商品中文名统计退货率（order-stats，只读）
+`publish` 使用批量发布协议，平台按前缀生成 VC，不保证透传任意完整自定义 VC；需要完整 VC 建卡语义时使用 `create-cards`。`replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码读取映射表，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
 
-> 用途：看**近一个月**各商品（按**中文名**）的下单量、退货量、退货率、完单口径退货率、未完结量。
-> **只读**（不触发任何写操作），逐店拉「订单动态」→ 按 created 精筛窗口 → vc→中文名 → 聚合 → **单个 xlsx 多 Sheet**。
+复制上架可分别限定源店与目标店，并按商品价格表的「最低售价」定价：
 
-```bash
-python wb.py order-stats                          # 近 30 天（含今天）、全店 → data/logs/订单动态统计_<ts>.xlsx
-python wb.py order-stats --shops 9352,9353        # 只统计指定店铺（也支持短名 袁州1）
-python wb.py order-stats --days 7                 # 近 7 天
-python wb.py order-stats --begin 2026-09-01 --end 2026-09-30   # 历史区间（闭区间）
-python wb.py order-stats --top 20 --no-detail     # 控制台只看前 20 名、不写明细 Sheet（快）
-python wb.py order-stats --out _scratch/os.xlsx   # 指定输出路径
+```powershell
+python run.py replicate --source-shops 1001,1002 --shops 1003 --price-source minimum --price-multiplier 10 --stock 999
 ```
 
-- **接口**：`POST seller-content .../content-analytics/api/v1/order-feed/orders`（body 带 `currentPeriod`，
-  游标 `data.pageInfo.cursor` 翻页，`limit=50`）。
-- **⚠ 关键口径**：接口 `currentPeriod` 实测按 **`order.updated`** 过滤（2026-10-27 实证：3 天窗口 65 行里
-  只有 7 行 `created` 在窗口内）⇒ 脚本把服务端结果只当**粗筛超集**，**再按 `created` 本地精筛**；
-  历史区间会把请求上界**自动放宽到今天**，避免「下单在窗口内、之后才变状态」的订单被服务端漏掉。
-- **订单数 = 明细行数（一行=一件）**，不按订单号去重（接口一行即一件商品；同一订单多件会占多行）。
-- **退货数** = `status ∈ {cancel, return, returnDefective}`；**未完结** = `status == created`；
-  退货率 = 退货数 / 订单数；完单口径退货率 = 退货数 / (订单数 − 未完结)，分母 ≤0 时单元格写 `-`。
-- **中文名**：vendorCode 反查本地映射真源（`vc_override` > `vc_known` > 前缀码兜底）；查不到归
-  `(中文名未知)` 桶并排最后。**库存SKU** 取 `data/商品价格表.xlsx`「库存SKU」列（按中文名）。
-- **未知状态不猜**：计入订单数，不进退货/未完结，控制台与 xlsx 元信息块都会显式列出。
-- **按供应商代码（VC）**：同一商品在 6 家店 **vendorCode 相同、nmId 不同** ⇒ 额外产出**一张跨店
-  `按供应商代码` Sheet**，口径与中文名表完全一致（订单数/退货数/退货率/完单口径退货率/未完结/涉及店铺/
-  库存SKU），多一列 `WB商品码` 把该 vc 在各店的全部 nmId 逗号列出（自动换行）。`--top` 同时截断控制台
-  两张表（xlsx 始终全量）；vc 为空的订单归 `(无供应商代码)` 桶并排最后。
-- **时区**：默认 `America/Los_Angeles`（对齐 WB 订单动态页，比北京时间晚约 15 小时）；`--timezone Asia/Shanghai` 可换。
-  「今天」的边界随之变化，控制台第一行会打印实际窗口。
-- **输出**：`汇总`（全店合计 + 合计行，按中文名）+ **`按供应商代码`**（跨店合并，同一 vc 各店 nmId 不同）
-  + 每店一个 Sheet（按中文名）+ `订单明细`（逐行：店铺/订单号/状态/下单时间/价格等）；
-  百分比为数值 + `0.00%` 格式（可排序/透视）。
-- 脚本内嵌调用（免 CLI）：
-  ```python
-  from wb_ops.services.order.order_stats import order_stats
-  from wb_ops.services.order.order_stats_xlsx import write_xlsx
-  r = order_stats(days=30, shops=["9352"])          # 也支持 begin=/end=/date=/timezone=
-  for row in r["by_cn"][:10]:
-      print(row["rank"], row["cn"], row["orders"], row["returns"], row["rate"], row["rate_done"])
-  for row in r["by_vc"][:10]:                       # 跨店按供应商代码（含该 vc 的全部 nmId）
-      print(row["rank"], row["vc"], row["orders"], row["returns"], row["rate"], row["nm_ids"])
-  path = write_xlsx(r)
-  ```
+示例默认预览，加 `--apply` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认1；`minimum` 必须匹配唯一的同中文名最低售价，不能回退到「实际售价」或整数价。金额按分四舍五入；库存默认999，显式0保留为0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，仅解析目标店莫斯科仓；任一目标仓缺失时阻止该商品组，提交后记录受理响应并结束。
 
-## 12. 买家提问查询 + AI 回复（前台 / 后台两种模式，二选一）
+## 尺寸、下架和清理
 
-### 查询（两种模式的基础，自动关联商品信息）
-```bash
-python wb.py questions                    # 查询未处理提问（自动带中文名/标题/品牌/颜色/价格/描述/特征）
-python wb.py questions --no-detail        # 跳过商品详情拉取（只中文名，快）
-python wb.py questions --reply "..." --question-id <id>   # 回复单条
+```powershell
+python run.py dimension --shops 1001 --name "示例商品"
+python run.py dimension --shops 1001 --vc "BCS-TEST-123456789" --dims "10*20*30/0.5"
+python run.py dims-check --shops 1001 --type all
+python run.py trash --shops 1001 --vc "BCS-TEST-123456789"
+python run.py banned --shops 1001 --limit 10
+python run.py clean --target draft --shops 1001 --limit 10
 ```
-- ✅ 成功：`[汇总] 未处理提问 N`；日志 `data/logs/买家提问_*.csv`。
 
-### 模式 A：前台 AI（WorkBuddy 自动化，每小时）
-- WorkBuddy 定时自动化每小时触发：查提问 → 读商品信息 → AI 编写俄语回复 → 调 `questions --reply` 提交。
-- 质量高（AI 理解上下文、可看商品信息），但每小时一次。
+- 自定义尺寸必须同时用 VC、中文名或前缀限定；不指定 --dims 时依据价格表包装列。
+- `trash --apply --yes` 从本地快照读取商品和全部规格 ID，先清莫斯科仓库存，再移回收站；无需先单独运行 stock，也不全量查询远端商品或库存。无法确认唯一可用的莫斯科仓库时阻止该店；商品 ID 或任一规格 ID 缺失时阻止该商品，不只清部分规格后下架。
+- 清库存失败或受理回执不完整时，受影响商品不会移回收站，其他正常商品继续；命令返回非零状态，日志记录被阻止原因。预览发现不完整计划也返回非零状态。收到清零受理回执后直接进入回收站提交，不进行写后查询验证。`trash-bcs` 同样遵守清库存前提，是独立 BCS 通道，不作为 WB 失败后的自动兜底。
+- `banned --apply` 会先要求输入确认，再提交被阻止商品到回收站；已确认授权范围的自动化可传 --yes。拒绝确认时不创建平台会话，提交后不重查列表。
+- `clean --target draft/basket/all --apply` 会实际清理，命令没有 --yes 参数。all 包含草稿和回收站，使用前确认两类数据都在用户授权范围。
+- `warehouse-clear` 针对成都仓库永久删除，不符合当前仅操作莫斯科仓的约定，当前不使用该命令；代码中存在该功能不表示获得操作授权。
 
-### 模式 B：后台 AI（常驻脚本 + LLM，1-2 分钟实时）
-```bash
-python wb.py questions-watch --once               # 跑一轮 dry-run 打草稿（先测试）
-python wb.py questions-watch --apply --interval 90  # 常驻监听（LLM 自动回复）
+这些操作不能仅凭“有 dry-run”就扩大范围或自动确认。
+
+## 折扣、促销和推广审计
+
+```powershell
+python run.py discount --shops 1001 --name "示例商品" --target 50
+python run.py discount --shops 1001 --threshold 55 --below 40 --target 50
+python run.py discount-bcs --shops 1001 --threshold 50 --target 50
+python run.py promo-apply --shops 1001
+python run.py price-review --shops 1001
+python run.py promo-goods --shops 1001
+python run.py promo-gap --shops 1001 --mode both --days 7
 ```
-- 需先在 `data/credentials.json` 配置 `ai` 字段（`base_url` / `model` / `api_key`，默认 DeepSeek；换商汤日日新等 OpenAI 兼容服务只需改这三个，见 CREDENTIALS.md）。
-- 无人值守、实时；记录已回复 id 防重复，日志 `data/logs/questions_watch_*.log`、明细 CSV。
-- ⚠ **二选一运行**：前台模式启用自动化（每小时）；后台模式跑 questions-watch（停自动化）。
 
-### AI 回复安全（必读）
-- 回复是**对买家公开发言**，务必措辞得当；内置提示词要求「基于商品信息作答、不编造、不确定的物流/售后引导联系客服」。
-- 后台模式建议先 `--once`（dry-run 打草稿）人工抽查 1-2 条，确认话术 OK 再 `--apply` 常驻。
+折扣、促销报名和价格审核需要 `--apply` 才提交；后三类查询/审计的结果位置以终端打印为准。折扣 threshold/below 是并集：`>55` 或 `<40`；--vc、--all、显式阈值的优先关系见帮助。
 
-## 12b. WB 平台投诉单查询（appeals，只读）
+`promo-gap` 依赖飞书订单登记、目标店快照和推广信息，按目标店合计销量与各店推广状态计算缺口/浪费。它只输出建议，不自动创建或关闭广告，不应把其他店的商品码直接用于本店写入。
 
-> 场景：WB 后台「投诉处理」里积压了未处理的投诉（多为「商品详情页中非法使用版权内容（图片、信息图等）」），需要在到期前批量拿到**涉及的商品编号（nmId）**再去做后续处理。
+## 订单履约与飞书
 
-```bash
-python wb.py appeals --days 5        # 未处理 + 剩余天数恰好=5 → 明细表 + nmId 行 + vendorCode 行 + CSV
-python wb.py appeals                 # 全部未处理投诉（列表按 id 倒序=临近到期优先）
-python wb.py appeals --shops 9353    # 只看指定店
-python wb.py appeals --no-cn         # 不解析中文名（供应商代码仍解析）
+```powershell
+python run.py orders --shops 1001 --days 1 --no-sync
+python run.py mabang-orders
+python run.py mabang-forecast --check
+python run.py mabang-process
+python run.py feishu-register
+python run.py feishu-register-dedup --limit 20
+python run.py mabang-stock-register
+python run.py mabang-stock-daily
 ```
-- ✅ 成功：每条打印 `[列表] #n id=… | 投诉方:… | 主题:… | 创建:… | 状态:等待回复(1) | 剩余:N天 | nmId:… | 供应商代码:…`；末尾 `[汇总]` + 一行**去重 nmId**、一行**去重供应商代码（vendorCode）**（均英文逗号分隔、可直接复制）；明细落 `data/logs/投诉单_*.csv`（含「供应商代码」「解析来源」列）。
-- 📌 口径：**未处理 = `status_id=1`（等待回复）**；`--days N` 是**剩余天数恰好等于 N**（不是「N 天内」）；`--limit N` 限制每店列表拉取条数，命令会提示结果可能不完整。
-- 📌 **供应商代码解析只用本地真源**：① 本店在架快照 `nmId→vendorCode` → ② 映射总表的 nmId 字段兜底；两处都没有的商品直接标注「**本地真源未收录**」并在末尾列出 nmId 清单（**不做联网核实**）。
-- 📌 商品编号（nmId）只在投诉详情里下发（`brands[].products[].nmid`，一条投诉可能挂多个商品），故命令会逐条拉详情 → 平台可能据此把投诉标记为「已读」（仅浏览副作用，不改变状态、不关闭投诉）。
-- ✅ 中文名列：由 vc 走映射池取商品中文名，解析不到即为空（不影响编号/代码输出）。
-- ⚠ 纯只读，无 `--apply`：不写 BCS、不改价格/库存/商品。cookie 失效（403/登录页）→ `python wb.py cookies-update <抓包md>`。
 
+`orders` 不加 --no-sync 时会先同步订单。其 days 和其他命令的 days 不一定是同一日期口径。
 
+`mabang-process --apply` 默认处理 `mabang.shop_map` 配置店铺的全部新增待处理订单，不限日期。顺序为库存 SKU 匹配、预报上传、成功状态轮询、交运；配置飞书地址时再登记飞书。`mabang-orders`、`mabang-forecast` 及飞书登记合并的待处理单也使用相同日期语义：`--days 0`（默认）不发送起止日期限制；明确要处理最近 N 天时传正数，例如 `--days 7`。仍只处理配置店铺与新增待处理状态，不包含其他店铺或历史已完成订单。列表完整翻页，达到安全上限或重复分页时报错，不用部分结果继续执行。更换失败、缺 SKU、预报失败或未完成的订单会按流程阻断后续履约，依据本次日志处理，不删除状态后盲目重跑。
 
-## 12c. AI 售后客服（买家聊天自动回复，chat-watch / chats）
+预报状态等待是交运前必要步骤，不能当成写后验证而跳过。`--check` 只是查看预报批次，`mabang-forecast --apply` 才执行整条预报/交运链。
 
-> 场景：WB 后台「与买家沟通(chat-with-clients)」里的买家聊天（多含退货/换货/退款/投诉/物流等售后诉求）。用 AI 自动回复，定位 = **不暴露 AI、软性拒绝退货换货、其余问题模糊拖延（踢皮球）**。
+`feishu-register --apply` 按订单编号去重增量登记，latest 模式合并最近订单和待处理订单。历史补录可明确指定：
 
-```bash
-python wb.py chats --shops 9352                       # 只读：列会话（最新消息 / 待回复 / nmId / 供应商代码 / 中文名）
-python wb.py chats --shops 9352 --chat-id <uuid> --history 10   # 看指定会话最近 10 条消息历史
-python wb.py chat-watch --once --shops 9352 --since-hours 900   # 前台AI跑一轮（展示买家消息+商品信息，不发送）
-python wb.py chat-watch --apply --interval 90                   # 后台AI常驻：LLM 生成俄语回复并自动发送
+```powershell
+python run.py feishu-register --scope all --date 2026-10-01
 ```
-- ✅ 日志：前台 `data/logs/chat_watch_front_*.log`；后台 `data/logs/chat_watch_*.csv`（时间/店铺/会话ID/nmId/买家消息/AI回复/结果）；只读查询落 `data/logs/买家聊天_*.csv`。
-- 📌 **触发口径**：只处理「**最新一条来自买家**」的会话消息，并叠加**时间窗**（`--since-hours`，默认 **72 小时**；0=不限）。⚠ **平台未读标记不可用**——实测所有会话 `unreadCount` 恒为 0、unread 接口 `messageCount=0`，故不以「未读」为闸门；用「最后一条来自买家 + eventID 去重 + 时间窗」三件套。
-- 📌 **去重**：键 = `店铺ID|会话ID` → 最新处理的买家消息 `eventID`；前台记 `data/state/chat_front_shown.json`，后台记 `data/state/chat_replied.json`（**仅 `--apply` 且发送成功才写**）。同一会话同一条消息不会重复回复。
-- 📌 **商品信息**：由消息内 `goodCard.nmID` 经本地真源反查供应商代码 → 中文名，再拉 basket `card.json`（标题/颜色/价格/描述/特征）拼进提示词（与 `questions` 同款）。
-- ⚠ **公开发言**：先 `--once`（前台展示 / 后台 dry-run）人工抽查话术，确认 OK 再 `--apply` 常驻。`chat-watch` 复用 `credentials.json` 的 `ai` 配置块（无需新增配置）；提示词内置在代码 `wb_ops/services/support/chat_prompts.py`。
-- ⚠ 消息接口走 `seller-chat.wildberries.ru` 域，与 `questions`/`appeals` 同用 WB cookie 三件套；cookie 失效同 `python wb.py cookies-update <抓包md>`。
 
-## 13. 每日自动运行（仅当已主动创建计划任务）
+用户确认后再加 --apply。去重命令只清已有重复记录，库存全量登记则会清空并重建库存表；都不能当作每天的无害初始化。`mabang-stock-daily` 默认补今天和更新现有日期列，显式 --begin/--date 会进入可删除旧日期列的区间模式，详见 [数据契约](DATA.md)。
 
-> ⚠ **默认不创建计划任务**。本节仅在你自己主动运行过 `wb.py schedule`（见第 1 节）之后才生效；未创建则一切手动执行。
+## 查询报表与客服
 
-| 时间 | 自动动作 |
-|---|---|
-| 09:00 | `wb.py daily morning` = 报名 + 改价（含价格审核） |
-| 11/15/19 点 | `wb.py daily check` = 只改价（含价格审核） |
+```powershell
+python run.py feishu-vc-stats --days 7
+python run.py fbs-delivery --shops 1001 --days 7
+python run.py order-stats --shops 1001 --days 30
+python run.py appeals --shops 1001 --days-max 5
+python run.py ratings --shops 1001 --one-star
+python run.py questions --shops 1001 --no-detail
+python run.py chats --shops 1001 --limit 10 --no-detail
+```
 
-> ⚠ **价格审核是改折扣后的必备环节**：无论计划任务还是手动跑 `daily morning/check`，`discount --apply` 之后都应补跑一次 `python wb.py price-review --apply`（隔离区商品不「应用新价格」则新折扣不生效，见第 10 节）。
+报告一般写入 data/logs，部分命令支持 --out。`order-stats` 默认时区为 America/Los_Angeles，统计窗口按该时区解释，不要直接当成本机当天；导出还区分订单创建时间/更新时间的口径。
 
-- 查看结果：`data/logs/daily_YYYYMMDD.log`（主日志）+ 各 CSV 明细。
-- 手动触发（等价于计划任务）：`python wb.py daily morning` 或 `python wb.py daily check`。
-- 已建任务时手动触发：`schtasks /Run /TN WB_Daily_Morning`。
+提问回复先确定店铺和提问 ID：
 
-## 14. 维护原则
+```powershell
+python run.py questions --shops 1001 --question-id "QUESTION_ID" --reply "回复内容"
+python run.py questions --shops 1001 --question-id "QUESTION_ID" --reply "回复内容" --apply
+```
 
-- **只维护**：`data/商品价格表.xlsx`（映射表由 merge 自动更新）。
-- **不要手动改**：`data/价格映射表.xlsx`（永远用 merge 重建）。
-- **审核文件用完即弃**：合并后归档。
-- **新增或修改功能时无需进行全量测试**：只测新增或修改的功能 `python tests/run_tests.py --cmd <命令>` 或 `python tests/run_tests.py`（严禁盲目跑全量测试）。详见 [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) 第七节与 [REUSE_GUIDE.md](REUSE_GUIDE.md) 第六节。
-- **日志与产物维护**：`data/logs/ops_result.csv`（写操作明细）**按月自动归档** —— 写操作执行前若发现文件属于上个月、或当月体积 >50MB，会自动移入 `data/logs/archive/ops_result_YYYY-MM[-partN].csv`（只移动不删除，可直接用 Excel 打开）；`data/logs/` 下的其它 CSV/日志（如 `尺寸修改_*.csv`、`daily_*.log`）可自行按日期清理，建议保留最近 30 天 + `archive/`。新增 `/logs/archive/` 目录无需维护。
-- **技能（Skill）位置**：唯一份在**用户级目录** `~/.workbuddy/skills/`（如 `wb-dimension-align`，脚本在其 `scripts/` 下）；仓库内**不再保留镜像副本**，避免两份漂移（历史 `data/skill/` 已删除，`data/wb-dimension-align.7z` 为旧归档，可自行清理）。
-- **加列/改结构用 Excel**，避免 openpyxl 重存破坏商品价格表公式。
-- **仓库默认莫斯科**：改库存/下架清库存/回收站归零/上架默认只操作「莫斯科仓库」，**成都仓库默认不操作**（成都用 `wb.py remote-wh` 单独处理）；切换默认仓库改 `config.py` 的 `DEFAULT_WAREHOUSE_NAME`。
+第一条预览，第二条发送。批量回复还需 --reply-all 与 --yes；不能因一条提问授权而回复所有店铺全部提问。
 
-## 15. AI 执行手册（拿给 AI 就能照做）
+```powershell
+python run.py questions-watch --shops 1001 --once
+python run.py questions-watch --shops 1001 --mode back --once
+python run.py chat-watch --shops 1001 --mode back --once
+python run.py ai-test --qa "examples/ai_test_qa.example.json"
+```
 
-> 若你是 AI 被要求操作本系统，按下面顺序执行，每步验证输出再继续：
+监听默认 front，只展示并记录已展示状态；back 会调用 LLM 生成草稿，仍需 --apply 才自动提交/发送。--apply 也会切换到后台模式。不加 --once 会持续轮询；停止用 Ctrl+C。`chat-watch` 默认只处理最近 72 小时，--since-hours 0 会扩大到历史消息，不作为普通补跑参数。
 
-1. `wb.py shops` → 店铺全部正常。
-2. `ls data/logs/daily_*.log` → 看最近一次结果。
-3. 要做什么就查什么（改价→`price`、折扣→`discount`、报名→`promo-apply`、清理→`clean`），**一律先 dry-run**（不加 `--apply`），确认清单再 `--apply`。
-4. **写操作后执行完毕即结束，严禁擅自执行 fetch、merge 或自写脚本做写后验证**（写后验证依赖同步，不同步拉取的快照是旧数据，而全量同步极慢且极易触发限流风控；接口成功返回即代表生效）。
-5. **开发/修改代码后测试铁律**：新增或者修改功能时，**无需进行全量测试**，只需要测新增或者修改的功能（使用 `python tests/run_tests.py --cmd <命令>` 或 `python tests/run_tests.py`），**严禁跑全量测试**。
-6. 遇 401/403 → 读 [CREDENTIALS.md](CREDENTIALS.md)；遇其他异常 → 看 `data/logs/`，不重复盲跑。
+`ai-test` 会联网调用 LLM 并写对照报告，不向买家发送；不要与 `scripts/check.py` 的离线测试混淆。
+
+## 每日任务与 Windows 计划任务
+
+```powershell
+python run.py daily morning
+python run.py daily check
+python run.py schedule
+```
+
+morning = 促销报名 + 改折扣，check = 只改折扣。这里的“check”是历史任务名称，并非只读检查；`daily check --apply` 会写平台。daily 预览只打印步骤，用户授权后可以使用：
+
+```powershell
+python run.py daily morning --shops 1001 --apply
+python run.py schedule --apply
+python run.py schedule --remove --apply --yes
+```
+
+schedule 注册 SellerOps_Morning（09:00）及 SellerOps_Check11/15/19（11:00、15:00、19:00），按运行电脑本地时间执行；自动任务自身包含 --apply，默认覆盖相应步骤的全部可用店铺。当前 schedule 不提供 --shops，所以只运行指定店铺时，应使用显式 scoped 的 daily 命令或由维护者设计任务，不能假设预览里的范围会自动继承。
+
+注册时固定当前解释器、代码路径和数据路径；移动目录或换解释器后需重新注册，并清理不再使用的任务以免重复执行。daily 每步最多等待 1 小时，某步非零退出会停止后续步骤；日志在 data/logs/daily_日期.log。

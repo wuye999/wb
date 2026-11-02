@@ -1,362 +1,1093 @@
-# wb_ops · 调用文档（CLI.md）
+# 命令参考
 
-> 统一入口：仓库根目录 `python wb.py <子命令>`（等价 `python -m wb_ops <子命令>`）。
-> 所有命令在**仓库根目录**下执行；`python` 指你的 venv Python（作者示例：`C:\Users\madokka\.workbuddy\binaries\python\envs\default\Scripts\python.exe`，**换电脑请替换成你自己的**，勿用系统 python）。
-> ⚠ 下文示例中的店铺 ID（如 9352、9356）、`--shops` 值均为**作者店铺示例**，换成你自己的店铺 ID（`wb.py shops` 可查）。
+由 `python scripts/generate_cli_docs.py` 从实际参数定义生成。
 
-## 一、通用约定
+使用方法见 [操作流程](USAGE.md)，配置见 [CONFIGURATION](CONFIGURATION.md)，AI 边界见 [AI_GUIDE](AI_GUIDE.md)。
 
-- **退出码**：`0` 正常（含 dry-run / 违规跳过）｜`1` 参数/环境错误｜`130` 中断。
-- **dry-run 默认**：所有写操作（改价/库存/下架/报名/折扣/清理）不加 `--apply` 只打印清单，不调写接口。
-- **不可逆确认**：`trash`（含 `trash-wb`/`trash-bcs`）、`stock --amount 0`、`banned --apply`（移回收站）执行时需 `--yes`（或交互输入 y）。
-- **严禁擅自写后验证与频繁同步（默认关闭，执行即结束）**：
-  - **核心机理**：写后验证必须依赖 BCS 全量同步，若不同步拉取的快照只是修改前的旧数据；而 BCS 全量同步耗时极长（~40-50s/店），频繁全量同步极易引发平台接口风控与限流封禁。
-  - **规则铁律**：**所有写操作（改价 price、改库存 stock、下架 trash、改折扣 discount、清理 clean、上架 replicate/import-shelve、改尺寸 dimension）默认绝不执行 BCS 同步、绝不执行写后验证、绝不自动合并映射表**。平台写接口返回成功即代表生效，命令执行完成打印提示后**直接结束**。
-  - **对 AI 的硬性要求**：AI 在执行写操作后，**严禁自行触发 `fetch`、`merge` 或编写临时脚本去查询接口验证修改结果**！日常高频业务无需同步；只有极少数全局大盘点或用户显式要求时才由人工执行。
-  - 例外（轻量复核）：`banned` 的 WB 原生复核（走 WB 原生 count，快且不做慢的 BCS 同步）与 `discount-scan` 的同接口回验，默认保留。
-- **仓库默认莫斯科**：改库存 / 下架清库存 / 回收站归零 / 上架等所有仓库操作**默认只操作「莫斯科仓库」**（`config.DEFAULT_WAREHOUSE_NAME`，按仓库 name 匹配），**成都仓库默认不操作**。成都仓库（国内仓）需单独用 `wb.py remote-wh` 命令处理；切换默认仓库改 `config.py` 的 `DEFAULT_WAREHOUSE_NAME`。
-- **仓库 ID 来源（2026-10-29 起）**：全部由 **WB 原生** `GET .../api/v3/portal/offices/stores/short` 解析（`services/replicate/warehouse.py:resolve_warehouse`：莫斯科仓 → 俄罗斯地区仓 → 无），**不再走 BCS**。因该接口需要 WB 会话，`stock`/`trash`/`replicate`/`shelve` 等命令在**该店 WB cookie 失效时会报错并跳过该店**（不再静默降级）。
+源码运行时将下方 usage 的 `sellerops` 换成 `python run.py`。全局 `--data-dir` 放在子命令之前。
 
-## 二、子命令全表
+远端业务写入显式加 `--apply`；部分命令另需 `--yes`，具体以实际参数及操作流程为准。
+本地映射、凭证导入等命令会直接写本地数据。dry-run 不等于离线；写命令结束后不追加验证或同步。
 
-### 数据准备 / 映射表维护
+当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。
+当前 WB 凭证使用人工登录、手动抓包并填写/导入；Playwright 尚未启动，`cookie-refresh-wb` 保留但未启用。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 
-| 子命令 | 参数 | 用途 | 产物 |
-|---|---|---|---|
-| `shops` | 无 | 打印账号店铺列表 | 控制台 |
-| `fetch` | `--shop-id N`（默认全部）/ `--no-sync` | 同步+拉取商品快照；默认先并发同步全部店铺（~1.5 分钟） | `data/products/shop{id}_products_all.json` |
-| `mapping` | `--legacy`（仅主店候选） | 统一核对工作台（全部活跃店铺并集一页两区） | `data/workbench/价格映射核对工作台.html` |
-| `mapping-import` | `<核对结果.json>` | 导入核对 → 生成映射表（旧格式单店初建） | `data/价格映射表.xlsx` |
-| `mapping-check` | `--tol N`（默认 5） | 映射表核查工作台（带图，可疑项标记） | `data/workbench/映射表核查工作台.html` |
-| `mismatch-check` | `--cn` / `--begin` / `--end` / `--days` | 货不对板筛查工作台（看图勾选，导出 vc 下架）；`--begin`/`--end`/`--days` 按映射表创建时间（上架/建立时间）时间段筛选，如只审昨天+今天上架用 `--days 2`（`--days 1`=仅今天） | `data/workbench/货不对板筛查工作台.html` |
-| `review` | 无 | 其余 4 店新商品待审核（前缀命中自动补录） | `data/workbench/多店铺待审核.html` |
-| `merge` | `[审核.json]`（可选） | 增量合并：自动同步刷新活跃店铺单店表并做 Outer Join 聚合成全景总表 | `data/shops/shop_*.xlsx` + `data/价格映射表.xlsx` |
-| `shops-mapping` | `--shop-id N` / `--force` | 刷新或生成指定店铺（或全部活跃店铺）的独立映射表 | `data/shops/shop_{id}_{name}.xlsx` |
-| `mapping-rename` | `--vc VC --cn "新中文名"` / `--file 纠偏.json` | 纠偏/修改商品中文名：**同时写入纠偏池与已知池两层**（`vc_override.json` + `vc_known.json`）并级联同步全部店铺单表与聚合总表 | `data/state/vc_override.json` + `data/state/vc_known.json` + 全部单店表 + `data/价格映射表.xlsx` |
+共 53 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
 
-### 一键操作（ops）
+| 命令 | 用途 | 实现入口 |
+| --- | --- | --- |
+| `shops` | 账号店铺列表 | [sellerops.integrations.bcs.client:print_shops](../src/sellerops/integrations/bcs/client.py) |
+| `fetch` | 拉取店铺商品数据（自动先同步 WB） | [sellerops.cli.catalog_handlers:run_fetch](../src/sellerops/cli/catalog_handlers.py) |
+| `mapping` | 生成统一核对工作台（全部活跃店铺并集，一页两区） | [sellerops.cli.catalog_handlers:run_mapping](../src/sellerops/cli/catalog_handlers.py) |
+| `mapping-import` | 导入核对结果 → 生成映射表（旧格式） | [sellerops.cli.catalog_handlers:run_mapping_import](../src/sellerops/cli/catalog_handlers.py) |
+| `mapping-check` | 映射表核查工作台（带图，核对匹配是否有误） | [sellerops.cli.catalog_handlers:run_mapping_check](../src/sellerops/cli/catalog_handlers.py) |
+| `mismatch-check` | 货不对板筛查工作台（看图勾选，导出 vc 下架） | [sellerops.cli.catalog_handlers:run_mismatch_check](../src/sellerops/cli/catalog_handlers.py) |
+| `review` | 多店铺待审核工作台 | [sellerops.cli.catalog_handlers:run_review](../src/sellerops/cli/catalog_handlers.py) |
+| `merge` | 增量合并审核 → 映射表（file 可选） | [sellerops.cli.catalog_handlers:run_merge](../src/sellerops/cli/catalog_handlers.py) |
+| `mapping-rename` | 纠偏/修改商品中文名（自动级联更新全部店铺单表与聚合总表） | [sellerops.cli.catalog_handlers:run_mapping_rename](../src/sellerops/cli/catalog_handlers.py) |
+| `shops-mapping` | 刷新/生成各店铺独立映射表（data/shops/shop_*.xlsx） | [sellerops.cli.catalog_handlers:run_shops_mapping](../src/sellerops/cli/catalog_handlers.py) |
+| `price` | 改价/改折扣（默认 WB 原生 dp-api 批量，自动确认降价/隔离区弹窗；dry-run 默认） | [sellerops.features.listings.prices:run](../src/sellerops/features/listings/prices.py) |
+| `price-bcs` | [备选] 改价走 BCS 接口（price/batch，WB 原生不可用时的兜底） | [sellerops.features.listings.operations:run (price)](../src/sellerops/features/listings/operations.py) |
+| `stock` | 改库存（默认 WB 原生在线接口；dry-run 默认，归零须 --yes） | [sellerops.features.listings.stocks:run](../src/sellerops/features/listings/stocks.py) |
+| `stock-bcs` | [备选] 改库存走 BCS 接口（stock/batchSetByChrtIdsBatch，WB 原生不可用时的兜底） | [sellerops.features.listings.operations:run (stock)](../src/sellerops/features/listings/operations.py) |
+| `trash` | 下架（默认 WB 原生 moveNmsToTrash 移回收站；先清库存；不可逆） | [sellerops.features.listings.operations:run (trash, wb)](../src/sellerops/features/listings/operations.py) |
+| `trash-bcs` | [旧通道] 移回收站走 BCS 接口（clean/removeToTrash）；仅供排查，**不作兜底**（BCS 不可靠） | [sellerops.features.listings.operations:run (trash, bcs)](../src/sellerops/features/listings/operations.py) |
+| `replicate` | 跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认） | [sellerops.features.listings.replicate:run](../src/sellerops/features/listings/replicate.py) |
+| `import-publish` | 他人映射表导入上架：他人有我方无的商品（按真实 WB商品码 匹配）上架到我的店铺 | [sellerops.features.listings.import_publish:run](../src/sellerops/features/listings/import_publish.py) |
+| `dimension` | 批量修改尺寸（按价格表或 --dims 自定义，dry-run 默认，--apply 执行） | [sellerops.features.listings.dimension:run](../src/sellerops/features/listings/dimension.py) |
+| `dims-check` | 查询 WB 包装尺寸/重量偏差待验证商品（只读） | [sellerops.features.listings.dims_check:run](../src/sellerops/features/listings/dims_check.py) |
+| `banned` | 查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站） | [sellerops.features.listings.banned:run](../src/sellerops/features/listings/banned.py) |
+| `clean` | 清理草稿箱/回收站 | [sellerops.features.listings.clean:run](../src/sellerops/features/listings/clean.py) |
+| `warehouse-clear` | 成都仓库商品永久删除（当前仅操作莫斯科，不使用此命令） | [sellerops.features.listings.warehouse_clear:run](../src/sellerops/features/listings/warehouse_clear.py) |
+| `publish` | 批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺） | [sellerops.features.listings.bulk_publish:run](../src/sellerops/features/listings/bulk_publish.py) |
+| `create-cards` | 建卡发布上架：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡） | [sellerops.features.listings.card_publish:run](../src/sellerops/features/listings/card_publish.py) |
+| `promo-apply` | 促销报名（cookie 会话，applyAll） | [sellerops.features.pricing.promo:run](../src/sellerops/features/pricing/promo.py) |
+| `promo-goods` | 查询 WB 广告推广中被推广的商品（中文名/供应商代码/WB商品码，只读） | [sellerops.features.pricing.adverts:run](../src/sellerops/features/pricing/adverts.py) |
+| `promo-gap` | 只读：推广 × 销量双向错配审计（gap=该推没推 / waste=在推但没销量该关） | [sellerops.features.pricing.promo_gap:run](../src/sellerops/features/pricing/promo_gap.py) |
+| `discount` | 折扣改价（WB 原生批量，从高到低查询，支持 --name/--vc/--shops 灵活筛选，默认不做写后验证） | [sellerops.features.pricing.discounts:run_cli](../src/sellerops/features/pricing/discounts.py) |
+| `discount-bcs` | BCS 通道全量改折扣（较慢，按需手动调用） | [sellerops.features.pricing.discount_bcs:run](../src/sellerops/features/pricing/discount_bcs.py) |
+| `price-review` | 价格审核：查看并应用新价格（降价 30-49.9%% 进审查的商品） | [sellerops.features.pricing.price_review:run](../src/sellerops/features/pricing/price_review.py) |
+| `orders` | 订单查询（自动同步 + 查询指定日期区间） | [sellerops.features.orders.orders:run](../src/sellerops/features/orders/orders.py) |
+| `mabang-orders` | 马帮待处理订单 SKU 匹配核对/更换（VC→映射表中文名→价格表库存SKU） | [sellerops.features.orders.matching:run](../src/sellerops/features/orders/matching.py) |
+| `mabang-forecast` | 马帮预报批次：已匹配商品订单生成预报批次并上传（dry-run 默认；--check 查批次状态） | [sellerops.features.orders.forecast:run_forecast](../src/sellerops/features/orders/forecast.py) |
+| `feishu-register` | 马帮订单登记到飞书多维表格（按订单编号去重，dry-run 默认） | [sellerops.features.orders.feishu_register:run](../src/sellerops/features/orders/feishu_register.py) |
+| `feishu-register-dedup` | 存量修复：「订单登记」表内重复订单编号清理（按订单编号分组，每组保留表内最早一条、其余删除；dry-run 默认） | [sellerops.features.orders.feishu_register_dedup:run](../src/sellerops/features/orders/feishu_register_dedup.py) |
+| `mabang-stock-register` | 拉取马帮全部库存 SKU → 全量重建飞书「马帮库存登记表」（含附件列「图」） | [sellerops.features.orders.mabang_stock:run](../src/sellerops/features/orders/mabang_stock.py) |
+| `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认只建今天列+更新全部已有日期列；--begin/--date 任一显式给出即进入区间模式（删早于该日的旧列+补建区间缺列，--end 需同用） | [sellerops.features.orders.mabang_stock_daily:run_daily](../src/sellerops/features/orders/mabang_stock_daily.py) |
+| `feishu-vc-stats` | 只读：飞书「订单登记」按供应商代码(BCS编号)统计单数并降序（跨店合并；支持店铺/日期过滤） | [sellerops.features.orders.feishu_vc_stats:run](../src/sellerops/features/orders/feishu_vc_stats.py) |
+| `fbs-delivery` | 只读：WB FBS「配送中」清单及其全部商品采集+统计（按清单 createdAt 时段、商品状态默认 shipment=待发货；控制台汇总 + CSV 明细） | [sellerops.features.orders.fbs_delivery:run](../src/sellerops/features/orders/fbs_delivery.py) |
+| `order-stats` | 只读：WB「订单动态」近一月订单按商品中文名统计（订单数/退货数/退货率/完单口径退货率/未完结）→ xlsx 多 Sheet（汇总 + 按供应商代码 + 每店 + 订单明细） | [sellerops.features.orders.order_stats:run](../src/sellerops/features/orders/order_stats.py) |
+| `mabang-process` | 马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运→飞书登记（登记含只匹配未进预报流程的订单） | [sellerops.features.orders.mabang_process:run](../src/sellerops/features/orders/mabang_process.py) |
+| `questions` | 买家未处理提问查询与回复 | [sellerops.features.support.questions:run](../src/sellerops/features/support/questions.py) |
+| `questions-watch` | 买家提问实时监听（front=前台AI打印提问/商品信息+手动回复，back=后台AI LLM 自动回复） | [sellerops.features.support.questions_watch:run](../src/sellerops/features/support/questions_watch.py) |
+| `chat-watch` | AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=后台AI自动回复；默认只展示） | [sellerops.features.support.chat_watch:run](../src/sellerops/features/support/chat_watch.py) |
+| `chats` | 查询 WB 买家聊天会话与消息历史（只读，用于验证/排障） | [sellerops.features.support.chat_inspect:run](../src/sellerops/features/support/chat_inspect.py) |
+| `appeals` | 查询 WB 平台投诉单（只读；未处理/剩余天数筛选，输出去重商品编号与供应商代码） | [sellerops.features.support.complaints:run](../src/sellerops/features/support/complaints.py) |
+| `ratings` | 查询商品链接评分与评价情况（只读；支持按评分/店铺/1星评论筛选，导出包含价格表数据的报表） | [sellerops.features.support.ratings:run](../src/sellerops/features/support/ratings.py) |
+| `ai-test` | 使用本地问答集调用 LLM 对照生成回复（会联网） | [sellerops.features.support.ai_reply_test:run](../src/sellerops/features/support/ai_reply_test.py) |
+| `cookies-update` | 从抓包 md 刷新凭证 | [sellerops.integrations.sessions.capture:run_cookies_update](../src/sellerops/integrations/sessions/capture.py) |
+| `cookie-refresh-wb` | Playwright 刷新 WB 会话（当前未启用，凭证手动抓包更新） | [sellerops.integrations.sessions.browser:run_cookie_refresh_wb](../src/sellerops/integrations/sessions/browser.py) |
+| `daily` | 每日任务（morning=报名+改价 / check=只改价） | [sellerops.automation.daily:run_daily_cmd](../src/sellerops/automation/daily.py) |
+| `schedule` | 创建/删除 Windows 计划任务（默认预览，--apply 执行） | [sellerops.automation.schedule:run](../src/sellerops/automation/schedule.py) |
 
-| 子命令 | 用途 | 操作参数 |
-|---|---|---|
-| `price` | 改价/改折扣（**默认 WB 原生 dp-api 批量**，2026-09-24 起；预检降价/隔离区弹窗自动确认提交；dry-run 默认，归零式大降不拦截需人工确认不在本命令） | `--price N` / `--discount N` / `--club-discount N`（WB 原生通道暂不支持，警告并忽略）/ `--keep-price` / `--auto-review` / `--chunk N`（默认 100，≤300）/ `--interval S` |
-| `price-wb` | [别名] 与 `price` 相同（WB 原生 dp-api 批量，显式点名通道） | 同 `price` |
-| `price-bcs` | [备选] 改价走 BCS 接口（`price/batch`，条目带 price+discount+clubDiscount；WB 原生不可用或需要 clubDiscount 时的兜底） | 同 `price` 原参数 |
-| `stock` | 改库存（**默认 WB 原生在线接口**，2026-09-24 起；dry-run 默认，归零须 --yes） | `--amount N`（默认 0）/ `--chunk N`（默认 500，≤1000）/ `--interval S` / `--max-pages N` / `--resolve snapshot\|live` |
-| `stock-wb` | [别名] 与 `stock` 相同（WB 原生在线接口，显式点名通道） | 同 `stock` |
-| `stock-bcs` | [备选] 改库存走 BCS 接口（`stock/batchSetByChrtIdsBatch`，WB 原生不可用时的兜底） | `--amount N`（默认 0） |
-| `trash` | 下架（不可逆；先清库存[WB 原生 portal stocks]→ 移回收站[**默认 WB 原生 `moveNmsToTrash`**]） | 筛选 + `--apply`/`--yes`；`--chunk`（默认 300，≤300）/`--interval`（默认 0.3） |
-| `trash-wb` | [别名] 与 `trash` 相同（WB 原生 `moveNmsToTrash`，显式点名通道） | 同上 |
-| `trash-bcs` | [旧通道] 移回收站走 BCS `clean/removeToTrash`；**仅供排查，不作兜底**（BCS 有 19s 限流窗口、成功率不可靠）。WB 通道报错时应修凭证后重跑 `trash` | 同上 |
-| `dimension` | 批量改尺寸：默认读取商品价格表「尺寸」列（格式 `长*宽*高/毛重`），按中文名把**所有店铺**中对应商品的包装尺寸/毛重批量设为价格表数值（数值原样透传；逐店取该店快照行 nmId，同一 vc 各店 nmId 不同）；也可用 `--dims "长*宽*高/毛重"` 给选定的 vc 统一设自定义尺寸（有自定义用之、无则回退价格表）；默认 dry-run；**默认不同步/不写后验证**，加 `--sync` 才同步+合并 | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--dims` / `--apply` / `--sync` |
-| `replicate` | 跨店复制上架：部分覆盖的商品上架到缺失店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次支持 50 个商品批量推送**，无需等待 WB 反爬抓取；包装尺寸优先读取价格映射表（绝不使用快照尺寸），商品价格表/card.json 兜底；前缀码智能匹配（中文名命中商品价格表前缀优先，原vc提取次之，随机兜底，均带 `BCS-` 前缀）；严格校验映射表「WB商品码」列（无商品码跳过）；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `--vc` / `--prefix` / `--name` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
-| `import-shelve` | 他人映射表导入上架：他人有我方无的商品上架到我的店铺；**切换至 BCS 新版批量上品接口（`POST /products/batch/push`），单批次 50 个商品批量推送**；**严格基于他人表「WB商品码」列比对差集与拉取商品**（绝不从 vendorCode 提取末尾数字，无商品码跳过）；前缀码我方价格表命中优先（均带 `BCS-` 前缀）；价格 = floor(实际售价，他人表须为新列名)；**启动默认不自动同步，加 `--sync` 才先同步全部店铺** | `<他人映射表.xlsx>` + `--cn` / `--shops` / `--limit` / `--apply` / `--sync` / `--no-verify` / `--interval S` / `--cn-stock "中文名:库存,..."` |
-| `shelve` | 新版批量上架：输入 WB 商品码（支持单码/多码/文件）自动上架到店铺；走 BCS 新版批量上品接口（`POST /products/batch/push`）；支持指定完整 VC、4位前缀码、价格、尺寸毛重（`--dims`）、目标店铺与库存；缺省参数智能从映射表、商品价格表与 card.json 补齐 | `[nms ...]` / `--nm` / `--vc` / `--prefix` / `--price` / `--dims` / `--shops` / `--stock` / `--cn` / `--file` / `--cn-stock` / `--interval` / `--apply` / `--sync` / `--no-verify` |
-| `shelve-old` | 旧版上架建卡：输入 WB 商品码自动上架到店铺；走 BCS 旧版上品建卡接口（`POST /system/wbCollection/wb/new`）；原生支持自定义完整 VC（不受前缀限制）、俄文标题/主图与规格建卡；支持单码/多码/文件；缺省参数智能补齐 | `[nms ...]` / `--nm` / `--vc` / `--prefix` / `--price` / `--dims` / `--shops` / `--stock` / `--cn` / `--file` / `--cn-stock` / `--interval` / `--apply` / `--sync` / `--no-verify` |
+## shops
 
-筛选参数（互斥，不传 = 全部）：`--sku` / `--name` / `--prefix` / `--vc` / `--all`
-通用参数：`--shops <店铺ID>,<店铺ID>`（限店铺，示例 9352,9356） / `--apply`（执行） / `--yes`（跳过不可逆确认） / `--sync`（执行后自动同步在架商品并合并映射表，见「一、通用约定」第 12 条）
+```text
+usage: sellerops shops [-h]
 
-### 促销 / 折扣 / 清理 / 客服 / 运维
-
-| 子命令 | 用途 | 关键参数 |
-|---|---|---|
-| `promo-apply` | 促销报名（cookie 会话 applyAll） | `--apply` / `--shops` / `--days` / `--days-back` / `--sleep` |
-| `promo-goods` | **广告推广中被推广商品查询**（cmp.wildberries.ru，**只读**；列出活动内商品的 WB 商品码 / 供应商代码 / 中文名 / 俄文标题 / 类目 / 活动内库存） | `--shops` / `--status`（默认 `4,9,11`=后台默认视图） / `--page-size` / `--max-pages` / `--limit` / `--no-cn` |
-| `promo-gap` | **只读（双向）**：推广 × 销量错配审计。**销量判据 = 该供应商代码在目标店铺（默认袁州1/2/3）的 7 天单数「合计」**（非单店；多店铺记录只计一次）：`--mode gap`=合计≥`--min` 但某目标店未推（按该店快照分「可直接补推 / 需先上架」）；`--mode waste`=合计<`--min` → 这些店**所有「在投」活动**里的推广都列「建议关闭」（逐行明细 + 商品级汇总 + 活动级汇总，标「★ 整个活动建议关闭」）；`both`=两个都出 | `--mode gap\|waste\|both` / `--shops`(=合计范围) / `--min`(默认4) / `--days` / `--date` / `--begin` / `--end` / `--status` / `--listed-only` / `--top` / `--no-cn` / `--url` / `--table` / `--page-size` / `--max-pages` / `--limit` |
-| `discount` | 折扣改价**WB 原生批量**（默认）：按折扣从高到低查询 >阈值商品，调用 WB 原生 upload/task 批量修改；支持 `--vc`、`--name`（中文名包含）、`--prefix`、`--shops` 灵活圈定；**`--below N` 额外命中「折扣<N」侧（走 WB 折扣升序列表接口，与 `--threshold` 并集去重）**；默认**不做写后验证**（WB 异步生效延迟）；改折扣同样触发价格审核，之后必跑 `price-review` | `--apply` / `--threshold` / `--below` / `--all` / `--target` / `--name` / `--vc` / `--prefix` / `--shops` / `--limit` / `--chunk` / `--verify` |
-| `discount-wb` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
-| `discount-scan` | [别名] `discount` 的兼容别名，调用完全相同 | 同 `discount` |
-| `discount-bcs` | [旧版/按需保留] 走 BCS 接口全量改折扣（慢，默认不启用，需显式调用） | `--apply` / `--threshold` / `--target` / `--shops` / `--limit` / `--sync` |
-| `price-review` | 价格审核：查隔离区待审商品并「应用新价格」（**改价或改折扣降幅 30-49.9% 都会触发**） | `--apply` / `--shops` / `--limit` |
-| `banned` | 查询并删除被阻止的商品（WB 标记 banned，dry-run 默认；`--apply` 移到回收站+自动复核） | `--apply` / `--shops` / `--limit` / `--yes` / `--no-verify` |
-| `clean` | 清草稿箱/回收站（回收站一键清空：先归零有库存再 `deleteAllSize`）；**回收站数量以 `countByFilter(TRASH)` 实时计数为准**（`list(TRASH)` 为列表缓存可能滞后，不一致会提示）；一键清空后实时计数仍>0 为平台被拒删残留（有库存/在途/成都仓，订单完成后再清，非命令失败）；**默认不自动同步/不自动合并**，加 `--sync` 才清理前同步 + 清理后自动 merge | `--target basket\|draft\|all` / `--apply` / `--shops` / `--limit` / `--sync` |
-| `orders` | 订单查询（自动同步 + 查日期区间） | `--begin` / `--end` / `--days` / `--no-sync` / `--shops` / `--page-size` |
-| `questions` | 买家未处理提问查询 + 回复（**自动关联中文名/标题/品牌/颜色/价格/描述/特征**） | `--shops` / `--reply` / `--question-id` / `--reply-all` / `--yes` / `--no-detail` |
-| `questions-watch` | 买家提问实时监听（双模式：**front=前台AI** 打印提问/商品信息到控制台与日志、前台手动回复；**back=后台AI** 常驻轮询 + LLM 自动回复，DeepSeek/商汤等 OpenAI 兼容） | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` |
-| `chat-watch` | **AI 售后客服**：买家聊天实时监听（双模式：**front=前台AI** 打印买家消息/商品信息到控制台与日志、不发送；**back=后台AI** 常驻轮询 + LLM 自动生成俄语回复并发送）。定位=不暴露 AI、软性拒退换、其余问题模糊拖延。**平台未读标记不可用**（实测恒 0），故以「最后一条来自买家 + eventID 去重 + 时间窗」为准 | `--interval S` / `--mode front\|back`（默认 front）/ `--apply`（等价 back）/ `--shops` / `--once` / `--limit` / `--history-limit` / `--since-hours`（默认 72）/ `--max-turns` |
-| `chats` | 查询 WB 买家聊天会话与消息历史（**只读**，用于上线前验证与排障；含 最新消息/待回复/未读数/nmId/供应商代码/中文名） | `--shops` / `--limit` / `--chat-id` / `--history` / `--since-hours` / `--no-detail` |
-| `appeals` | WB 平台**投诉单查询（只读）**：未处理=「等待回复」(`status_id=1`)，`--days N` 按**剩余天数恰好=N**（平台字段 `decide_counter`）筛选；逐条调详情取商品编号（nmId 仅在详情的 `brands[].products[].nmid`）；**用本地真源把 nmId 反查为供应商代码 vendorCode**（本店快照 → 映射表两级，查不到标注「本地真源未收录」，不联网核实）；输出控制台明细表 + **去重 nmId 行 + 去重 vendorCode 行** + CSV；⚠ 调详情可能被平台标记「已读」（浏览副作用，不改业务状态） | `--shops` / `--days` / `--type` / `--limit` / `--no-cn` |
-| `ratings` | WB **商品链接评分与买家评价查询（只读）**：支持按评分（`--rating 1` / `--max-rating 2`）、店铺（`--shops`）、1星评论（`--one-star`）、评价总数门槛等灵活筛选；**级联匹配商品价格表**补齐中文名、实际售价、尺寸、前缀码；输出控制台预览并自动导出 CSV 与带格式的 Excel 报表 | `--shops` / `--rating` / `--min-rating` / `--max-rating` / `--one-star` / `--min-one-star` / `--min-feedbacks` / `--days` / `--name` / `--prefix` / `--vc` / `--limit` / `--out` |
-| `ai-test` | 离线对照测试 AI 客服回复效果（读取本地问答数据集测试 prompt，不调外网） | `--qa <json文件路径>` |
-
-| `remote-wh` | 成都仓库（国内仓）商品永久删除（dry-run 默认；`--apply --yes` 真正执行） | `--shops` / `--interval` / `--parallel` / `--apply` / `--yes` |
-| `cookies-update` | 从抓包 md 刷新凭证 | `<md文件>` |
-| `cookie-refresh-wb` | 无头浏览器刷新 WB 会话（401 根因=浏览器指纹信标门槛，纯脚本凭证不可独立续期；Playwright 无头持久化 context 播种既有登录态→等 validate→收割全量 cookie 回写 credentials.json；wb_client 遇 401 亦自动触发同机制重试一次） | `--shops`(店铺id逗号分隔) / `--headed`(首次播种被拒时人工登录) / `--apply` |
-| `daily` | 每日任务 | `morning\|check`（+ 透传参数） |
-| `schedule` | 创建/删除 Windows 计划任务（⚠ 默认不创建，仅按需执行）；`--plan` 只读预览任务定义 | `--remove` / `--plan` |
-
-### 马帮订单 / 飞书登记（2026-09-07 新增）
-
-| 子命令 | 用途 | 关键参数 |
-|---|---|---|
-| `mabang-orders` | 马帮待处理订单 SKU 匹配更换：平台 SKU(VC)→映射表中文名→价格表库存SKU，**全部强制更换**（含系统匹配一致者，幂等）；状态分类 REPLACE/NO_VC/SKIP_SHOP，**更换失败标 `REPLACE_FAIL`**（备注「更换失败: 原因」，网络类异常自动重试 1 次）并导出 `data/logs/更换失败订单_*.csv` | `--apply` / `--days`(默认30) / `--page-size` |
-| `mabang-forecast` | 预报批次全链路（幂等状态机）：①生成批次（`order_label` 含「已预报」跳过）→②**依次上传**（`getForecastConfig` 模板**只取一次** + 每批单批次号 + `wb_automark=1` 自动发货）→③**轮询确认预报成功**（上传后先一次 `status=1` 预扫描确认受理并建店铺映射；此后**每轮仅查 `status=3`**，命中即成功 —— 判据=批次出现在「预报成功」列表，兼容 `status=5` 历史归档；`status=5` 兜底限频：连续 3 轮未命中或过半超时各一次）→④物流交运「莫斯科仓-七库海外仓」（已选择跳过）；超时经 `status=99` 定性为**预报失败**的批次其订单不交运（标 `跳过-预报失败`），未完成批次标 `跳过-上传未完成`（均幂等，可重跑补齐）。⚠ 上传响应**无任务 id / 无进度字段**（仅「已插入上传队列」），故完成判定只能靠列表轮询；`--check` 默认**四 tab 概览**（待预报1/预报成功3/预报失败99/历史预报5），`--status` 看单 tab、`--pages` 控页 | `--apply` / `--check` / `--status`(1\|3\|99\|5) / `--pages`(默认1) / `--wait S`(额外最小等待) / `--upload-timeout S`(默认900) / `--poll-interval S`(默认20，建议 ≥20s：结果 5-10 分钟才出) / `--upload-waiting` / `--days`<br>⚠ 独立执行时**不做**「步骤①更换失败」自检（不比对 `matched_sku != expected_sku`）；该闸门只在 `mabang-process` 链路内生效 |
-| `mabang-process` | **马帮订单处理一体（零飞书依赖）**：匹配商品→预报单生成→依次上传（自动发货，config 只取一次）→**轮询确认预报成功**（预扫描 `status=1` 建店铺映射 + 每轮仅 `status=3`，判据同上）→物流交运→飞书登记（URL 读配置 feishu.base_url，--url 可覆盖）；过滤/幂等机制与 mabang-orders+mabang-forecast 一致；超时时仅对已确认成功的批次所属店铺交运（**店铺级粒度**，失败优先），飞书登记照常执行 | `--days` / `--page-size` / `--wait` / `--upload-timeout` / `--poll-interval` / `--url` / `--table` / `--apply`<br>⚠ 步骤① 更换失败的订单标 `REPLACE_FAIL`（网络类异常已重试 1 次），失败单ID 经 `args.replace_fail_order_ids` 传给步骤②**按订单ID排除**：不进批次/上传/交运，飞书登记照常；汇总行会打印「更换失败 N 单未预报/交运」 |
-| `feishu-register` | 新订单登记到飞书多维表格「订单登记」（数据源=**orderalllist 最近 500 条全状态订单 + 待处理订单两路合并**，按订单编号去重只登记新增；`--no-pending` 可关闭合并）：VC→中文名（**三级回退：映射总表 → vc_known 归属池 → 四位前缀码**，仅用于填名）→下单店 wb编号→**库存SKU（本地商品价格表「库存SKU」列，查不到留空）**→WB链接；`--scope all --date/--begin/--end` 补录历史全部状态订单（orderalllist 忽略服务端日期过滤，本地按 paidTime 筛） | `--url`(可选，默认读配置 feishu.base_url) / `--table`(默认 订单登记) / `--scope latest\|pending\|all`(默认 latest) / `--date` / `--begin` / `--end` / `--apply` |
-| `feishu-vc-stats` | **只读**：读飞书「订单登记」→ 按**供应商代码（`BCS编号` = vendorCode）跨店合并**统计「**单数**」（= 登记记录条数；另附「件数」= `订单量` 求和）→ **降序**输出（控制台 + `data/logs/飞书订单按供应商代码统计_*.csv`）。未命中原因（无日期/不在窗口/店铺被过滤）显式标注；`BCS编号` 为空的记录归入 `(无BCS编号)` 桶不丢弃 | `--days`(默认7，含今天) / `--date` / `--begin` / `--end` / `--shops`(支持 `9352` 或 `袁州1`) / `--top` / `--by-prefix` / `--no-cn` / `--url` / `--table` |
-| `feishu-register-dedup` | **存量修复**（2026-10-13 新增）：清理「订单登记」表内**重复订单编号**。全表分页读 → 按 `订单编号` 分组 → 每组**保留表内最早一条**（读取即插入顺序），其余 `+record-delete`（≤100/批）；`订单编号` 为空的行不动、单独计数。**默认 dry-run**（只出统计 + `data/logs/飞书订单登记去重_*.csv` 保留/删除明细），`--apply` 才真删；幂等可续跑（每次实时重算分组，删到一半失败直接重跑） | `--url` / `--table`(默认 订单登记) / `--apply` / `--limit N`(本次最多删 N 行，0=不限) |
-| `fbs-delivery` | **只读**：WB FBS「配送中」→ 遍历各店拉取**全部清单**及每张清单下**全部商品**（`portal/supplies/delivery` + `portal/supplies/{supplyID}/orders/delivery`，游标分页），按**清单 createdAt 时段 / 商品状态 / 店铺**筛选 → 按「**商品中文名**」统计（vc→中文名走本地映射真源；查不到归 `(中文名未知)` 桶置尾）→ 控制台汇总 + 两份 CSV（明细 + 按中文名统计，写 `data/logs/配送中*_*.csv`）。⚠ 商品明细接口返回该清单下**全部**订单（**含已取消/已售出**），**默认只保留 `shipment`（待发货）**；聚合口径：商品数=明细行数、供应商代码数=去重 vendorCode、清单数=去重 supplyID | `--shops` / `--days`(默认0=不过滤) / `--date` / `--begin` / `--end` / `--item-state`(默认 shipment；all=不过滤) / `--supply-state` / `--include-canceled` / `--limit` / `--max-pages` / `--top` / `--no-cn` / `--interval` |
-| `order-stats` | **只读**：WB「订单动态」（`seller-content .../order-feed/orders`）→ 时间窗内订单按**商品中文名**统计：**订单数**（=明细行数，一行=一件）/ **退货数**（`status` ∈ cancel/return/returnDefective）/ **退货率** / **完单口径退货率**（退货数÷(订单数−未完结)）/ **未完结(created)** / 涉及店铺 / 供应商代码数 / 库存SKU → **单个 xlsx 多 Sheet**（`汇总` + `按供应商代码` + 每店一页 + `订单明细`）。**另出一张跨店 `按供应商代码`(VC) 子表**：同一商品各店 vendorCode 相同、nmId 不同，`WB商品码` 列全量列出该 vc 涉及的全部 nmId，口径与中文名表一致（无 vc 归 `(无供应商代码)` 桶置尾）。默认近 30 天含今天；⚠ 接口 `currentPeriod` 实测按 **updated** 过滤，故服务端只做粗筛超集、本地再按 **created** 精筛（历史区间自动把请求上界放宽到今天，避免漏单） | `--shops` / `--days`(30) / `--date` / `--begin` / `--end` / `--timezone`(America/Los_Angeles) / `--page-size`(50) / `--max-pages`(200) / `--limit` / `--top` / `--no-cn` / `--quiet` / `--interval` / `--out` / `--no-detail` / `--detail-max-rows` / `--no-local-filter` |
-| `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认不删旧列、只建今天列（缺失时）、**更新全部已有日期列**（有单写数量、无单即清空含残留旧值）；**`--begin` 或 `--date` 任一显式给出即进入区间模式**：删除早于该日的旧列 + 补建 begin~end 缺列（**`--end` 必须与 `--begin`/`--date` 同用，单独给 `--end` 会报错退出**）；每次运行同步更新「**总新增订单量**」列（=**当前所有存活日期列之和**，与运行参数无关） | `--url` / `--date` / `--begin` / `--end` / `--table` / `--orders-table` / `--apply` |
-| `mabang-stock-register` | 拉取马帮全部库存 SKU（stock.getStockList，URL 读配置 feishu.base_url）→ **全量重建**「马帮库存登记表」（库存SKU/商品中文名/库存总量/状态/**附件列「图」**；⚠ 重建会清空全部记录，各日订单量列与「总新增订单量」一并被清空） | `--url` / `--table` / `--apply` |
-
-> 注：原 `orders-pipeline` 历史编排流水线已被 `mabang-process` 与 `feishu-register` 两大独立命令完全替代。
-> 马帮凭证/店铺映射在 `data/credentials.json` 的 `mabang` 段（www_cookie / aamz_cookie / api_bearer / api_key / warehouse_id / shop_map / handover_*）；接口明细见 `api/BCS_API完整文档_核对版.md` 第八章。飞书鉴权走 `lark-cli` 用户身份，无需另配凭证。
-
-## 三、示例
-
-```bash
-# 数据准备
-python wb.py shops
-python wb.py fetch                         # 同步+拉取全部店铺（~1.5 分钟）
-python wb.py fetch --no-sync               # 跳过同步快速拉取（~30s）
-python wb.py fetch --shop-id 9352          # 单店
-python wb.py mapping                       # 统一核对工作台
-python wb.py review                        # 待审核工作台
-python wb.py merge                         # 增量合并（同步各店单表并聚合总表）
-python wb.py merge 统一审核.json            # 合并本次审核（新归属自动分发到各单店表与总表）
-python wb.py shops-mapping                 # 刷新全部店铺单表（data/shops/shop_*.xlsx）
-python wb.py shops-mapping --shop-id 9352  # 仅刷新指定店铺单表
-python wb.py mapping-rename --vc BCS-XXX-123 --cn "新中文名" # 纠偏改名：全店单表与总表一键同步
-python wb.py mapping-check --tol 3         # 核查工作台
-python wb.py mismatch-check                 # 货不对板筛查工作台（看图勾选 → 导出 vc → trash --vc）
-python wb.py mismatch-check --days 2        # 只审最近 2 天（昨天+今天）上架/创建的商品（--days 1=仅今天）
-python wb.py mismatch-check --begin 2026-08-20 --end 2026-08-25  # 指定时间段（按映射表创建时间）
-
-# 改价/折扣/库存/下架/改尺寸（dry-run 默认，加 --apply 执行；默认不自动同步/不写后验证，完成后仅打印提示；加 --sync 自动「同步在架商品并合并映射表」）
-python wb.py price --name 充电宝 --apply --yes
-python wb.py price --vc BCS-XXX-123 --price 130 --discount 20 --apply --sync
-python wb.py price --vc BCS-XXX-123 --discount 30 --keep-price --apply --yes
-python wb.py price-bcs --vc BCS-XXX-123 --price 130 --apply --yes   # [备选] BCS 通道做同一件事
-python wb.py stock --prefix CYQX --amount 0 --apply --yes
-python wb.py stock --name 短直假发 --amount 0                 # WB 原生接口（默认通道）：全部店铺「短直假发」库存归零（dry-run 预览）
-python wb.py stock --name 短直假发 --amount 0 --apply --yes   # 真正执行（归零不可逆，必须 --yes）
-python wb.py stock --vc BCS-XXX-123 --shops 9352 --amount 50 --apply    # 单 vc 单店设库存 50
-python wb.py stock --name 短直假发 --amount 0 --resolve live --apply --yes  # chrtId 走 WB 实时列表解析（绕过快照滞后）
-python wb.py stock-bcs --name 短直假发 --amount 0 --apply --yes  # [备选] BCS 通道做同一件事
-python wb.py trash --vc BCS-XXX-123 --shops 9352 --apply --yes
-python wb.py trash-bcs --vc BCS-XXX-123 --shops 9352 --chunk 100 --interval 21 --apply --yes   # 旧通道，仅排查用
-python wb.py dimension                               # 预览：按价格表尺寸改全部店铺商品（dry-run）
-python wb.py dimension --name 育发液 --apply          # 只改中文名含「育发液」的商品
-python wb.py dimension --prefix ZLTH --apply --sync   # 指定前缀码 + 事后同步并合并映射表
-python wb.py dimension --name 感应灯 --dims "8*14*26/0.3" --apply   # 给选定商品统一设自定义尺寸/毛重（必须配 --vc/--name/--prefix 圈定）
-
-# 跨店复制上架（部分覆盖的商品 → 缺失店铺；vendorCode 与源店一致、价格=源店现价）
-# 默认不自动同步（用本地快照判断，可能滞后）；加 --sync 才前置同步全部店铺 + 上架后复核并合并映射表
-python wb.py replicate                       # 预览全部部分覆盖商品（vc/源店/价格/目标店）
-python wb.py replicate --prefix ZLTH --apply --sync  # 指定前缀码批量补齐（先行同步最新快照）
-python wb.py replicate --vc BCS-XXX-123 --apply   # 单个 vc 补齐（目标店自动=缺失店）
-python wb.py replicate --shops 9353 --apply  # 只补指定店
-python wb.py replicate --cn-stock "感应灯:0,运动包:0" --apply  # 指定中文名上架库存（未指定用默认 999）
-
-# 他人映射表导入上架（他人有我方无，按 WB原始nmId 匹配；新 vc 我方前缀优先、价格=floor(实际售价)）
-# 默认不自动同步（用本地快照判断，可能滞后）；加 --sync 才前置同步全部店铺 + 上架后复核并合并映射表
-python wb.py import-shelve 他人映射表.xlsx          # 预览差集清单（含前缀来源标注）
-python wb.py import-shelve 他人映射表.xlsx --cn 冲牙器   # 按他人表中文名过滤
-python wb.py import-shelve 他人映射表.xlsx --shops 9353 --apply --sync  # 上架到指定店（先行同步）
-python wb.py import-shelve 他人映射表.xlsx --cn-stock "充电线:100" --apply  # 指定中文名上架库存
-
-# 输入 WB 商品码直接自动上架（支持单码/多码/批量文件；新版批量 push 与旧版建卡双接口）
-python wb.py shelve 248364237 --price 59                                    # 新接口单品预览（自动提取包装、中文名、前缀推导）
-python wb.py shelve 248364237 388854754 --price 66 --apply                 # 新接口多商品批量执行
-python wb.py shelve 248364237 --prefix ABCD --dims "10*20*30/0.5" --apply   # 指定前缀码与包装尺寸重量
-python wb.py shelve 248364237 --vc BCS-CUSTOM-12345 --shops 9352 --apply    # 指定完整 VC 与目标店铺
-python wb.py shelve --file 商品码清单.txt --price 55 --apply                   # 从 txt 文件批量读取上架
-python wb.py shelve-old 248364237 --price 59 --apply                       # 旧版建卡接口上架（原汁原味旧版接口）
-python wb.py shelve-old 248364237 --vc BCS-SPECIAL-MYVC --apply            # 旧版接口支持任意自定义完整 VC
-
-
-# 促销/折扣/清理/价格审核/订单/提问
-python wb.py promo-apply                   # 预览可报名活动
-python wb.py promo-goods                   # 列出广告推广中被推广的商品（中文名/供应商代码/WB商品码，只读）
-python wb.py promo-goods --shops 9356       # 只查指定店
-python wb.py promo-goods --status 9         # 只看「在投」活动（默认 4,9,11 = 后台默认视图）
-python wb.py promo-goods --no-cn            # 不解析中文名，速度更快（供应商代码仍解析）
-# 推广 × 销量双向错配审计（只读；销量判据 = 目标店铺的「合计单数」）
-python wb.py promo-gap                      # 正向：该推没推（三店合计≥4 但某店未推广）
-python wb.py promo-gap --mode waste          # 反向：在推但该关（三店合计<4 → 建议关闭清单）
-python wb.py promo-gap --mode both --shops 9352,9353,9356   # 两个方向都出，限目标店（= 合计范围）
-python wb.py promo-gap --min 6 --days 14     # 阈值改 6、窗口改近 14 天
-python wb.py promo-gap --mode waste --listed-only   # ⚠ --listed-only 仅对 gap 生效，waste 下忽略
-python wb.py promo-gap --status 9            # 只把「在投」活动算作已推广
-# 折扣修改（默认 WB 原生批量，支持多种维度过滤）
-python wb.py discount                      # 预览全店 >50% 商品（WB 原生从高到低快速查询）
-python wb.py discount --apply              # 执行全店 >50%→50%（WB 原生 upload/task 批量修改，默认不写后验证）
-python wb.py discount --name 笔记本电脑 --threshold 55 --target 50 # 各店独立筛选：笔记本电脑且折扣>55% 改为 50%
-python wb.py discount --name 笔记本电脑 --all --target 50         # 全量设置：所有店铺笔记本电脑无条件改 50%
-python wb.py discount --vc BCS-HAAJ-248364237 --target 48        # 单个 VC 精准改折扣
-python wb.py discount --vc BCS-XXX-1,BCS-XXX-2 --target 45       # 多个 VC 批量改折扣
-python wb.py discount --threshold 55 --below 40 --target 50     # 双侧区间：折扣>55% 或 <40% 的都改为 50%（<40% 侧走 WB 升序接口）
-python wb.py discount --below 40 --target 50                    # 只改「折扣<40%」的（未给 --threshold 时不叠加高折扣侧）
-python wb.py discount --shops 9352 --limit 10 --apply            # 限定店铺与处理上限
-python wb.py discount-bcs --apply --sync                         # 【旧版】显式走 BCS 慢速改折扣
-python wb.py price-review --apply          # ⚠ 应用新价格（改折扣也会触发审核，不应用则新折扣不生效）
-python wb.py banned                        # 预览各店被阻止商品（WB 标记 banned）
-python wb.py banned --apply --yes          # 执行：被阻止商品移到回收站（自动复核）
-python wb.py banned --shops 9352 --apply --yes   # 只处理指定店
-python wb.py dims-check --name 视黄醇面霜         # 只读：列出中文名含「视黄醇面霜」的尺寸偏差待验证商品
-python wb.py dims-check --shops 9353             # 只读：只看指定店铺的待验证商品
-python wb.py dims-check --type weight --shops 9352   # 重量偏差待验证商品
-python wb.py dims-check --type all --shops 9352      # 尺寸+重量合并去重，标注偏差类型
-python wb.py clean --target all            # 预览
-python wb.py clean --target all --apply    # 执行（先草稿后回收站；默认不自动同步/不合并，完成后仅提示）
-python wb.py clean --target all --apply --sync  # 执行 + 清理前同步 + 清理后自动合并映射表
-python wb.py orders                        # 同步+查询今天订单
-python wb.py orders --begin 2026-08-17 --end 2026-08-20   # 指定日期区间
-python wb.py orders --no-sync --days 3     # 跳过同步查缓存
-python wb.py feishu-vc-stats                # 只读：飞书「订单登记」近 7 天按供应商代码(BCS编号)统计单数降序
-python wb.py feishu-vc-stats --days 14      # 近 14 天（含今天）
-python wb.py feishu-vc-stats --date 2026-09-22          # 单天
-python wb.py feishu-vc-stats --begin 2026-09-17 --end 2026-09-23   # 指定区间
-python wb.py feishu-vc-stats --shops 9352,9356          # 只统计袁州1、袁州3（短名 袁州1 亦可）
-python wb.py feishu-vc-stats --days 7 --top 20          # 控制台只看前 20 名（CSV 仍写全量）
-python wb.py feishu-vc-stats --days 7 --by-prefix       # 按 vendorCode 的 4 位前缀码聚合
-python wb.py feishu-register-dedup                      # dry-run：全表分页读并报告重复订单编号（不删任何记录）
-python wb.py feishu-register-dedup --apply              # 真删：每组保留表内最早一条，其余删除（先看 CSV 报告再执行）
-python wb.py feishu-register-dedup --limit 500 --apply  # 限制单次最多删 500 行（分次推进）
-# FBS「配送中」清单商品采集统计（只读；默认只统计「待发货」商品）
-python wb.py fbs-delivery                      # 全店全部「配送中」清单里的待发货商品，按中文名统计
-python wb.py fbs-delivery --shops 9352         # 只统计袁州1（也支持短名 袁州1）
-python wb.py fbs-delivery --days 3             # 只统计近 3 天创建的清单（默认 0=不过滤）
-python wb.py fbs-delivery --begin 2026-10-01 --end 2026-10-08   # 指定清单创建时间区间
-python wb.py fbs-delivery --item-state all --top 20   # 不过滤商品状态（含已取消/已售出），只看前 20 名
-python wb.py fbs-delivery --supply-state onway,complete       # 只统计指定状态的清单
-python wb.py fbs-delivery --include-canceled   # 在「待发货」基础上并入「已取消」
-# 「订单动态」按商品中文名统计订单数/退货率（只读；输出 xlsx 多 Sheet）
-python wb.py order-stats                          # 近 30 天（含今天），全店 → data/logs/订单动态统计_<ts>.xlsx
-python wb.py order-stats --days 7 --top 20        # 近 7 天；控制台两张表（中文名 / 供应商代码）各只看前 20 名（xlsx 仍全量）
-python wb.py order-stats --shops 9352             # 只统计袁州1（也支持短名 袁州1）
-python wb.py order-stats --begin 2026-09-01 --end 2026-09-30   # 历史区间（自动放宽请求上界防漏单）
-python wb.py order-stats --no-detail --out _scratch/os.xlsx    # 不写明细 Sheet + 指定输出路径
-python wb.py order-stats --timezone Asia/Shanghai --days 30    # 换窗口时区（默认 America/Los_Angeles）
-python wb.py questions                     # 查询未处理提问（带中文名/标题/品牌/颜色/价格/描述/特征）
-python wb.py questions --no-detail         # 跳过商品详情拉取（只中文名，快）
-python wb.py questions --reply "..." --question-id <id>    # 回复单条
-python wb.py questions-watch                # 前台AI：常驻监听，新提问打印到控制台与 data/logs/questions_front_*.log，前台手动回复（默认）
-python wb.py questions-watch --once         # 前台AI跑一轮（展示，不提交）
-python wb.py questions-watch --mode back --apply --interval 90   # 后台AI：常驻轮询 + LLM 自动提交（需配 ai.api_key）
-python wb.py chats --shops 9352                     # 只读：列出买家聊天会话（最新消息/待回复/nmId/供应商代码/中文名）
-python wb.py chats --shops 9352 --chat-id <uuid> --history 10   # 只读：看指定会话最近 10 条消息历史
-python wb.py chat-watch --once --shops 9352 --since-hours 900   # 前台AI跑一轮（展示买家消息+商品信息，不发送）
-python wb.py chat-watch --apply --interval 90       # 后台AI：常驻轮询 + LLM 自动回复买家聊天（需配 ai.api_key）
-python wb.py ai-test                            # 离线运行客服问答效果对比评测（不联网）
-python wb.py appeals --days 5                   # ⚠ 未处理投诉 + 剩余天数恰好=5 → 明细表 + 去重 nmId 行 + 去重 vendorCode 行 + CSV
-python wb.py appeals                            # 全部未处理投诉（不限剩余天数）
-python wb.py appeals --shops 9353 --no-cn       # 只看袁州2，不解析中文名（仍解析供应商代码）
-python wb.py appeals --type in --limit 10       # 每店最多拉 10 条列表（可能不完整，仅做快照式抽查）
-# 商品链接评分与买家评价查询（只读；自动关联价格表实际售价、尺寸、前缀码，生成 CSV 与 Excel）
-python wb.py ratings                            # 全店评分查询（默认有评价商品 feedbackCount>=1，近365天）
-python wb.py ratings --shops 9352               # 只查袁州1
-python wb.py ratings --rating 1                 # 筛选评分为 1 的商品
-python wb.py ratings --one-star                 # 筛选含有 1 星差评的商品（智能以 1星倒序并快速截断）
-python wb.py ratings --max-rating 2             # 筛选评分 <= 2 的低分预警商品
-python wb.py ratings --min-one-star 3           # 筛选 1 星评论数 >= 3 的严重差评商品
-python wb.py ratings --name 牙膏                # 按产品中文名筛选
-python wb.py ratings --out data/logs/差评.xlsx   # 自定义导出文件路径
-python wb.py remote-wh                          # 预览成都仓库（国内仓）待删除商品
-
-python wb.py remote-wh --apply --yes            # 执行永久删除成都仓库商品（不可逆确认）
-
-# 运维
-python wb.py cookies-update data/har/<店铺>_cookies.md
-python wb.py daily morning                 # 手动跑一次"报名+改价"（等价于计划任务，无需计划任务）
-python wb.py schedule                      # 【按需】创建 4 个计划任务（默认不创建，除非你要每日自动运行）
-python wb.py schedule --remove             # 【按需】删除全部任务
-python wb.py schedule --plan               # 【只读】预览将创建的任务定义（不调用 schtasks）
+options:
+  -h, --help  show this help message and exit
 ```
 
-## 四、merge 要点
+## fetch
 
-- 审核文件是一次性输入：合并后固化进映射表，可归档。
-- 消失即移除：vc 若全部店铺任一都不在架 → 剔除并打印清单；某店数据缺失自动跳过（防误删）。
-- 幂等：重复 merge 不翻倍。
+```text
+usage: sellerops fetch [-h] [--shop-id SHOP_ID] [--no-sync]
 
-## 五、ops 安全机制（必读）
-
-1. **dry-run 默认**：不加 `--apply` 只打印清单。
-2. **不可逆确认**：`trash`（含 `trash-wb`/`trash-bcs`）/ 库存归零 需 `--yes`。
-3. **价格下限校验**：目标价 ≤ 原价÷2 → 自动剔除并报告（先提价再分步调价可规避）。
-4. **结果输出**：控制台 `✓/✗` + 汇总；明细追加写 `data/logs/ops_result.csv`（UTF-8-SIG）。
-5. **0 值商品**：照常提交 + 执行后红色 `[0 值商品报告]`，复查仍 0 属 WB 官方原因。
-6. **所有跳过显式提示**：`[跳过] 店X vc → 原因` + `[跳过汇总]`，杜绝隐式操作。
-7. **replicate 防重复（四层）**：快照覆盖判断（vc 已在店 → 不进候选）→ 本地提交记录 `data/state/复制上架记录.json`（BCS 缓存滞后窗口内拦截，实测同步前 API 查不到刚提交的商品）→ 执行时 `vendorCodeMulti(filter=ALL)` 实时查重（同步后拦截）→ BCS 服务端 vendorCode 幂等（兜底）。上架后商品库存/价格以 BCS→WB 异步生效为准，明细 CSV 在 `data/logs/复制上架_*.csv`。
-8. **replicate 成功判据 = vendorCode 出现**：上架后价格/库存等字段显示 None 属正常（WB 平台审核/回填延迟，短则数分钟、长则 1 小时+），**只要目标店能查到该 vendorCode 即上架成功**；核对价格库存数值需等 1 小时后再查。另：**多目标店一次请求提交**——BCS 已恢复多店一次提交（原 2026-08-20 曾因「多店静默不生效」bug 临时改逐店，现 `shop` 数组带全部目标店一次请求上架全部缺失店，提速）；直接信任 `code==200` 即整批成功，不做逐店回验。
-9. **import-shelve 说明**：查重按 WB原始nmId（vc 末段数字，两代格式通吃）；新 vc 我方前缀优先（他人表中文名**精确命中**我商品价格表前缀码 → `BCS-{我的前缀}-{nmId}`，未命中沿用他人 vc）；防重复三层 = 我方快照 nm 集合 + 本地记录（`复制上架记录.json`，**nm 为键**）+ 执行时按新 vc 实时查重（新 vc 与他人不同时 BCS 服务端幂等失效，本地记录是必要防线）。仓库解析三层兜底：快照众数 → 仓库 API → `replicate.KNOWN_WAREHOUSES` 实测表。明细 CSV 在 `data/logs/导入上架_*.csv`。
-
-## 六、Python 库调用（import 方式）
-
-在新架构下，系统按照整洁分层对外暴露领域服务门面（`services/*_svc.py`）与仓储层（`storage/*_repo.py`）：
-
-```python
-from wb_ops.storage.mapping_repo import MappingRepository
-from wb_ops.services.replicate import ops
-from wb_ops.services import (
-    catalog_svc,
-    discount_svc,
-    order_svc,
-    replicate_svc,
-    support_svc,
-)
-
-# 1. 仓储层读取映射状态、前缀与构建反查器
-state, excluded = MappingRepository.load_mapping_state()   # {vc: {cn, dp}} + {vc: 排除原因}
-prefix_map = MappingRepository.load_prefix_map()           # 前缀码映射
-vc_resolver = MappingRepository.build_vc_resolver()        # 解耦的反查闭包: vc -> 中文名
-
-# 2. 一键操作（两段式安全模式：构建计划 -> 预览 -> 批量执行）
-state, _, boss = ops.load_state()
-shops = ops.get_shops()                                   # [店id]
-# 构造改价计划（ops_plan 纯函数无副作用）
-plans = ops.plan_price(['BCS-XXX-1'], shops, state, boss, manual=130, discount=20, club=None, keep_price=False)
-ops.dry_run(plans, 'price')                               # dry-run 预览
-ops.run_apply(plans, 'price')                             # 提交执行（自动分批、退避并追加日志）
-
-# 3. 领域服务门面标准调用
-# 各领域服务均对外暴露标准 run 接口（接受 argparse.Namespace 或领域参数）：
-# replicate_svc.run_price(args)
-# discount_svc.run_discount(args)
-# order_svc.run_mabang_process(args)
-
-# 4. 飞书「订单登记」按供应商代码统计（只读；显式关键字参数，便于脚本内嵌调用）
-from wb_ops.services.order.feishu_vc_stats import vc_order_stats
-r = vc_order_stats(days=7, shops=["9352", "袁州3"])      # 或 begin="2026-09-17", end="2026-09-23"
-print(r["begin"], r["end"], r["total_orders"], r["vc_count"])   # 窗口 / 命中记录数 / 供应商代码数
-for row in r["rows"]:                                   # 已按单数降序、未归类桶垫底
-    print(row["rank"], row["key"], row["orders"], row["qty"], row["cn"], row["shops"])
-
-# 5. 推广 × 销量双向错配审计（只读；销量判据 = 目标店铺「合计单数」，mode 只影响打印/写文件）
-from wb_ops.services.discount.promo_gap import promo_gap
-a = promo_gap(days=7, min_orders=4, mode="both", shops=["9352", "袁州3"])
-print(a["stats"])                                       # {'gap': {...}, 'waste': {...}}
-for x in a["gap_rows"]:                                 # 该推没推（x['orders']=合计, x['shop_orders']=该店）
-    print(x["shop_name"], x["vc"], x["orders"], x["shop_orders"], x["group"], x["nm_id"])
-for x in a["waste_rows"]:                               # 在推但该关（合计单数升序，0 单优先）
-    print(x["shop_name"], x["campaign_id"], x["nm"], x["vc"], x["orders"], x["verdict"])
-for x in a["waste_by_campaign"]:                        # 活动级：便于整活动关停
-    print(x["campaign_id"], x["被推广商品数"], x["建议关闭数"], x["是否整活动建议关闭"])
-
-# 6. WB「订单动态」按商品中文名统计（只读；返回聚合结果 + 明细，可直接写 xlsx）
-from wb_ops.services.order.order_stats import order_stats
-from wb_ops.services.order.order_stats_xlsx import write_xlsx
-r = order_stats(days=30, shops=["9352"])                # 或 begin/end/date；timezone 默认 America/Los_Angeles
-print(r["begin"], r["end"], len(r["rows"]))             # 窗口（按 created）/ 明细行数
-for row in r["by_cn"][:10]:                             # 已按订单数降序、(中文名未知) 垫底
-    print(row["rank"], row["cn"], row["orders"], row["returns"], row["rate"], row["rate_done"])
-path = write_xlsx(r)                                    # data/logs/订单动态统计_<时间戳>.xlsx（汇总+每店+明细）
+options:
+  -h, --help         show this help message and exit
+  --shop-id SHOP_ID  店铺ID（默认全部）
+  --no-sync          跳过 BCS 同步，直接拉取上次数据
 ```
 
-> 每个模块内部函数签名在源码 docstring 中都有说明；CLI 是这些函数的薄封装。
+## mapping
 
-## 七、失败排查速查
+```text
+usage: sellerops mapping [-h] [--main-shop-only]
 
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| WB 接口 403 | cfidsw-wb 过期 | 重新抓包 → `wb.py cookies-update` |
-| WB 接口 401 | 浏览器指纹信标门槛过期（浏览器不活跃超 ~15 分钟） | `wb.py cookie-refresh-wb --apply`（无头浏览器自动续会话；批量命令遇 401 亦自动触发）；仍失败用 `--headed` 人工登录一次 |
-| BCS 接口 401 | bcs.token 过期 | 更新 `data/credentials.json` 的 bcs.token |
-| BCS 接口 405 | 缺 X-Limit-Key | 更新 bcs.limit_key |
-| 改价查出 0 个但 WB 有高折扣 | BCS 缓存未同步 | 确认加了 `--sync`（或先 `wb.py fetch`），重跑 |
-| 返回 200 但价格没变 | 触发价格下限 | ops 已拦截；确认是否手动提交过 |
-| 删除失败"有库存" | 订单未完成 | 脚本已自动归零，订单完成后重跑 |
-| `banned --apply` 部分失败 | 商品有库存/在途 | 先归零库存（`wb.py stock`）后重跑 `banned` |
-| 报名"已存在跳过" | 活动已参加 | 正常幂等行为 |
+options:
+  -h, --help        show this help message and exit
+  --main-shop-only  只使用主店候选商品
+```
+
+## mapping-import
+
+```text
+usage: sellerops mapping-import [-h] file
+
+positional arguments:
+  file        核对结果 JSON
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## mapping-check
+
+```text
+usage: sellerops mapping-check [-h] [--tol TOL]
+
+options:
+  -h, --help  show this help message and exit
+  --tol TOL   价格偏差阈值（元，默认 5）
+```
+
+## mismatch-check
+
+```text
+usage: sellerops mismatch-check [-h] [--cn CN] [--begin BEGIN] [--end END]
+                                [--days DAYS]
+
+options:
+  -h, --help     show this help message and exit
+  --cn CN        只渲染指定中文名（精确匹配，如『牙膏-紫色』）
+  --begin BEGIN  开始日期 YYYY-MM-DD（按映射表创建时间/上架时间筛选）
+  --end END      结束日期 YYYY-MM-DD（缺省=今天）
+  --days DAYS    最近 N 天（含今天；与 --begin/--end 冲突时以具体日期为准）
+```
+
+## review
+
+```text
+usage: sellerops review [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## merge
+
+```text
+usage: sellerops merge [-h] [file]
+
+positional arguments:
+  file        本次审核结果 JSON（可选）
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## mapping-rename
+
+```text
+usage: sellerops mapping-rename [-h] [--vc VC] [--cn CN] [--reason REASON]
+                                [--file FILE]
+
+options:
+  -h, --help       show this help message and exit
+  --vc VC          要改名的 vendorCode
+  --cn CN          新产品中文名
+  --reason REASON  改名原因说明
+  --file FILE      批量改名 JSON 文件路径（含 [{'vc': ..., 'cn': ...}]）
+```
+
+## shops-mapping
+
+```text
+usage: sellerops shops-mapping [-h] [--shop-id SHOP_ID] [--force]
+
+options:
+  -h, --help         show this help message and exit
+  --shop-id SHOP_ID  指定店铺ID（默认全部活跃店铺）
+  --force            强制全量重新构建
+```
+
+## price
+
+```text
+usage: sellerops price [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--price PRICE] [--discount DISCOUNT]
+                       [--club-discount CLUB_DISCOUNT] [--keep-price]
+                       [--auto-review] [--chunk CHUNK] [--interval INTERVAL]
+
+options:
+  -h, --help            show this help message and exit
+  --sku SKU             商品价格表卖家SKU
+  --name NAME           商品价格表产品中文名包含
+  --prefix PREFIX       商品价格表 vendorCode 前缀码
+  --vc VC               vendorCode 列表（逗号分隔）
+  --all                 全部映射商品（默认）
+  --shops SHOPS         限定店铺ID（逗号分隔，默认全部已 fetch 店铺）
+  --apply               真正执行（默认 dry-run）
+  --yes                 跳过不可逆操作确认
+  --price PRICE         目标价（默认 floor(商品价格表实际售价)）
+  --discount DISCOUNT   折扣 0-100（不传=不改）
+  --club-discount CLUB_DISCOUNT
+                        club折扣 0-100（不传=不改）
+  --keep-price          价格保持当前值（只改折扣/俱乐部折扣）
+  --auto-review         改价后自动「应用新价格」（降价 30-49.9% 进审查时，精确匹配刚改价商品）
+  --chunk CHUNK         每批提交条数（≤300，对齐 discount 实践，默认 100）
+  --interval INTERVAL   批/店间请求间隔秒
+```
+
+## price-bcs
+
+```text
+usage: sellerops price-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--price PRICE] [--discount DISCOUNT]
+                           [--club-discount CLUB_DISCOUNT] [--keep-price]
+                           [--auto-review]
+
+options:
+  -h, --help            show this help message and exit
+  --sku SKU             商品价格表卖家SKU
+  --name NAME           商品价格表产品中文名包含
+  --prefix PREFIX       商品价格表 vendorCode 前缀码
+  --vc VC               vendorCode 列表（逗号分隔）
+  --all                 全部映射商品（默认）
+  --shops SHOPS         限定店铺ID（逗号分隔，默认全部已 fetch 店铺）
+  --apply               真正执行（默认 dry-run）
+  --yes                 跳过不可逆操作确认
+  --price PRICE         目标价（默认 floor(商品价格表实际售价)）
+  --discount DISCOUNT   折扣 0-100（不传=不改）
+  --club-discount CLUB_DISCOUNT
+                        club折扣 0-100（不传=不改）
+  --keep-price          价格保持当前值（只改折扣/俱乐部折扣）
+  --auto-review         改价后自动「应用新价格」（降价 30-49.9% 进审查时，精确匹配刚改价商品）
+```
+
+## stock
+
+```text
+usage: sellerops stock [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--amount AMOUNT] [--chunk CHUNK] [--interval INTERVAL]
+                       [--max-pages MAX_PAGES] [--resolve {snapshot,live}]
+
+options:
+  -h, --help            show this help message and exit
+  --sku SKU             商品价格表卖家SKU
+  --name NAME           商品价格表产品中文名包含
+  --prefix PREFIX       商品价格表 vendorCode 前缀码
+  --vc VC               vendorCode 列表（逗号分隔）
+  --all                 全部映射商品（默认）
+  --shops SHOPS         限定店铺ID（逗号分隔，默认全部已 fetch 店铺）
+  --apply               真正执行（默认 dry-run）
+  --yes                 跳过不可逆操作确认
+  --amount AMOUNT       目标库存（默认 0）
+  --chunk CHUNK         每批提交条数（≤1000，探针实测 1000 可行，默认 500）
+  --interval INTERVAL   批/店间请求间隔秒
+  --max-pages MAX_PAGES
+                        WB 游标分页安全上限（--resolve live 时使用）
+  --resolve {snapshot,live}
+                        chrtId 解析源：snapshot=BCS 快照（默认，零请求）；live=WB
+                        portal/stocks 实时拉取（绕过快照滞后）
+```
+
+## stock-bcs
+
+```text
+usage: sellerops stock-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--amount AMOUNT]
+
+options:
+  -h, --help       show this help message and exit
+  --sku SKU        商品价格表卖家SKU
+  --name NAME      商品价格表产品中文名包含
+  --prefix PREFIX  商品价格表 vendorCode 前缀码
+  --vc VC          vendorCode 列表（逗号分隔）
+  --all            全部映射商品（默认）
+  --shops SHOPS    限定店铺ID（逗号分隔，默认全部已 fetch 店铺）
+  --apply          真正执行（默认 dry-run）
+  --yes            跳过不可逆操作确认
+  --amount AMOUNT  目标库存（默认 0）
+```
+
+## trash
+
+```text
+usage: sellerops trash [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--chunk CHUNK] [--interval INTERVAL]
+
+options:
+  -h, --help           show this help message and exit
+  --sku SKU            商品价格表卖家SKU
+  --name NAME          商品价格表产品中文名包含
+  --prefix PREFIX      商品价格表 vendorCode 前缀码
+  --vc VC              vendorCode 列表（逗号分隔）
+  --all                全部映射商品（默认）
+  --shops SHOPS        限定店铺ID（逗号分隔，默认全部已 fetch 店铺）
+  --apply              真正执行（默认 dry-run）
+  --yes                跳过不可逆操作确认
+  --chunk CHUNK        每批移回收站条数（≤300，默认 300）
+  --interval INTERVAL  批间间隔秒
+```
+
+## trash-bcs
+
+```text
+usage: sellerops trash-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--chunk CHUNK] [--interval INTERVAL]
+
+options:
+  -h, --help           show this help message and exit
+  --sku SKU            商品价格表卖家SKU
+  --name NAME          商品价格表产品中文名包含
+  --prefix PREFIX      商品价格表 vendorCode 前缀码
+  --vc VC              vendorCode 列表（逗号分隔）
+  --all                全部映射商品（默认）
+  --shops SHOPS        限定店铺ID（逗号分隔，默认全部已 fetch 店铺）
+  --apply              真正执行（默认 dry-run）
+  --yes                跳过不可逆操作确认
+  --chunk CHUNK        每批条数（≤300，默认 300）
+  --interval INTERVAL  批间间隔秒（BCS 有 19s 限流窗口，连续多批建议 21）
+```
+
+## replicate
+
+```text
+usage: sellerops replicate [-h] [--vc VC] [--prefix PREFIX] [--name NAME]
+                           [--shops SHOPS] [--source-shops SOURCE_SHOPS]
+                           [--price-source {snapshot,minimum}]
+                           [--price-multiplier PRICE_MULTIPLIER]
+                           [--stock STOCK] [--limit LIMIT] [--apply]
+                           [--interval INTERVAL] [--cn-stock CN_STOCK]
+
+options:
+  -h, --help            show this help message and exit
+  --vc VC               指定 vendorCode（逗号分隔）
+  --prefix PREFIX       前缀码筛选（4 位大写）
+  --name NAME           映射表中文名包含匹配
+  --shops SHOPS         限定目标店铺 id 逗号分隔（默认全部缺失店）
+  --source-shops SOURCE_SHOPS
+                        源店铺 id 逗号分隔（默认全部本地店铺，按完整 VC 去重）
+  --price-source {snapshot,minimum}
+                        价格来源：snapshot=源店快照价格；minimum=商品价格表最低售价
+  --price-multiplier PRICE_MULTIPLIER
+                        价格来源乘数，按分四舍五入（默认 1）
+  --stock STOCK         上架库存（默认999，可显式设为0）
+  --limit LIMIT         最多处理 N 个 vc（0=不限）
+  --apply               真正执行（默认 dry-run）
+  --interval INTERVAL   批次上架请求间隔秒
+  --cn-stock CN_STOCK   按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
+```
+
+## import-publish
+
+```text
+usage: sellerops import-publish [-h] [--cn CN] [--shops SHOPS] [--limit LIMIT]
+                                [--apply] [--interval INTERVAL]
+                                [--cn-stock CN_STOCK]
+                                xlsx
+
+positional arguments:
+  xlsx                 他人映射表 xlsx 路径（同项目「映射总表」格式）
+
+options:
+  -h, --help           show this help message and exit
+  --cn CN              他人表中文名包含过滤（逗号分隔多个）
+  --shops SHOPS        限定目标店铺 id 逗号分隔（默认全部店铺）
+  --limit LIMIT        最多处理 N 个商品（0=不限）
+  --apply              真正执行（默认 dry-run）
+  --interval INTERVAL  批次上架请求间隔秒
+  --cn-stock CN_STOCK  按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
+```
+
+## dimension
+
+```text
+usage: sellerops dimension [-h] [--vc VC] [--prefix PREFIX] [--name NAME]
+                           [--shops SHOPS] [--limit LIMIT] [--dims DIMS]
+                           [--apply]
+
+options:
+  -h, --help       show this help message and exit
+  --vc VC          指定单个或多个 vendorCode（逗号分隔）
+  --prefix PREFIX  vendorCode 4位前缀码包含匹配
+  --name NAME      商品价格表产品中文名包含匹配
+  --shops SHOPS    限定店铺 id 逗号分隔
+  --limit LIMIT    每店最多处理 N 条（0=不限）
+  --dims DIMS      自定义尺寸 '长*宽*高/毛重'（例: 8*14*26/0.3）
+  --apply          真正执行（默认 dry-run）
+```
+
+## dims-check
+
+```text
+usage: sellerops dims-check [-h] [--type {dims,weight,all}] [--name NAME]
+                            [--shops SHOPS] [--limit LIMIT]
+
+options:
+  -h, --help            show this help message and exit
+  --type {dims,weight,all}
+                        dims=尺寸偏差 / weight=重量偏差 / all=两者合并去重（默认 dims）
+  --name NAME           映射表中文名包含过滤
+  --shops SHOPS         限定店铺 id 逗号分隔
+  --limit LIMIT         每店最多查询 N 条（0=不限）
+```
+
+## banned
+
+```text
+usage: sellerops banned [-h] [--apply] [--shops SHOPS] [--limit LIMIT] [--yes]
+
+options:
+  -h, --help     show this help message and exit
+  --apply        真正执行（默认 dry-run）
+  --shops SHOPS  限定店铺 id 逗号分隔
+  --limit LIMIT  每店最多处理 N 条（0=不限）
+  --yes          跳过不可逆确认（移到回收站）
+```
+
+## clean
+
+```text
+usage: sellerops clean [-h] --target {basket,draft,all} [--apply]
+                       [--shops SHOPS] [--limit LIMIT]
+
+options:
+  -h, --help            show this help message and exit
+  --target {basket,draft,all}
+                        basket=回收站 / draft=草稿箱 / all=先草稿后回收站
+  --apply               真正执行（默认 dry-run）
+  --shops SHOPS         限定店铺 id 逗号分隔
+  --limit LIMIT         每店最多处理 N 条
+```
+
+## warehouse-clear
+
+当前不使用：此命令操作成都仓，不能用于仅允许莫斯科仓的日常任务。命令仍被注册，不代表代码已强制禁用。
+
+```text
+usage: sellerops warehouse-clear [-h] [--shops SHOPS] [--limit LIMIT]
+                                 [--interval INTERVAL] [--parallel PARALLEL]
+                                 [--apply] [--yes]
+
+options:
+  -h, --help           show this help message and exit
+  --shops SHOPS        限定店铺 id 逗号分隔（默认全部店铺的成都仓）
+  --limit LIMIT        （预留）每店最多处理 N 条，0=全部
+  --interval INTERVAL  删除请求间隔秒（默认 0.3）
+  --parallel PARALLEL  并发店铺数（默认 1=串行；--apply 时有效，店内仍串行）
+  --apply              真正执行删除（不可逆）
+  --yes                确认永久删除（后台运行必备）
+```
+
+## publish
+
+```text
+usage: sellerops publish [-h] [--nm NM] [--vc VC] [--prefix PREFIX]
+                         [--price PRICE] [--dims DIMS] [--length LENGTH]
+                         [--width WIDTH] [--height HEIGHT] [--weight WEIGHT]
+                         [--shops SHOPS] [--stock STOCK] [--cn CN]
+                         [--file FILE] [--cn-stock CN_STOCK]
+                         [--interval INTERVAL] [--apply]
+                         [nms ...]
+
+positional arguments:
+  nms                  WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+
+options:
+  -h, --help           show this help message and exit
+  --nm NM              WB 商品码（逗号分隔多个，兼容命令行参数传参）
+  --vc VC              完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
+  --prefix PREFIX      4位前缀码（如 ABCD 或 BCS-ABCD）
+  --price PRICE        指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+  --dims DIMS          自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
+  --length LENGTH      包装长 (cm)
+  --width WIDTH        包装宽 (cm)
+  --height HEIGHT      包装高 (cm)
+  --weight WEIGHT      包装毛重 (kg)
+  --shops SHOPS        目标店铺 ID（逗号分隔，如 9352,9353；默认上架到全部活跃店铺）
+  --stock STOCK        上架库存量（默认 999）
+  --cn CN              商品中文名（辅助匹配价格与包装规格）
+  --file FILE          批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+  --cn-stock CN_STOCK  按中文名指定库存（'中文名:库存,...'）
+  --interval INTERVAL  批次/商品请求间隔秒（默认 1.0）
+  --apply              真正调用平台接口执行（默认仅 dry-run 预览）
+```
+
+## create-cards
+
+```text
+usage: sellerops create-cards [-h] [--nm NM] [--vc VC] [--prefix PREFIX]
+                              [--price PRICE] [--dims DIMS] [--length LENGTH]
+                              [--width WIDTH] [--height HEIGHT]
+                              [--weight WEIGHT] [--shops SHOPS]
+                              [--stock STOCK] [--cn CN] [--file FILE]
+                              [--cn-stock CN_STOCK] [--interval INTERVAL]
+                              [--apply]
+                              [nms ...]
+
+positional arguments:
+  nms                  WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+
+options:
+  -h, --help           show this help message and exit
+  --nm NM              WB 商品码（逗号分隔多个，兼容命令行参数传参）
+  --vc VC              完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
+  --prefix PREFIX      4位前缀码（如 ABCD 或 BCS-ABCD）
+  --price PRICE        指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+  --dims DIMS          自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
+  --length LENGTH      包装长 (cm)
+  --width WIDTH        包装宽 (cm)
+  --height HEIGHT      包装高 (cm)
+  --weight WEIGHT      包装毛重 (kg)
+  --shops SHOPS        目标店铺 ID（逗号分隔，如 9352,9353；默认上架到全部活跃店铺）
+  --stock STOCK        上架库存量（默认 999）
+  --cn CN              商品中文名（辅助匹配价格与包装规格）
+  --file FILE          批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+  --cn-stock CN_STOCK  按中文名指定库存（'中文名:库存,...'）
+  --interval INTERVAL  批次/商品请求间隔秒（默认 1.0）
+  --apply              真正调用平台接口执行（默认仅 dry-run 预览）
+```
+
+## promo-apply
+
+```text
+usage: sellerops promo-apply [-h] [--apply] [--shops SHOPS] [--days DAYS]
+                             [--days-back DAYS_BACK] [--sleep SLEEP]
+
+options:
+  -h, --help            show this help message and exit
+  --apply               真正报名（默认 dry-run 预览）
+  --shops SHOPS         限定店铺 id 逗号分隔
+  --days DAYS           查询结束=N天后
+  --days-back DAYS_BACK
+                        查询起始=N天前
+  --sleep SLEEP         活动间请求间隔秒
+```
+
+## promo-goods
+
+```text
+usage: sellerops promo-goods [-h] [--shops SHOPS] [--status STATUS]
+                             [--page-size PAGE_SIZE] [--max-pages MAX_PAGES]
+                             [--limit LIMIT] [--no-cn]
+
+options:
+  -h, --help            show this help message and exit
+  --shops SHOPS         限定店铺 id 逗号分隔（默认全部已填 cookie 店铺）
+  --status STATUS       活动状态ID逗号分隔（默认 4,9,11 = 后台默认视图）
+  --page-size PAGE_SIZE
+                        活动列表分页大小（默认 100）
+  --max-pages MAX_PAGES
+                        活动列表最多翻页数（安全上限，默认 50）
+  --limit LIMIT         每店最多拉取 N 个活动（0=不限，翻页到底）
+  --no-cn               不解析商品中文名（供应商代码仍解析）
+```
+
+## promo-gap
+
+```text
+usage: sellerops promo-gap [-h] [--mode {gap,waste,both}] [--shops SHOPS]
+                           [--min MIN] [--days DAYS] [--date DATE]
+                           [--begin BEGIN] [--end END] [--status STATUS]
+                           [--listed-only] [--top TOP] [--no-cn] [--url URL]
+                           [--table TABLE] [--page-size PAGE_SIZE]
+                           [--max-pages MAX_PAGES] [--limit LIMIT]
+
+options:
+  -h, --help            show this help message and exit
+  --mode {gap,waste,both}
+                        审计方向：gap=该推没推(默认) / waste=该关的(在推广但本店单数<阈值) / both=两个都出
+  --shops SHOPS         限定店铺，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部已填 cookie 店铺）
+  --min MIN             单数阈值（默认 4）：gap=单数≥N；waste=单数<N
+  --days DAYS           近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）
+  --date DATE           单天 YYYY-MM-DD（等价 --begin=--end）
+  --begin BEGIN         区间开始 YYYY-MM-DD（单独给按单天处理）
+  --end END             区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）
+  --status STATUS       推广活动状态ID逗号分隔（默认 4,9,11 = 含暂停；只算在投用 --status 9）
+  --listed-only         [gap] 只输出「可直接补推」组（默认两组都出）
+  --top TOP             每组控制台只显示前 N 名（0=全部；CSV 始终写全量）
+  --no-cn               不补全商品中文名（飞书表内已有的仍显示）
+  --url URL             飞书表格地址（可选，默认读配置 feishu.base_url）
+  --table TABLE         飞书表名（默认 订单登记）
+  --page-size PAGE_SIZE
+                        推广活动列表分页大小（默认 100）
+  --max-pages MAX_PAGES
+                        推广活动列表最多翻页数（默认 50）
+  --limit LIMIT         每店最多拉取 N 个活动（0=不限）
+```
+
+## discount
+
+```text
+usage: sellerops discount [-h] [--apply] [--threshold THRESHOLD] [--all]
+                          [--below BELOW] [--target TARGET] [--name NAME]
+                          [--vc VC] [--prefix PREFIX] [--shops SHOPS]
+                          [--limit LIMIT] [--chunk CHUNK]
+
+options:
+  -h, --help            show this help message and exit
+  --apply               真正提交修改（默认 dry-run 预览）
+  --threshold THRESHOLD
+                        折扣阈值：只处理折扣>该值的商品（默认 50；指定 --all 或指定 --vc 时默认不限阈值）
+  --all                 不限折扣阈值，处理指定条件下的所有在架商品（等价于 --threshold -1）
+  --below BELOW         额外命中折扣 <N 的商品（与 --threshold 取并集，走 WB 折扣升序列表接口；例
+                        --threshold 55 --below 40 = 折扣>55% 或 <40%；-1=不启用）
+  --target TARGET       目标折扣（默认 50）
+  --name NAME           商品价格表产品中文名包含匹配（如 笔记本电脑）
+  --vc VC               指定单个或多个 vendorCode（逗号分隔）
+  --prefix PREFIX       vendorCode 4位前缀码包含匹配（如 DSGI）
+  --shops SHOPS         限定店铺 id 逗号分隔（默认全部凭证店铺）
+  --limit LIMIT         每店最多处理 N 条（0=不限）
+  --chunk CHUNK         每批提交数量（默认 100，最大 300）
+```
+
+## discount-bcs
+
+```text
+usage: sellerops discount-bcs [-h] [--apply] [--threshold THRESHOLD]
+                              [--target TARGET] [--shops SHOPS]
+                              [--limit LIMIT]
+
+options:
+  -h, --help            show this help message and exit
+  --apply               真正提交（默认 dry-run）
+  --threshold THRESHOLD
+                        阈值：只处理折扣>该值的商品；全量设目标值用 --threshold -1
+  --target TARGET       目标折扣
+  --shops SHOPS         限定店铺 id 逗号分隔
+  --limit LIMIT         每店最多处理 N 条（0=不限）
+```
+
+## price-review
+
+```text
+usage: sellerops price-review [-h] [--apply] [--shops SHOPS] [--limit LIMIT]
+
+options:
+  -h, --help     show this help message and exit
+  --apply        真正应用新价格（默认 dry-run）
+  --shops SHOPS  限定店铺 id 逗号分隔
+  --limit LIMIT  每店最多审核 N 个（0=全部）
+```
+
+## orders
+
+```text
+usage: sellerops orders [-h] [--begin BEGIN] [--end END] [--days DAYS]
+                        [--no-sync] [--shops SHOPS] [--page-size PAGE_SIZE]
+
+options:
+  -h, --help            show this help message and exit
+  --begin BEGIN         开始日期 YYYY-MM-DD
+  --end END             结束日期 YYYY-MM-DD
+  --days DAYS           查询最近 N 天（--begin/--end 未指定时，默认 1 天）
+  --no-sync             跳过订单同步，直接查缓存
+  --shops SHOPS         限定店铺 id 逗号分隔（默认全部）
+  --page-size PAGE_SIZE
+                        分页每页条数
+```
+
+## mabang-orders
+
+```text
+usage: sellerops mabang-orders [-h] [--days DAYS] [--page-size PAGE_SIZE]
+                               [--apply]
+
+options:
+  -h, --help            show this help message and exit
+  --days DAYS           新增待处理订单日期范围：0=不限日期（默认）；正数=最近 N 天
+  --page-size PAGE_SIZE
+                        订单列表每页条数
+  --apply               真正更换错误匹配（默认 dry-run 只出报表）
+```
+
+## mabang-forecast
+
+```text
+usage: sellerops mabang-forecast [-h] [--days DAYS] [--page-size PAGE_SIZE]
+                                 [--apply] [--check] [--status {1,3,99,5}]
+                                 [--pages PAGES] [--wait WAIT]
+                                 [--upload-timeout UPLOAD_TIMEOUT]
+                                 [--poll-interval POLL_INTERVAL]
+                                 [--upload-waiting]
+
+options:
+  -h, --help            show this help message and exit
+  --days DAYS           新增待处理订单日期范围：0=不限日期（默认）；正数=最近 N 天
+  --page-size PAGE_SIZE
+                        订单列表每页条数
+  --apply               全链路执行：生成批次→上传→轮询等待上传结束→设置交运方式（各步幂等跳过已完成项）
+  --check               只查询预报批次（默认四 tab 概览：待预报/预报成功/预报失败/历史预报）
+  --status {1,3,99,5}   --check 只看单个 tab：1=待预报 / 3=预报成功 / 99=预报失败 / 5=历史预报（默认四
+                        tab 概览）
+  --pages PAGES         --check --status 时最多打印页数（默认 1；0=翻到底）
+  --wait WAIT           轮询之外额外的最小等待秒数（默认 0；旧「盲等固定秒数」语义已废弃）
+  --upload-timeout UPLOAD_TIMEOUT
+                        轮询等待新批次上传结束的最长秒数（默认读配置
+                        mabang.upload_timeout_seconds，缺省 900）
+  --poll-interval POLL_INTERVAL
+                        批次状态轮询间隔秒数（默认读配置 mabang.upload_poll_interval，缺省 20）
+  --upload-waiting      把待上传列表(status=1)中历史批次一并补传（补传后同样轮询等待上传结束）
+```
+
+## feishu-register
+
+```text
+usage: sellerops feishu-register [-h] [--url URL] [--table TABLE]
+                                 [--scope {latest,pending,all}] [--date DATE]
+                                 [--begin BEGIN] [--end END] [--days DAYS]
+                                 [--page-size PAGE_SIZE] [--apply]
+                                 [--no-pending]
+
+options:
+  -h, --help            show this help message and exit
+  --url URL             飞书多维表格地址（可选，默认读配置 feishu.base_url）
+  --table TABLE         表格名（默认 订单登记）
+  --scope {latest,pending,all}
+                        latest=最近500条全状态去重只登新增（默认）；pending=待处理订单；all=全部状态订单（补录
+                        历史，配合 --date 或 --begin/--end）
+  --date DATE           单天日期 YYYY-MM-DD（--scope all 用）
+  --begin BEGIN         开始日期 YYYY-MM-DD（--scope all 用）
+  --end END             结束日期 YYYY-MM-DD（--scope all 用）
+  --days DAYS           待处理订单日期范围：0=不限日期（默认）；正数=最近 N 天；用于 pending 或 latest
+                        合并待处理单
+  --page-size PAGE_SIZE
+                        订单列表每页条数
+  --apply               真正写入（默认 dry-run 只列出将登记订单）
+  --no-pending          不合并「待处理订单」数据源（默认 scope=latest 会合并 orderalllist +
+                        待处理订单，让只匹配但未进预报/上传/交运流程的订单也能登记）
+```
+
+## feishu-register-dedup
+
+```text
+usage: sellerops feishu-register-dedup [-h] [--url URL] [--table TABLE]
+                                       [--apply] [--limit LIMIT]
+
+options:
+  -h, --help     show this help message and exit
+  --url URL      飞书多维表格地址（可选，默认读配置 feishu.base_url）
+  --table TABLE  表格名（默认 订单登记）
+  --apply        真正删除重复记录（默认 dry-run 只出报告）
+  --limit LIMIT  本次最多删除 N 行（0=不限）
+```
+
+## mabang-stock-register
+
+```text
+usage: sellerops mabang-stock-register [-h] [--url URL] [--table TABLE]
+                                       [--apply]
+
+options:
+  -h, --help     show this help message and exit
+  --url URL      飞书多维表格地址（可选，默认读配置 feishu.base_url）
+  --table TABLE  目标表名（默认 马帮库存登记表）
+  --apply        真正全量重建（默认 dry-run 预览）
+```
+
+## mabang-stock-daily
+
+```text
+usage: sellerops mabang-stock-daily [-h] [--url URL] [--table TABLE]
+                                    [--orders-table ORDERS_TABLE]
+                                    [--date DATE] [--begin BEGIN] [--end END]
+                                    [--apply]
+
+options:
+  -h, --help            show this help message and exit
+  --url URL             飞书多维表格地址（可选，默认读配置 feishu.base_url）
+  --table TABLE         库存表名（默认 马帮库存登记表）
+  --orders-table ORDERS_TABLE
+                        订单明细表名（默认 订单登记）
+  --date DATE           单天日期 YYYY-MM-DD（默认今天；显式给出即进入区间模式，会删除该日之前的旧日期列）
+  --begin BEGIN         区间开始 YYYY-MM-DD（显式给出即删除该日之前的旧日期列，并补建至 --end 的缺列）
+  --end END             区间结束 YYYY-MM-DD（必须与 --begin/--date 同用，单独使用直接报错）
+  --apply               真正建列并填充（默认 dry-run 预览）
+```
+
+## feishu-vc-stats
+
+```text
+usage: sellerops feishu-vc-stats [-h] [--days DAYS] [--date DATE]
+                                 [--begin BEGIN] [--end END] [--shops SHOPS]
+                                 [--top TOP] [--by-prefix] [--no-cn]
+                                 [--url URL] [--table TABLE]
+
+options:
+  -h, --help     show this help message and exit
+  --days DAYS    近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）
+  --date DATE    单天 YYYY-MM-DD（等价 --begin=--end）
+  --begin BEGIN  区间开始 YYYY-MM-DD（单独给按单天处理）
+  --end END      区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）
+  --shops SHOPS  店铺过滤，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部）
+  --top TOP      控制台只显示前 N 名（0=全部；CSV 始终写全量）
+  --by-prefix    按 vendorCode 的 4 位前缀码聚合（默认完整 vendorCode）
+  --no-cn        不补全商品中文名（表内已有的仍会显示）
+  --url URL      飞书表格地址（可选，默认读配置 feishu.base_url）
+  --table TABLE  表名（默认 订单登记）
+```
+
+## fbs-delivery
+
+```text
+usage: sellerops fbs-delivery [-h] [--shops SHOPS] [--days DAYS] [--date DATE]
+                              [--begin BEGIN] [--end END]
+                              [--item-state ITEM_STATE]
+                              [--supply-state SUPPLY_STATE]
+                              [--include-canceled] [--limit LIMIT]
+                              [--max-pages MAX_PAGES] [--top TOP] [--no-cn]
+                              [--interval INTERVAL]
+
+options:
+  -h, --help            show this help message and exit
+  --shops SHOPS         店铺过滤，逗号分隔，支持店铺ID或短名（默认全部已填 cookie 店铺）
+  --days DAYS           近 N 天（按清单 createdAt；0=不过滤，默认）
+  --date DATE           单天 YYYY-MM-DD（等价 --begin=--end）
+  --begin BEGIN         区间开始 YYYY-MM-DD（单独给按单天处理）
+  --end END             区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）
+  --item-state ITEM_STATE
+                        商品级状态过滤，逗号分隔（默认 shipment=待发货；all=不过滤；可选 cancel/sold/re
+                        adyForPickup/reshipment/sorted/expectedSorting=等待分拣）
+  --supply-state SUPPLY_STATE
+                        清单级状态过滤，逗号分隔（默认不过滤；可选 complete/onway/reshipment/sort）
+  --include-canceled    把 cancel 并入 --item-state（默认排除已取消）
+  --limit LIMIT         每店最多处理 N 个清单（0=不限）
+  --max-pages MAX_PAGES
+                        清单/商品列表翻页安全上限（默认 50，防死循环）
+  --top TOP             控制台按中文名只显示前 N 名（0=全部；CSV 始终全量）
+  --no-cn               不解析商品中文名（供应商代码仍解析）
+  --interval INTERVAL   清单间/店铺间请求间隔秒（默认 0.3）
+```
+
+## order-stats
+
+```text
+usage: sellerops order-stats [-h] [--shops SHOPS] [--days DAYS] [--date DATE]
+                             [--begin BEGIN] [--end END] [--timezone TIMEZONE]
+                             [--page-size PAGE_SIZE] [--max-pages MAX_PAGES]
+                             [--limit LIMIT] [--top TOP] [--no-cn] [--quiet]
+                             [--interval INTERVAL] [--out OUT] [--no-detail]
+                             [--detail-max-rows DETAIL_MAX_ROWS]
+                             [--no-local-filter]
+
+options:
+  -h, --help            show this help message and exit
+  --shops SHOPS         店铺过滤，逗号分隔，支持店铺ID或短名（默认全部已填 cookie 店铺）
+  --days DAYS           近 N 天（含今天，默认 30；仅当未给 --begin/--end/--date 时生效）
+  --date DATE           单天 YYYY-MM-DD（等价 --begin=--end）
+  --begin BEGIN         区间开始 YYYY-MM-DD（单独给按单天处理）
+  --end END             区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）
+  --timezone TIMEZONE   接口时区（默认 America/Los_Angeles，对齐抓包；--days/--begin/--end
+                        的日期口径同此，LA 日期比北京时间晚约 15 小时）
+  --page-size PAGE_SIZE
+                        每页条数（默认 50，抓包实测；服务端夹小会自动降级）
+  --max-pages MAX_PAGES
+                        每店翻页安全上限（默认 200，防死循环）
+  --limit LIMIT         每店最多拉取 N 行明细（0=不限）
+  --top TOP             控制台两张表（按中文名 / 按供应商代码）各只显示前 N 名（0=全部；xlsx 始终全量）
+  --no-cn               不解析商品中文名（供应商代码仍解析）
+  --quiet               不打印逐页翻页进度
+  --interval INTERVAL   翻页/店铺间请求间隔秒（默认 0.3）
+  --out OUT             自定义 xlsx 路径（默认 data/logs/订单动态统计_<时间戳>.xlsx）
+  --no-detail           不输出「订单明细」Sheet（行数大时提速、减小文件）
+  --detail-max-rows DETAIL_MAX_ROWS
+                        「订单明细」Sheet 最多写 N 行（0=不限）
+  --no-local-filter     不在本地按 created 复核时间窗（默认复核；越界行会显式告警）
+```
+
+## mabang-process
+
+```text
+usage: sellerops mabang-process [-h] [--days DAYS] [--page-size PAGE_SIZE]
+                                [--wait WAIT]
+                                [--upload-timeout UPLOAD_TIMEOUT]
+                                [--poll-interval POLL_INTERVAL] [--url URL]
+                                [--table TABLE] [--no-pending] [--apply]
+
+options:
+  -h, --help            show this help message and exit
+  --days DAYS           配置店铺的全部新增待处理订单，0=不限日期（默认）；正数=最近 N 天
+  --page-size PAGE_SIZE
+                        订单列表分页大小（默认 100）
+  --wait WAIT           轮询之外额外的最小等待秒数（默认 0；旧「盲等固定秒数」语义已废弃）
+  --upload-timeout UPLOAD_TIMEOUT
+                        轮询等待新批次上传结束的最长秒数（默认读配置
+                        mabang.upload_timeout_seconds，缺省 900）
+  --poll-interval POLL_INTERVAL
+                        批次状态轮询间隔秒数（默认读配置 mabang.upload_poll_interval，缺省 20）
+  --url URL             飞书表格地址（可选，默认读配置 feishu.base_url）
+  --table TABLE         飞书订单登记表名（默认 订单登记）
+  --no-pending          飞书登记时不合并「待处理订单」数据源（默认合并，覆盖只匹配未进预报/上传/交运的订单）
+  --apply               真正执行（默认 dry-run 预览）
+```
+
+## questions
+
+```text
+usage: sellerops questions [-h] [--shops SHOPS] [--reply REPLY] [--apply]
+                           [--question-id QUESTION_ID] [--reply-all] [--yes]
+                           [--no-detail]
+
+options:
+  -h, --help            show this help message and exit
+  --shops SHOPS         限定店铺 id 逗号分隔
+  --reply REPLY         回复内容（配合 --question-id 或 --reply-all）
+  --apply               真正提交回复（默认预览）
+  --question-id QUESTION_ID
+                        回复指定提问 ID
+  --reply-all           回复本店全部未处理提问（需 --yes）
+  --yes                 确认回复全部（公开发言）
+  --no-detail           跳过 WB 商品详情拉取（只显示本地中文名，速度快）
+```
+
+## questions-watch
+
+```text
+usage: sellerops questions-watch [-h] [--interval INTERVAL]
+                                 [--mode {front,back}] [--apply]
+                                 [--shops SHOPS] [--once]
+
+options:
+  -h, --help           show this help message and exit
+  --interval INTERVAL  轮询间隔秒（默认 90，或 credentials 的 ai.watch_interval）
+  --mode {front,back}  front=展示提问/商品信息；back=LLM 生成草稿，提交仍需 --apply
+  --apply              生成并提交回复（同时选择 back；需配 ai.api_key）
+  --shops SHOPS        限定店铺 id 逗号分隔
+  --once               只跑一轮就退出（测试用）
+```
+
+## chat-watch
+
+```text
+usage: sellerops chat-watch [-h] [--interval INTERVAL] [--mode {front,back}]
+                            [--apply] [--shops SHOPS] [--once] [--limit LIMIT]
+                            [--history-limit HISTORY_LIMIT]
+                            [--since-hours SINCE_HOURS]
+                            [--max-turns MAX_TURNS]
+
+options:
+  -h, --help            show this help message and exit
+  --interval INTERVAL   轮询间隔秒（默认取 credentials 的 ai.watch_interval，90）
+  --mode {front,back}   front=展示买家消息/商品信息；back=LLM 生成草稿，发送仍需 --apply
+  --apply               生成并发送回复（同时选择 back；需配 ai.api_key）
+  --shops SHOPS         限定店铺 id 逗号分隔
+  --once                只跑一轮就退出（测试用）
+  --limit LIMIT         每店最多取 N 个会话（默认 20）
+  --history-limit HISTORY_LIMIT
+                        会话历史拉取条数（默认 50）
+  --since-hours SINCE_HOURS
+                        只处理最近 N 小时内的买家消息（默认 72；0=不限，会补回历史旧账）
+  --max-turns MAX_TURNS
+                        拼进提示词的最近对话轮数（默认 3）
+```
+
+## chats
+
+```text
+usage: sellerops chats [-h] [--shops SHOPS] [--limit LIMIT]
+                       [--chat-id CHAT_ID] [--history HISTORY]
+                       [--since-hours SINCE_HOURS] [--no-detail]
+
+options:
+  -h, --help            show this help message and exit
+  --shops SHOPS         限定店铺 id 逗号分隔
+  --limit LIMIT         每店最多取 N 个会话（默认 20）
+  --chat-id CHAT_ID     只看指定会话 chatID
+  --history HISTORY     展示最近 N 条消息历史（默认仅在指定 --chat-id 时展示 10 条）
+  --since-hours SINCE_HOURS
+                        只列出最新消息在最近 N 小时内的会话（0=不限，默认）
+  --no-detail           跳过 WB 商品详情拉取（只显示本地中文名，速度快）
+```
+
+## appeals
+
+```text
+usage: sellerops appeals [-h] [--shops SHOPS] [--days DAYS]
+                         [--days-max DAYS_MAX] [--type {in,out}]
+                         [--limit LIMIT] [--no-cn]
+
+options:
+  -h, --help           show this help message and exit
+  --shops SHOPS        限定店铺 id 逗号分隔（默认全部已填 cookie 店铺）
+  --days DAYS          仅命中剩余天数恰好=N 的未处理投诉（decide_counter，0=不筛选，默认）
+  --days-max DAYS_MAX  仅命中剩余天数≤N 的未处理投诉（0=不筛选，默认；与 --days 同给时 --days 优先）
+  --type {in,out}      投诉方向：in=发往本店（默认）/ out=本店发出
+  --limit LIMIT        每店最多拉取 N 条投诉列表（0=不限，翻页到底）
+  --no-cn              不解析商品中文名（供应商代码仍会解析；本地真源查不到的商品标注「本地真源未收录」）
+```
+
+## ratings
+
+```text
+usage: sellerops ratings [-h] [--shops SHOPS] [--rating RATING]
+                         [--min-rating MIN_RATING] [--max-rating MAX_RATING]
+                         [--one-star] [--two-star] [--negative]
+                         [--stars STARS] [--min-one-star MIN_ONE_STAR]
+                         [--min-feedbacks MIN_FEEDBACKS] [--days DAYS]
+                         [--name NAME] [--prefix PREFIX] [--vc VC]
+                         [--limit LIMIT] [--out OUT]
+
+options:
+  -h, --help            show this help message and exit
+  --shops SHOPS         限定店铺 id 逗号分隔（默认全部）
+  --rating RATING       精确筛选指定评分（如 1 或 1.0）
+  --min-rating MIN_RATING
+                        最低评分（>=）
+  --max-rating MAX_RATING
+                        最高评分（<=，如 1 或 2 筛选低分商品）
+  --one-star            筛选存在 1 星评论的商品（oneStar >= 1）
+  --two-star            筛选存在 2 星评论的商品（twoStar >= 1）
+  --negative, --bad     筛选存在差评的商品（即 1 星或 2 星差评数 >= 1）
+  --stars STARS         指定星级评论筛选（逗号分隔，如 1,2 筛选含 1 星或 2 星差评的商品）
+  --min-one-star MIN_ONE_STAR
+                        筛选 1 星评论数 >= N 的商品
+  --min-feedbacks MIN_FEEDBACKS
+                        最低评价总数（默认 1，仅看有评价商品；设为 0 含无评价）
+  --days DAYS           统计天数跨度（默认 365 天）
+  --name NAME           按产品中文名包含筛选
+  --prefix PREFIX       按 4 位前缀码筛选
+  --vc VC               按 vendorCode 筛选
+  --limit LIMIT         每店最多拉取商品条数（0=不限）
+  --out OUT             自定义导出文件路径（支持 .csv / .xlsx）
+```
+
+## ai-test
+
+```text
+usage: sellerops ai-test [-h] [--qa QA]
+
+options:
+  -h, --help  show this help message and exit
+  --qa QA     测试数据集 json（默认 data/ai_test_qa.json）
+```
+
+## cookies-update
+
+```text
+usage: sellerops cookies-update [-h] md_file
+
+positional arguments:
+  md_file     含 fetch 块的 md 文件（相对路径从数据目录 har/ 读取，或传绝对路径）
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## cookie-refresh-wb
+
+当前未启用：Playwright 尚未启动，凭证按 [手动抓包流程](CONFIGURATION.md#手动抓包更新凭证当前方式) 更新；不能把保留的参数定义当作自动续期已部署。
+
+```text
+usage: sellerops cookie-refresh-wb [-h] [--shops SHOPS] [--headed] [--apply]
+
+options:
+  -h, --help     show this help message and exit
+  --shops SHOPS  限定店铺 id 逗号分隔（默认全部 WB 店铺）
+  --headed       有头浏览器人工登录（仅供后续另行启用浏览器方案时使用）
+  --apply        实际执行刷新（默认 dry-run 预览）
+```
+
+## daily
+
+```text
+usage: sellerops daily [-h] [--apply] [--shops SHOPS] {morning,check}
+
+positional arguments:
+  {morning,check}
+
+options:
+  -h, --help       show this help message and exit
+  --apply          执行每日流程（默认预览）
+  --shops SHOPS    限定店铺 ID
+```
+
+## schedule
+
+```text
+usage: sellerops schedule [-h] [--remove] [--apply] [--yes]
+
+options:
+  -h, --help  show this help message and exit
+  --remove    删除全部任务
+  --apply     真正注册或删除任务
+  --yes       确认删除任务
+```

@@ -1,53 +1,11 @@
-# data/ 目录说明（克隆后你需要在这里创建自己的文件）
+# 运行数据
 
-> 本目录被 `.gitignore` 整体忽略，**仓库里不含任何数据**。克隆后请按下面结构，在本地 `data/` 下创建你自己的文件。
+本目录存放自己的凭证、表格、商品快照、状态和浏览器资料，与项目根目录 run.py 同级。已有数据可整体放入；首次配置按项目 README 的配置和数据说明准备。默认路径不依赖启动时的工作目录；可用 --data-dir 或 SELLEROPS_DATA_DIR 覆盖。
 
-## 必须创建
+- 文件格式、表头、状态与备份规则：[数据契约](../docs/DATA.md)。
+- 凭证与平台准备：[配置](../docs/CONFIGURATION.md)。
+- 常用任务与读写边界：[操作流程](../docs/USAGE.md)。
 
-### 1. `data/credentials.json` —— 统一凭证
+真实凭证、商业表格、店铺快照、抓包、日志和浏览器登录资料不提交 Git。此目录仅 README.md 可以随源码发布。生产数据不要用示例文件覆盖，状态损坏不要靠清空文件解决。
 
-```json
-{
-  "bcs": {
-    "base_url": "https://wb.bcserp.com/prod-api",
-    "token": "<BCS 登录 JWT>",
-    "limit_key": "<userId.base64url>",
-    "cookie_extra": "_c_WBKFRo=...; sidebarStatus=1"
-  },
-  "wb": {
-    "root_version": "v1.108.1",
-    "shops": [
-      {
-        "shopName": "店铺名",
-        "shopId": 12345,
-        "authorizev3": "<用户级 JWT>",
-        "wb_seller_lk": "<店铺级 JWT，含 Z-Sid>",
-        "cookie": "_wbauid=...; x-supplier-id-external=...; cfidsw-wb=..."
-      }
-    ]
-  }
-}
-```
-
-凭证获取方法见 `../docs/CREDENTIALS.md`。⚠️ 本文件含真实令牌，**严禁提交到 git / 分享**。
-
-### 2. `data/商品价格表.xlsx` —— 商品清单（唯一权威）
-
-8 列结构（第一行表头）：`产品图片 / 卖家SKU / 产品中文名 / 实际售价 / 尺寸 / 最低售价 / vendorCode前缀码 / 库存SKU`
-
-- 第 4 列「实际售价」：用户手工维护，可直接写数值或公式（`=F2*2` / `=F2` / `=$F$2*2` / `=ROUND(F2*1.3,2)` 等）；店铺价 = `floor(实际售价)`。公式不可解析时回退 Excel 缓存值，取不到则打印 `[警告]`。
-- 第 8 列「库存SKU」：马帮侧 SKU（`stock-wb`/马帮订单匹配用）；缺列或空值按 `""` 处理。
-- 第 7 列「vendorCode前缀码」：4 位大写、全局唯一（上架时用于生成 `BCS-{前缀}-{WB原始nmId}`）。
-
-## 自动生成与状态维护（无需手动创建）
-
-- `shops/` —— ★ **各店铺独立映射表**（`shop_{id}_{name}.xlsx`，反映单店真实在架存活商品、价格与库存）；子目录 `_archive/` 用于存放停用/归档店铺
-- `state/` —— 同步状态 / 全局归属池（`vc_known.json`、`vc_override.json`、`vc_excluded.json`）
-- `products/` —— `wb.py fetch` 拉取的各店商品快照
-- `workbench/` —— 生成的工作台 HTML
-- `logs/` —— 运行日志与结果 CSV
-- `价格映射表.xlsx` —— ★ **聚合全景总表**（8-Sheet，`wb.py merge` 汇聚所有活跃单店表 Outer Join 自动生成，勿手改）
-
-## 可选（刷新凭证时用）
-
-- `har/` —— 从浏览器抓包导出的 md/har 文件，供 `wb.py cookies-update` 消费
+普通用户及运营 AI 可维护自己的数据；源码、文档和项目配置保持只读，临时脚本放项目根目录的 _scratch/。维护者明确授权的开发和文档维护任务按开发准则执行。

@@ -1,29 +1,42 @@
-# ==== 敏感与本地数据：data/ 默认全部忽略，只保留说明模板 ====
-# 原因：data/ 里含真实令牌（credentials.json、har/ 抓包）、商业数据（商品价格表、价格映射表）、
-#       以及各店铺快照/状态/日志——每个用户都不同，绝不能进 git（尤其公开仓库）。
-# data/* 的忽略项含：商品价格表.xlsx、价格映射表.xlsx、credentials.json、products/、state/、logs/、har/ 等。
-data/*
-!data/README.md
+# Python 环境与构建产物
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
 
-# ==== 归档：旧脚本/旧文档里含历史 token 与旧 config，严禁提交 ====
-_archive/
+# 生产凭证、商业数据、快照、抓包、浏览器登录态和运行日志
+# data/ 整体保护，仅保留不含敏感信息的说明文件
+/data/*
+!/data/README.md
+/api/
+/_archive/
+/logs/
+/har/
+/wb_browser_profiles/
+/secrets/
 
-# ==== API 抓包与内部文档：含真实 X-Limit-Key / JWT / sid 前缀，不随公开仓库分发 ====
-api/
-
-# ==== AI 临时工作区（AI 写脚本/处理文件的草稿区；仅保留说明模板，其余不进公开仓库）====
-_scratch/*
-!_scratch/README.md
-
-# ==== 工作区元数据与记忆（作者内部笔记）====
+# 临时脚本、测试副本和本机工具资料可能包含生产数据
+/_scratch/*
+!/_scratch/README.md
+/.test-tmp/
 .workbuddy/
 .trae/
 
-# ==== 虚拟环境 ====
-.venv/
+# 防止凭证、环境变量和抓包误放到数据目录之外
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+credentials.json
+credentials_*.json
+*.har
+*.har.gz
+*.pem
+*.key
 
-# ==== 运行产物 ====
-__pycache__/
-*.pyc
-.DS_Store
-_scratchai*.log
+# 根目录迁移期间的私有暂存区
+/.root-migration-*/

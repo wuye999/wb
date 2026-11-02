@@ -1,89 +1,116 @@
-# Wildberries / BCS 卖家自动化（wb_ops）
+# SellerOps 卖家运营工具
 
-统一管理多店铺（店铺数量与 ID 由 data/credentials.json 决定，作者当前环境 3 家：袁州1/2/3）的商品**映射、改价、库存、下架、促销报名、折扣改价、清理**与**每日自动运营**。
+Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需要 Python 3.10+，基础依赖为 requests 和 openpyxl。
 
-## ⚠ 环境适配（换账号 / 换电脑必读）
+## 从这里开始
 
-本仓库里的以下内容是**原作者环境**的，换账号、换店铺、换电脑后**需替换成你自己的**（脚本代码无需改，只需换数据文件与凭证）：
+| 读者或任务 | 阅读入口 |
+| --- | --- |
+| 第一次使用 | 本页安装与数据准备 → [配置](docs/CONFIGURATION.md) → [操作流程](docs/USAGE.md) |
+| 日常查询与运营 | [操作流程](docs/USAGE.md)、[命令参考](docs/CLI.md) |
+| 数据准备与备份 | [数据契约](docs/DATA.md) |
+| 让 AI 协助操作 | [项目约束](AGENTS.md)、[AI 操作指南](docs/AI_GUIDE.md) |
+| 开发与维护 | [开发指南](docs/DEVELOPMENT.md)，包含架构、代码入口、复用能力和开发准则 |
+| 启动或业务报错 | [故障排查](docs/TROUBLESHOOTING.md) |
 
-| 项目 | 原作者环境示例 | 你需要改成 |
-|---|---|---|
-| 店铺 ID / 名称 | 作者环境示例：9352(袁州1)、9353(袁州2)、9356(袁州3) | 你自己的店铺 ID / 名称（wb.py shops 可查） |
-| Python 路径 | `C:\Users\madokka\.workbuddy\binaries\python\envs\default\Scripts\python.exe` | 你自己的 venv Python 路径 |
-| 仓库位置 | 任意目录（本仓库根目录下即可） | 你自己的目录（相对路径，脚本自动识别） |
+## 安装并启动
 
-> 脚本内部**已全部使用相对路径**：`config.py` 按包所在位置自动定位 `data/`，`daily.py`/`schedule.py` 用 `sys.executable` 动态推导 Python 解释器路径，**不依赖任何绝对路径**。你只需准备 `data/credentials.json`（凭证）和 `data/商品价格表.xlsx`（商品清单）。
+在项目根目录创建独立环境，始终使用同一个解释器安装和运行：
 
-## 🤖 给 AI 的硬性约束（必读）
-
-本项目通过 **git 仓库统一维护与更新**。为让后续 `git pull` 更新不冲突，AI 必须遵守：
-
-- **禁止修改项目代码与文档文件**：`wb_ops/`、`wb.py`、`docs/`、`README.md`、`.gitignore`、`requirements.txt`、`data/README.md` 一律**只读**。
-- **写脚本 / 处理文件 → 一律放 `_scratch/` 目录**：AI 要写临时脚本、处理文件、生成中间产物或结果文件时，统一放在仓库根目录的 `_scratch/`（该目录已 gitignore，不进公开仓库，用完可自行清理）。**不要**把临时脚本写进 `wb_ops/`（核心库）、`data/`（数据区）、`docs/` 或仓库根目录。
-- **只允许**：运行命令（`python wb.py ...`）、读写 `data/` 下你自己的数据、在 `_scratch/` 里写临时脚本处理文件、阅读文档与代码。
-- **严禁在写操作后擅自执行同步、合并或写后验证**：在执行改价（`price`）、改库存（`stock`）、改折扣（`discount`）、下架（`trash`）、清理（`clean`）、改尺寸（`dimension`）等写操作后，**严禁顺手执行 `fetch`、`merge` 或自写脚本查询接口进行写后验证**！
-  - **核心原因**：写后验证必须依赖 BCS 全量同步，若不同步拉取的快照只是未修改前的旧数据；而触发 BCS 全量同步耗时长（~40-50s/店），频繁全量同步极易导致平台风控限流。平台侧写操作提交成功即生效。
-  - **规范行为**：所有写操作执行完毕后立即结束。绝对不要自行补跑 `fetch` 或 `merge`，除非用户在指令中明确提出要同步/合并。
-- **严禁执行全量测试，只测新增或修改的功能**：新增或者修改功能时，**无需进行全量测试**，只需要测新增或者修改的功能（使用 `python tests/run_tests.py --cmd <命令>` 或 `python tests/run_tests.py`）。全量测试会真连平台并耗时约 5 分钟，日常开发与修改功能严禁触发全量测试。
-- 确需改代码时，请先征得作者同意，由作者改好后通过 `git pull` 下发，**不要在本地直接改代码**（否则会分叉、`git pull` 冲突）。
-
-## 快速开始
-
-```bash
-# 用你自己的 venv Python 执行（勿用系统 python）；下文统一用 `python` 表示它
-python wb.py shops                      # 打印你的店铺列表（验证鉴权）
-
-# 常用
-python wb.py fetch                      # 同步+拉取商品快照（仅当需要 BCS 缓存反映最新结果时才跑，日常写操作默认不用）
-python wb.py mapping                    # 核对工作台
-python wb.py merge                      # 增量合并映射表（同步各店单表并聚合总表；拿到新审核/新上架需入库时跑）
-python wb.py shops-mapping              # 刷新各店铺独立映射表（data/shops/shop_*.xlsx）
-python wb.py mapping-rename --vc BCS-XXX-123 --cn "新中文名" # 货不对板纠偏/改名：全店单表与总表一键同步
-python wb.py price --name 充电宝 --apply --yes
-python wb.py dimension                        # 按价格表「尺寸」批量改全部店铺商品尺寸（dry-run 默认；也可 --dims "长*宽*高/毛重" 自定义，须配 --vc/--name/--prefix 圈定）
-python wb.py discount --apply           # >50% → 50%（BCS 批量；默认不自动同步/不写后验证，仅提示；加 --sync 自动同步并合并映射表）
-python wb.py discount-wb --apply        # WB 原生批量改折扣（从高到低查询 >50% 并原生批量修改；默认不写后验证）
-python wb.py promo-apply --apply        # 促销报名
-python wb.py promo-goods                 # 只读：广告推广中被推广的商品（WB商品码/供应商代码/中文名；明细 CSV）
-python wb.py promo-gap                   # 只读：该推没推（按店对齐：本店单数≥4 但本店未推广）
-python wb.py promo-gap --mode waste      # 只读：在推但该关（在投活动里被推广但本店单数<4 → 建议关闭清单）
-python wb.py price-review --apply       # ⚠ 报名/改折扣后必跑：应用新价格（改折扣也会触发价格审核）
-python wb.py dims-check --name 视黄醇面霜  # 只读：列出尺寸偏差待验证商品（--type weight/all 可看重量/合并）
-python wb.py clean --target all --apply # 清理（默认不自动同步，仅提示；加 --sync 自动同步并合并映射表）
-python wb.py replicate                  # 跨店复制上架（部分覆盖→补齐缺失店铺）
-python wb.py import-shelve 他人表.xlsx  # 他人映射表导入上架（他人有我方无）
-python wb.py shelve <nmId> --price 59   # 新版批量上架（输入 WB 商品码直接上架）
-python wb.py shelve-old <nmId> --price 59 # 旧版上品建卡（支持自定义完整 VC）
-python wb.py price-review --apply       # 价格审核：应用新价格
-python wb.py orders                     # 订单查询（同步+查询今天）
-# ▸ 写操作（改价/库存/下架/折扣/清理/上架/改尺寸）默认都不同步、不写后验证、不合并映射表；执行完成即结束，严禁擅自补跑 fetch+merge，仅在极低频全局盘点或用户显式要求时才跑。
-python wb.py questions                  # 买家未处理提问查询
-python wb.py appeals --days 5           # WB 平台投诉单：未处理(等待回复) + 剩余天数=5 → 明细 + 去重商品编号行 + CSV
-python wb.py feishu-vc-stats             # 只读：飞书「订单登记」近7天按供应商代码(BCS编号)统计单数降序（跨店合并；--days/--date/--begin/--end/--shops/--by-prefix）
-python wb.py fbs-delivery                # 只读：WB FBS「配送中」清单及其全部商品采集+统计（默认商品状态=待发货 shipment；--shops/--days/--begin/--end/--item-state/--supply-state/--top）
-python wb.py order-stats                 # 只读：WB「订单动态」近30天按商品中文名统计（订单数/退货数/退货率/完单口径退货率/未完结）→ xlsx 多 Sheet（汇总+按供应商代码+每店+明细）
-
-# ▸ 每日新订单处理（2026-09-10 拆分为两个独立脚本；先 A 后 B 保证库存SKU 正确）
-python wb.py mabang-process --apply                     # A 马帮处理一体：匹配商品→预报单→上传（自动发货）→轮询确认预报成功→物流交运（零飞书依赖；轮询 1 请求/轮）
-python wb.py feishu-register                            # B 飞书登记：orderalllist 最近500条 + 待处理订单（两路合并）去重只登新增；只匹配未进预报/上传/交运的单也登记，库存SKU 取本地价格表（查不到留空）
-python wb.py feishu-register --scope all --date 2026-09-05 --apply   # 补录历史订单（指定日期/区间）
-python wb.py mabang-forecast --check                    # 预报批次概览（四 tab：待预报/预报成功/预报失败/历史预报；--status 3 看成功明细）
-python wb.py mabang-stock-daily --apply                 # 「马帮库存登记表」日期列管理：默认只建今天列+更新全部已有日期列+总新增订单量（--begin/--date 显式时删旧列，--end 需同用）
-python wb.py mabang-stock-register --apply              # 全量重建「马帮库存登记表」（马帮全部库存SKU 库存/状态/附件列「图」；会清空各日列与总列）
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe run.py --help
 ```
 
-## 文档
+下文的 `python` 应替换为实际使用的解释器，或先激活环境。也可以使用已装基础依赖的 Python 执行 `python run.py --help`。
 
-| 文档                                           | 内容                     |
-| -------------------------------------------- | ---------------------- |
-| [docs/README.md](docs/README.md)             | 文档索引 + AI 上手           |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构 / 模块职责 / 解耦实践 / 业务规则 / 数据流 |
-| [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | ★ 开发要求与代码格式规范（分层依赖/拆分标准/扩展流程/按需测试门禁） |
-| [docs/REUSE_GUIDE.md](docs/REUSE_GUIDE.md)   | ★ 开发复用指南：能做 X 用哪个模块/函数 + 代码模板（写新功能前先读） |
-| [docs/CLI.md](docs/CLI.md)                   | 58 个命令全集参考 + Python 库调用 |
-| [docs/USAGE.md](docs/USAGE.md)               | 日常情景使用流程               |
-| [docs/CREDENTIALS.md](docs/CREDENTIALS.md)   | 鉴权与凭证                  |
+当前 WB 凭证使用手动登录、抓包并写入的方式更新，**Playwright 尚未启动，浏览器自动续期未启用**；使用现有功能不要求启动它。受限浏览器的抓包步骤见 [配置](docs/CONFIGURATION.md#手动抓包更新凭证当前方式)。飞书功能另需已登录的配套 lark-cli。
 
-## 目录
+## 更新已有环境
 
-- `wb_ops/` 核心库（5 层分层整洁架构） ｜ `wb.py` 统一入口 ｜ `tests/` 自动化测试套件（`test_all_commands.py` 全量 + `run_tests.py` 按需选择器） ｜ `data/` 数据与凭证（本地专属，不进 git） ｜ `docs/` 文档 ｜ `_scratch/` AI 临时工作区 ｜ `api/`、`_archive/` 本地参考（含账号信息，不随公开仓库分发）
+已有用户可继续使用原来的 `data/` 和 `.venv`，无需重建数据或重新填写凭证。更新前先停止本项目的运行进程，在项目根目录执行：
+
+```powershell
+git pull --ff-only
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe run.py --help
+```
+
+以上安装命令会按 `pyproject.toml` 检查基础依赖，并安装 `sellerops` 包入口；不会读取或修改生产数据。原环境若已满足 Python 3.10+、requests 与 openpyxl 的版本要求，也可直接用该环境执行 `python run.py ...`。
+
+当前源码入口是 `run.py`，旧的 `python wb.py ...` 调用需改为 `python run.py ...`。原脚本、快捷方式及计划任务若引用旧入口或目录，应同步更新；安装包后也可使用 `python -m sellerops ...`。持续运行的任务在更新后按原授权范围手动恢复，更新代码不会自动启动任务、同步平台或执行业务写入。
+
+Git 只分发源码、说明和空值样例，自己的凭证、商业表格、快照、状态、日志、运行环境及本地归档不上传。更新代码保留这些用户数据；飞书 CLI 路径、登录状态及平台凭证继续由各用户自己的环境维护。
+
+## 准备自己的数据
+
+数据放在与 `run.py` 同级的 `data/`。已有数据时可将自己的整个 data 文件夹放入；首次配置按 [配置样例](examples/credentials.example.json) 和 [数据契约](docs/DATA.md) 准备凭证及表格：
+
+```text
+wb/
+  run.py
+  src/
+  data/
+    credentials.json
+    商品价格表.xlsx
+    价格映射表.xlsx
+    products/
+    state/
+    shops/
+```
+
+样例凭证为空，不能直接连接平台。基础业务先准备所需平台凭证；商品匹配、价格计算和履约还依赖对应表格及库存 SKU。真实凭证、浏览器资料和业务数据由 Git 排除，更新代码时保留自己的 data，并单独备份。
+
+默认 data 路径由项目位置确定，不随终端工作目录变化。只有需要单独存放数据时才使用 `--data-dir` 或 `SELLEROPS_DATA_DIR`；优先级为命令行、环境变量、项目根目录 data。全局参数放在子命令之前：
+
+```powershell
+python run.py --data-dir "D:\SellerData" shops
+```
+
+## 检查入口并开始使用
+
+以下命令显示帮助或预览，不访问平台、不注册任务：
+
+```powershell
+python run.py price --help
+python run.py daily morning
+python run.py schedule
+```
+
+配置完成后可查询 BCS 店铺列表：
+
+```powershell
+python run.py shops
+```
+
+这只能检查 BCS 店铺查询，不能证明其他平台已登录可用。已有表格和快照时，按自己的店铺和商品生成操作预览：
+
+```powershell
+python run.py price --shops 1001 --name "示例商品"
+```
+
+店铺 ID 和商品名都是占位示例。核对范围、数量、价格及授权后，再对相同范围显式提交：
+
+```powershell
+python run.py price --shops 1001 --name "示例商品" --apply --yes
+```
+
+业务命令的 dry-run 可能读取平台并生成本地报告。首次需要初始化或更新商品快照时，按 [操作流程](docs/USAGE.md) 单独执行 fetch / merge；不要把同步当作每次启动或写入后的固定步骤。
+
+## 日常使用边界
+
+- 凡涉及仓库的操作，**默认且仅限各店铺自己的莫斯科仓库 ID**。全店/全部商品不等于全仓；成都及其他地区仓不操作，也不作为找不到莫斯科时的备用仓。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许莫斯科)。
+- 普通用户及其运营 AI 使用已有命令，维护自己的 data；源码、文档、依赖声明和项目配置保持只读，临时脚本与产物放 `_scratch/`。维护者及其明确授权的开发任务按开发指南修改项目。
+- WB/BCS 写入异步处理。提交并记录接口结果后结束，不进行写后查询验证，不附加同步、拉取或合并。需要更新数据时，由用户单独要求运行 fetch / merge。
+- `--apply` 提交业务写入，部分操作还需 `--yes`；不同命令的确认机制不同。保留任务号与成功、失败、跳过明细，非零退出可能已有部分提交，不能盲目整批重试。
+- Windows 任务记录注册时的解释器、代码和数据路径；移动项目或更换环境后需重新注册，并避免同一业务重复执行。
+
+## 开发检查
+
+```powershell
+python scripts/check.py
+python scripts/check_docs.py
+```
+
+离线检查验证源码、导入、依赖边界、命令入口和业务行为，不连接平台或读取真实凭证。改动 CLI 后先运行 `python scripts/generate_cli_docs.py` 更新 [命令参考](docs/CLI.md)。代码结构与扩展步骤见 [开发指南](docs/DEVELOPMENT.md)。

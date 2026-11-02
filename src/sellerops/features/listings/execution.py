@@ -1,0 +1,322 @@
+"""
+sellerops 批量操作执行器 (ops_executor)
+负责分批提交改价、改库存、下架操作。
+下架（trash）两阶段：先清库存（WB 原生 portal stocks）→ 移回收站
+（默认 WB 原生 moveNmsToTrash；`trash-bcs` 是**旧通道，仅供排查，不作兜底**）。
+WB 通道失败或 cookie 过期时**不自动改走 BCS**，只报错。
+改价/改库存走 BCS 接口；自动处理编码转换、日志记录与审核触发。
+"""
+import csv
+import glob
+import os
+import shutil
+import time
+from datetime import datetime
+
+from sellerops.integrations.bcs import client as bcs
+from sellerops.core import utils as common
+from sellerops.settings import paths as config
+from sellerops.settings import credentials
+from sellerops.features.listings.plans import price_limit_violations
+from sellerops.features.listings.plans import price_review_items
+from sellerops.features.listings.plans import PRICE_HALF_LIMIT_NOTE
+from sellerops.features.listings.trash_execution import clear_stock_for_trash
+
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+
+PRICE_CHUNK = 300
+STOCK_CHUNK = 200
+BATCH_SLEEP = 0.15
+SHOP_SLEEP = 0.6
+TRASH_CHUNK = 300        # 移回收站单批 nmID 上限（项目硬性 ≤300/批，WB/BCS 通用）
+TRASH_INTERVAL = 0.3     # 移回收站批间间隔（BCS 有 19s 限流窗口，用 --interval 21 规避）
+RESULT_CSV = config.RESULT_CSV
+ARCHIVE_DIR = os.path.join(os.path.dirname(RESULT_CSV), "archive")
+ARCHIVE_MAX_MB = 50            # 同月明细超过该体积也强制归档（防单月暴涨）
+
+
+def _auto_review_shop(sid, items):
+    """改价后自动审核：按 nmID 匹配「降价 30-49.9%」的商品，应用新价格。
+    返回成功审核数。
+
+    ⚠ 跨域调用走 discount_svc 门面（REUSE_GUIDE 铁律 3：严禁直接 import 其他领域的
+    私有实现）。此处懒加载门面，与 ops.py 引用 catalog_svc 的写法保持一致。
+    """
+    review_items = price_review_items(items)
+    if not review_items:
+        return 0
+    shop = credentials.get().wb_shop(sid)
+    if not shop:
+        print(f"  [自动审核] 店铺 {sid} 无 WB 凭证，跳过")
+        return 0
+    from sellerops.features.pricing.discounts import Discounts
+    try:
+        r = Discounts().apply_new_prices_by_nmids(shop, [it.get("nmID") for it in review_items])
+        print(f"  [自动审核] {r['note']}")
+        return r["applied"]
+    except common.CookieExpiredError as e:
+        print(f"  [自动审核] 店铺 {sid} cookie 失效，跳过: {e}")
+        return 0
+    except Exception as e:
+        print(f"  [自动审核] 店铺 {sid} 失败: {e}")
+        return 0
+
+
+def _normalize_csv_encoding():
+    if not os.path.exists(RESULT_CSV) or os.path.getsize(RESULT_CSV) == 0:
+        return
+    try:
+        with open(RESULT_CSV, "r", encoding="utf-8-sig") as f:
+            f.read()
+        return
+    except UnicodeDecodeError:
+        pass
+    raw = open(RESULT_CSV, "rb").read().splitlines()
+    lines = []
+    for ln in raw:
+        try:
+            lines.append(ln.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            lines.append(ln.decode("gb18030"))
+    os.makedirs(os.path.dirname(RESULT_CSV), exist_ok=True)
+    shutil.copy2(RESULT_CSV, RESULT_CSV + ".bak")
+    with open(RESULT_CSV, "w", encoding="utf-8-sig", newline="") as f:
+        f.write("\n".join(lines) + ("\n" if lines else ""))
+    print(f"  ⚠ ops_result.csv 非 UTF-8 编码（可能被 Excel 另存过），已备份 {RESULT_CSV}.bak 并转码为 UTF-8-SIG")
+
+
+def _rotate_result_csv_if_needed():
+    """按「月」归档 ops_result.csv，避免追加写无限增长（实测 2026-09 单月已达 7 万行 / 4.7MB）。
+
+    规则：
+      ① 现有文件最后修改时间不在当前月份 → 移入 `data/logs/archive/ops_result_YYYY-MM.csv`；
+      ② 同月文件超过 ARCHIVE_MAX_MB 时 → 移入 `.../ops_result_YYYY-MM-partN.csv`。
+    只「移动」不删除，归档文件仍可直接用 Excel 打开，便于追溯；归档动作会打印一行提示。
+    """
+    if not os.path.exists(RESULT_CSV) or os.path.getsize(RESULT_CSV) == 0:
+        return
+    mtime = datetime.fromtimestamp(os.path.getmtime(RESULT_CSV))
+    now = datetime.now()
+    month_tag = mtime.strftime("%Y-%m")
+    oversized = os.path.getsize(RESULT_CSV) > ARCHIVE_MAX_MB * 1024 * 1024
+    if mtime.strftime("%Y-%m") == now.strftime("%Y-%m") and not oversized:
+        return
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    base = os.path.join(ARCHIVE_DIR, f"ops_result_{month_tag}.csv")
+    if oversized:
+        base = os.path.join(ARCHIVE_DIR, f"ops_result_{month_tag}-part"
+                            f"{len(glob.glob(os.path.join(ARCHIVE_DIR, f'ops_result_{month_tag}-part*.csv')))+1}.csv")
+    dst = base
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        dst = base[:-4] + f"-{n}.csv"
+    shutil.move(RESULT_CSV, dst)
+    print(f"  [归档] ops_result.csv（{mtime:%Y-%m-%d} 前写入）已移入 {dst}，本次将新建当次明细文件")
+
+
+def _endpoint(body):
+    if "dataList" in body:
+        return "price/batch"
+    if "warehouses" in body:
+        return "stock/batchSetByChrtIdsBatch"
+    if "nmIds" in body:
+        return "clean/removeToTrash"
+    raise RuntimeError("无法识别操作类型")
+
+
+def _post(body, label):
+    """提交写操作，返回 (ok: bool, msg: str)。ok=False 表示接口失败/异常，供 run_apply 准确计数。
+    ★ 2026-09-03 BCS 接口变更适配（内部 body 结构不变，提交前按端点转换）：
+    - price/batch：shopId 须在每个 dataList 条目内（顶层 shopId 已不被识别，报 500 null key）
+    - clean/removeToTrash：body 须为根级数组 [{shopId, nmId}]（每条目一个 nmId）"""
+    try:
+        ep = _endpoint(body)
+        if ep == "price/batch":
+            payload = {"dataList": [{**it, "shopId": body["shopId"]} for it in body["dataList"]]}
+        elif ep == "clean/removeToTrash":
+            payload = [{"shopId": body["shopId"], "nmId": nm} for nm in body["nmIds"]]
+        else:
+            payload = body
+        r = bcs.http_post_json(f"{bcs.base_url()}/shopKeeper/{ep}", payload)
+        msg = r.get("msg", "")
+        if r.get("code") == 200:
+            print(f"  {GREEN}✓{RESET} {label} 成功: {msg}")
+            return True, (msg or "OK")
+        print(f"  {RED}✗{RESET} {label} 失败: code={r.get('code')} {msg}")
+        return False, f"FAIL: {msg}"
+    except Exception as e:
+        print(f"  {RED}✗{RESET} {label} 异常: {e}")
+        return False, f"FAIL: {e}"
+
+
+def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, interval=None):
+    """按计划执行写操作。
+
+    channel: 仅 trash 生效 —— "wb"=WB 原生 moveNmsToTrash（默认，见 ops._default_channel），
+             "bcs"=BCS clean/removeToTrash（trash-bcs 旧通道，仅供排查，**不作兜底**）。
+             WB 通道失败**不会**自动切到 bcs，只报错。其余 action 忽略该参数。
+    chunk/interval: 移回收站批大小与批间间隔（None=用模块常量）。
+    """
+    common.validate_batch_options(chunk=chunk, interval=interval)
+    ok = fail = 0
+    skipped_bad = 0
+    zero_items = []
+    results = []
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for pi, p in enumerate(plans):
+        sid = p["shopId"]
+        print(f"\n>>> 店{sid}：{action}")
+        if action == "price":
+            bad = price_limit_violations(p["items"])
+            if bad:
+                print(f"  {RED}[跳过] {len(bad)} 条{PRICE_HALF_LIMIT_NOTE}：{RESET}")
+                for vc, cn, cur, target in bad[:10]:
+                    print(f"    {vc} | {cn} | 原价 {cur} → 目标 {target}")
+                if len(bad) > 10:
+                    print(f"    ... 共 {len(bad)} 条")
+                skipped_bad += len(bad)
+                fail += len(bad)
+            ok_items = [it for it in p["items"] if not any(it["vc"] == b[0] and it["price"] == b[3] for b in bad)]
+            zero_items.extend((sid, it["vc"], it.get("cn", ""), it.get("cur_price"), it["price"])
+                              for it in ok_items if it.get("orig_zero"))
+            dl = [{"nmID": it["nmID"], "price": it["price"],
+                   "discount": it["discount"], "clubDiscount": it["clubDiscount"]}
+                  for it in ok_items]
+            if not dl:
+                print("  本店无有效改价项，跳过")
+                continue
+            for i in range(0, len(dl), PRICE_CHUNK):
+                body = {"shopId": sid, "dataList": dl[i:i + PRICE_CHUNK]}
+                ok_flag, msg = _post(body, f"{action} 批{i // PRICE_CHUNK + 1}")
+                if ok_flag:
+                    ok += len(body["dataList"])
+                else:
+                    fail += len(body["dataList"])
+                for it in body["dataList"]:
+                    results.append([sid, it["nmID"], action, it["price"], msg, ts])
+                if i + PRICE_CHUNK < len(dl):
+                    time.sleep(BATCH_SLEEP)
+            if auto_review:
+                _auto_review_shop(sid, ok_items)
+        elif action == "stock":
+            for it in p.get("blocked_items", []):
+                fail += 1
+                print(f"  [已阻止] 店{sid} {it['vc']}: {it['reason']}")
+                results.append([sid, it['vc'], action, "", f"SKIP: {it['reason']}", ts])
+            for wh in p["warehouses"]:
+                sis = wh["stockItems"]
+                for i in range(0, len(sis), STOCK_CHUNK):
+                    body = {"shopId": sid,
+                            "warehouses": [{"warehouseId": wh["warehouseId"],
+                                            "stockItems": sis[i:i + STOCK_CHUNK]}]}
+                    ok_flag, msg = _post(body, f"stock 仓库{wh['warehouseId']} 批{i // STOCK_CHUNK + 1}")
+                    if ok_flag:
+                        ok += len(sis[i:i + STOCK_CHUNK])
+                    else:
+                        fail += len(sis[i:i + STOCK_CHUNK])
+                    for it in sis[i:i + STOCK_CHUNK]:
+                        results.append([sid, it["chrtId"], action, it["amount"], msg, ts])
+                    if i + STOCK_CHUNK < len(sis):
+                        time.sleep(BATCH_SLEEP)
+            zero_items.extend((sid, it["vc"], it.get("cn", ""), it.get("cur_amt"), it["amount"])
+                              for it in p["items"] if it.get("orig_zero"))
+        elif action == "trash":
+            tag = "trash_wb" if channel == "wb" else "trash_bcs"   # CSV「操作」列区分通道
+            ready, blocked = clear_stock_for_trash(sid, p["items"])
+            blocked = [*p.get("blocked_items", []), *blocked]
+            fail += len(blocked)
+            for it in blocked:
+                print(f"  [已阻止] 店{sid} {it.get('vc', '')}: {it['reason']}")
+                results.append([sid, it.get("nmID") or it.get("vc"), tag, "", f"SKIP: {it['reason']}", ts])
+            nms = list(dict.fromkeys(it["nmID"] for it in ready))
+            if not nms:
+                continue
+            step = int(chunk or TRASH_CHUNK)
+            gap = TRASH_INTERVAL if interval is None else float(interval)
+            if channel == "wb":
+                # 懒加载：与 stock_wb 同风格，避免把 wb_client 拖进所有 ops 命令的启动路径
+                from sellerops.features.listings import trash as trash_wb_mod
+                shop = credentials.get().wb_shop(sid)
+                if not shop:
+                    print(f"  {RED}✗ 错误{RESET} 店{sid} 无 WB 凭证，本条通道无法下架"
+                          f"（{len(nms)} 个 nmID 计入失败）")
+                    print(f"    {RED}处置：先补该店 WB 凭证（python -m sellerops cookies-update）后重跑 trash。"
+                          f"不自动改走 BCS，也不建议用 trash-bcs 替代。{RESET}")
+                    fail += len(nms)
+                    results.extend([sid, nm, tag, "", "SKIP: 无 WB 凭证", ts] for nm in nms)
+                else:
+                    r = trash_wb_mod.move_nms(shop, nms,
+                                              chunk=step,
+                                              interval=gap)
+                    ok += r["ok"]
+                    fail += r["fail"]
+                    for d in r["details"]:
+                        results.append([sid, d["nmID"], tag, "",
+                                        "OK" if d["ok"] else f"FAIL: {d['msg']}", ts])
+                    bad = [d for d in r["details"] if not d["ok"]]
+                    if bad:
+                        for d in bad[:10]:
+                            print(f"    [失败] nmID={d['nmID']}: {d['msg']}")
+                        if len(bad) > 10:
+                            print(f"    ... 共 {len(bad)} 条")
+                        if not r.get("aborted"):
+                            print("  [提示] 若为「有库存/在途」原因，WB 会拒收：先归零库存后重跑")
+                    print(f"  [移回收站·WB原生] 成功 {r['ok']} · 失败 {r['fail']}"
+                          f"（{len(nms)} 个 nmID，{step}/批）")
+                    if r.get("aborted"):
+                        print(f"  {RED}✗ 错误{RESET} 店{sid} 移回收站中止：{r['aborted']}")
+                        print(f"    {RED}本店剩余 nmID 已计入失败。请修好 WB 会话"
+                              f"（cookie-refresh-wb / cookies-update）后重跑 trash；"
+                              f"不会自动改走 BCS。{RESET}")
+            else:
+                for i in range(0, len(nms), step):
+                    body = {"shopId": sid, "nmIds": nms[i:i + step]}
+                    ok_flag, msg = _post(body, f"trash_bcs 批{i // step + 1}")
+                    if ok_flag:
+                        ok += len(body["nmIds"])
+                    else:
+                        fail += len(body["nmIds"])
+                    for nm in body["nmIds"]:
+                        results.append([sid, nm, tag, "", msg, ts])
+                    if i + step < len(nms):
+                        time.sleep(gap)
+        if pi < len(plans) - 1:
+            time.sleep(SHOP_SLEEP)
+
+    _normalize_csv_encoding()
+    _rotate_result_csv_if_needed()
+    need_header = not (os.path.exists(RESULT_CSV) and os.path.getsize(RESULT_CSV) > 0)
+    os.makedirs(os.path.dirname(RESULT_CSV), exist_ok=True)
+    with open(RESULT_CSV, "a", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        if need_header:
+            w.writerow(["店铺", "ID(nmId/chrtId)", "操作", "目标值", "接口响应", "时间"])
+        w.writerows(results)
+    summary = f"结果: 成功 {ok} · 失败 {fail}"
+    if action == "trash" and channel == "wb":
+        summary += "（WB 通道按 nmID 计；BCS 通道按批计）"
+    if skipped_bad:
+        summary += f" · {RED}价格下限剔除 {skipped_bad}{RESET}"
+    print(f"\n{summary}（明细已保存 {RESULT_CSV}）")
+
+    if action == "trash" and channel == "wb" and fail:
+        # WB 通道失败：只报错，不自动改走 BCS（BCS 限流/成功率均不可靠，不能当兜底）
+        print(f"{RED}★ WB 通道有 {fail} 条未成功下架 —— 请按上面的报错先修原因，再重跑 trash。"
+              f"{RESET}")
+        print(f"{RED}  常见原因：WB cookie/seller-lk 过期（sellerops cookies-update 或 "
+              f"cookie-refresh-wb）、商品有库存/在途被平台拒收（先归零库存）。{RESET}")
+        print(f"{RED}  本工具不会自动切换 trash-bcs，也不建议用它替代。{RESET}")
+
+    if zero_items:
+        print(f"\n{RED}⚠ [0 值商品报告] {len(zero_items)} 项操作前价格/库存为 0（WB 官方数据延迟或商品受限）{RESET}")
+        print("  已照常提交修改；若之后查询仍为 0，属 WB 官方原因（修改生效可能延迟），无需反复修改。")
+        seen = {}
+        for sid, vc, cn, old, new in zero_items:
+            seen.setdefault(vc, {"cn": cn, "shops": [], "old": old, "new": new})["shops"].append(sid)
+        for vc, d in sorted(seen.items()):
+            print(f"    {vc} | {d['cn']} | 原值 {d['old']} → 目标 {d['new']} | 店 {','.join(map(str, d['shops']))}")
+    return ok, fail
