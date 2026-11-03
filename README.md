@@ -12,7 +12,7 @@ Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需�
 | 让 AI 协助操作 | [项目约束](AGENTS.md)、[AI 操作指南](docs/AI_GUIDE.md) |
 | 开发与维护 | [开发指南](docs/DEVELOPMENT.md)，包含架构、代码入口、复用能力和开发准则 |
 | 商品运营报告 | [报告说明](docs/PRODUCT_REPORT.md)：退货、差评、近7/14天出单和店铺链接缺口 |
-| WB Open API 商品写入 | [备用上架与内容同步](docs/OPEN_API_LISTINGS.md)：两种商品来源、建卡后有限等待并上传图片/库存、断点续办、相同 VC 跨店更新；BCS 默认接口保留 |
+| WB Open API 商品写入 | [上架、内容更新与 VC 规范化](docs/OPEN_API_LISTINGS.md)：两种商品来源、有限标识等待、断点续办、相同 VC 跨店更新、按明确归属规范历史 VC 前缀；BCS 默认接口保留 |
 | 平台接口与抓包参考 | [开发指南](docs/DEVELOPMENT.md#平台接口资料)；维护者私有资料保存在根目录 `api/`，不随 Git 分发 |
 | 启动或业务报错 | [故障排查](docs/TROUBLESHOOTING.md) |
 

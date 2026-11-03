@@ -12,7 +12,7 @@
 当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。
 当前 WB 凭证使用人工登录、手动抓包并填写/导入；Playwright 尚未启动，`cookie-refresh-wb` 保留但未启用。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 
-共 56 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
+共 57 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
 
 | 命令 | 用途 | 实现入口 |
 | --- | --- | --- |
@@ -43,6 +43,7 @@
 | `publish` | 批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺） | [sellerops.features.listings.bulk_publish:run](../src/sellerops/features/listings/bulk_publish.py) |
 | `create-cards` | 建卡发布上架：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡） | [sellerops.features.listings.card_publish:run](../src/sellerops/features/listings/card_publish.py) |
 | `publish-openapi` | [备用] WB Open API 上架：建卡、有限等待标识、上传图片和莫斯科库存；支持续办 | [sellerops.features.listings.open_api_publish:run](../src/sellerops/features/listings/open_api_publish.py) |
+| `normalize-vc-openapi` | WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店一致序号 | [sellerops.features.listings.vc_normalization:run](../src/sellerops/features/listings/vc_normalization.py) |
 | `sync-cards-openapi` | WB Open API：按相同完整 VC 将源店商品内容同步到其他店 | [sellerops.features.listings.open_api_sync:run](../src/sellerops/features/listings/open_api_sync.py) |
 | `promo-apply` | 促销报名（cookie 会话，applyAll） | [sellerops.features.pricing.promo:run](../src/sellerops/features/pricing/promo.py) |
 | `promo-goods` | 查询 WB 广告推广中被推广的商品（中文名/供应商代码/WB商品码，只读） | [sellerops.features.pricing.adverts:run](../src/sellerops/features/pricing/adverts.py) |
@@ -213,11 +214,12 @@ options:
 ## price
 
 ```text
-usage: sellerops price [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                       [--price PRICE] [--discount DISCOUNT]
-                       [--club-discount CLUB_DISCOUNT] [--keep-price]
-                       [--auto-review] [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops price [-h]
+                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                       [--shops SHOPS] [--apply] [--yes] [--price PRICE]
+                       [--discount DISCOUNT] [--club-discount CLUB_DISCOUNT]
+                       [--keep-price] [--auto-review] [--chunk CHUNK]
+                       [--interval INTERVAL]
 
 options:
   -h, --help            show this help message and exit
@@ -242,9 +244,10 @@ options:
 ## price-bcs
 
 ```text
-usage: sellerops price-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                           [--price PRICE] [--discount DISCOUNT]
+usage: sellerops price-bcs [-h]
+                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                           [--shops SHOPS] [--apply] [--yes] [--price PRICE]
+                           [--discount DISCOUNT]
                            [--club-discount CLUB_DISCOUNT] [--keep-price]
                            [--auto-review]
 
@@ -269,9 +272,10 @@ options:
 ## stock
 
 ```text
-usage: sellerops stock [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                       [--amount AMOUNT] [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops stock [-h]
+                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                       [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
+                       [--chunk CHUNK] [--interval INTERVAL]
                        [--max-pages MAX_PAGES] [--resolve {snapshot,live}]
 
 options:
@@ -297,9 +301,9 @@ options:
 ## stock-bcs
 
 ```text
-usage: sellerops stock-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                           [--amount AMOUNT]
+usage: sellerops stock-bcs [-h]
+                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                           [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
 
 options:
   -h, --help       show this help message and exit
@@ -317,9 +321,10 @@ options:
 ## trash
 
 ```text
-usage: sellerops trash [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                       [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops trash [-h]
+                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                       [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
+                       [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -338,9 +343,10 @@ options:
 ## trash-bcs
 
 ```text
-usage: sellerops trash-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                           [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops trash-bcs [-h]
+                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                           [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
+                           [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -586,13 +592,28 @@ options:
   --apply               执行完整上架或续办流程（默认仅预览，不等待、不写入）
 ```
 
+## normalize-vc-openapi
+
+```text
+usage: sellerops normalize-vc-openapi [-h] (--vc VC | --name NAME | --all)
+                                      [--shops SHOPS] [--apply]
+
+options:
+  -h, --help     show this help message and exit
+  --vc VC        完整旧 VC，逗号分隔
+  --name NAME    已确认的中文商品名包含匹配，不按标题或随机前缀推断
+  --all          全部非回收站商品；无明确归属的项记录阻止原因
+  --shops SHOPS  目标 BCS 店铺 ID，逗号分隔（默认全部店铺；任一店读取失败整轮不提交）
+  --apply        提交改码（默认预览）；保留历史防重放日志，不更新本地映射/快照
+```
+
 ## sync-cards-openapi
 
 ```text
-usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP (--vc VC |
-                                    --nm NM | --all) [--shops SHOPS]
-                                    [--fields FIELDS] [--limit LIMIT]
-                                    [--apply]
+usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP
+                                    (--vc VC | --nm NM | --all)
+                                    [--shops SHOPS] [--fields FIELDS]
+                                    [--limit LIMIT] [--apply]
 
 options:
   -h, --help            show this help message and exit

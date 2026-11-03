@@ -62,6 +62,8 @@ BCS 来源保留原始行，但不会将“无规格”解释为零库存：空�
 
 ## 关键状态文件
 
+`logs/normalize-vc-openapi_*.json` 额外承担历史改码的防重放依据：version=1，记录本店 `nmID`、旧 `vc`、`newVC`、中文名和载荷，状态为 `planned/skipped/blocked/failed/submitting/accepted/unknown`。预览不固定分配；真实 submitting/accepted/unknown 固定旧新码并阻止本店同卡自动重放，损坏日志会报错。现行改码保留原尾部，无冲突时只替换四位前缀；冲突时在末尾追加避重序号，后续店铺沿用历史分配的同一新码。历史新码若改写了原尾部或不符合当前前缀，阻止续办并交维护者处理。保留日志及日志目录的锁文件，不为重试清空。该功能不增加旧新码别名，也不更新下方状态文件、映射表或快照；详见 [规范化流程](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。
+
 | 文件 | 含义 |
 | --- | --- |
 | `state/vc_known.json` | 历史已知 VC 归属 |

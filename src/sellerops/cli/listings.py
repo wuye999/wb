@@ -142,6 +142,15 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument('--apply', action='store_true', help='执行完整上架或续办流程（默认仅预览，不等待、不写入）')
     bind(p, 'sellerops.features.listings.open_api_publish', 'run')
 
+    p = sub.add_parser('normalize-vc-openapi', help='WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店一致序号')
+    selection = p.add_mutually_exclusive_group(required=True)
+    selection.add_argument('--vc', default='', help='完整旧 VC，逗号分隔')
+    selection.add_argument('--name', default='', help='已确认的中文商品名包含匹配，不按标题或随机前缀推断')
+    selection.add_argument('--all', action='store_true', help='全部非回收站商品；无明确归属的项记录阻止原因')
+    p.add_argument('--shops', default='', help='目标 BCS 店铺 ID，逗号分隔（默认全部店铺；任一店读取失败整轮不提交）')
+    p.add_argument('--apply', action='store_true', help='提交改码（默认预览）；保留历史防重放日志，不更新本地映射/快照')
+    bind(p, 'sellerops.features.listings.vc_normalization', 'run')
+
     p = sub.add_parser('sync-cards-openapi', help='WB Open API：按相同完整 VC 将源店商品内容同步到其他店')
     p.add_argument('--source-shop', type=int, required=True, help='修改后的源店 BCS 店铺 ID（例如袁州1店对应 ID）')
     selection = p.add_mutually_exclusive_group(required=True)

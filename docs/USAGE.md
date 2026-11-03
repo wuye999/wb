@@ -131,6 +131,8 @@ python run.py replicate --source-shops 1001,1002 --shops 1003 --price-source min
 
 备用官方上架与跨店内容更新使用 `publish-openapi`、`sync-cards-openapi`，详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。原有 BCS 上架默认入口保留。上架支持自有源店与任意 WB 商品码，统一完成建卡、有限标识等待、图片/莫斯科库存提交；超时用 `publish-openapi --resume --shops ... --vc ...` 续办。内容同步按完整 VC 匹配各店自己的商品码，不修改价格/库存。默认预览，`--apply` 才执行。
 
+历史随机 VC 前缀使用 `normalize-vc-openapi --shops 1001 --name "示例商品"` 预览，加 `--apply` 才提交。`--vc/--name/--all` 三选一；省略店铺时覆盖 BCS 全部店铺。只改前缀不一致的商品，按已有明确归属取价格表前缀，保留原尾部；仅新码冲突时追加跨店一致的避重序号；任一店商品/回收站读取失败整轮不提交。完整流程与日志防重放规则见 [VC 前缀规范化](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。仅远端改码并留日志，旧码订单和历史记录由用户另行维护；不自动改本地表格或追加同步。
+
 ## 尺寸、下架和清理
 
 ```powershell

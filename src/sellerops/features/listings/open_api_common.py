@@ -90,7 +90,8 @@ class OperationLog:
         planned = sum(row['status'] == 'planned' for row in rows)
         skipped = sum(row['status'] == 'skipped' for row in rows)
         for row in rows:
-            print(f"[店{row['shopId']}] {row['vc']} {row['status']} {row.get('reason', '')}")
+            change = f" → {row['newVC']}" if row.get('newVC') else ''
+            print(f"[店{row['shopId']}] {row['vc']}{change} {row['status']} {row.get('reason', '')}")
         print(f'[汇总] 已受理 {accepted} | 待提交 {planned} | 跳过 {skipped} | 失败/未完成 {failed}')
         print(f'[结果] {self.path}')
         return 1 if failed else 0
