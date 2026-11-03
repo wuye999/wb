@@ -260,7 +260,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
                 raise RuntimeError('remote error secret-2')
             return ([dict(self.row, shopId=shop.id)] if shop.id == 1 else []), {'warnings': {}}
         with patch.object(products.snapshot_open_api, 'collect_shop', side_effect=collect) as read:
-            self.assertEqual(self.run_cli('fetch', '--no-sync'), 1)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--no-sync'), 1)
         self.assertCountEqual([call.args[0].id for call in read.call_args_list], [1, 2, 3])
         self.assertEqual(failed.read_bytes(), before)
         self.assertEqual(json.loads(Path(paths.shop_json_path(3)).read_text(encoding='utf8'))['rows'], [])
@@ -305,7 +305,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
                 with patch.object(products.bcs.client, 'fetch_open_api_shops', return_value=accesses) as read_keys, \
                         patch.object(snapshot, 'WBOpenAPI', side_effect=lambda key, **kw: clients[key]), \
                         patch.object(products.snapshot_open_api, 'collect_shop', side_effect=collect):
-                    self.assertEqual(self.run_cli('fetch', *args), 0)
+                    self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', *args), 0)
                 self.assertEqual(peak, limit)
                 read_keys.assert_called_once_with()
                 status = json.loads(Path(paths.STATUS_JSON).read_text(encoding='utf8'))
@@ -347,7 +347,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
 
         with patch.object(products.bcs.client, 'fetch_open_api_shops', return_value=accesses), \
                 patch.object(snapshot, 'collect_shop', side_effect=collect):
-            self.assertEqual(self.run_cli('fetch'), 1)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi'), 1)
         for sid in failures:
             self.assertEqual(Path(paths.shop_json_path(sid)).read_bytes(), previous[sid])
         self.assertEqual(json.loads(Path(paths.shop_json_path(4)).read_text(encoding='utf8'))['rows'], [])
@@ -364,13 +364,13 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
         with patch.object(products.bcs.client, 'fetch_open_api_shops', return_value=[]) as keys, \
                 patch.object(snapshot, 'collect_shop') as collect:
             for value in ('0', '-1'):
-                self.assertEqual(self.run_cli('fetch', '--parallel', value), 1)
-                self.assertEqual(self.run_cli('fetch', '--shop-id', '1', '--parallel', value), 1)
+                self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--parallel', value), 1)
+                self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--shop-id', '1', '--parallel', value), 1)
             for value in (0, -1, True, 1.5):
                 with self.assertRaises(ValueError):
-                    products.fetch_all(parallel=value)
+                    products.fetch_all(source='wb-openapi', parallel=value)
             keys.assert_not_called()
-            self.assertEqual(self.run_cli('fetch', '--parallel', '100'), 0)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--parallel', '100'), 0)
             collect.assert_not_called()
         status = json.loads(Path(paths.STATUS_JSON).read_text(encoding='utf8'))
         self.assertEqual((status['shops'], status['fetched'], status['errors']), ([], [], []))
@@ -388,7 +388,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
 
         with patch.object(snapshot, 'collect_shop', return_value=([], {})), \
                 patch.object(products, 'atomic_dump_json', side_effect=save):
-            self.assertEqual(self.run_cli('fetch', '--parallel', '2'), 1)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--parallel', '2'), 1)
         self.assertEqual(path.read_bytes(), before)
         status = json.loads(Path(paths.STATUS_JSON).read_text(encoding='utf8'))
         self.assertEqual([row['id'] for row in status['errors']], [1])
@@ -399,7 +399,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
         with patch.object(products.snapshot_open_api, 'collect_shop', return_value=(
             [self.row], {'warnings': {'missingStockSpecs': 2}, 'warehouse': WAREHOUSE, 'region': 'cn'},
         )) as read:
-            self.assertEqual(self.run_cli('fetch', '--shop-id', '1'), 0)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--shop-id', '1'), 0)
             self.assertEqual(read.call_args.args[0].api_key, 'secret-1')
         from sellerops.persistence.snapshots import ProductSnapshotRepository
         from sellerops.features.catalog.mapping import price_of
@@ -422,7 +422,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
 
     def test_missing_token_never_constructs_success_or_falls_back(self):
         with patch.object(products.bcs.client, 'fetch_open_api_shops', return_value=[OpenAPIShop(1, '店1', '')]):
-            self.assertEqual(self.run_cli('fetch'), 1)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi'), 1)
         self.assertFalse(Path(paths.shop_json_path(1)).exists())
         self.legacy.assert_not_called()
         self.sync_all.assert_not_called()
@@ -430,7 +430,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
     def test_invalid_explicit_shop_id_does_not_expand_to_all_shops(self):
         with patch.object(products.bcs.client, 'fetch_open_api_shops') as read:
             for sid in ('0', '-1'):
-                self.assertEqual(self.run_cli('fetch', '--shop-id', sid), 1)
+                self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--shop-id', sid), 1)
             read.assert_not_called()
         self.legacy.assert_not_called()
 
@@ -449,7 +449,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
         before = path.read_bytes()
         with patch.object(products.snapshot_open_api, 'collect_shop', return_value=([self.row], {})), \
                 patch.object(products, 'atomic_dump_json', side_effect=OSError('fixture disk full')):
-            self.assertEqual(self.run_cli('fetch', '--shop-id', '1'), 1)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--shop-id', '1'), 1)
         self.assertEqual(path.read_bytes(), before)
 
     def test_official_snapshot_merges_without_changing_historical_ownership(self):
@@ -471,7 +471,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
         originals = {path: Path(path).read_bytes() for path in (
             paths.VC_KNOWN_JSON, paths.VC_OVERRIDE_JSON, paths.VC_EXCLUDED_JSON)}
         with patch.object(products.snapshot_open_api, 'collect_shop', return_value=([self.row], {})):
-            self.assertEqual(self.run_cli('fetch', '--shop-id', '1'), 0)
+            self.assertEqual(self.run_cli('fetch', '--source', 'wb-openapi', '--shop-id', '1'), 0)
         self.assertEqual({path: Path(path).read_bytes() for path in originals}, originals)
         with patch.object(mapping, '_shop_id_cache', 1):
             self.assertEqual(self.run_cli('merge'), 0)

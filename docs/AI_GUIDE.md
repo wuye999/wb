@@ -25,7 +25,7 @@
 | 看价格/库存修改范围 | price / stock 不加 --apply；先限定 --shops 和商品条件 |
 | 商品运营综合报告 | product-report；默认低评分、高退货率及近期出单筛选，完整VC单行，按最长数字段列本店缺口；--details追加证据，不触发同步；先读 [报告说明](PRODUCT_REPORT.md) |
 | 提交明确的修改 | 对应命令加 --apply，必要时 --yes；保持授权范围，不改成全部店铺 |
-| 获取最新商品快照 | 用户明确要求后独立 fetch；默认 BCS apiKey＋WB 官方中国区读取，不同步 BCS；需更新映射时再独立 merge |
+| 获取最新商品快照 | 用户明确要求后独立 fetch；默认 BCS 快照（先同步再读 BASE 缓存，已在后台同步过可用 --no-sync）；需更新映射时再独立 merge |
 | 核对归属/中文名 | mapping、review、mapping-check、mismatch-check；本地结果通过对应导入命令处理 |
 | 导入/复制上架 | publish、create-cards、replicate、import-publish；核对库存默认值、VC 语义和目标店 |
 | 备用官方上架/跨店内容同步 | 显式 publish-openapi / sync-cards-openapi；BCS 默认入口不变；上架含建卡后有限标识等待、图片/莫斯科库存；超时用 publish-openapi --resume 续办，未知写入状态不重放；见 [专项说明](OPEN_API_LISTINGS.md) |
@@ -45,7 +45,7 @@
 
 用户已经明确授权执行的操作，可按现有命令要求完成，不人为增加反复确认。`--yes` 只表示跳过命令自带确认，不能替代任务授权，也不能保证每个破坏性操作都需要这个参数。
 
-`fetch` 的默认 Open API 来源不使用 WB 后台 Cookie。缺 apiKey、401/403、限流或读取失败时，保留旧快照并报告失败，不自动改用 `--source bcs`；官方令牌应在 BCS 对应店铺更新。`--no-sync` 在默认来源下仅为兼容参数；只有显式 BCS 来源才表示读取旧缓存。缺失价格或库存不能补零，分页不完整不能宣称已完成全量快照。
+`fetch` 的默认 BCS 快照来源会先触发 WB → BCS 同步（加 `--no-sync` 才跳过并直接读上次同步结果），再按 BASE 读取该店缓存；同步失败不中止本次拉取，按原流程打印警示后继续读旧缓存。显式 `--source wb-openapi` 才改用官方接口，该来源不使用 WB 后台 Cookie；缺 apiKey、401/403、限流或读取失败时保留旧快照并报告失败，不自动改回 `--source bcs`，官方令牌应在 BCS 对应店铺更新。两种来源都不补零缺失的价格或库存，分页不完整不能宣称已完成全量快照。
 
 ## 写操作结束规则
 

@@ -21,13 +21,14 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument('--out', default='', help='输出.xlsx路径（默认data/logs/商品运营报告_时间.xlsx）')
     bind(p, 'sellerops.features.catalog.product_report', 'run')
 
-    p = sub.add_parser("fetch", help="拉取商品快照（默认 WB 官方 API，仅从 BCS 读取店铺密钥）")
+    p = sub.add_parser("fetch", help="拉取商品快照（默认 BCS 快照，可显式改用 WB 官方 API）")
     p.add_argument("--shop-id", type=int, default=None, help="店铺ID（默认全部）")
-    p.add_argument('--source', choices=['wb-openapi', 'bcs'], default='wb-openapi',
-                   help='快照来源（默认wb-openapi；bcs显式选择旧缓存流程，不自动回退）')
+    p.add_argument('--source', choices=['bcs', 'wb-openapi'], default='bcs',
+                   help='快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）')
     p.add_argument('--parallel', type=int, default=4,
-                   help='Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）')
-    p.add_argument("--no-sync", action="store_true", help="BCS来源：跳过同步；Open API来源无需同步")
+                   help='WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）')
+    p.add_argument("--no-sync", action="store_true",
+                   help="BCS来源：跳过后台同步直接读取已同步快照；Open API来源无需同步")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_fetch')
 
     p = sub.add_parser("mapping", help="生成统一核对工作台（全部活跃店铺并集，一页两区）")

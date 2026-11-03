@@ -99,7 +99,7 @@ python run.py price --shops 1001 --name "示例商品"
 python run.py price --shops 1001 --name "示例商品" --apply --yes
 ```
 
-业务命令的 dry-run 可能读取平台并生成本地报告。首次需要初始化或更新商品快照时，按 [操作流程](docs/USAGE.md) 单独执行 fetch / merge。`fetch` 默认通过 BCS 保存的各店 apiKey 直接读取 WB 官方中国区商品、价格及莫斯科仓库存，全店默认4店并发（`--parallel` 可调整），不再等待 BCS 商品同步；旧来源须显式指定 `--source bcs`。不要把同步当作每次启动或写入后的固定步骤。
+业务命令的 dry-run 可能读取平台并生成本地报告。首次需要初始化或更新商品快照时，按 [操作流程](docs/USAGE.md) 单独执行 fetch / merge。`fetch` 默认走 BCS 快照接口：先同步 WB → BCS，再读取各店 BASE 缓存；已在后台同步过可加 `--no-sync` 直接读取。显式 `--source wb-openapi` 才会改用 BCS 保存的各店 apiKey 直接读取 WB 官方中国区商品、价格及莫斯科仓库存（全店默认4店并发，`--parallel` 可调整，不等待 BCS 商品同步）。不要把同步当作每次启动或写入后的固定步骤。
 
 ## 日常使用边界
 

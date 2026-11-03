@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | `shops` | 账号店铺列表 | [sellerops.integrations.bcs.client:print_shops](../src/sellerops/integrations/bcs/client.py) |
 | `product-report` | 只读：默认筛选低评分、高退货率及近期出单补货候选 → Excel | [sellerops.features.catalog.product_report:run](../src/sellerops/features/catalog/product_report.py) |
-| `fetch` | 拉取商品快照（默认 WB 官方 API，仅从 BCS 读取店铺密钥） | [sellerops.cli.catalog_handlers:run_fetch](../src/sellerops/cli/catalog_handlers.py) |
+| `fetch` | 拉取商品快照（默认 BCS 快照，可显式改用 WB 官方 API） | [sellerops.cli.catalog_handlers:run_fetch](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping` | 生成统一核对工作台（全部活跃店铺并集，一页两区） | [sellerops.cli.catalog_handlers:run_mapping](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping-import` | 导入核对结果 → 生成映射表（旧格式） | [sellerops.cli.catalog_handlers:run_mapping_import](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping-check` | 映射表核查工作台（带图，核对匹配是否有误） | [sellerops.cli.catalog_handlers:run_mapping_check](../src/sellerops/cli/catalog_handlers.py) |
@@ -110,16 +110,16 @@ options:
 ## fetch
 
 ```text
-usage: sellerops fetch [-h] [--shop-id SHOP_ID] [--source {wb-openapi,bcs}]
+usage: sellerops fetch [-h] [--shop-id SHOP_ID] [--source {bcs,wb-openapi}]
                        [--parallel PARALLEL] [--no-sync]
 
 options:
   -h, --help            show this help message and exit
   --shop-id SHOP_ID     店铺ID（默认全部）
-  --source {wb-openapi,bcs}
-                        快照来源（默认wb-openapi；bcs显式选择旧缓存流程，不自动回退）
-  --parallel PARALLEL   Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
-  --no-sync             BCS来源：跳过同步；Open API来源无需同步
+  --source {bcs,wb-openapi}
+                        快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）
+  --parallel PARALLEL   WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
+  --no-sync             BCS来源：跳过后台同步直接读取已同步快照；Open API来源无需同步
 ```
 
 ## mapping

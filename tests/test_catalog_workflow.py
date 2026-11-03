@@ -146,6 +146,22 @@ class TestCatalogWorkflow(unittest.TestCase):
         sync.assert_not_called()
         sync_one.assert_not_called()
 
+    def test_fetch_defaults_to_bcs_snapshot_and_keeps_open_api_explicit(self):
+        from sellerops.integrations.bcs import client as bcs
+        from sellerops.features.catalog import products
+        with patch.object(bcs, 'fetch_shop_list', return_value=self.shops), \
+                patch.object(bcs, 'fetch_shop_products',
+                             side_effect=lambda sid, filter_type: [self.live] if sid == 1 else []) as legacy, \
+                patch.object(bcs, 'sync_shops_parallel') as sync, \
+                patch.object(bcs.client, 'fetch_open_api_shops') as open_api, \
+                patch.object(products.time, 'sleep'):
+            self.assertEqual(self.run_cli('fetch'), 0)
+        self.assertEqual(legacy.call_count, len(self.shops))
+        self.assertEqual(sync.call_count, 1)
+        open_api.assert_not_called()
+        doc = json.loads(Path(paths.shop_json_path(1)).read_text(encoding='utf8'))
+        self.assertEqual(doc['source'], 'bcs')
+
     def test_successful_fetch_including_empty_shop_returns_zero_and_clears_old_errors(self):
         from sellerops.integrations.bcs import client as bcs
         from sellerops.features.catalog import products

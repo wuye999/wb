@@ -54,7 +54,7 @@
 
 快照通常为 JSON 对象，含 `shopId`、`total`、`rows` 等信息。保留原封装与字段；业务会过滤已经有 `trashedAt` 的商品。`state/多店铺同步状态.json` 保存店铺元信息；缺少时可从快照文件名扫描店铺。
 
-默认 `fetch` 以 WB Open API 重建非回收站商品快照，文件名和行字段兼容旧 BCS 快照。顶层增加 `source=wb-openapi`、`region=cn`、已确认的 `warehouse.id/name` 和 `warnings` 缺失统计；`fetchMethod/fetchedAt/fetchedCount` 记录采集来源、时间及数量。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店莫斯科仓。未返回库存记录保持空列表，价格缺失保留 null，不补零；合法零价与零库存原样保留。图片缺失为空字符串。`createAt/updateAt` 来自商品卡创建/更新时间，不使用采集时间替代。状态文件的 `fetched` 记录成功店铺数量，`errors` 记录失败店铺；两类文件均不包含密钥。显式 BCS 来源标记为 `source=bcs`，不隐式迁移旧文件。
+默认 `fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存并保留原始行；显式 `--source wb-openapi` 时以 WB Open API 重建非回收站商品快照，文件名和行字段兼容旧 BCS 快照。该来源的顶层增加 `source=wb-openapi`、`region=cn`、已确认的 `warehouse.id/name` 和 `warnings` 缺失统计；`fetchMethod/fetchedAt/fetchedCount` 记录采集来源、时间及数量。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店莫斯科仓。未返回库存记录保持空列表，价格缺失保留 null，不补零；合法零价与零库存原样保留。图片缺失为空字符串。`createAt/updateAt` 来自商品卡创建/更新时间，不使用采集时间替代。状态文件的 `fetched` 记录成功店铺数量，`errors` 记录失败店铺；两类文件均不包含密钥。显式 BCS 来源标记为 `source=bcs`，不隐式迁移旧文件。
 
 BCS 来源保留原始行，但不会将“无规格”解释为零库存：空规格、无效或重复 chrtId，以及任一规格缺少有效库存记录时，单店表、总表与覆盖矩阵的库存留空。无完整规格时，附带的占位价格0也不作为实际售价；有完整规格的真实零价、零库存仍保留，展示的小数价格不截断为整数。库存数量的空值、布尔值、负数、非整数或重复仓库记录均视为未知。总表优先展示主店数据，主店缺失的库存或售价不借用别店填充；主店没有该VC时，使用最小店铺ID的同一条代表记录。BCS 快照 `warnings` 增加规格不完整、库存未知、价格未知的商品数。已有文件不会被后台自动改写，表格更新仍由独立 merge 完成。
 

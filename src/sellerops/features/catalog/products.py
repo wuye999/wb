@@ -1,8 +1,8 @@
 """
 sellerops 店铺商品拉取与快照管理（原 fetch_products.py + sync_shops.fetch_all）
 
-默认使用 BCS 保存的 apiKey 直接读取 WB Open API，兼容原本地快照契约。
-显式 source=bcs 时保留旧的同步及 BASE 缓存拉取流程。
+默认使用 BCS 快照接口：先同步 WB → BCS，再读取 BASE 缓存，兼容原本地快照契约。
+显式 source=wb-openapi 时改为用 BCS 保存的 apiKey 直接读取 WB Open API。
 """
 
 import os
@@ -39,8 +39,8 @@ def shop_ids_from_disk():
 
 
 def fetch_shop(shop_id: int, out_file: str, no_sync: bool = False,
-               source: str = 'wb-openapi', *, access: bcs.OpenAPIShop | None = None) -> tuple[list[dict], int]:
-    """完整拉取并原子保存单店快照；Open API 失败不回退 BCS。"""
+               source: str = 'bcs', *, access: bcs.OpenAPIShop | None = None) -> tuple[list[dict], int]:
+    """完整拉取并原子保存单店快照；默认走 BCS 快照，Open API 失败不回退 BCS。"""
     if type(shop_id) is not int or shop_id <= 0:
         raise ValueError('店铺 ID 必须为正整数')
     if source not in {'wb-openapi', 'bcs'}:
@@ -161,8 +161,8 @@ def _fetch_open_api_shops(accesses: list[bcs.OpenAPIShop], parallel: int) -> tup
     return fetched, errors
 
 
-def fetch_all(no_sync: bool = False, source: str = 'wb-openapi', *, parallel: int = 4) -> None:
-    """Open API 默认最多4店并发，BCS保留旧流程；失败保留旧快照，汇总后报错。"""
+def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) -> None:
+    """BCS 默认先同步再读 BASE 缓存；显式 wb-openapi 时最多4店并发；失败保留旧快照，汇总后报错。"""
     if source not in {'wb-openapi', 'bcs'}:
         raise ValueError('未知快照数据来源')
     if type(parallel) is not int or parallel < 1:

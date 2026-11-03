@@ -12,10 +12,10 @@ def run_fetch(args):
     if getattr(args, "shop_id", None) is not None:
         out = config.shop_json_path(args.shop_id)
         catalog_products.fetch_shop(args.shop_id, out, no_sync=getattr(args, "no_sync", False),
-                                    source=getattr(args, 'source', 'wb-openapi'))
+                                    source=getattr(args, 'source', 'bcs'))
     else:
         catalog_products.fetch_all(no_sync=getattr(args, "no_sync", False),
-                                   source=getattr(args, 'source', 'wb-openapi'), parallel=parallel)
+                                   source=getattr(args, 'source', 'bcs'), parallel=parallel)
     return 0
 
 def run_mapping(args):
