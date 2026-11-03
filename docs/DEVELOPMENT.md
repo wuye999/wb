@@ -12,11 +12,15 @@
 
 `product-report` 已有独立的 WB Open API 只读客户端，使用订单动态、评价及归档评价、卖家仓库目录；BCS 提供对应店铺的官方令牌，飞书提供出单来源。[完整口径与限制](PRODUCT_REPORT.md)。现有默认商品写入通道及后台会话管理没有因此迁移到 Open API。
 
+临时报告账号由 `integrations.bcs.capture.parse_sessions()` 从标准输入文本解析为不显示秘密的 `BCSSession`，通过 `BCSClient(session)` 注入独立认证，默认客户端仍延迟读取本机配置。`product_report.collect(extra_bcs_accounts=...)` 合并统计来源，`ProductReport.target_shop_ids` 单独限定本机链接缺口目标（直接构造旧实体时None沿用全部店铺）；`unavailable_accounts` 保留店铺列表读取失败的账号标签，防止健康店铺的汇总误标整轮完整。报告实体不保存认证；额外店铺不加载本地快照或使用本机提交记录。离线边界见 [临时账号测试](../tests/test_product_report_accounts.py)。
+
 显式的备用官方上架与跨店内容更新见 [Open API 商品写入](OPEN_API_LISTINGS.md)。[content_api](../src/sellerops/integrations/wildberries/content_api.py) 独立声明新增读写端点，保持只读 `WBOpenAPI` 白名单不变；[open_api_payloads](../src/sellerops/features/listings/open_api_payloads.py) 负责完整覆盖更新与标识保留，[open_api_sources](../src/sellerops/features/listings/open_api_sources.py) 负责公开商品的类目属性映射，[open_api_publish](../src/sellerops/features/listings/open_api_publish.py) 编排完整上架，[open_api_finish](../src/sellerops/features/listings/open_api_finish.py) 负责有限标识轮询、后续提交与续办，[open_api_sync](../src/sellerops/features/listings/open_api_sync.py) 编排跨店更新。阶段状态在 [持久化模块](../src/sellerops/persistence/open_api_publish.py) 中按数据目录隔离，以 FileLock 覆盖整轮事务。写请求不重试，条码、建卡与媒体/库存分别记录，预览不生成条码或等待；离线边界覆盖见 [test_open_api_writes](../tests/test_open_api_writes.py) 与 [有限等待测试](../tests/test_open_api_publish_wait.py)。
 
 `normalize-vc-openapi` 的编排在 [vc_normalization](../src/sellerops/features/listings/vc_normalization.py)，[纯规则](../src/sellerops/domain/vc_normalization.py) 处理明确归属和跨店一致的避重分配，只替换四位前缀并保留原尾部，冲突时追加正整数序号，[专用载荷](../src/sellerops/features/listings/vc_normalization_payloads.py) 保留现值并按实际 ASCII JSON 字节分批。[只读输入与历史](../src/sellerops/persistence/vc_normalization.py) 按表头加载所需字段，拒绝歧义、吞错和随机前缀兜底；日志目录的 FileLock 覆盖全轮，提交前保存 submitting，历史记录固定新码并阻止同店同卡重放。读取不完整整轮零提交，写后不查询；不建立别名或修改现有归属/快照/状态。边界见 [离线改码测试](../tests/test_vc_normalization.py)。
 
 ## 当前必须保留的运行约定
+
+报告默认筛选由 [product_report_screening](../src/sellerops/features/catalog/product_report_screening.py) 纯计算：最长数字段合并风险，完整VC去重输出，当前本店快照判断缺口并区分未知/回收站/已有提交。名称输入由 [report_catalog](../src/sellerops/persistence/report_catalog.py) 按表头仅读取价格表商品名、当前映射VC及中文名，不依赖价格公式、图片或库存。`--details` 才展开原证据；[离线筛选测试](../tests/test_product_report_screening.py) 覆盖边界、加权、跨店标识与缺口。
 
 - 所有仓库操作默认且仅使用该店铺的莫斯科仓库 ID，包括读取、修改库存、清零、下架前清库存、回收站归零、上架和临时脚本。全店/全部商品不扩大仓库范围；不能回退到成都或其他俄语地区仓。名称和 ID 无法确认时中止该店操作。
 - WB 仓库列表的 `id` 才是库存使用的仓库标识，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对；马帮仓库 ID 属于另一套体系，也须核实为莫斯科业务仓。

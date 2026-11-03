@@ -205,7 +205,7 @@ python run.py product-report
 python run.py product-report --shops 1001,1002 --feedback-days 365 --out data/logs/product_report.xlsx
 ```
 
-默认近30天退货、接口可取历史差评，含飞书全部来源店铺近7天与14天出单；按UTC+8日期计算。有风险的VC仍完整保留，由用户决定。目标店无快照或授权失败时标为未知，报告仍输出并返回非零；不要用旧快照中的缺口当作实时缺货。配置、工作表和完整口径见 [报告说明](PRODUCT_REPORT.md)。
+默认近30天退货、接口可取历史评价，按UTC+8日期计算。默认输出评分≤3.5且本店存在、高退货率≥30%且本店存在，以及排除已知风险且中文名在价格表的近7/14天出单清单；完整VC只显示一行，列存在/缺少/待确认店铺，不列商品链接。风险与缺口按VC最长数字段合并；加 `--details` 才追加原始证据表。目标店无快照或授权失败时标为未知，报告仍输出并返回非零；不要把本地缺口视为实时缺货。配置、工作表和完整口径见 [报告说明](PRODUCT_REPORT.md)。
 
 ```powershell
 python run.py feishu-vc-stats --days 7

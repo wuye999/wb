@@ -1,18 +1,22 @@
 """BCS 店铺访问资料＋WB Open API＋飞书的只读运营报告编排。"""
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
 from typing import Any
 
 from sellerops.core.errors import AuthenticationError, RateLimitError
 from sellerops.domain.product_reports import ProductReport, ReportIssue
 from sellerops.features.catalog import product_report_data as data
 from sellerops.features.listings.publish_records import load_records
-from sellerops.integrations.bcs.client import client as bcs
+from sellerops.integrations.bcs.capture import BCSSession, MAX_CAPTURE_CHARS, parse_sessions
+from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop, client as bcs
 from sellerops.integrations.feishu import tables
 from sellerops.integrations.wildberries.open_api import WBOpenAPI, OpenAPIResponseError
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository
+from sellerops.persistence.report_catalog import load_report_catalog
 from sellerops.settings import credentials, paths
 
 
@@ -162,42 +166,81 @@ def _shop(report: ProductReport, access: Any, start: datetime, end: datetime,
         api.close()
 
 
+def _add_shop(report: ProductReport, sid: int, name: str, source: str, *, target: bool) -> None:
+    report.shops.append({'id': sid, 'name': name, 'account_source': source,
+                         'role': '本机目标店铺' if target else '仅补充统计'})
+    report.coverage[sid] = {'orders': '未知', 'feedbacks': '未知',
+                            'snapshot': '未知' if target else '不适用：仅补充统计',
+                            'fetched_at': '', 'outside_warehouse': 0, 'outside_created': 0}
+    report.snapshots[sid] = None
+    if target:
+        report.target_shop_ids.add(sid)
+
+
+def _sources(report: ProductReport, wanted: set[int],
+             extra_bcs_accounts: Sequence[BCSSession]) -> list[OpenAPIShop]:
+    """先选本机目标，再加入临时来源；重复ID不覆盖优先来源或扩大目标范围。"""
+    report.target_shop_ids = set()
+    selected: dict[int, OpenAPIShop] = {}
+    unknown = set(wanted)
+    clients = [('本机账号', bcs)] + [
+        (f'临时账号{index}', BCSClient(session)) for index, session in enumerate(extra_bcs_accounts, 1)]
+    for index, (source, client) in enumerate(clients):
+        try:
+            accesses = client.fetch_open_api_shops()
+            if not accesses:
+                raise ValueError('BCS 未返回任何店铺')
+        except Exception as exc:
+            report.unavailable_accounts.append(source)
+            _failure(report, 'BCS/' + source, '店铺列表读取失败，该账号店铺覆盖未知', exc)
+            continue
+        if index == 0:
+            unknown -= {item.id for item in accesses}
+            accesses = [item for item in accesses if not wanted or item.id in wanted]
+        for access in accesses:
+            if access.id in selected:
+                if selected[access.id].name != access.name:
+                    report.issues.append(ReportIssue('BCS/' + source,
+                        '重复店铺ID的名称冲突，保留先前来源，不重复采集', access.id))
+                continue
+            selected[access.id] = access
+            _add_shop(report, access.id, access.name, source, target=index == 0)
+    for sid in sorted(unknown):
+        report.issues.append(ReportIssue('BCS/本机账号',
+            '指定店铺未在本机完整店铺列表中确认，未扩大目标范围', sid))
+        if sid not in selected:
+            _add_shop(report, sid, f'未确认店铺({sid})', '本机账号（未确认）', target=True)
+    return list(selected.values())
+
+
 def collect(*, shops: str = '', order_days: int = 30, feedback_days: int = 0,
             region: str = 'ru', url: str = '', table: str = '订单登记',
-            now: datetime | None = None) -> ProductReport:
-    """采集只读数据，失败阶段记入报告；任何路径都不触发同步或平台写入。"""
+            now: datetime | None = None,
+            extra_bcs_accounts: Sequence[BCSSession] = ()) -> ProductReport:
+    """临时账号仅补充统计，--shops仅筛本机；所有凭证留在本轮内存中。"""
     start, end, feedback_start = data.windows(order_days, feedback_days, now)
     if region not in {'ru', 'cn'}:
         raise ValueError('--wb-region 必须为 ru 或 cn')
     tokens = [item.strip() for item in shops.split(',') if item.strip()]
     if shops.strip() and (not tokens or any(not data.positive_id(item) for item in tokens)):
         raise ValueError('--shops 应为逗号分隔的正整数店铺ID')
+    if any(not isinstance(session, BCSSession) for session in extra_bcs_accounts):
+        raise ValueError('临时BCS账号必须为已解析的内存会话')
     wanted = {int(item) for item in tokens}
     generated = now or datetime.now(data.TZ)
     generated = (generated if generated.tzinfo else generated.replace(tzinfo=data.TZ)).astimezone(data.TZ)
     report = ProductReport(generated.isoformat(), start.date().isoformat(),
                            (end - timedelta(days=1)).date().isoformat(),
                            feedback_start.date().isoformat() if feedback_start else '', region)
+    accesses = _sources(report, wanted, extra_bcs_accounts)
     try:
-        accesses = bcs.fetch_open_api_shops()
-        if not accesses:
-            raise ValueError('BCS 未返回任何店铺')
+        report.catalog = load_report_catalog()
     except Exception as exc:
-        accesses = []
-        _failure(report, 'BCS', '店铺列表读取失败，目标店铺覆盖未知', exc)
-    known = {item.id for item in accesses}
-    for sid in sorted(wanted - known):
-        report.issues.append(ReportIssue('BCS', '指定店铺未在完整店铺列表中确认，未扩大范围', sid))
-        report.shops.append({'id': sid, 'name': f'未确认店铺({sid})'})
-        report.coverage[sid] = {'orders': '未知', 'feedbacks': '未知', 'snapshot': '未知', 'fetched_at': ''}
-        report.snapshots[sid] = None
-    accesses = [item for item in accesses if not wanted or item.id in wanted]
+        _failure(report, '报告名称与价格表', '无法读取当前商品归属与价格表，近期筛选无法确认中文名', exc)
     for access in accesses:
         sid = access.id
-        report.shops.append({'id': sid, 'name': access.name})
-        report.coverage[sid] = {'orders': '未知', 'feedbacks': '未知', 'snapshot': '未知',
-                                'fetched_at': '', 'outside_warehouse': 0, 'outside_created': 0}
-        report.snapshots[sid] = None
+        if sid not in report.target_shop_ids:
+            continue
         try:
             snapshot = ProductSnapshotRepository.load_snapshot_document(sid)
             if snapshot is None:
@@ -212,14 +255,17 @@ def collect(*, shops: str = '', order_days: int = 30, feedback_days: int = 0,
                 report.issues.append(ReportIssue('本地快照', f'{invalid}行缺少商品码或VC，未见链接不能判断为缺少', sid))
         except Exception as exc:
             _failure(report, '本地快照', '快照缺失或无效，不能视为空店', exc, sid)
-    try:
-        records = load_records()
-        if not isinstance(records, dict) or any(not isinstance(value, dict) for value in records.values()):
-            raise ValueError('提交记录结构无效')
-        report.publish_records = records
-        report.publish_records_complete = True
-    except Exception as exc:
-        _failure(report, '本地提交记录', '无法读取提交记录，未提交状态不能确认', exc)
+    if report.target_shop_ids:
+        try:
+            records = load_records()
+            if not isinstance(records, dict) or any(not isinstance(value, dict) for value in records.values()):
+                raise ValueError('提交记录结构无效')
+            targets = {str(sid) for sid in report.target_shop_ids}
+            report.publish_records = {vc: {sid: value for sid, value in submitted.items() if sid in targets}
+                                      for vc, submitted in records.items()}
+            report.publish_records_complete = True
+        except Exception as exc:
+            _failure(report, '本地提交记录', '无法读取提交记录，未提交状态不能确认', exc)
     try:
         resolve_cn, _ = MappingRepository.build_vc_resolver()
     except Exception as exc:
@@ -259,14 +305,30 @@ def run(args: Any) -> int:
     output = getattr(args, 'out', '')
     if output and Path(output).suffix.lower() != '.xlsx':
         raise ValueError('--out 必须为 .xlsx 文件')
+    extra_bcs_accounts = []
+    if getattr(args, 'extra_bcs_stdin', False):
+        if sys.stdin.isatty():
+            raise ValueError('--extra-bcs-stdin 需要通过标准输入管道传入抓包并关闭输入流')
+        try:
+            capture = getattr(sys.stdin, 'buffer', sys.stdin).read(MAX_CAPTURE_CHARS + 1)
+            if len(capture) > MAX_CAPTURE_CHARS:
+                raise ValueError('临时BCS抓包输入超过1MiB上限')
+            if isinstance(capture, bytes):
+                capture = capture.decode('utf-8-sig')
+        except (UnicodeError, OSError):
+            raise ValueError('无法读取临时BCS抓包，请通过标准输入传入UTF-8文本') from None
+        extra_bcs_accounts = parse_sessions(capture)
     report = collect(shops=args.shops, order_days=args.order_days, feedback_days=args.feedback_days,
-                     region=args.wb_region, url=args.url, table=args.table)
+                     region=args.wb_region, url=args.url, table=args.table,
+                     extra_bcs_accounts=extra_bcs_accounts)
     target = Path(output) if output else Path(paths.LOG_DIR) / (
         '商品运营报告_' + data.timestamp(report.generated_at).strftime('%Y%m%d_%H%M%S') + '.xlsx')
-    write_report(report, target)
+    screening = write_report(report, target, details=getattr(args, 'details', False))
     print(f'[报告] {target.resolve()}')
     print(f'[范围] {len(report.shops)}店，莫斯科仓订单{len(report.orders)}条，'
-          f'评价{len(report.feedbacks)}条，飞书近14天记录{len(report.sales)}条；未自动筛除任何VC')
-    for issue in report.issues:
+          f'评价{len(report.feedbacks)}条，飞书近14天记录{len(report.sales)}条')
+    print(f'[默认筛选] 低评分{len(screening.low_rating)}个VC，高退货率{len(screening.high_returns)}个VC，'
+          f'近期出单候选{len(screening.recent)}个VC；缺口按同数字段判断')
+    for issue in [*report.issues, *screening.issues]:
         print(f'[{issue.severity}] {issue.source} 店铺={issue.shop_id or "-"}：{issue.message}')
-    return 1 if report.failed else 0
+    return 1 if report.failed or screening.failed else 0

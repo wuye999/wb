@@ -8,8 +8,11 @@ def register(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("shops", help="账号店铺列表")
     bind(p, 'sellerops.integrations.bcs.client', 'print_shops')
 
-    p = sub.add_parser('product-report', help='只读：退货、历史差评、飞书近7/14天出单与各店链接缺口 → Excel')
-    p.add_argument('--shops', default='', help='目标店铺ID，逗号分隔（默认BCS账号店铺；飞书来源始终包含全部登记店铺）')
+    p = sub.add_parser('product-report', help='只读：默认筛选低评分、高退货率及近期出单补货候选 → Excel')
+    p.add_argument('--details', action='store_true', help='追加原始汇总、订单、评价和链接证据表（默认仅简洁筛选与覆盖说明）')
+    p.add_argument('--shops', default='', help='本机目标店铺ID，逗号分隔（默认本机BCS账号全部店铺；不筛选临时账号或飞书来源）')
+    p.add_argument('--extra-bcs-stdin', action='store_true',
+                   help='从标准输入读取临时BCS账号的一个或多个fetch抓包，仅补充统计，凭证不落盘')
     p.add_argument('--order-days', type=int, default=30, help='退货统计下单窗口，含今天（1–31天，默认30）')
     p.add_argument('--feedback-days', type=int, default=0, help='评价日期窗口，含今天（默认0：接口可访问的全部历史）')
     p.add_argument('--wb-region', choices=['ru', 'cn'], default='ru', help='WB官方主机区域（默认ru；不自动跨域重试）')

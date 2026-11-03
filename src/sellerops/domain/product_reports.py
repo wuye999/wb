@@ -12,6 +12,12 @@ class ReportIssue:
 
 
 @dataclass
+class ReportCatalog:
+    price_names: set[str] = field(default_factory=set)
+    mapped_names: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class ProductReport:
     generated_at: str
     order_begin: str
@@ -28,6 +34,22 @@ class ProductReport:
     publish_records_complete: bool = False
     issues: list[ReportIssue] = field(default_factory=list)
     feishu_complete: bool = False
+    # None 保持直接构建旧报告实体时的“所有店铺均为目标”行为。
+    target_shop_ids: set[int] | None = None
+    unavailable_accounts: list[str] = field(default_factory=list)
+    catalog: ReportCatalog | None = None
+
+    @property
+    def failed(self) -> bool:
+        return any(issue.severity == '错误' for issue in self.issues)
+
+
+@dataclass
+class ProductScreening:
+    low_rating: list[dict[str, Any]] = field(default_factory=list)
+    high_returns: list[dict[str, Any]] = field(default_factory=list)
+    recent: list[dict[str, Any]] = field(default_factory=list)
+    issues: list[ReportIssue] = field(default_factory=list)
 
     @property
     def failed(self) -> bool:

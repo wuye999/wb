@@ -13,6 +13,7 @@ from sellerops.settings import credentials
 from sellerops.core.errors import AuthenticationError
 from sellerops.core.errors import RateLimitError
 from sellerops.core.errors import PlatformApiError
+from sellerops.integrations.bcs.capture import BCS_BASE_URL, BCSSession
 
 RETRY_MAX = 3
 PAGE_SIZE_BIG = 10000
@@ -30,15 +31,15 @@ class OpenAPIShop:
 class BCSClient:
     """BCS ERP 客户端"""
 
-    def __init__(self):
-        pass
+    def __init__(self, session: BCSSession | None = None) -> None:
+        self._session = session
 
     @property
     def base_url(self) -> str:
-        return credentials.get().base_url
+        return BCS_BASE_URL if self._session is not None else credentials.get().base_url
 
     def _headers(self) -> Dict[str, str]:
-        return credentials.get().bcs_headers()
+        return self._session.headers() if self._session is not None else credentials.get().bcs_headers()
 
     def request_json(self, method: str, url: str, retry: int = RETRY_MAX,
                      idempotent: bool = False, **kwargs) -> Dict[str, Any]:

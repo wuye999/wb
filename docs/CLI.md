@@ -17,7 +17,7 @@
 | 命令 | 用途 | 实现入口 |
 | --- | --- | --- |
 | `shops` | 账号店铺列表 | [sellerops.integrations.bcs.client:print_shops](../src/sellerops/integrations/bcs/client.py) |
-| `product-report` | 只读：退货、历史差评、飞书近7/14天出单与各店链接缺口 → Excel | [sellerops.features.catalog.product_report:run](../src/sellerops/features/catalog/product_report.py) |
+| `product-report` | 只读：默认筛选低评分、高退货率及近期出单补货候选 → Excel | [sellerops.features.catalog.product_report:run](../src/sellerops/features/catalog/product_report.py) |
 | `fetch` | 拉取商品快照（默认 WB 官方 API，仅从 BCS 读取店铺密钥） | [sellerops.cli.catalog_handlers:run_fetch](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping` | 生成统一核对工作台（全部活跃店铺并集，一页两区） | [sellerops.cli.catalog_handlers:run_mapping](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping-import` | 导入核对结果 → 生成映射表（旧格式） | [sellerops.cli.catalog_handlers:run_mapping_import](../src/sellerops/cli/catalog_handlers.py) |
@@ -86,14 +86,17 @@ options:
 ## product-report
 
 ```text
-usage: sellerops product-report [-h] [--shops SHOPS] [--order-days ORDER_DAYS]
+usage: sellerops product-report [-h] [--details] [--shops SHOPS]
+                                [--extra-bcs-stdin] [--order-days ORDER_DAYS]
                                 [--feedback-days FEEDBACK_DAYS]
                                 [--wb-region {ru,cn}] [--url URL]
                                 [--table TABLE] [--out OUT]
 
 options:
   -h, --help            show this help message and exit
-  --shops SHOPS         目标店铺ID，逗号分隔（默认BCS账号店铺；飞书来源始终包含全部登记店铺）
+  --details             追加原始汇总、订单、评价和链接证据表（默认仅简洁筛选与覆盖说明）
+  --shops SHOPS         本机目标店铺ID，逗号分隔（默认本机BCS账号全部店铺；不筛选临时账号或飞书来源）
+  --extra-bcs-stdin     从标准输入读取临时BCS账号的一个或多个fetch抓包，仅补充统计，凭证不落盘
   --order-days ORDER_DAYS
                         退货统计下单窗口，含今天（1–31天，默认30）
   --feedback-days FEEDBACK_DAYS
@@ -214,12 +217,11 @@ options:
 ## price
 
 ```text
-usage: sellerops price [-h]
-                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                       [--shops SHOPS] [--apply] [--yes] [--price PRICE]
-                       [--discount DISCOUNT] [--club-discount CLUB_DISCOUNT]
-                       [--keep-price] [--auto-review] [--chunk CHUNK]
-                       [--interval INTERVAL]
+usage: sellerops price [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--price PRICE] [--discount DISCOUNT]
+                       [--club-discount CLUB_DISCOUNT] [--keep-price]
+                       [--auto-review] [--chunk CHUNK] [--interval INTERVAL]
 
 options:
   -h, --help            show this help message and exit
@@ -244,10 +246,9 @@ options:
 ## price-bcs
 
 ```text
-usage: sellerops price-bcs [-h]
-                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                           [--shops SHOPS] [--apply] [--yes] [--price PRICE]
-                           [--discount DISCOUNT]
+usage: sellerops price-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--price PRICE] [--discount DISCOUNT]
                            [--club-discount CLUB_DISCOUNT] [--keep-price]
                            [--auto-review]
 
@@ -272,10 +273,9 @@ options:
 ## stock
 
 ```text
-usage: sellerops stock [-h]
-                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                       [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
-                       [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops stock [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--amount AMOUNT] [--chunk CHUNK] [--interval INTERVAL]
                        [--max-pages MAX_PAGES] [--resolve {snapshot,live}]
 
 options:
@@ -301,9 +301,9 @@ options:
 ## stock-bcs
 
 ```text
-usage: sellerops stock-bcs [-h]
-                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                           [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
+usage: sellerops stock-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--amount AMOUNT]
 
 options:
   -h, --help       show this help message and exit
@@ -321,10 +321,9 @@ options:
 ## trash
 
 ```text
-usage: sellerops trash [-h]
-                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                       [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
-                       [--interval INTERVAL]
+usage: sellerops trash [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--chunk CHUNK] [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -343,10 +342,9 @@ options:
 ## trash-bcs
 
 ```text
-usage: sellerops trash-bcs [-h]
-                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                           [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
-                           [--interval INTERVAL]
+usage: sellerops trash-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--chunk CHUNK] [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -610,10 +608,10 @@ options:
 ## sync-cards-openapi
 
 ```text
-usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP
-                                    (--vc VC | --nm NM | --all)
-                                    [--shops SHOPS] [--fields FIELDS]
-                                    [--limit LIMIT] [--apply]
+usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP (--vc VC |
+                                    --nm NM | --all) [--shops SHOPS]
+                                    [--fields FIELDS] [--limit LIMIT]
+                                    [--apply]
 
 options:
   -h, --help            show this help message and exit

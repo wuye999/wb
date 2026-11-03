@@ -11,7 +11,7 @@ from unittest.mock import Mock, PropertyMock, patch
 from openpyxl import load_workbook
 
 from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLimitError
-from sellerops.domain.product_reports import ProductReport
+from sellerops.domain.product_reports import ProductReport, ReportCatalog
 from sellerops.features.catalog import product_report as workflow
 from sellerops.features.catalog import product_report_data as data
 from sellerops.features.catalog.product_report_analysis import analyze, return_metrics
@@ -260,6 +260,7 @@ class TestReportWorkflow(unittest.TestCase):
     def fixture(self, *, missing=False, api_error=False, bad_warehouse=False, records=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(patch.object(workflow, 'load_report_catalog', return_value=ReportCatalog({'测试商品'}, {VC: '测试商品'})))
         accesses = [OpenAPIShop(11, '店甲', 'secret-a'), OpenAPIShop(12, '店乙', 'secret-b')]
         stack.enter_context(patch.object(workflow.bcs, 'fetch_open_api_shops', return_value=accesses))
         stack.enter_context(patch.object(workflow, 'load_records', return_value=records or {}))
@@ -436,7 +437,7 @@ class TestReportWorkflow(unittest.TestCase):
         report = self.collect()
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'report.xlsx'
-            write_report(report, target)
+            write_report(report, target, details=True)
             wb = load_workbook(target)
             self.addCleanup(wb.close)
             self.assertIn('店铺链接缺口', wb.sheetnames)

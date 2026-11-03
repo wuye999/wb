@@ -22,14 +22,21 @@ def return_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             'cancel_rate': cancel / orders if orders else None}
 
 
+def _coverage_scope(report: ProductReport, stage: str, complete: str) -> str:
+    incomplete = [str(shop['id']) for shop in report.shops
+                  if report.coverage[shop['id']][stage] != '完整']
+    reasons = ['部分店铺数据缺失：' + ','.join(incomplete)] if incomplete else []
+    if report.unavailable_accounts:
+        reasons.append('账号店铺范围未知：' + '、'.join(report.unavailable_accounts))
+    return '；'.join(reasons) or complete
+
+
 def _return_groups(report: ProductReport, key: str) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in report.orders:
         label = row[key] or ('(中文名未知)' if key == 'cn' else f'(VC未知:{row["shop_id"]}:{row["nm_id"]})')
         groups[label].append(row)
-    incomplete = [str(shop['id']) for shop in report.shops
-                  if report.coverage[shop['id']]['orders'] != '完整']
-    scope = '部分店铺数据缺失：' + ','.join(incomplete) if incomplete else '所选店铺完整'
+    scope = _coverage_scope(report, 'orders', '所选店铺完整')
     result = []
     for label, rows in groups.items():
         result.append({'key': label, 'cn': '、'.join(sorted({row['cn'] for row in rows if row['cn']})),
@@ -109,9 +116,7 @@ def _feedback_groups(report: ProductReport) -> list[dict[str, Any]]:
     for row in report.feedbacks:
         key = row['vc'] or f'(VC未知:{row["shop_id"]}:{row["nm_id"]})'
         groups[key].append(row)
-    incomplete = [str(shop['id']) for shop in report.shops
-                  if report.coverage[shop['id']]['feedbacks'] != '完整']
-    scope = ('所选店铺评价不完整：' + ','.join(incomplete) if incomplete else '所选店铺可取评价完整')
+    scope = _coverage_scope(report, 'feedbacks', '所选店铺可取评价完整')
     result = []
     for key, rows in groups.items():
         stars = Counter(row['stars'] for row in rows)
@@ -160,6 +165,8 @@ def _gaps(report: ProductReport, sales: list[dict[str, Any]]) -> list[dict[str, 
     result = []
     for shop in report.shops:
         sid = shop['id']
+        if report.target_shop_ids is not None and sid not in report.target_shop_ids:
+            continue
         snapshot = report.snapshots.get(sid)
         active: dict[str, list[str]] = defaultdict(list)
         trashed: set[str] = set()
