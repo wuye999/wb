@@ -8,9 +8,23 @@ def register(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("shops", help="账号店铺列表")
     bind(p, 'sellerops.integrations.bcs.client', 'print_shops')
 
-    p = sub.add_parser("fetch", help="拉取店铺商品数据（自动先同步 WB）")
+    p = sub.add_parser('product-report', help='只读：退货、历史差评、飞书近7/14天出单与各店链接缺口 → Excel')
+    p.add_argument('--shops', default='', help='目标店铺ID，逗号分隔（默认BCS账号店铺；飞书来源始终包含全部登记店铺）')
+    p.add_argument('--order-days', type=int, default=30, help='退货统计下单窗口，含今天（1–31天，默认30）')
+    p.add_argument('--feedback-days', type=int, default=0, help='评价日期窗口，含今天（默认0：接口可访问的全部历史）')
+    p.add_argument('--wb-region', choices=['ru', 'cn'], default='ru', help='WB官方主机区域（默认ru；不自动跨域重试）')
+    p.add_argument('--url', default='', help='飞书多维表格地址（默认feishu.base_url）')
+    p.add_argument('--table', default='订单登记', help='飞书来源表（默认订单登记）')
+    p.add_argument('--out', default='', help='输出.xlsx路径（默认data/logs/商品运营报告_时间.xlsx）')
+    bind(p, 'sellerops.features.catalog.product_report', 'run')
+
+    p = sub.add_parser("fetch", help="拉取商品快照（默认 WB 官方 API，仅从 BCS 读取店铺密钥）")
     p.add_argument("--shop-id", type=int, default=None, help="店铺ID（默认全部）")
-    p.add_argument("--no-sync", action="store_true", help="跳过 BCS 同步，直接拉取上次数据")
+    p.add_argument('--source', choices=['wb-openapi', 'bcs'], default='wb-openapi',
+                   help='快照来源（默认wb-openapi；bcs显式选择旧缓存流程，不自动回退）')
+    p.add_argument('--parallel', type=int, default=4,
+                   help='Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）')
+    p.add_argument("--no-sync", action="store_true", help="BCS来源：跳过同步；Open API来源无需同步")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_fetch')
 
     p = sub.add_parser("mapping", help="生成统一核对工作台（全部活跃店铺并集，一页两区）")

@@ -368,7 +368,7 @@ def merge(review_file=None, sync_shops=True):
         for vc, r in mapped.items():
             shop_coverage.setdefault(vc, {})[sid] = {
                 "price": r.get("price"),
-                "stock": r.get("stock") or "",
+                "stock": r.get("stock") if r.get("stock") is not None else "",
                 "title": r.get("title") or "",
                 "img": r.get("img") or "",
                 "nmId": r.get("nmId"),
@@ -413,11 +413,10 @@ def merge(review_file=None, sync_shops=True):
                 d = safe_load_json(p_json, default={})
                 rows = [r for r in d.get("rows", []) if not r.get("trashedAt")]
                 for r in rows:
-                    sl = r.get("sizeList") or []
-                    p = sl[0].get("price") if sl else None
+                    p = mapping.price_of(r)
                     if p is not None:
                         c = dict(r)
-                        c["price"] = int(p)
+                        c["price"] = p
                         c["vc"] = r.get("vendorCode") or ""
                         c["wbnm"] = str(r.get("nmId")) if r.get("nmId") else ""
                         c["img"] = r.get("repImg") or ""

@@ -12,12 +12,13 @@
 当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。
 当前 WB 凭证使用人工登录、手动抓包并填写/导入；Playwright 尚未启动，`cookie-refresh-wb` 保留但未启用。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 
-共 53 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
+共 56 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
 
 | 命令 | 用途 | 实现入口 |
 | --- | --- | --- |
 | `shops` | 账号店铺列表 | [sellerops.integrations.bcs.client:print_shops](../src/sellerops/integrations/bcs/client.py) |
-| `fetch` | 拉取店铺商品数据（自动先同步 WB） | [sellerops.cli.catalog_handlers:run_fetch](../src/sellerops/cli/catalog_handlers.py) |
+| `product-report` | 只读：退货、历史差评、飞书近7/14天出单与各店链接缺口 → Excel | [sellerops.features.catalog.product_report:run](../src/sellerops/features/catalog/product_report.py) |
+| `fetch` | 拉取商品快照（默认 WB 官方 API，仅从 BCS 读取店铺密钥） | [sellerops.cli.catalog_handlers:run_fetch](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping` | 生成统一核对工作台（全部活跃店铺并集，一页两区） | [sellerops.cli.catalog_handlers:run_mapping](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping-import` | 导入核对结果 → 生成映射表（旧格式） | [sellerops.cli.catalog_handlers:run_mapping_import](../src/sellerops/cli/catalog_handlers.py) |
 | `mapping-check` | 映射表核查工作台（带图，核对匹配是否有误） | [sellerops.cli.catalog_handlers:run_mapping_check](../src/sellerops/cli/catalog_handlers.py) |
@@ -41,6 +42,8 @@
 | `warehouse-clear` | 成都仓库商品永久删除（当前仅操作莫斯科，不使用此命令） | [sellerops.features.listings.warehouse_clear:run](../src/sellerops/features/listings/warehouse_clear.py) |
 | `publish` | 批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺） | [sellerops.features.listings.bulk_publish:run](../src/sellerops/features/listings/bulk_publish.py) |
 | `create-cards` | 建卡发布上架：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡） | [sellerops.features.listings.card_publish:run](../src/sellerops/features/listings/card_publish.py) |
+| `publish-openapi` | [备用] WB Open API 上架：建卡、有限等待标识、上传图片和莫斯科库存；支持续办 | [sellerops.features.listings.open_api_publish:run](../src/sellerops/features/listings/open_api_publish.py) |
+| `sync-cards-openapi` | WB Open API：按相同完整 VC 将源店商品内容同步到其他店 | [sellerops.features.listings.open_api_sync:run](../src/sellerops/features/listings/open_api_sync.py) |
 | `promo-apply` | 促销报名（cookie 会话，applyAll） | [sellerops.features.pricing.promo:run](../src/sellerops/features/pricing/promo.py) |
 | `promo-goods` | 查询 WB 广告推广中被推广的商品（中文名/供应商代码/WB商品码，只读） | [sellerops.features.pricing.adverts:run](../src/sellerops/features/pricing/adverts.py) |
 | `promo-gap` | 只读：推广 × 销量双向错配审计（gap=该推没推 / waste=在推但没销量该关） | [sellerops.features.pricing.promo_gap:run](../src/sellerops/features/pricing/promo_gap.py) |
@@ -79,15 +82,40 @@ options:
   -h, --help  show this help message and exit
 ```
 
+## product-report
+
+```text
+usage: sellerops product-report [-h] [--shops SHOPS] [--order-days ORDER_DAYS]
+                                [--feedback-days FEEDBACK_DAYS]
+                                [--wb-region {ru,cn}] [--url URL]
+                                [--table TABLE] [--out OUT]
+
+options:
+  -h, --help            show this help message and exit
+  --shops SHOPS         目标店铺ID，逗号分隔（默认BCS账号店铺；飞书来源始终包含全部登记店铺）
+  --order-days ORDER_DAYS
+                        退货统计下单窗口，含今天（1–31天，默认30）
+  --feedback-days FEEDBACK_DAYS
+                        评价日期窗口，含今天（默认0：接口可访问的全部历史）
+  --wb-region {ru,cn}   WB官方主机区域（默认ru；不自动跨域重试）
+  --url URL             飞书多维表格地址（默认feishu.base_url）
+  --table TABLE         飞书来源表（默认订单登记）
+  --out OUT             输出.xlsx路径（默认data/logs/商品运营报告_时间.xlsx）
+```
+
 ## fetch
 
 ```text
-usage: sellerops fetch [-h] [--shop-id SHOP_ID] [--no-sync]
+usage: sellerops fetch [-h] [--shop-id SHOP_ID] [--source {wb-openapi,bcs}]
+                       [--parallel PARALLEL] [--no-sync]
 
 options:
-  -h, --help         show this help message and exit
-  --shop-id SHOP_ID  店铺ID（默认全部）
-  --no-sync          跳过 BCS 同步，直接拉取上次数据
+  -h, --help            show this help message and exit
+  --shop-id SHOP_ID     店铺ID（默认全部）
+  --source {wb-openapi,bcs}
+                        快照来源（默认wb-openapi；bcs显式选择旧缓存流程，不自动回退）
+  --parallel PARALLEL   Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
+  --no-sync             BCS来源：跳过同步；Open API来源无需同步
 ```
 
 ## mapping
@@ -262,8 +290,8 @@ options:
   --max-pages MAX_PAGES
                         WB 游标分页安全上限（--resolve live 时使用）
   --resolve {snapshot,live}
-                        chrtId 解析源：snapshot=BCS 快照（默认，零请求）；live=WB
-                        portal/stocks 实时拉取（绕过快照滞后）
+                        snapshot=本地完整规格（默认，缺标识时官方API定向补齐）；live=另读莫斯科当前库存，缺库存记录
+                        不减少规格
 ```
 
 ## stock-bcs
@@ -525,6 +553,59 @@ options:
   --cn-stock CN_STOCK  按中文名指定库存（'中文名:库存,...'）
   --interval INTERVAL  批次/商品请求间隔秒（默认 1.0）
   --apply              真正调用平台接口执行（默认仅 dry-run 预览）
+```
+
+## publish-openapi
+
+```text
+usage: sellerops publish-openapi [-h] [--source-shop SOURCE_SHOP] [--nm NM]
+                                 [--vc VC] [--all] [--file FILE] --shops SHOPS
+                                 [--price PRICE] [--dims DIMS] [--stock STOCK]
+                                 [--limit LIMIT] [--resume]
+                                 [--wait-timeout WAIT_TIMEOUT]
+                                 [--wait-interval WAIT_INTERVAL] [--apply]
+
+options:
+  -h, --help            show this help message and exit
+  --source-shop SOURCE_SHOP
+                        自有源店 BCS 店铺 ID；不传则从公开 CDN 读取任意商品码
+  --nm NM               源 WB 商品码，逗号分隔；自有源店模式使用该店商品码
+  --vc VC               源店模式为完整 VC 筛选；公开商品模式指定目标完整 VC（支持 {nm} 模板）
+  --all                 源店全部非回收站商品；仅自有源店模式
+  --file FILE           公开商品 JSON 对象数组：nmId/vendorCode/price，可用 card 覆盖官方字段
+  --shops SHOPS         目标店铺 ID，逗号分隔；不可包含源店
+  --price PRICE         新建全部规格的整数价格（目标店币种）；文件可逐项指定 price
+  --dims DIMS           覆盖包装尺寸：长*宽*高/毛重，单位 cm/kg
+  --stock STOCK         莫斯科仓各规格库存（默认 999，0 保留）
+  --limit LIMIT         最多选择 N 个源商品（0=不限）
+  --resume              按 --shops/--vc 续办已有记录，不重新建卡；沿用原图片和库存计划
+  --wait-timeout WAIT_TIMEOUT
+                        等待完整商品/规格标识的总时限秒（默认1800，0=只查询一次，最多7200）
+  --wait-interval WAIT_INTERVAL
+                        标识查询轮次间隔秒（默认15，范围1..60；仍遵守接口限流）
+  --apply               执行完整上架或续办流程（默认仅预览，不等待、不写入）
+```
+
+## sync-cards-openapi
+
+```text
+usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP (--vc VC |
+                                    --nm NM | --all) [--shops SHOPS]
+                                    [--fields FIELDS] [--limit LIMIT]
+                                    [--apply]
+
+options:
+  -h, --help            show this help message and exit
+  --source-shop SOURCE_SHOP
+                        修改后的源店 BCS 店铺 ID（例如袁州1店对应 ID）
+  --vc VC               源店完整 VC，逗号分隔
+  --nm NM               源店 WB 商品码，逗号分隔
+  --all                 源店全部非回收站商品
+  --shops SHOPS         目标店铺 ID，逗号分隔（默认 BCS 中除源店外的全部店铺）
+  --fields FIELDS       同步字段：title,description,brand,dimensions,characteristic
+                        s,photos（默认）；可选 sizes,documents,video,gtin,kizMarked
+  --limit LIMIT         最多选择 N 个源商品（0=不限）
+  --apply               真正提交内容/媒体更新（默认预览）
 ```
 
 ## promo-apply

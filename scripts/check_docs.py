@@ -18,6 +18,7 @@ from sellerops.cli.main import build_parser
 REQUIRED = (
     'CONFIGURATION.md', 'DATA.md', 'USAGE.md', 'AI_GUIDE.md',
     'DEVELOPMENT.md', 'TROUBLESHOOTING.md', 'CLI.md',
+    'PRODUCT_REPORT.md',
 )
 
 
@@ -44,7 +45,7 @@ def run() -> int:
         if not (ROOT / 'docs' / name).is_file():
             errors.append('Missing documentation: docs/' + name)
     documents = [ROOT / 'README.md', ROOT / 'AGENTS.md', ROOT / 'data/README.md',
-                 ROOT / '_scratch/README.md', *sorted((ROOT / 'docs').glob('*.md'))]
+                 ROOT / '_scratch/README.md', *sorted((ROOT / 'docs').rglob('*.md'))]
     parser = build_parser()
     sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
     links = examples = 0
@@ -65,6 +66,11 @@ def run() -> int:
                     errors.append(f'{label}: missing heading anchor {target}')
         for block in re.finditer(r'^```([^\n]*)\n(.*?)^```\s*$', text, flags=re.M | re.S):
             language, body = block.group(1).strip().lower(), block.group(2)
+            if language == 'json':
+                try:
+                    json.loads(body)
+                except json.JSONDecodeError as exc:
+                    errors.append(f'{label}: invalid JSON example ({exc.msg})')
             if language == 'python':
                 try:
                     ast.parse(body)

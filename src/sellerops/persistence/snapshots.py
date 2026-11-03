@@ -25,6 +25,26 @@ class ProductSnapshotRepository:
         return os.path.exists(cls.get_path(shop_id))
 
     @classmethod
+    def load_snapshot_document(cls, shop_id: Any) -> Optional[Dict[str, Any]]:
+        """读取行和采集元信息；不存在返回 None，损坏或错店不作为空店。"""
+        path = cls.get_path(shop_id)
+        if not os.path.isfile(path):
+            return None
+        data = safe_load_json(path)
+        if isinstance(data, list):
+            data = {'rows': data}
+        if not isinstance(data, dict) or not isinstance(data.get('rows'), list):
+            raise ValueError('商品快照缺少 rows 数组')
+        if any(not isinstance(row, dict) for row in data['rows']):
+            raise ValueError('商品快照包含无效商品行')
+        if data.get('shopId') is not None and str(data['shopId']) != str(shop_id):
+            raise ValueError('商品快照的 shopId 与目标店铺不一致')
+        for key in ('total', 'fetchedCount'):
+            if data.get(key) is not None and data[key] != len(data['rows']):
+                raise ValueError('商品快照数量不完整或元信息不一致')
+        return data
+
+    @classmethod
     def load_shop_products(cls, shop_id: Any) -> List[Dict[str, Any]]:
         """安全加载某店铺全量商品快照列表。若不存在返回空列表。"""
         path = cls.get_path(shop_id)
@@ -64,7 +84,8 @@ class ProductSnapshotRepository:
         if cache_key in cls._cache:
             return cls._cache[cache_key]
 
-        products = cls.load_shop_products(shop_id)
+        document = cls.load_snapshot_document(shop_id)
+        products = document['rows'] if document is not None else []
         rows: Dict[str, Dict[str, Any]] = {}
         for item in products:
             if not isinstance(item, dict):
@@ -73,6 +94,8 @@ class ProductSnapshotRepository:
                 continue
             vc = item.get("vendorCode") or item.get("goodsCode") or ""
             if vc:
+                if not isinstance(vc, str) or not vc.strip() or vc.strip() in rows:
+                    raise ValueError('商品快照包含无效或重复vendorCode，无法唯一定位商品')
                 rows[vc.strip()] = item
 
         cls._cache = {key: value for key, value in cls._cache.items() if key[0] != path}

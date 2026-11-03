@@ -7,7 +7,9 @@
 | 功能 | 主要前置条件 |
 | --- | --- |
 | 帮助、daily/schedule 默认预览 | Python 与基础依赖，不读取平台凭证 |
-| shops、fetch、orders、BCS 通道写入 | BCS 凭证；本地表格/快照由具体用例决定 |
+| shops、orders、BCS 来源 fetch、BCS 通道写入 | BCS 凭证；本地表格/快照由具体用例决定 |
+| fetch 默认 Open API 来源 | BCS 凭证和 BCS 各店保存的官方 apiKey，具备 Content、Prices and Discounts、Marketplace 权限；不要求后台 Cookie |
+| publish-openapi、sync-cards-openapi | BCS 保存的各店官方 apiKey；Content 读写权限，上架另需 Marketplace 仓库读取/库存写入权限；固定中国区，不要求后台 Cookie，见 [专门说明](OPEN_API_LISTINGS.md) |
 | price、stock、trash、折扣、促销、客服、WB 报表 | 对应 WB 店铺完整 Cookie 三件套；涉及商品匹配时还需本地数据 |
 | 上架、跨店复制、BCS 库存/下架中的仓库解析 | BCS 与对应店铺 WB 凭证，以及本地价格/映射/快照；默认仓库解析走 WB |
 | mabang-orders、mabang-forecast、mabang-process | 马帮凭证与店铺映射、本地商品/库存 SKU 映射；取消单过滤还可能读取 WB |
@@ -16,6 +18,8 @@
 | WB 凭证维护 | 当前由用户手动登录、抓包并写入；Playwright 浏览器刷新能力保留，但尚未启动或启用 |
 
 表中是主要依赖。dry-run 也可能调用这些平台的读取接口，不能等同离线检查。
+
+`publish-openapi --apply` 在建卡受理后允许按待办完整 VC 有限查询本店 nmID/chrtID，核对生成条码后上传图片和莫斯科库存。默认等待上限1800秒、轮询间隔15秒；超时保留记录，用 `publish-openapi --resume` 续办。此轮询不写本地商品快照，不触发 BCS 同步，也不在图片/库存提交后验证结果。其余写入的提交后结束约定保持不变。
 
 ## 仓库范围：仅允许莫斯科
 
@@ -27,7 +31,7 @@
 - 临时脚本和底层调用也要先校验 ID，库存读取传入莫斯科 `store_id` / `warehouse_id`，写入前再次核对计划中的仓库 ID。马帮的 `mabang.warehouse_id` 属于马帮自己的标识体系，当前也须核实为莫斯科业务仓，不能套用 WB ID。
 - `warehouse-clear` 专门针对成都仓库，虽然代码和 CLI 中保留该命令，**当前操作流程不使用它**。
 
-这是现行操作约束，并非所有底层 API 都已经自动强制校验。现有仓库解析器还保留俄罗斯地区仓回退，某些底层库存读取可返回多仓；调用方必须核对并限定莫斯科，不能把这些代码能力理解为允许扩大范围。开发要求见 [开发指南](DEVELOPMENT.md#当前必须保留的运行约定)。
+这是现行操作约束，并非所有底层 API 都已经自动强制校验。当前业务仓库解析器只接受唯一可用的莫斯科仓，不回退其他地区；某些底层库存读取未传 store_id 时仍可返回多仓，调用方必须核对并限定莫斯科。开发要求和私有协议资料入口见 [开发指南](DEVELOPMENT.md#当前必须保留的运行约定)。
 
 ## BCS：bcs
 
@@ -39,6 +43,14 @@
 | `cookie_extra` | 其他需要附带的 Cookie 内容，保留原格式 |
 
 401 通常表示凭证失效；网关错误还可能与 limit_key 有关。店铺枚举来自 BCS 的 `shops` 命令，与 WB Cookie 是否完整是两项检查。
+
+店铺原始响应的 `apiKey` 是该店 **WB Open API** 令牌，不能填到 `bcs.token` 或 `wb.authorizev3`。现有 `fetch_shop_list()` 只返回 id/name；默认商品快照、只读报告和显式 Open API 商品写入通过内部 `fetch_open_api_shops()` 分页读取对应店铺的官方令牌，不输出或保存密钥副本，也无需新增凭证段。
+
+库存、改价、尺寸、下架及定向折扣操作在本地必要字段不足时，也可在提交前用此令牌按本店完整VC/商品ID只读补齐；完整数据不额外查询商品，补齐不更新快照或映射，不改变这些命令原有的WB网页/BCS写入通道。官方令牌失效在BCS更新，网页写入的Cookie失效仍按下文人工抓包更新，不能互相替代或自动换通道。
+
+`fetch` 默认使用中国区 `.cn` 官方主机。个人令牌可用于自有程序及本地软件，快照只需要 Content、Prices and Discounts、Marketplace 的读取权限；基础令牌的类别可用性与限额不同，不能只凭令牌字符串判断。401/403 时检查 BCS 对应店铺 apiKey 是否有效及权限是否齐全，更新后重新执行独立 fetch；不改用 Cookie、浏览器或旧缓存。429 会结束该店采集并保留旧快照，稍后再按原范围重试。原 BCS 缓存拉取须显式 `--source bcs`。
+
+`product-report` 要求 BCS 已保存各店有效的官方令牌，并具有 Analytics、Feedbacks and Questions、Marketplace 类别权限。默认使用 `.ru` 官方主机，需使用中国区主机时显式传 `--wb-region cn`；不自动切换主机或改走后台 Cookie。常规限额以个人、服务或带密钥基础令牌为前提，低限额基础令牌可能触发429；限流或401/403时该阶段停止并记录未知，不启动浏览器。飞书仍使用已登录的 lark-cli。[报告说明](PRODUCT_REPORT.md)
 
 ## Wildberries：wb
 

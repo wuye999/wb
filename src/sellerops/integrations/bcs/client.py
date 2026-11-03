@@ -6,6 +6,7 @@ from sellerops.core.errors import NetworkError
 
 import time
 import requests
+from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 from sellerops.settings import paths as config
 from sellerops.settings import credentials
@@ -15,6 +16,15 @@ from sellerops.core.errors import PlatformApiError
 
 RETRY_MAX = 3
 PAGE_SIZE_BIG = 10000
+
+
+@dataclass(frozen=True)
+class OpenAPIShop:
+    """BCS 店铺的私有 Open API 访问资料；密钥不参与 repr。"""
+
+    id: int
+    name: str
+    api_key: str = field(repr=False)
 
 
 class BCSClient:
@@ -87,13 +97,56 @@ class BCSClient:
             raise PlatformApiError("未获取到店铺列表")
         return shops[0]["id"]
 
+    def fetch_open_api_shops(self) -> List[OpenAPIShop]:
+        """完整分页读取店铺访问资料，供显式 Open API 集成内部使用，不打印原始行。"""
+        shops: List[OpenAPIShop] = []
+        seen = set()
+        for page in range(1, 1001):
+            d = self.get(f"{self.base_url}/system/wbShop/user/list?pageNum={page}&pageSize=100")
+            if not isinstance(d, dict) or d.get('code') != 200 or not isinstance(d.get('rows'), list):
+                raise PlatformApiError('BCS 店铺列表响应不完整')
+            rows = d['rows']
+            for row in rows:
+                raw_id = row.get('id') if isinstance(row, dict) else None
+                if isinstance(raw_id, bool) or not str(raw_id).isdigit() or int(raw_id) <= 0:
+                    raise PlatformApiError('BCS 店铺列表含无效 ID')
+                sid = int(raw_id)
+                if sid in seen:
+                    raise PlatformApiError('BCS 店铺列表分页重复，无法确认完整性')
+                seen.add(sid)
+                shops.append(OpenAPIShop(sid, str(row.get('shopName') or sid),
+                                         str(row.get('apiKey') or '').strip()))
+            total = d.get('total')
+            if total is not None:
+                if isinstance(total, bool) or not str(total).isdigit() or int(total) < len(shops):
+                    raise PlatformApiError('BCS 店铺列表 total 无效或不一致')
+                if len(shops) == int(total):
+                    return shops
+                if not rows:
+                    raise PlatformApiError('BCS 店铺列表提前结束')
+            elif not rows:
+                return shops
+        raise PlatformApiError('BCS 店铺列表超过分页上限')
+
     def fetch_shop_products(self, shop_id: int, filter_type: str = "BASE") -> List[Dict[str, Any]]:
         url = (f"{self.base_url}/shopKeeper/productList/list?filter={filter_type}"
                f"&pageNum=1&pageSize={PAGE_SIZE_BIG}&shopId={shop_id}")
         d = self.get(url)
-        if d.get("code") != 200:
-            raise PlatformApiError(f"店铺{shop_id}拉取失败 code={d.get('code')} msg={d.get('msg')}")
-        return d.get("rows") or []
+        if not isinstance(d, dict) or d.get('code') != 200:
+            raise PlatformApiError(f'店铺{shop_id} BCS 商品查询失败')
+        rows = d.get('rows')
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise PlatformApiError(f'店铺{shop_id} BCS 商品响应缺少有效 rows，不能视为空店')
+        total = d.get('total')
+        if total is not None:
+            if (isinstance(total, bool) or not str(total).isdecimal()
+                    or int(total) != len(rows)):
+                raise PlatformApiError(f'店铺{shop_id} BCS 商品总数与返回行数不一致，快照不完整')
+        elif len(rows) >= PAGE_SIZE_BIG:
+            raise PlatformApiError(f'店铺{shop_id} BCS 商品达到单页上限，无法确认完整性')
+        if any(row.get('shopId') is not None and str(row['shopId']) != str(shop_id) for row in rows):
+            raise PlatformApiError(f'店铺{shop_id} BCS 商品响应包含其他店铺数据')
+        return rows
 
     def count_by_filter(self, shop_id: int) -> Dict[str, Any]:
         d = self.get(f"{self.base_url}/shopKeeper/productList/countByFilter?shopId={shop_id}")

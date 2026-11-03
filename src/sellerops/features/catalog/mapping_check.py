@@ -5,7 +5,6 @@ sellerops 映射表核查工作台（带图，人工核对匹配是否有误）�
   ① 前缀不符  ② 价格偏差  ③ 跨店不一致
 顶部可「只看可疑」「搜索过滤」「导出可疑清单 JSON」。
 """
-import glob
 import json
 import os
 import re
@@ -22,6 +21,8 @@ from sellerops.persistence.headers import COL_VC
 from sellerops.persistence.headers import find_col
 from sellerops.persistence.headers import warn_missing
 from sellerops.features.catalog import mapping
+from sellerops.domain.snapshot_values import first_price
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 PRICE_DEV_TOL = 5  # 价格偏差阈值（元）
 
 
@@ -72,22 +73,20 @@ def load_mapping_rows():
 def load_union_prices():
     """全部活跃店铺并集价格 → {vc: {sid: price}}（用于跨店一致性检测）"""
     out = {}
-    for p in sorted(glob.glob(config.shop_json_path("*"))):
-        try:
-            sid = int(os.path.basename(p).replace("shop", "").replace("_products_all.json", ""))
-        except ValueError:
+    for sid in ProductSnapshotRepository.shop_ids_from_disk():
+        if config.is_shop_archived(sid):
             continue
-        d = safe_load_json(p, default={})
+        d = safe_load_json(config.shop_json_path(sid), default={})
         for r in d.get("rows", []):
             if r.get("trashedAt"):
                 continue
-            sl = r.get("sizeList") or []
-            if not sl or sl[0].get("price") is None:
+            price = first_price(r)
+            if price is None:
                 continue
             vc = r.get("vendorCode")
             if not vc:
                 continue
-            out.setdefault(vc, {})[sid] = sl[0].get("price")
+            out.setdefault(vc, {})[sid] = price
     return out
 
 

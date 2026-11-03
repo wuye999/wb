@@ -6,11 +6,16 @@ from sellerops.features.catalog import products as catalog_products
 
 def run_fetch(args):
     from sellerops.settings import paths as config
-    if getattr(args, "shop_id", None):
+    parallel = getattr(args, 'parallel', 4)
+    if parallel < 1:
+        raise ValueError('并发店铺数必须为正整数')
+    if getattr(args, "shop_id", None) is not None:
         out = config.shop_json_path(args.shop_id)
-        catalog_products.fetch_shop(args.shop_id, out, no_sync=getattr(args, "no_sync", False))
+        catalog_products.fetch_shop(args.shop_id, out, no_sync=getattr(args, "no_sync", False),
+                                    source=getattr(args, 'source', 'wb-openapi'))
     else:
-        catalog_products.fetch_all(no_sync=getattr(args, "no_sync", False))
+        catalog_products.fetch_all(no_sync=getattr(args, "no_sync", False),
+                                   source=getattr(args, 'source', 'wb-openapi'), parallel=parallel)
     return 0
 
 def run_mapping(args):

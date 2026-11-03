@@ -1,0 +1,14 @@
+[
+  {
+    "nmId": 123456789,
+    "vendorCode": "BCS-TEST-123456789",
+    "price": 59,
+    "card": {
+      "title": "Пример товара",
+      "description": "Замените описание и характеристики данными своего товара.",
+      "dimensions": {"length": 10, "width": 20, "height": 30, "weightBrutto": 0.5},
+      "characteristics": [{"id": 14177449, "value": ["красный"]}],
+      "sizes": [{"techSize": "0"}]
+    }
+  }
+]

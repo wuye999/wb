@@ -32,6 +32,7 @@ from sellerops.integrations.wildberries import client as wb_api
 from sellerops.core import utils as common
 from sellerops.settings import credentials
 from sellerops.features.listings import operations as ops
+from sellerops.features.listings.product_data import ProductDataResolver
 from sellerops.features.listings.plans import load_state
 from sellerops.features.listings.plans import resolve_filters
 from sellerops.features.listings.plans import plan_price
@@ -62,8 +63,7 @@ def _filter_shops(args):
     shops = [int(s) for s in args.shops.split(",")] if getattr(args, "shops", None) else all_shops
     missing = [s for s in shops if s not in all_shops]
     if missing:
-        print(f"[警告] 以下店铺无数据文件（未 fetch）：{missing}，将跳过")
-        shops = [s for s in shops if s in all_shops]
+        print(f"[警告] 以下店铺无数据文件（未 fetch）：{missing}，将记录为计划失败")
     return shops
 
 
@@ -73,8 +73,9 @@ def _build_payload(item, discount):
     只改价：{"vendorCode","nmID","price","currencyIsoCode"}（HAR 实证无 discount 字段）；
     --discount 显式给出（含 0）时附加 discount 字段。
     """
-    d = {"vendorCode": item["vc"], "nmID": int(item["nmID"]),
-         "price": int(item["price"]), "currencyIsoCode": "CNY"}
+    d = {"vendorCode": item["vc"], "nmID": int(item["nmID"]), "currencyIsoCode": "CNY"}
+    if item['price'] is not None:
+        d['price'] = int(item['price'])
     if discount is not None:
         d["discount"] = int(discount)
     return d
@@ -90,10 +91,9 @@ def exec_shop(client, plan, args, results, ts):
     ok_items = plan["items"]
     if bad:
         print(f"  {RED}[跳过] {len(bad)} 条低于原价一半（WB quarantine 硬限）：{RESET}")
-        for vc, cn, cur, target in bad[:10]:
+        for vc, cn, cur, target in bad:
             print(f"    {vc} | {cn} | 原价 {cur} → 目标 {target}")
-        if len(bad) > 10:
-            print(f"    ... 共 {len(bad)} 条")
+            results.append([sid, vc, ACTION_TAG, target, 'SKIP: 低于原价一半', ts])
         ok_items = [it for it in plan["items"]
                     if not any(it["vc"] == b[0] and it["price"] == b[3] for b in bad)]
     if not ok_items:
@@ -191,8 +191,10 @@ def run(args):
         return 1
 
     state, _, boss = load_state()
-    plans = plan_price(vcs, shops, state, boss, getattr(args, "price", None),
-                       discount, club, keep_price=getattr(args, "keep_price", False))
+    with ProductDataResolver() as resolver:
+        plans = plan_price(vcs, shops, state, boss, getattr(args, "price", None),
+                           discount, club, keep_price=getattr(args, "keep_price", False),
+                           resolver=resolver, allow_discount_only=True)
     if not plans:
         print(f"\n{RED}⚠ [无任何可执行项]{RESET} 目标商品在各店铺数据中均无法操作（上方 [跳过] / [跳过汇总] 已列明原因）")
         print("  可能原因：未先 fetch 最新数据 / 商品已下架 / 无目标价。")
@@ -200,7 +202,7 @@ def run(args):
 
     if not getattr(args, "apply", False):
         dry_run(plans, "price")
-        return 0
+        return 1 if any(p.get('blocked_items') for p in plans) else 0
 
     cred = credentials.get()
     ok = fail = 0
@@ -208,6 +210,12 @@ def run(args):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for pi, p in enumerate(plans):
         sid = p["shopId"]
+        for item in p.get('blocked_items', []):
+            fail += 1
+            print(f"  [已阻止] 店{sid} {item['vc']}: {item['reason']}")
+            results.append([sid, item['vc'], ACTION_TAG, '', f"SKIP: {item['reason']}", ts])
+        if not p['items']:
+            continue
         print(f"\n>>> 店{sid}：price_wb（{len(p['items'])} 条）")
         shop = cred.wb_shop(sid)
         if not shop:

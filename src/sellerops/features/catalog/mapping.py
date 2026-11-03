@@ -4,7 +4,6 @@ sellerops 商品价格表 ↔ 店铺商品映射表构建（原 build_mapping.py
 数据职责：商品价格表解析、前缀映射、全部活跃店铺并集分类、8-Sheet 映射表生成。
 HTML 工作台渲染已抽到 workbench.py。
 """
-import glob
 
 import math
 import os
@@ -17,6 +16,8 @@ from sellerops.core import utils as common
 from sellerops.settings import paths as config
 from sellerops.features.catalog import keywords
 from sellerops.features.catalog import workbench
+from sellerops.domain.snapshot_values import first_price, valid_sizes
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 # ---------------- 主店 / 常量（懒加载，避免 import 即联网） ----------------
 _shop_id_cache = None
 
@@ -118,12 +119,11 @@ def load_bcs():
     rows = [r for r in d.get("rows", []) if not r.get("trashedAt")]
     out = []
     for r in rows:
-        sl = r.get("sizeList") or []
-        price = sl[0].get("price") if sl else None
+        price = first_price(r)
         if price is None:
             continue
         c = dict(r)
-        c["price"] = int(price)
+        c["price"] = price
         c["vc"] = r.get("vendorCode") or ""
         c["wbnm"] = str(r.get("nmId")) if r.get("nmId") else (common.extract_wb_nm(c["vc"]) or str(c["vc"]).rsplit("-", 1)[-1])
         c["img"] = r.get("repImg") or ""
@@ -134,13 +134,12 @@ def load_bcs():
 def size_summary(r):
     """sizeList 压成 'chrtId(techSize)@price; ...'"""
     return "; ".join(f"{s.get('chrtId')}({s.get('techSizeName') or s.get('name') or ''})@{s.get('price')}"
-                     for s in (r.get("sizeList") or []))
+                     for s in (valid_sizes(r) or []))
 
 
 def price_of(r):
     """商品代表价 = sizeList[0].price"""
-    sl = r.get("sizeList") or []
-    return sl[0].get("price") if sl else None
+    return first_price(r)
 
 
 # ---------------- 候选计算 ----------------
@@ -153,12 +152,8 @@ def load_shops_union():
     meta = safe_load_json(config.STATUS_JSON, default={})
     shops_meta = meta.get("shops", []) or []
     if not shops_meta:  # 状态文件缺失 → 扫描目录推断店铺
-        for p in sorted(glob.glob(config.shop_json_path("*"))):
-            try:
-                sid = int(os.path.basename(p).replace("shop", "").replace("_products_all.json", ""))
-                shops_meta.append({"id": sid, "name": f"shop{sid}"})
-            except ValueError:
-                continue
+        for sid in ProductSnapshotRepository.shop_ids_from_disk():
+            shops_meta.append({"id": sid, "name": f"shop{sid}"})
     sid_main = shop_id()
     for s in shops_meta:
         sid = s["id"]
@@ -169,13 +164,12 @@ def load_shops_union():
         for r in d.get("rows", []):
             if r.get("trashedAt"):
                 continue
-            sl = r.get("sizeList") or []
-            if not sl or sl[0].get("price") is None:
+            price = first_price(r)
+            if price is None:
                 continue  # 无价格（含空商品）不计
             vc = r.get("vendorCode")
             if not vc:
                 continue
-            price = sl[0].get("price")
             u = union.setdefault(vc, {"vc": vc, "title": r.get("title") or "", "img": r.get("repImg") or "",
                                       "per_shop": {}, "shops": [], "price": None})
             u["per_shop"][sid] = {"price": price, "stock": stock_summary(r),

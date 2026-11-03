@@ -3,6 +3,7 @@
 
 from collections import defaultdict
 import openpyxl
+from sellerops.domain.snapshot_values import stock_values
 from sellerops.settings import paths as config
 from sellerops.persistence.headers import COL_ACTUAL_PRICE
 from sellerops.persistence.headers import COL_CN
@@ -21,15 +22,9 @@ IMG_COL = 9
 NMID_COL = 16
 
 def stock_summary(r):
-    """库存数量：'999'；多规格/多仓库不同数量用逗号分隔（去掉 warehouseId 前缀）"""
-    seen, parts = set(), []
-    for s in (r.get("sizeList") or []):
-        for st in (s.get("stockList") or []):
-            am = st.get("amount")
-            if am is not None and am not in seen:
-                seen.add(am)
-                parts.append(str(am))
-    return ", ".join(parts)
+    """完整规格的已知数量；无规格或任一库存缺失时留空，真实零保留为'0'。"""
+    values = stock_values(r)
+    return ', '.join(str(value) for value in dict.fromkeys(values)) if values is not None else ''
 
 def detail_headers(main_sid=None):
     """映射总表 16 列（13 主数据 + 创建时间/更新时间/WB商品码） + 店铺覆盖列
@@ -51,11 +46,11 @@ def row_for(item, vc, c, match="", status="", stock_summary_fn=None):
     if c is None:
         return [item.get("cn"), vc, dp, "", "", "", "", "", "", "", "", "", "", "", "", ""]
     stock_val = c.get("_stock")
-    if not stock_val and stock_summary_fn:
+    if stock_val is None and stock_summary_fn:
         stock_val = stock_summary_fn(c)
     return [
         item.get("cn"), vc, dp, c.get("price"),
-        c.get("discount"), c.get("clubDiscount"), stock_val or "",
+        c.get("discount"), c.get("clubDiscount"), stock_val if stock_val is not None else "",
         c.get("title"), c.get("repImg") or "",
         c.get("dimensionsLength"), c.get("dimensionsWidth"), c.get("dimensionsHeight"),
         c.get("dimensionsWeightBrutto"),
@@ -114,22 +109,13 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
         if c is None:
             if not cov:
                 return None
-            d0 = next((d for d in cov.values() if d.get("price") is not None), None)
-            if d0 is None:
-                d0 = next(iter(cov.values()))
+            d0 = cov.get(sid_main) or cov[min(cov)]
             return {"vc": vc, "title": d0.get("title") or "", "price": d0.get("price"),
                     "repImg": d0.get("img") or "", "img": d0.get("img") or "",
-                    "_stock": d0.get("stock") or "",
-                    "nmId": rep(None, "nmId", cov), "createAt": rep(None, "createAt", cov),
-                    "updateAt": rep(None, "updateAt", cov)}
+                    "_stock": d0.get("stock") if d0.get("stock") is not None else "",
+                    "nmId": d0.get("nmId"), "createAt": d0.get("createAt"),
+                    "updateAt": d0.get("updateAt")}
         c = dict(c)
-        for sid, d in cov.items():
-            if sid == sid_main:
-                continue
-            if c.get("price") is None and d.get("price") is not None:
-                c["price"] = d["price"]
-            if not stock_summary_fn(c) and d.get("stock"):
-                c["_stock"] = d["stock"]
         for k in ("nmId", "createAt", "updateAt"):
             if c.get(k) is None:
                 c[k] = rep(c, k, cov)

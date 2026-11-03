@@ -11,8 +11,8 @@ sellerops WB 原生在线接口批量改库存 (stock_wb)
 库存归零（amount=0）视为不可逆需 --yes；提交后不验证，不附加同步、拉取或合并。
 
 chrtId 解析两条路径（--resolve）：
-- snapshot（默认）：BCS 快照 sizeList[].chrtId（ops_plan.plan_stock 现成链路，零请求）
-- live：WB portal/stocks 全量游标分页建 vendorCode→chrtId 实时映射（绕过快照滞后）
+- snapshot（默认）：本地快照 sizeList[].chrtId；缺必要标识时按本店完整VC定向补齐
+- live：在完整规格计划上补充已确认莫斯科仓的实时库存；缺库存记录不减少待修改规格
 
 用法：
   sellerops stock-wb --name 短直假发 --amount 0                 # 全店 dry-run
@@ -32,7 +32,8 @@ from sellerops.core import utils as common
 from sellerops.settings import paths as config
 from sellerops.settings import credentials
 from sellerops.features.listings import operations as ops
-from sellerops.features.listings import warehouse
+from sellerops.features.listings.product_data import ProductDataResolver
+from sellerops.domain.snapshot_values import positive_id, quantity
 from sellerops.features.listings.plans import RED
 from sellerops.features.listings.plans import GREEN
 
@@ -64,79 +65,69 @@ def _filter_shops(args):
     shops = [int(s) for s in args.shops.split(",")] if getattr(args, "shops", None) else all_shops
     missing = [s for s in shops if s not in all_shops]
     if missing:
-        print(f"[警告] 以下店铺无数据文件（未 fetch）：{missing}，将跳过")
-        shops = [s for s in shops if s in all_shops]
+        print(f"[警告] 以下店铺无数据文件（未 fetch）：{missing}，将记录为计划失败")
     return shops
 
 
 # ---------- 计划构建 ----------
 
-def _live_stock_map(session, max_pages):
-    """portal/stocks 全量游标分页 → {article: [(chrtId, amount), ...]}（实时 vendorCode→chrtId）。"""
-    stocks = wsc.get_stocks(session, verbose=True, max_pages=max_pages)
+def _live_stock_map(session, max_pages, warehouse_id):
+    """只读已确认莫斯科仓；库存缺行只表示未知，不决定完整规格集合。"""
+    stocks = wsc.get_stocks(session, store_id=warehouse_id, verbose=True, max_pages=max_pages)
     mapping = {}
     for s in stocks:
         art = s.get("article")
-        chrt = s.get("chrtId")
-        if not art or not chrt:
-            continue
-        mapping.setdefault(str(art), []).append((chrt, int(s.get("amount") or 0)))
+        chrt = positive_id(s.get("chrtId"))
+        if not art or chrt is None or (s.get('storeId') is not None and positive_id(s['storeId']) != warehouse_id):
+            raise ValueError('实时库存标识无效或含非莫斯科仓记录')
+        key = (str(art), chrt)
+        if key in mapping:
+            raise ValueError('实时库存存在重复规格记录')
+        mapping[key] = quantity(s.get('amount'))
     return mapping
 
 
 def build_plans(vcs, shops, state, amount, resolve="snapshot", max_pages=200):
     """逐店组装改库存计划。resolve 见模块 docstring。产物结构与 ops_plan.plan_stock 一致。"""
-    if resolve == "snapshot":
-        return plan_stock(vcs, shops, state, amount)
+    if resolve not in {'snapshot', 'live'} or type(max_pages) is not int or max_pages < 1:
+        raise ValueError('库存解析模式或分页上限无效')
+    with ProductDataResolver() as resolver:
+        plans = plan_stock(vcs, shops, state, amount, resolver=resolver)
+    if resolve == 'snapshot':
+        return plans
 
-    # live：WB 实时列表解析 chrtId（每店拉一次全量映射）
+    # live仅补充当前库存；不能用库存缺行排除已确认的商品规格。
     cred = credentials.get()
-    plans = []
     tracker = SkipTracker()
-    for sid in shops:
+    for plan in plans:
+        sid = plan['shopId']
+        if not plan['items']:
+            continue
         shop = cred.wb_shop(sid)
-        if not shop:
-            for vc in vcs:
-                tracker.add(sid, vc, "无 WB 凭证（credentials.json wb.shops 缺失/三件套不齐）")
-            continue
-        wh = warehouse.resolve_warehouse(sid)
-        if wh is None:
-            print(f"  [警告] 店{sid} 未找到默认仓库「{config.DEFAULT_WAREHOUSE_NAME}」，该店库存操作跳过")
-            continue
+        session = None
         try:
+            if not shop:
+                raise ValueError('缺少WB网页凭证')
+            wh = plan['warehouses'][0]['warehouseId']
             session = wb_api.make_session(shop, cred.root_version)
-            mapping = _live_stock_map(session, max_pages)
-        except common.CookieExpiredError as e:
-            print(f"  [警告] 店{sid} cookie 失效，跳过: {e}")
-            for vc in vcs:
-                tracker.add(sid, vc, "cookie 失效")
-            continue
-        items = []
-        for vc in vcs:
-            specs = mapping.get(vc) or []
-            if not specs:
-                tracker.add(sid, vc, "WB 实时列表无此规格")
-                continue
-            for chrt, cur_amt in specs:
-                items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
-                              "chrtId": chrt, "warehouseId": wh, "amount": amount,
-                              "orig_zero": (cur_amt == 0), "cur_amt": cur_amt,
-                              "wh_fallback": False})
-        if items:
-            plans.append({"shopId": sid, "items": items,
-                          "warehouses": _group_warehouses(items)})
+            mapping = _live_stock_map(session, max_pages, wh)
+        except Exception as error:
+            reason = ('缺少WB网页凭证' if not shop else f'莫斯科实时库存读取失败（{type(error).__name__}）')
+            targets = {item['vc']: item for item in plan['items']}
+            for vc, item in targets.items():
+                plan.setdefault('blocked_items', []).append({'vc': vc, 'cn': item.get('cn', ''), 'reason': reason})
+                tracker.add(sid, vc, reason)
+            plan['items'], plan['warehouses'] = [], []
+        else:
+            for item in plan['items']:
+                current = mapping.get((item['vc'], item['chrtId']))
+                item.update(cur_amt=current, orig_zero=current == 0, wh_fallback=current is None)
+        finally:
+            if session is not None:
+                session.close()
     if tracker.count:
         tracker.report(f"设库存(WB实时) {len(vcs)} 个 vendorCode × {len(shops)} 店")
     return plans
-
-
-def _group_warehouses(items):
-    """items → [{"warehouseId", "stockItems": [{chrtId, amount}]}]（与 ops_plan._group_warehouses 同构）"""
-    by_wh = {}
-    for it in items:
-        by_wh.setdefault(it["warehouseId"], {})[it["chrtId"]] = it["amount"]
-    return [{"warehouseId": wh, "stockItems": [{"chrtId": c, "amount": a} for c, a in sorted(d.items())]}
-            for wh, d in sorted(by_wh.items())]
 
 
 # ---------- 执行 ----------

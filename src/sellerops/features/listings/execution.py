@@ -171,13 +171,16 @@ def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, in
         sid = p["shopId"]
         print(f"\n>>> 店{sid}：{action}")
         if action == "price":
+            for item in p.get('blocked_items', []):
+                fail += 1
+                print(f"  [已阻止] 店{sid} {item['vc']}: {item['reason']}")
+                results.append([sid, item['vc'], action, '', f"SKIP: {item['reason']}", ts])
             bad = price_limit_violations(p["items"])
             if bad:
                 print(f"  {RED}[跳过] {len(bad)} 条{PRICE_HALF_LIMIT_NOTE}：{RESET}")
-                for vc, cn, cur, target in bad[:10]:
+                for vc, cn, cur, target in bad:
                     print(f"    {vc} | {cn} | 原价 {cur} → 目标 {target}")
-                if len(bad) > 10:
-                    print(f"    ... 共 {len(bad)} 条")
+                    results.append([sid, vc, action, target, 'SKIP: 低于原价一半', ts])
                 skipped_bad += len(bad)
                 fail += len(bad)
             ok_items = [it for it in p["items"] if not any(it["vc"] == b[0] and it["price"] == b[3] for b in bad)]

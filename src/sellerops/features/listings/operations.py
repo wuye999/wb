@@ -31,6 +31,7 @@ from sellerops.features.listings.plans import dry_run
 
 
 from sellerops.features.listings.execution import run_apply
+from sellerops.features.listings.product_data import ProductDataResolver
 
 def get_shops():
     """扫描 data/products/ 下 shop{id}_products_all.json → [店id]"""
@@ -90,20 +91,20 @@ def run(action, args, channel=None):
     shops = [int(s) for s in args.shops.split(",")] if getattr(args, "shops", None) else all_shops
     missing = [s for s in shops if s not in all_shops]
     if missing:
-        print(f"[警告] 以下店铺无数据文件（未 fetch）：{missing}，将跳过")
-        shops = [s for s in shops if s in all_shops]
+        print(f"[警告] 以下店铺无数据文件（未 fetch）：{missing}，将记录为计划失败")
 
     state, _, boss = load_state()
 
-    if action == "price":
-        manual = getattr(args, "price", None)
-        plans = plan_price(vcs, shops, state, boss, manual, getattr(args, "discount", None),
-                           getattr(args, "club_discount", None),
-                           keep_price=getattr(args, "keep_price", False))
-    elif action == "stock":
-        plans = plan_stock(vcs, shops, state, getattr(args, "amount", 0))
-    else:
-        plans = plan_trash(vcs, shops, state)
+    with ProductDataResolver() as resolver:
+        if action == "price":
+            manual = getattr(args, "price", None)
+            plans = plan_price(vcs, shops, state, boss, manual, getattr(args, "discount", None),
+                               getattr(args, "club_discount", None),
+                               keep_price=getattr(args, "keep_price", False), resolver=resolver)
+        elif action == "stock":
+            plans = plan_stock(vcs, shops, state, getattr(args, "amount", 0), resolver=resolver)
+        else:
+            plans = plan_trash(vcs, shops, state, resolver=resolver)
 
     if not plans:
         print(f"\n{RED}⚠ [无任何可执行项]{RESET} 目标商品在各店铺数据中均无法操作（上方 [跳过] / [跳过汇总] 已列明原因）")

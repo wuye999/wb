@@ -63,6 +63,8 @@ class TestLocalPlanning(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(redirect_stdout(io.StringIO()))
+        from sellerops.features.listings import product_data
+        self.stack.enter_context(patch.object(product_data.bcs.client, 'fetch_open_api_shops', return_value=[]))
 
     def save(self, rows):
         from sellerops.persistence.snapshots import ProductSnapshotRepository

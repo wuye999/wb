@@ -19,6 +19,8 @@ from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.integrations.wildberries.client import WBClient
 from sellerops.integrations.wildberries import client as wb_api
+from sellerops.features.listings.plans import SkipTracker
+from sellerops.features.pricing.discount_products import snapshot_discount_items
 
 
 class Discounts:
@@ -71,6 +73,7 @@ class Discounts:
         quarantine_batches = 0
         price_modal_batches = 0
         task_ids: List[str] = []
+        tracker = SkipTracker()
 
         for shop_dict in active_shops:
             sid = shop_dict.get("shopId") or shop_dict.get("shop_id")
@@ -84,79 +87,72 @@ class Discounts:
             # （含 --below 的低折扣侧由 WB 折扣升序接口覆盖，见下方 fetch_discount_goods_asc）
             use_snapshot_direct = bool(plan.target_vcs or (plan.is_all and plan.name_filter))
 
-            if use_snapshot_direct and self.product_repo.exists(sid):
-                shop_rows = self.product_repo.load_shop_rows(sid)
-                search_pool = plan.target_vcs if plan.target_vcs else list(shop_rows.keys())
-                for vc in search_pool:
-                    r = shop_rows.get(vc)
-                    if not r:
-                        continue
-                    nm_id = r.get("nmId") or r.get("nmID")
-                    if not nm_id:
-                        continue
-                    title = r.get("shopGoodsName") or r.get("title") or ""
-                    cn = resolve_cn(vc, title)
-                    if not self._matches_filters(vc, cn, title, plan):
-                        continue
-                    disc = common.to_int(r.get("discount"))
-                    if not plan.is_all and (r.get("discount") is None or not self._disc_matched(disc, plan)):
-                        continue
-                    if disc == plan.target_discount:
-                        continue
-                    matched_items.append({
-                        "nmID": nm_id,
-                        "vendorCode": vc,
-                        "cn": cn,
-                        "old_discount": disc,
-                        "currencyIsoCode": r.get("currency") or "CNY",
-                        "price": r.get("price") or r.get("salePrice"),
-                        "title": title,
-                    })
-                    if plan.limit and len(matched_items) >= plan.limit:
-                        break
-            else:
-                # 走 WB 原生列表：降序取「>threshold」侧；含 --below 时再取升序「<below」侧，并集去重
-                # ⚠ 只给 --below 时 threshold 为 -1（高折扣侧已关闭）→ 绝不能再拉降序侧：
-                #   降序接口靠「首条 ≤ threshold 截断」，threshold=-1 永不截断会翻遍全量目录（实测 12+ 分钟）
-                wb_goods: List[Dict[str, Any]] = []
-                if plan.is_all or plan.threshold >= 0:
-                    wb_goods = client.fetch_discount_goods_desc(
-                        threshold=-1 if plan.is_all else plan.threshold,
-                        limit=plan.limit,
-                    )
-                if plan.below >= 0 and not plan.is_all:
-                    wb_goods = wb_goods + client.fetch_discount_goods_asc(
-                        threshold=plan.below, limit=plan.limit,
-                    )
-                seen_nm: set = set()
-                for g in wb_goods:
-                    nm_key = g.get("nmID")
-                    if nm_key in seen_nm:
-                        continue
-                    seen_nm.add(nm_key)
-                    disc = common.to_int(g.get("discount"))
-                    if not plan.is_all and (g.get("discount") is None or not self._disc_matched(disc, plan)):
-                        continue
-                    if disc == plan.target_discount:
-                        continue
-                    vc = g.get("vendorCode") or ""
-                    title = g.get("title") or ""
-                    cn = resolve_cn(vc, title)
-                    if not self._matches_filters(vc, cn, title, plan):
-                        continue
-                    prices = g.get("prices") or []
-                    price_val = prices[0] if prices else None
-                    matched_items.append({
-                        "nmID": g.get("nmID"),
-                        "vendorCode": vc,
-                        "cn": cn,
-                        "old_discount": disc,
-                        "currencyIsoCode": g.get("isoCode4217") or "CNY",
-                        "price": price_val,
-                        "title": title,
-                    })
-                    if plan.limit and len(matched_items) >= plan.limit:
-                        break
+            try:
+                if use_snapshot_direct and self.product_repo.exists(sid):
+                    shop_rows = self.product_repo.load_shop_rows(sid)
+                    matched_items, blocked = snapshot_discount_items(
+                        sid, shop_rows or {}, plan, resolve_cn, self._matches_filters, self._disc_matched, tracker)
+                    total_failed += len(blocked)
+                    all_rows.extend({'shop_id': sid, 'shop_name': sname, 'nmID': item.get('nmID'),
+                                     'vendorCode': item['vc'], 'cn': item.get('cn', ''),
+                                     'old_discount': None, 'new_discount': plan.target_discount,
+                                     'status': 'skip', 'taskId': '', 'error': item['reason']} for item in blocked)
+                else:
+                    # 走 WB 原生列表：降序取「>threshold」侧；含 --below 时再取升序「<below」侧，并集去重
+                    # ⚠ 只给 --below 时 threshold 为 -1（高折扣侧已关闭）→ 绝不能再拉降序侧：
+                    #   降序接口靠「首条 ≤ threshold 截断」，threshold=-1 永不截断会翻遍全量目录（实测 12+ 分钟）
+                    wb_goods: List[Dict[str, Any]] = []
+                    if plan.is_all or plan.threshold >= 0:
+                        wb_goods = client.fetch_discount_goods_desc(
+                            threshold=-1 if plan.is_all else plan.threshold,
+                            limit=plan.limit,
+                        )
+                    if plan.below >= 0 and not plan.is_all:
+                        wb_goods = wb_goods + client.fetch_discount_goods_asc(
+                            threshold=plan.below, limit=plan.limit,
+                        )
+                    seen_nm: set = set()
+                    for g in wb_goods:
+                        nm_key = g.get("nmID")
+                        if nm_key in seen_nm:
+                            continue
+                        seen_nm.add(nm_key)
+                        disc = common.to_int(g.get("discount"))
+                        if not plan.is_all and (g.get("discount") is None or not self._disc_matched(disc, plan)):
+                            continue
+                        if disc == plan.target_discount:
+                            continue
+                        vc = g.get("vendorCode") or ""
+                        title = g.get("title") or ""
+                        cn = resolve_cn(vc, title)
+                        if not self._matches_filters(vc, cn, title, plan):
+                            continue
+                        prices = g.get("prices") or []
+                        price_val = prices[0] if prices else None
+                        matched_items.append({
+                            "nmID": g.get("nmID"),
+                            "vendorCode": vc,
+                            "cn": cn,
+                            "old_discount": disc,
+                            "currencyIsoCode": g.get("isoCode4217") or "CNY",
+                            "price": price_val,
+                            "title": title,
+                        })
+                        if plan.limit and len(matched_items) >= plan.limit:
+                            break
+            except Exception as error:
+                reason = ('WB网页会话失效，请人工抓包更新' if isinstance(error, common.CookieExpiredError)
+                          else f'本店商品准备失败（{type(error).__name__}）')
+                targets = plan.target_vcs or ['（本店商品读取失败，无法枚举完整VC）']
+                for vc in targets:
+                    tracker.add(sid, vc, reason)
+                    all_rows.append({'shop_id': sid, 'shop_name': sname, 'nmID': None,
+                                     'vendorCode': vc, 'cn': '', 'old_discount': None,
+                                     'new_discount': plan.target_discount, 'status': 'skip',
+                                     'taskId': '', 'error': reason})
+                total_failed += len(targets)
+                print(f'  [已阻止] 店{sid}：{reason}')
+                continue
 
             if not matched_items:
                 print("  无匹配或符合条件的待改商品\n")
@@ -255,6 +251,7 @@ class Discounts:
             print()
 
         # 写入日志
+        tracker.report('改折扣')
         log_path = self._write_csv(all_rows)
 
         print("=" * 50)
@@ -353,7 +350,7 @@ class Discounts:
     @staticmethod
     def _matches_filters(vc: str, cn: str, title: str, plan: DiscountPlan) -> bool:
         v_upper = (vc or "").upper()
-        if plan.target_vcs and v_upper not in plan.target_vcs:
+        if plan.target_vcs and v_upper not in {str(vc).upper() for vc in plan.target_vcs}:
             return False
         if plan.prefix_filter and plan.prefix_filter.upper() not in v_upper:
             return False

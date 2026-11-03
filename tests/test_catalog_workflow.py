@@ -136,7 +136,7 @@ class TestCatalogWorkflow(unittest.TestCase):
                 patch.object(bcs, 'fetch_shop_products', side_effect=fetch), \
                 patch.object(bcs, 'sync_shops_parallel') as sync, \
                 patch.object(bcs, 'sync_shop') as sync_one, patch.object(products.time, 'sleep'):
-            self.assertEqual(self.run_cli('fetch', '--no-sync'), 1)
+            self.assertEqual(self.run_cli('fetch', '--source', 'bcs', '--no-sync'), 1)
         self.assertEqual(visited, [1, 2, 3])
         self.assertEqual(Path(paths.shop_json_path(2)).read_bytes(), old_failed)
         self.assertEqual(json.loads(Path(paths.shop_json_path(1)).read_text(encoding='utf8'))['rows'], [self.live])
@@ -154,7 +154,7 @@ class TestCatalogWorkflow(unittest.TestCase):
                 patch.object(bcs, 'fetch_shop_products', side_effect=lambda sid, filter_type: [self.live] if sid == 1 else []), \
                 patch.object(bcs, 'sync_shops_parallel') as sync, \
                 patch.object(bcs, 'sync_shop') as sync_one, patch.object(products.time, 'sleep'):
-            self.assertEqual(self.run_cli('fetch', '--no-sync'), 0)
+            self.assertEqual(self.run_cli('fetch', '--source', 'bcs', '--no-sync'), 0)
         status = json.loads(Path(paths.STATUS_JSON).read_text(encoding='utf8'))
         self.assertEqual(status['errors'], [])
         self.assertEqual(json.loads(Path(paths.shop_json_path(2)).read_text(encoding='utf8'))['rows'], [])

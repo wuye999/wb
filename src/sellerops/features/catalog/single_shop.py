@@ -4,6 +4,7 @@ import os
 import re
 
 import openpyxl
+from sellerops.domain.snapshot_values import first_price
 from sellerops.settings import paths as config
 from sellerops.persistence.headers import COL_ACTUAL_PRICE
 from sellerops.persistence.headers import COL_CN
@@ -87,8 +88,7 @@ def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=N
         vc = r.get("vendorCode")
         if not vc:
             continue
-        sl = r.get("sizeList") or []
-        price = sl[0].get("price") if sl else None
+        price = first_price(r)
         disc = r.get("discount")
         club = r.get("clubDiscount")
         stock = stock_summary(r)
