@@ -4,6 +4,7 @@ import os
 import re
 
 import openpyxl
+from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.domain.snapshot_values import first_price
 from sellerops.settings import paths as config
 from sellerops.persistence.headers import COL_ACTUAL_PRICE
@@ -50,6 +51,12 @@ def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=N
         d = safe_load_json(p_json, default={})
         rows = d.get("rows", [])
 
+    # 兼容尚未重新 fetch 的旧快照；冲突必须在覆盖表格或更新归属前报错。
+    alive_rows = [r for r in rows if not r.get("trashedAt")]
+    unique_rows = deduplicate_bcs_products(alive_rows, sid)
+    if len(unique_rows) != len(alive_rows):
+        print(f'  [单店去重] 店铺{sid}：{len(alive_rows)}行 → {len(unique_rows)}个商品')
+
     if registry is None:
         from sellerops.persistence.mappings import load_vc_known
         from sellerops.persistence.mappings import load_vc_override
@@ -72,8 +79,6 @@ def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=N
     out_file = out_path or config.shop_mapping_xlsx(sid, shop_name)
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
 
-    alive_rows = [r for r in rows if not r.get("trashedAt")]
-
     wb = openpyxl.Workbook()
     ws1 = wb.active
     ws1.title = "在架映射明细"
@@ -84,7 +89,7 @@ def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=N
 
     n_mapped, n_unmapped = 0, 0
     known_updated = False
-    for r in alive_rows:
+    for r in unique_rows:
         vc = r.get("vendorCode")
         if not vc:
             continue

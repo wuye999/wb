@@ -6,9 +6,7 @@ import math
 
 
 from typing import Dict, Any, List, Optional, Tuple
-from urllib.parse import quote
 from sellerops.domain.models import PublishItem
-from sellerops.integrations.bcs import client as bcs
 
 
 from sellerops.persistence.mappings import MappingRepository
@@ -22,12 +20,6 @@ from sellerops.features.listings.product_details import resolve_replicate_packag
 from sellerops.integrations.wildberries.client import basket_base
 from sellerops.features.listings.publish_inputs import DEFAULT_STOCK
 
-DETAIL_URL_TPL = (
-    "https://www.wildberries.ru/__internal/u-card/cards/v4/detail"
-    "?appType=1&curr=rub&dest=-1257786&spp=30&hide_vflags=4294967296"
-    "&hide_dtype=15&mtype=257&lang=ru&ab_testing=false&nm={nm}"
-)
-
 def generate_image_urls(nm_id: int, photo_count: Optional[int] = None) -> List[str]:
     """生成 WB 商品 CDN 高清大图链接列表"""
     count = photo_count or 1
@@ -35,19 +27,6 @@ def generate_image_urls(nm_id: int, photo_count: Optional[int] = None) -> List[s
     if not urls:
         urls = [f"{basket_base(nm_id)}/images/big/1.webp"]
     return urls
-
-def fetch_wb_detail_bcs(nm_id: int) -> Optional[Dict[str, Any]]:
-    """通过 BCS 代理获取 WB 商品原生详情 (product 实体)，失败返回 None"""
-    wb_url = DETAIL_URL_TPL.format(nm=nm_id)
-    url = f"{bcs.client.base_url}/wb/api/proxy/common?url={quote(wb_url, safe='')}"
-    try:
-        d = bcs.client.get(url)
-        if d.get("code") != 200:
-            return None
-        products = (d.get("data") or {}).get("products") or []
-        return products[0] if products else None
-    except Exception:
-        return None
 
 def build_synthetic_detail(
     card_info: Optional[Dict[str, Any]],
@@ -59,7 +38,7 @@ def build_synthetic_detail(
     subject_id: Optional[int] = None,
     parent_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """根据 card.json 拼装合成 detail product 实体（供旧接口 /system/wbCollection/wb/new 兜底）"""
+    """根据 card.json 组装 BCS 完整 VC 建卡所需的 wbDetail。"""
     ci = card_info or {}
     data = ci.get("data") or {}
     subj_id = (

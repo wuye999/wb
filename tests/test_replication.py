@@ -99,25 +99,42 @@ class TestReplication(TestCase):
         events = []
         one, two = item(), item('BCS-TEST-2')
         one.extra = {}
-        two.extra = {}
+        two.extra = {'wb_detail': {'subjectId': 1, 'sizes': [
+            {'origName': 42, 'name': 'M', 'price': '10.00', 'vendorCode': 'SOURCE-VC'},
+            {'origName': 44, 'name': 'L'},
+        ]}}
+        card_info = {'imt_name': 'fixture', 'description': 'source description',
+                     'data': {'subject_id': 1}}
+
         def read(nm):
             events.append('read')
-            return {'imt_name':'fixture','data':{'subject_id':1}}
-        def submit(url,payload):
+            return card_info
+
+        def submit(url, payload):
             events.append('write')
             return {'code':200}
+
         with contextlib.redirect_stdout(io.StringIO()), \
                 patch.object(card_publish,'fetch_card_json',side_effect=read), \
-                patch.object(card_publish,'fetch_wb_detail_bcs',return_value=None), \
                 patch.object(card_publish,'resolve_warehouse',return_value=100) as wh, \
                 patch.object(card_publish.bcs,'fetch_shop_list',side_effect=AssertionError('unrelated shop read')), \
                 patch.object(card_publish,'load_records',return_value={}), \
                 patch.object(card_publish,'save_records'), \
-                patch.object(card_publish.bcs.client,'post',side_effect=submit):
+                patch.object(card_publish.bcs, 'client', base_url='https://fixture.invalid') as client:
+            client.post.side_effect = submit
             result = card_publish.execute_publish([one,two],apply=True,interval=0,writer=Mock(),check_exists=False)
         wh.assert_called_once_with(42)
+        client.get.assert_not_called()
         self.assertEqual(events,['read','read','write','write'])
         self.assertEqual((result['ok'],result['fail']),(2,0))
+        for call, it, orig_name, name in zip(client.post.call_args_list, [one, two], [0, 42], ['', 'M']):
+            url, payload = call.args
+            self.assertEqual(url, 'https://fixture.invalid/system/wbCollection/wb/new')
+            card = payload['shopDatas'][0]
+            self.assertEqual(json.loads(card['wbCardInfo']), card_info)
+            self.assertEqual(json.loads(card['wbDetail'])['sizes'], [
+                {'origName': orig_name, 'name': name, 'price': '415.25', 'vendorCode': it.vendor_code},
+            ])
 
     def test_one_missing_target_warehouse_blocks_group_instead_of_silent_partial_success(self):
         with contextlib.redirect_stdout(io.StringIO()), \

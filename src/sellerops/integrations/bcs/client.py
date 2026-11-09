@@ -13,6 +13,7 @@ from sellerops.settings import credentials
 from sellerops.core.errors import AuthenticationError
 from sellerops.core.errors import RateLimitError
 from sellerops.core.errors import PlatformApiError
+from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.integrations.bcs.capture import BCS_BASE_URL, BCSSession
 
 RETRY_MAX = 3
@@ -147,7 +148,14 @@ class BCSClient:
             raise PlatformApiError(f'店铺{shop_id} BCS 商品达到单页上限，无法确认完整性')
         if any(row.get('shopId') is not None and str(row['shopId']) != str(shop_id) for row in rows):
             raise PlatformApiError(f'店铺{shop_id} BCS 商品响应包含其他店铺数据')
-        return rows
+        try:
+            unique = deduplicate_bcs_products(rows, shop_id)
+        except ValueError as error:
+            raise PlatformApiError(str(error)) from None
+        if len(unique) != len(rows):
+            print(f'[店铺{shop_id}] BCS商品去重：原始{len(rows)}行，'
+                  f'保留{len(unique)}个商品，移除{len(rows) - len(unique)}条重复记录')
+        return unique
 
     def count_by_filter(self, shop_id: int) -> Dict[str, Any]:
         d = self.get(f"{self.base_url}/shopKeeper/productList/countByFilter?shopId={shop_id}")

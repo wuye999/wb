@@ -14,7 +14,7 @@ from sellerops.features.listings.publish_inputs import (
     DEFAULT_STOCK, load_publish_file, parse_cn_stock, parse_dims_str, stock_for,
 )
 from sellerops.features.listings.publish_records import load_records, save_records, record_publish_success
-from sellerops.features.listings.publish_details import resolve_publish_details, fetch_wb_detail_bcs
+from sellerops.features.listings.publish_details import resolve_publish_details
 from sellerops.features.listings.publish_report import create_publish_csv, print_publish_preview
 from sellerops.features.listings.product_details import fetch_card_json, price_book_packages
 from sellerops.features.listings.card_payload import build_card_payload
@@ -90,8 +90,7 @@ def execute_publish(
             result["details"].append({"vc": it.vendor_code, "targets": final_targets,
                                       "ok": False, "msg": "card.json获取失败"})
             continue
-        # 已缓存详情（包括合成详情）无需再次请求。
-        detail = it.extra.get("wb_detail") or fetch_wb_detail_bcs(it.nm_id)
+        detail = it.extra.get("wb_detail")
         payload, err = build_card_payload(it, final_targets, warehouses, card_info, detail, overrides)
         if err or not payload:
             result["fail"] += 1
