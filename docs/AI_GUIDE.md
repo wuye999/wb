@@ -30,6 +30,7 @@
 | 导入/复制上架 | publish、create-cards、replicate、import-publish；核对库存默认值、VC 语义和目标店 |
 | 备用官方上架/跨店内容同步 | 显式 publish-openapi / sync-cards-openapi；BCS 默认入口不变；上架含建卡后有限标识等待、图片/莫斯科库存；超时用 publish-openapi --resume 续办，未知写入状态不重放；见 [专项说明](OPEN_API_LISTINGS.md) |
 | 处理新订单 | mabang-process；默认配置店铺的全部新增待处理订单，不限日期；不要跳过匹配失败或预报等待直接交运 |
+| 发货群供货和标签 | 独立 fbs-group-ship-openapi；逐店莫斯科仓，只处理价格表标记「在发货群发货」的 FBS 新增订单；加 --apply 才创建供货及导出，配送已受理后可用 --resume --apply 补 PDF |
 | 查询客服/生成草稿 | questions、chats 或 watch 的 front/back 模式，不擅自添加 --apply |
 | 自动回复/定时写入 | 必须有明确自动运行范围；注册任务前说明其时间、全部店铺范围和持续写入性质 |
 

@@ -238,20 +238,84 @@ class TestRegression(unittest.TestCase):
         self.assertEqual(res['pages_fetched'], 2)
         self.assertEqual(res['found']['ZZ']['shopId'], '主号7')
 
+    def test_mabang_group_shipping_stays_excluded_if_price_book_changes_mid_run(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from sellerops.features.orders import forecast_selection, matching
+        from sellerops.integrations.wildberries import client as wb
+        from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+
+        cred = {'shop_map': {'9352': '袁州1(9352)'}}
+        marked = {'id': 1, 'shopIdText': '9352', 'platformOrderId': '101',
+                  'order_ellipsis_other_title': '商品编号*数量:BCS-AAAA-1*1'}
+        normal = dict(marked, id=2, platformOrderId='102',
+                      order_ellipsis_other_title='商品编号*数量:BCS-BBBB-2*1')
+        names = {'BCS-AAAA-1': '群发商品', 'BCS-BBBB-2': '普通商品'}
+        sku_values = {'群发商品': GROUP_SHIPPING_MARKER, '普通商品': 'SKU-2'}
+        args = SimpleNamespace(days=0, page_size=100, apply=True)
+
+        with patch.object(matching, 'mb_client_get_mabang_cred', return_value=cred), \
+                patch.object(matching, 'mb_client_fetch_pending_orders', return_value=[marked]), \
+                patch.object(matching, 'load_local_mapping', return_value=(names, sku_values)), \
+                patch.object(matching, 'write_csv') as report, \
+                patch.object(matching, 'mb_client_api_ready') as api_ready, \
+                patch.object(matching, 'mb_client_search_stock') as search:
+            self.assertEqual(matching.run(args), 0)
+        api_ready.assert_not_called()
+        search.assert_not_called()
+        self.assertEqual(args.group_shipping_order_ids, {'1'})
+        self.assertEqual(report.call_args.args[0][0]['status'], matching.STATUS_GROUP_SHIPPING)
+
+        with patch.object(forecast_selection, 'mb_client_get_mabang_cred', return_value=cred), \
+                patch.object(forecast_selection, 'mb_client_fetch_pending_orders', return_value=[marked, normal]), \
+                patch.object(forecast_selection, 'load_local_mapping',
+                             side_effect=[(names, sku_values), (names, {**sku_values, '群发商品': 'SKU-1'})]), \
+                patch.object(wb, 'fetch_canceled_ids', return_value=set()):
+            direct_args = SimpleNamespace(days=0, page_size=100)
+            for forecast_args in (direct_args, args):
+                target, _ = forecast_selection.collect_forecast_orders(forecast_args)
+                self.assertEqual([r['order_id'] for r in target], [2])
+
+    def test_mabang_stock_daily_ignores_historical_group_shipping_as_a_sku(self):
+        from unittest.mock import patch
+        from sellerops.features.orders.mabang_stock_daily import read_orders_daily
+        from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+
+        day = '2026-11-11'
+        rows = [{'fields': {'日期': day, '库存SKU': sku, '订单量': qty}}
+                for sku, qty in [([{'text': GROUP_SHIPPING_MARKER}], 2), ('SKU-2', 3)]]
+        with patch('sellerops.integrations.feishu.tables.list_records', return_value=rows):
+            daily, no_sku = read_orders_daily('fixture', 'orders', day, day)
+        self.assertEqual(daily, {day: {'SKU-2': 3}})
+        self.assertEqual(no_sku, {day: 2})
+
     def test_feishu_register_inventory_sku_unit(self):
         """离线单测：登记「库存SKU」取本地价格表（cn2sku），绝不取马帮系统匹配值。"""
         import tempfile
         from types import SimpleNamespace
         from unittest import mock
         from sellerops.features.orders import feishu_register as feishu_register
+        from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
         order = {'id': '421000001', 'shopIdText': '9352', 'platformOrderId': '6060000001', 'paidTime': '2026-10-19 09:00:00', 'order_ellipsis_other_title': '商品编号*数量:BCS-AAAA-100000001*1', 'order_ellipsis_title': '商品编号*数量:BCS-WRNG-999*1'}
         args = SimpleNamespace(scope='pending', days=1, page_size=100, no_pending=True, date='', begin='', end='')
-        tmp = tempfile.mkdtemp()
-        with mock.patch.object(feishu_register, 'mabang_api_get_mabang_cred', return_value={'shop_map': {'9352': '袁州1(9352)'}}), mock.patch.object(feishu_register, 'mabang_api_fetch_pending_orders', return_value=[order]), mock.patch.object(feishu_register, 'mabang_load_local_mapping', return_value=({'BCS-AAAA-100000001': '测试品'}, {'测试品': 'SKU-LOCAL-1'})), mock.patch.object(feishu_register.config, 'shop_json_path', return_value=os.path.join(tmp, 'absent.json')), mock.patch('sellerops.integrations.wildberries.client.fetch_canceled_ids', return_value=set()):
-            records, _skip, _notice, _cred = feishu_register.build_records(args)
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]['库存SKU'], 'SKU-LOCAL-1', '库存SKU 必须来自本地价格表')
-        self.assertNotEqual(records[0]['库存SKU'], 'BCS-WRNG-999', '不得回写马帮系统匹配值')
+        cases = [('SKU-LOCAL-1', set(), 'SKU-LOCAL-1'), (GROUP_SHIPPING_MARKER, set(), None),
+                 ('SKU-LOCAL-1', {order['id']}, None)]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(feishu_register, 'mabang_api_get_mabang_cred',
+                                  return_value={'shop_map': {'9352': '袁州1(9352)'}}), \
+                mock.patch.object(feishu_register, 'mabang_api_fetch_pending_orders', return_value=[order]), \
+                mock.patch.object(feishu_register.config, 'shop_json_path',
+                                  return_value=os.path.join(tmp, 'absent.json')), \
+                mock.patch('sellerops.integrations.wildberries.client.fetch_canceled_ids', return_value=set()):
+            for sku, group_shipping_ids, expected in cases:
+                args.group_shipping_order_ids = group_shipping_ids
+                with self.subTest(sku=sku, group_shipping_ids=group_shipping_ids), \
+                        mock.patch.object(feishu_register, 'mabang_load_local_mapping',
+                                          return_value=({'BCS-AAAA-100000001': '测试品'}, {'测试品': sku})):
+                    records, _skip, notice, _cred = feishu_register.build_records(args)
+                    self.assertEqual(len(records), 1)
+                    self.assertEqual(records[0]['库存SKU'], expected)
+                    self.assertEqual(notice.get('发货群订单(库存SKU留空)', 0), int(expected is None))
 
     def test_feishu_vc_stats_offline(self):
         """feishu-vc-stats 离线断言（**不联网、不调 lark-cli**）：字段解析 / 窗口 / 跨店合并 / 降序 / 前缀。

@@ -12,7 +12,7 @@
 当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。
 当前 WB 凭证使用人工登录、手动抓包并填写/导入；Playwright 尚未启动，`cookie-refresh-wb` 保留但未启用。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 
-共 58 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
+共 59 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
 
 | 命令 | 用途 | 实现入口 |
 | --- | --- | --- |
@@ -60,6 +60,7 @@
 | `mabang-stock-daily` | 「马帮库存登记表」日期列管理：默认只建今天列+更新全部已有日期列；--begin/--date 任一显式给出即进入区间模式（删早于该日的旧列+补建区间缺列，--end 需同用） | [sellerops.features.orders.mabang_stock_daily:run_daily](../src/sellerops/features/orders/mabang_stock_daily.py) |
 | `feishu-vc-stats` | 只读：飞书「订单登记」按供应商代码(BCS编号)统计单数并降序（跨店合并；支持店铺/日期过滤） | [sellerops.features.orders.feishu_vc_stats:run](../src/sellerops/features/orders/feishu_vc_stats.py) |
 | `fbs-delivery` | 只读：WB FBS「配送中」清单及其全部商品采集+统计（按清单 createdAt 时段、商品状态默认 shipment=待发货；控制台汇总 + CSV 明细） | [sellerops.features.orders.fbs_delivery:run](../src/sellerops/features/orders/fbs_delivery.py) |
+| `fbs-group-ship-openapi` | WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并导出 PDF | [sellerops.features.orders.fbs_group_ship:run](../src/sellerops/features/orders/fbs_group_ship.py) |
 | `order-stats` | 只读：WB「订单动态」近一月订单按商品中文名统计（订单数/退货数/退货率/完单口径退货率/未完结）→ xlsx 多 Sheet（汇总 + 按供应商代码 + 每店 + 订单明细） | [sellerops.features.orders.order_stats:run](../src/sellerops/features/orders/order_stats.py) |
 | `mabang-process` | 马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运→飞书登记（登记含只匹配未进预报流程的订单） | [sellerops.features.orders.mabang_process:run](../src/sellerops/features/orders/mabang_process.py) |
 | `questions` | 买家未处理提问查询与回复 | [sellerops.features.support.questions:run](../src/sellerops/features/support/questions.py) |
@@ -218,12 +219,11 @@ options:
 ## price
 
 ```text
-usage: sellerops price [-h]
-                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                       [--shops SHOPS] [--apply] [--yes] [--price PRICE]
-                       [--discount DISCOUNT] [--club-discount CLUB_DISCOUNT]
-                       [--keep-price] [--auto-review] [--chunk CHUNK]
-                       [--interval INTERVAL]
+usage: sellerops price [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--price PRICE] [--discount DISCOUNT]
+                       [--club-discount CLUB_DISCOUNT] [--keep-price]
+                       [--auto-review] [--chunk CHUNK] [--interval INTERVAL]
 
 options:
   -h, --help            show this help message and exit
@@ -248,10 +248,9 @@ options:
 ## price-bcs
 
 ```text
-usage: sellerops price-bcs [-h]
-                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                           [--shops SHOPS] [--apply] [--yes] [--price PRICE]
-                           [--discount DISCOUNT]
+usage: sellerops price-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--price PRICE] [--discount DISCOUNT]
                            [--club-discount CLUB_DISCOUNT] [--keep-price]
                            [--auto-review]
 
@@ -276,10 +275,9 @@ options:
 ## stock
 
 ```text
-usage: sellerops stock [-h]
-                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                       [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
-                       [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops stock [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--amount AMOUNT] [--chunk CHUNK] [--interval INTERVAL]
                        [--max-pages MAX_PAGES] [--resolve {snapshot,live}]
 
 options:
@@ -305,9 +303,9 @@ options:
 ## stock-bcs
 
 ```text
-usage: sellerops stock-bcs [-h]
-                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                           [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
+usage: sellerops stock-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--amount AMOUNT]
 
 options:
   -h, --help       show this help message and exit
@@ -325,10 +323,9 @@ options:
 ## trash
 
 ```text
-usage: sellerops trash [-h]
-                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                       [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
-                       [--interval INTERVAL]
+usage: sellerops trash [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                       [--chunk CHUNK] [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -347,10 +344,9 @@ options:
 ## trash-bcs
 
 ```text
-usage: sellerops trash-bcs [-h]
-                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
-                           [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
-                           [--interval INTERVAL]
+usage: sellerops trash-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
+                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
+                           [--chunk CHUNK] [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -614,10 +610,10 @@ options:
 ## sync-cards-openapi
 
 ```text
-usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP
-                                    (--vc VC | --nm NM | --all)
-                                    [--shops SHOPS] [--fields FIELDS]
-                                    [--limit LIMIT] [--apply]
+usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP (--vc VC |
+                                    --nm NM | --all) [--shops SHOPS]
+                                    [--fields FIELDS] [--limit LIMIT]
+                                    [--apply]
 
 options:
   -h, --help            show this help message and exit
@@ -942,6 +938,20 @@ options:
   --top TOP             控制台按中文名只显示前 N 名（0=全部；CSV 始终全量）
   --no-cn               不解析商品中文名（供应商代码仍解析）
   --interval INTERVAL   清单间/店铺间请求间隔秒（默认 0.3）
+```
+
+## fbs-group-ship-openapi
+
+```text
+usage: sellerops fbs-group-ship-openapi [-h] [--shops SHOPS] [--name NAME]
+                                        [--resume] [--apply]
+
+options:
+  -h, --help     show this help message and exit
+  --shops SHOPS  限定店铺 ID，逗号分隔（默认 BCS 全部店铺）
+  --name NAME    精确限定一个商品中文名（默认全部标记商品）
+  --resume       查看已受理配送的待导出供货；加 --apply 补取 PDF
+  --apply        执行供货和导出（默认预览）；与 --resume 同用时仅补取 PDF
 ```
 
 ## order-stats

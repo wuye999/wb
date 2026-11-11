@@ -207,6 +207,25 @@ python run.py feishu-register --scope all --date 2026-10-01
 
 用户确认后再加 --apply。去重命令只清已有重复记录，库存全量登记则会清空并重建库存表；都不能当作每天的无害初始化。`mabang-stock-daily` 默认补今天和更新现有日期列，显式 --begin/--date 会进入可删除旧日期列的区间模式，详见 [数据契约](DATA.md)。
 
+### WB 发货群供货与 PDF
+
+`fbs-group-ship-openapi` 单独查询 BCS 配置店铺的 WB FBS 新增订单。逐店只处理已确认的莫斯科仓，按完整 VC 对应的商品中文名识别价格表库存 SKU 列中的「在发货群发货」。同店同名合为一个供货。
+
+马帮把这类订单记录为 `GROUP_SHIPPING`，跳过库存匹配更换、预报和交运。飞书仍按订单编号登记，库存 SKU 留空。已有登记中的同一标记在马帮库存日统计中按无 SKU 计数。
+
+```powershell
+python run.py fbs-group-ship-openapi
+python run.py fbs-group-ship-openapi --shops 9352 --name 黑丝假发
+python run.py fbs-group-ship-openapi --shops 9352 --name 黑丝假发 --apply
+python run.py fbs-group-ship-openapi --shops 9352 --resume --apply
+```
+
+默认预览，不创建供货。加 `--apply` 后建供货、加入全部订单、提交配送，再按本次供货号和订单 ID 取 WB 原码。加入每次最多 100 单，超过时分次加入同一个供货。订单的货物尺寸、跨境或 B2B 属性无法合并，或缺平台必填标识时，整组留待人工处理。
+
+供货名如 `20261111-103500_袁州1(9352)_黑丝假发_2单`，使用新加坡时间。PDF 用较短的文件名，例如 `袁州1(9352)_黑丝假发_2单_1234567_供货码.pdf` 和 `袁州1(9352)_黑丝假发_2单_1234567_标签.pdf`，数字编号对应 WB 供货 `WB-GI-1234567`。按供货创建日建文件夹，例如 `data/fbs_shipments/20261111/`，同一天所有店铺的 PDF 集中保存，续办沿用原供货日期。供货二维码是 58 × 40 mm 的一页，订单标签是 40 × 30 mm 的每单一页。两份文件都通过检查并保存后才记录为导出完成。
+
+配送已受理但 PDF 未导出时，用 `--resume --apply` 按原供货号和文件名补取；只加 `--resume` 查看记录。部分加入失败或写入结果不明时，按 `data/state/WB_FBS发货群供货.json` 中的批次回执人工处理。两份 PDF 是配送后的业务产物，结束后不附加回读验证或同步。
+
 ## 查询报表与客服
 
 商品运营综合报告使用 BCS＋WB Open API＋飞书，只生成本地 Excel，不修改商品或飞书，不自动同步、拉取或合并快照：

@@ -26,11 +26,17 @@ def _names(path: str | Path, sheet: str, mapping: bool) -> list[tuple[str, str]]
         wb.close()
 
 
+def load_mapped_names() -> dict[str, str]:
+    """按完整 VC 读取映射总表，拒绝冲突的商品归属。"""
+    mapped_names = {}
+    for vc, cn in _names(paths.MAPPING_XLSX, '映射总表', True):
+        if vc in mapped_names and mapped_names[vc] != cn:
+            raise ValueError('映射表同一完整VC对应多个中文名')
+        mapped_names[vc] = cn
+    return mapped_names
+
+
 def load_report_catalog() -> ReportCatalog:
     """按表头读取本轮名称；损坏/缺失明确报错，不把旧报告归属冒充最新映射。"""
-    catalog = ReportCatalog(price_names={cn for _, cn in _names(paths.PRICE_BOOK_XLSX, 'Sheet1', False)})
-    for vc, cn in _names(paths.MAPPING_XLSX, '映射总表', True):
-        if vc in catalog.mapped_names and catalog.mapped_names[vc] != cn:
-            raise ValueError('映射表同一完整VC对应多个中文名')
-        catalog.mapped_names[vc] = cn
-    return catalog
+    return ReportCatalog(price_names={cn for _, cn in _names(paths.PRICE_BOOK_XLSX, 'Sheet1', False)},
+                         mapped_names=load_mapped_names())

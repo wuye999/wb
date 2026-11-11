@@ -117,6 +117,14 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--interval", type=float, default=0.3, help="清单间/店铺间请求间隔秒（默认 0.3）")
     bind(p, 'sellerops.features.orders.fbs_delivery', 'run')
 
+    p = sub.add_parser("fbs-group-ship-openapi",
+                       help="WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并导出 PDF")
+    p.add_argument("--shops", default="", help="限定店铺 ID，逗号分隔（默认 BCS 全部店铺）")
+    p.add_argument("--name", default="", help="精确限定一个商品中文名（默认全部标记商品）")
+    p.add_argument("--resume", action="store_true", help="查看已受理配送的待导出供货；加 --apply 补取 PDF")
+    p.add_argument("--apply", action="store_true", help="执行供货和导出（默认预览）；与 --resume 同用时仅补取 PDF")
+    bind(p, 'sellerops.features.orders.fbs_group_ship', 'run')
+
     p = sub.add_parser("order-stats",
                            help="只读：WB「订单动态」近一月订单按商品中文名统计（订单数/退货数/退货率/"
                                 "完单口径退货率/未完结）→ xlsx 多 Sheet（汇总 + 按供应商代码 + 每店 + 订单明细）")

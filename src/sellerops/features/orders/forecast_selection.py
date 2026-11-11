@@ -9,6 +9,7 @@ from sellerops.settings import paths as config
 from sellerops.core import utils as common
 from sellerops.integrations.mabang.client import get_mabang_cred as mb_client_get_mabang_cred
 from sellerops.integrations.mabang.orders import fetch_pending_orders as mb_client_fetch_pending_orders
+from sellerops.features.orders.matching import STATUS_GROUP_SHIPPING
 from sellerops.features.orders.matching import classify
 from sellerops.features.orders.matching import load_local_mapping
 from sellerops.features.orders.matching import report_no_sku
@@ -56,6 +57,10 @@ def collect_forecast_orders(args):
         return [], cred
     vc2cn, cn2sku = load_local_mapping()
     recs = classify(orders, vc2cn, cn2sku, shop_map)
+    group_shipping_ids = getattr(args, "group_shipping_order_ids", ())
+    for rec in recs:
+        if rec["status"] != "SKIP_SHOP" and str(rec["order_id"]) in group_shipping_ids:
+            rec["status"] = STATUS_GROUP_SHIPPING
     target = [r for r in recs if r["status"] == "REPLACE"]
     other = {}
     for r in recs:

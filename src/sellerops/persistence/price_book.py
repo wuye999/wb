@@ -49,6 +49,8 @@ BOSS_COLUMNS = {
     "stock_sku": "库存SKU",
 }
 
+GROUP_SHIPPING_MARKER = "在发货群发货"
+
 
 def price_book_columns(ws, path: str, required=("sku", "cn", "dp")):
     """解析商品价格表表头 → {逻辑字段: 列索引}；required 缺列抛 HeaderError。

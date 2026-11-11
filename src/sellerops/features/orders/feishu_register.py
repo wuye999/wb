@@ -15,6 +15,7 @@ from sellerops.core import utils as common
 from sellerops.settings import credentials
 from sellerops.features.orders.matching import load_local_mapping as mabang_load_local_mapping
 from sellerops.features.orders.matching import parse_order as mabang_parse_order
+from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
 from sellerops.integrations.feishu.tables import invoke
 from sellerops.integrations.feishu.tables import list_records
 from sellerops.integrations.feishu.tables import resolve_base
@@ -219,6 +220,7 @@ def build_records(args):
             print(f"  [警告] 店{sid} 取消单查询失败（跳过排除）: {e}")
 
     records, skip, notice = [], {}, {}
+    group_shipping_ids = getattr(args, "group_shipping_order_ids", ())
     for o in orders:
         p = mabang_parse_order(o)
         if p["shop"] not in shop_map:
@@ -236,6 +238,11 @@ def build_records(args):
             notice["VC不在映射表(仍登记·中文名留空)"] = notice.get("VC不在映射表(仍登记·中文名留空)", 0) + 1
         elif not p["vc"]:
             notice["无BCS编号(仍登记)"] = notice.get("无BCS编号(仍登记)", 0) + 1
+        stock_sku = cn2sku.get(cn) or None
+        if stock_sku == GROUP_SHIPPING_MARKER or str(p["order_id"]) in group_shipping_ids:
+            stock_sku = None
+            key = "发货群订单(库存SKU留空)"
+            notice[key] = notice.get(key, 0) + 1
         wb_code = ""
         if p["vc"]:
             wb_code = str(snaps.get(p["shop"], {}).get(p["vc"]) or "")
@@ -255,7 +262,7 @@ def build_records(args):
             # 库存SKU：以本地商品价格表「库存SKU」列为准（用户规则 2026-09-17）；
             # 本地查不到（含只匹配未走完预报/上传/交运流程的单）→ 留空，
             # 不再回写马帮系统的匹配值（避免 BCS-FSCH-982897107 / BCS-xxx-40-56 这类非法值）
-            "库存SKU": (cn2sku.get(cn) or None) if cn else None,
+            "库存SKU": stock_sku,
             "wb编号": wb_code or None,
             "商品链接": (f"https://www.wildberries.ru/catalog/{wb_code}/detail.aspx"
                         if wb_code else None),

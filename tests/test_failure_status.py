@@ -277,16 +277,19 @@ class TestOrderFailures(unittest.TestCase):
             for registration in [0, 1, RuntimeError('lark-cli failed')]:
                 def match(args, **kwargs):
                     args.replace_fail_order_ids = ['failed-order'] if replace_failed else []
+                    args.group_shipping_order_ids = {'group-order'}
                     return 0
                 with self.subTest(replace_failed=replace_failed, registration=registration), redirect_stdout(io.StringIO()), \
                         patch.object(pipeline, 'mabang_run', side_effect=match), \
                         patch.object(pipeline, 'mabang_run_forecast', return_value=0) as forecast, \
                         patch.object(pipeline, 'feishu_register_run', return_value=registration,
-                                     side_effect=registration if isinstance(registration, Exception) else None):
+                                     side_effect=registration if isinstance(registration, Exception) else None) as register:
                     code = pipeline.run(parser.parse_args(['mabang-process', '--url', 'https://fixture.invalid', '--apply']))
                     self.assertEqual(code, int(replace_failed or registration != 0))
                     self.assertEqual(forecast.call_args.args[0].replace_fail_order_ids,
                                      ['failed-order'] if replace_failed else [])
+                    self.assertEqual(forecast.call_args.args[0].group_shipping_order_ids, {'group-order'})
+                    self.assertEqual(register.call_args.args[0].group_shipping_order_ids, {'group-order'})
 
     def test_forecast_does_not_handover_when_one_failed_batch_has_unknown_shop(self):
         from sellerops.features.orders import forecast

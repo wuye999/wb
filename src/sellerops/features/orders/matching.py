@@ -15,6 +15,7 @@ from sellerops.integrations.mabang.orders import fetch_order_item_ids as mb_clie
 from sellerops.integrations.mabang.orders import search_stock as mb_client_search_stock
 from sellerops.integrations.mabang.orders import replace_order_item as mb_client_replace_order_item
 from sellerops.integrations.mabang.session import MabangAuthError
+from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
 
 VC_RE = re.compile(r"(BCS-[A-Z]{4}-(?:(?:ozon-card-)?[A-Za-z0-9-]+|[^/*\s]+/\d+))(?:\*\d+)?$")
 
@@ -22,8 +23,10 @@ SKU_RE = re.compile(r"商品编号\*数量:(.+?)\*?\d*$")
 
 TITLE_SKU_RE = re.compile(r"数量:(.*)$")
 
+STATUS_GROUP_SHIPPING = "GROUP_SHIPPING"
+
 def load_local_mapping():
-    """返回 (vc→中文名, 中文名→库存SKU)。
+    """返回 (vc→中文名, 中文名→价格表库存SKU栏值)，保留发货群标记供分流。
 
     2026-10-29：改为**按表头名定位**，不再硬编码列号（旧实现读 `r[1]/r[0]` 与
     `r[2]/r[7]`，一旦用户插列/挪列就会静默读错 —— 轻则全部判 NO_SKU，
@@ -38,7 +41,7 @@ def load_local_mapping():
     from sellerops.persistence.mappings import MappingRepository
 
     state, _ = MappingRepository.load_mapping_state()
-    vc2cn = {str(vc).strip(): (st.get("cn") or "") for vc, st in state.items() if vc}
+    vc2cn = {str(vc).strip(): str(st.get("cn") or "").strip() for vc, st in state.items() if vc}
 
     cn2sku = {}
     wb = load_workbook(config.PRICE_BOOK_XLSX, read_only=True)
@@ -52,7 +55,9 @@ def load_local_mapping():
             cn = r[i_cn] if i_cn is not None and len(r) > i_cn else None
             sku = r[i_stock] if i_stock is not None and len(r) > i_stock else None
             if cn and sku:
-                cn2sku[str(cn).strip()] = str(sku).strip()
+                name = str(cn).strip()
+                if cn2sku.get(name) != GROUP_SHIPPING_MARKER:
+                    cn2sku[name] = str(sku).strip()
     finally:
         wb.close()
     return vc2cn, cn2sku
@@ -114,6 +119,11 @@ def classify(orders, vc2cn, cn2sku, shop_map):
         if not sku:
             rec["status"] = "NO_SKU"
             rec["note"] = "中文名在商品价格表无库存SKU"
+            recs.append(rec)
+            continue
+        if sku == GROUP_SHIPPING_MARKER:
+            rec["status"] = STATUS_GROUP_SHIPPING
+            rec["note"] = "价格表标记在发货群发货，跳过马帮匹配、预报和交运"
             recs.append(rec)
             continue
         rec["expected_sku"] = sku
@@ -264,16 +274,13 @@ def report_replace_fail(recs):
 
 def run(args, *, continue_on_item_failure: bool = False) -> int:
     common.ensure_utf8_stdout()
-    # 跨步骤契约：本轮「更换失败」的订单ID，供 mabang-process 传给步骤②排除（单独跑则无人读取）
+    # 保留本轮分流和更换失败的订单 ID，供组合流程复用。
     setattr(args, "replace_fail_order_ids", [])
+    args.group_shipping_order_ids = set()
     cred = mb_client_get_mabang_cred()
     warehouse_id = int(cred.get("warehouse_id") or 1457537)
     shop_map = cred["shop_map"]
     print(f"[配置] 目标店铺: {'、'.join(f'{k}→{v}' for k, v in shop_map.items())}")
-    if args.apply and not mb_client_api_ready(cred):
-        print("[错误] 更换订单商品需要马帮 API 凭证，请先运行 mabang-login 更新会话。")
-        return 1
-
     scope = f"最近 {args.days} 天" if args.days else "全部新增，不限日期"
     print(f"\n[查询] 待处理订单（{scope}，仅处理配置店铺，tabId=7）...")
     orders = mb_client_fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
@@ -283,6 +290,8 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
 
     vc2cn, cn2sku = load_local_mapping()
     recs = classify(orders, vc2cn, cn2sku, shop_map)
+    args.group_shipping_order_ids = {str(r["order_id"]) for r in recs
+                                     if r["status"] == STATUS_GROUP_SHIPPING and r["order_id"]}
 
     stat = {}
     for r in recs:
@@ -296,8 +305,12 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
             print(f"  [{r['status']}] {r['order_id']} [{r['shop_bcs'] or r['shop']}] "
                   f"{r['vc'] or '(无VC)'} {r['cn_name']} | {r['note']}")
 
-    if args.apply:
-        n = stat.get("REPLACE", 0)
+    n = stat.get("REPLACE", 0)
+    if args.apply and n:
+        if not mb_client_api_ready(cred):
+            print("[错误] 更换订单商品需要马帮 API 凭证，请先运行 mabang-login 更新会话。")
+            write_csv(recs)
+            return 1
         print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；仓库 {warehouse_id}）...")
         try:
             ok, fail = apply_replace(cred, recs, warehouse_id)
@@ -312,7 +325,7 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
         # 供 mabang-process 步骤②按订单ID排除（此处赋值须早于下方报告/CSV）
         setattr(args, "replace_fail_order_ids",
                 [str(r["order_id"]) for r in recs if r["status"] == STATUS_REPLACE_FAIL])
-    else:
+    elif not args.apply:
         print("\n（dry-run 模式未做任何更换；确认无误后加 --apply 执行）")
 
     report_no_sku(recs)

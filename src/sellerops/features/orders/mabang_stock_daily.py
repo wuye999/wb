@@ -12,6 +12,7 @@ from sellerops.settings import credentials
 from sellerops.integrations.feishu.tables import invoke
 from sellerops.integrations.feishu.tables import resolve_base
 from sellerops.integrations.feishu.tables import resolve_table
+from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
 
 DATE_COL_RE = re.compile(r"^(\d{1,2})月(\d{1,2})日新订单量$")
 
@@ -31,7 +32,7 @@ def read_orders_daily(base_token, orders_table_id, begin, end):
             qty = int(float(_sv(fields.get("订单量")) or 1))
         except ValueError:
             qty = 1
-        if not sku:
+        if not sku or sku == GROUP_SHIPPING_MARKER:
             no_sku[dt] += qty
             continue
         daily.setdefault(dt, Counter())[sku] += qty

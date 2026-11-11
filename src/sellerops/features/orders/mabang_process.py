@@ -5,6 +5,7 @@ sellerops 马帮订单处理一体脚本：
 兼容 status=5 历史归档；超时经 status=99 定性失败）→ 物流交运 → 自动登记飞书
 过滤机制与既有流程一致：shop_map 店铺过滤 / 取消单排除（WB 门户）/
 NO_SKU（价格表缺库存SKU）只匹配不预报 /
+GROUP_SHIPPING（价格表标记在发货群发货）跳过匹配更换、预报和交运，飞书库存SKU留空 /
 REPLACE_FAIL（步骤①更换库存SKU失败）：同样只匹配不预报——
 本轮失败单ID经 args.replace_fail_order_ids 传给步骤②按订单ID排除（**仅本链路内**，
 单独跑 mabang-forecast 不做该排除）；飞书登记照常 /
@@ -41,6 +42,7 @@ def run(args):
         print("[中止] 商品匹配失败，后续步骤不执行")
         return code
     replace_fail_ids = list(getattr(ns_match, "replace_fail_order_ids", None) or [])
+    group_shipping_ids = getattr(ns_match, "group_shipping_order_ids", set())
     if replace_fail_ids:
         print(f"\n[提示] 步骤① 更换失败 {len(replace_fail_ids)} 单 → REPLACE_FAIL："
               "本轮不进预报/交运（飞书登记照常）")
@@ -54,13 +56,14 @@ def run(args):
                             wait=args.wait, upload_waiting=False,
                             upload_timeout=getattr(args, "upload_timeout", None),
                             poll_interval=getattr(args, "poll_interval", None),
-                            replace_fail_order_ids=replace_fail_ids)
+                            replace_fail_order_ids=replace_fail_ids,
+                            group_shipping_order_ids=group_shipping_ids)
     code = mabang_run_forecast(ns_fc)
     if code:
         print("[中止] 预报/交运失败")
         return code
 
-    # ③ 自动登记飞书（匹配完成后登记，库存SKU 为实际匹配值）
+    # ③ 自动登记飞书（库存SKU 取自本地价格表）
     print("\n" + "#" * 72)
     print("# 步骤 ③ 新订单登记飞书（最近500条去重，只登新增）")
     print("#" * 72)
@@ -75,6 +78,7 @@ def run(args):
                              page_size=args.page_size, scope="latest",
                              date="", begin="", end="", apply=args.apply,
                              no_pending=getattr(args, "no_pending", False),
+                             group_shipping_order_ids=group_shipping_ids,
                              registered_new=[])
     registration_failed = False
     try:
