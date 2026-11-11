@@ -12,6 +12,8 @@ from sellerops.integrations.mabang.forecast import upload_forecast_batch as mb_c
 from sellerops.integrations.mabang.forecast import get_forecast_list as mb_client_get_forecast_list
 from sellerops.integrations.mabang.forecast import get_handover_channel_value as mb_client_get_handover_channel_value
 from sellerops.integrations.mabang.forecast import set_handover as mb_client_set_handover
+from sellerops.integrations.mabang.forecast import MabangUploadInterrupted
+from sellerops.integrations.mabang.session import MabangAuthError
 from sellerops.features.orders.forecast_polling import _resolve_poll_interval
 from sellerops.features.orders.forecast_polling import _resolve_upload_timeout
 from sellerops.features.orders.forecast_selection import collect_forecast_orders
@@ -20,6 +22,27 @@ from sellerops.features.orders.forecast_polling import wait_upload_done
 from sellerops.features.orders.forecast_selection import write_forecast_csv
 
 FORECAST_STATUS_TAGS = {1: "待上传", 2: "上传中", 3: "预报成功", 99: "预报失败"}
+
+
+def _record_auth_stop(target: list[dict], batches: list[str], submitted: tuple[str, ...],
+                      reason: MabangAuthError) -> None:
+    for row in target:
+        row["_step_handover"] = "跳过-认证中止"
+    accepted = set(submitted)
+    report = write_forecast_csv(target, [
+        {"batchNo": bn, "状态": "上传已受理，未确认完成" if bn in accepted else "上传未确认",
+         "note": str(reason)} for bn in batches])
+    if report:
+        print(f"[报告] 认证中止前的批次明细: {report}")
+
+
+def _upload(cred: dict, target: list[dict], batches: list[str]) -> str:
+    try:
+        return mb_client_upload_forecast_batch(cred, batches)
+    except MabangAuthError as exc:
+        _record_auth_stop(target, batches, exc.submitted if isinstance(exc, MabangUploadInterrupted) else (), exc)
+        raise
+
 
 def _print_forecast_rows(rows):
     """打印预报批次行（揽货批次号/批次状态/订单总数/批次重量/上传货代/创建人/回传号）。"""
@@ -82,6 +105,8 @@ def run_forecast(args):
                 first[st_code] = (rows, st or {})
                 if not stats0:
                     stats0 = st or {}
+            except MabangAuthError:
+                raise
             except Exception as e:
                 first[st_code] = ([], {"_err": str(e)[:80]})
         print(f"统计: 待上传 {stats0.get('waitTotal')} / 成功 {stats0.get('succesTotal')} / "
@@ -135,7 +160,6 @@ def run_forecast(args):
         print(f"  {msg}；新批次 {len(batch_nos_new)} 个: {','.join(batch_nos_new)}")
         for r in to_create:
             r["_step_create"] = "已生成"
-            r["_step_upload"] = "已提交上传"
     else:
         print("\n[① 生成批次] 全部订单已预报，跳过（不重复生成）")
         for r in target:
@@ -147,14 +171,16 @@ def run_forecast(args):
     uploaded_nos = []          # 本轮流经上传的批次号（新批次或补传批次）
 
     if batch_nos_new:
-        up_msg = mb_client_upload_forecast_batch(cred, batch_nos_new)
+        up_msg = _upload(cred, target, batch_nos_new)
         print(f"[② 上传批次] {len(batch_nos_new)} 个新批次: {up_msg}")
         uploaded_nos = [str(b) for b in batch_nos_new]
+        for r in to_create:
+            r["_step_upload"] = "已提交上传"
     elif getattr(args, "upload_waiting", False):
         waiting, _stats = mb_client_get_forecast_list(cred, status=1)
         wb_nos = [b["batchNo"] for b in waiting]
         if wb_nos:
-            up_msg = mb_client_upload_forecast_batch(cred, wb_nos)
+            up_msg = _upload(cred, target, wb_nos)
             print(f"[② 上传批次] 补传待上传列表 {len(wb_nos)} 个批次: {up_msg}")
             for r in target:
                 r["_step_upload"] = r["_step_upload"] or "补传历史批次"
@@ -173,8 +199,12 @@ def run_forecast(args):
     skipped_fail, skipped_upload, up_rows, store_of = [], [], {}, {}
     success_nos, failed_nos, still_nos = set(), set(), set()
     if uploaded_nos:
-        res = wait_upload_done(cred, uploaded_nos, timeout=up_timeout,
-                               interval=poll_iv, min_wait=min_wait)
+        try:
+            res = wait_upload_done(cred, uploaded_nos, timeout=up_timeout,
+                                   interval=poll_iv, min_wait=min_wait)
+        except MabangAuthError as exc:
+            _record_auth_stop(target, uploaded_nos, tuple(uploaded_nos), exc)
+            raise
         up_rows, store_of = res["rows"], res["store_of"]
         success_nos, failed_nos, still_nos = res["success"], res["failed"], res["still"]
 
@@ -217,6 +247,7 @@ def run_forecast(args):
         print(f"[⚠ 告警] {len(skipped_upload)} 单因「上传未完成」跳过交运"
               f"（标记=跳过-上传未完成）；稍后重跑 mabang-process 幂等补交运。")
 
+    auth_interrupted = False
     if not to_handover:
         print("[④ 交运] 全部订单已选择交运方式，跳过")
         for r in target:
@@ -238,6 +269,7 @@ def run_forecast(args):
                 print(f"  [警告] 平台未找到订单: {not_found}")
             print(f"  交运成功 {len(ok_ids)} / 共提交 {len(to_handover)}")
         except Exception as e:
+            auth_interrupted = isinstance(e, MabangAuthError)
             print(f"  [错误] 交运失败: {e}")
             for r in to_handover:
                 r["_step_handover"] = f"错误:{str(e)[:40]}"
@@ -256,7 +288,7 @@ def run_forecast(args):
                            "handoverNumber": b.get("handoverNumber", ""),
                            "orderWeight": b.get("orderWeight", ""),
                            "forecastLogisticsName": b.get("forecastLogisticsName", "")})
-    if batch_rows and not any(r.get("状态", "").startswith("预报成功") for r in batch_rows):
+    if batch_rows and not auth_interrupted and not any(r.get("状态", "").startswith("预报成功") for r in batch_rows):
         try:                     # 无成功快照时回读 status=3 兜底
             r3 = find_batches(cred, batch_nos_new or uploaded_nos, status=3)
             for bn, b in r3["found"].items():
@@ -268,6 +300,7 @@ def run_forecast(args):
                         row["orderWeight"] = b.get("orderWeight", "")
                         row["forecastLogisticsName"] = b.get("forecastLogisticsName", "")
         except Exception as e:
+            auth_interrupted = isinstance(e, MabangAuthError)
             print(f"  [警告] 回读批次清单失败: {e}")
 
     csv_path = write_forecast_csv(target, batch_rows)
@@ -286,6 +319,7 @@ def run_forecast(args):
         print("[⚠ 告警] 存在预报失败批次：对应订单未交运；请到马帮后台核查后重跑 mabang-process。")
     if n_skip:
         print("[⚠ 告警] 存在上传未完成批次：对应订单未交运；稍后重跑 mabang-process 幂等补齐。")
-    if not (n_fail or n_skip or handover_errors or failed_nos or still_nos):
+    failed = auth_interrupted or n_fail or n_skip or handover_errors or failed_nos or still_nos
+    if not failed:
         print("（本次已轮询确认批次预报成功；如需核对可运行 sellerops mabang-forecast --check）")
-    return 1 if n_fail or n_skip or handover_errors or failed_nos or still_nos else 0
+    return 1 if failed else 0

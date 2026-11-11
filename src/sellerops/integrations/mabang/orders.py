@@ -1,5 +1,4 @@
 """orders。"""
-import json
 from datetime import datetime, timedelta, timezone
 
 import time
@@ -10,10 +9,9 @@ import requests
 from sellerops.integrations.mabang.client import AAMZ_BASE
 from sellerops.integrations.mabang.client import REQUEST_INTERVAL
 from sellerops.integrations.mabang.client import WWW_BASE
-from sellerops.integrations.mabang.client import aamz_headers
 from sellerops.integrations.mabang.client import api_post
+from sellerops.integrations.mabang.client import form_request
 from sellerops.integrations.mabang.client import parse_json
-from sellerops.integrations.mabang.client import www_headers
 
 def fetch_pending_orders(cred: dict, days: int = 0, page_size: int = 100,
                          max_pages: int = 200) -> list[dict]:
@@ -63,8 +61,8 @@ def fetch_pending_orders(cred: dict, days: int = 0, page_size: int = 100,
     while page <= max_pages:
         form = dict(base_form)
         form["page"] = str(page)
-        r = requests.post(WWW_BASE, params={"mod": "order.oTc"}, headers=www_headers(cred),
-                          data=urllib.parse.urlencode(form), timeout=60)
+        r = form_request(cred, WWW_BASE, 'order.oTc', read_only=True,
+                         data=urllib.parse.urlencode(form), timeout=60)
         r.raise_for_status()
         d = parse_json(r)
         if not d.get("success"):
@@ -119,8 +117,8 @@ def fetch_all_orders(cred, page_size=500, max_pages=60):
             "jumpParams": "undefined", "1": "1", "tabId": "222",
             "global_company_config_json_str": "",
         }
-        r = requests.post(WWW_BASE, params={"mod": "order.oTc"}, headers=www_headers(cred),
-                          data=urllib.parse.urlencode(form), timeout=120)
+        r = form_request(cred, WWW_BASE, 'order.oTc', read_only=True,
+                         data=urllib.parse.urlencode(form), timeout=120)
         r.raise_for_status()
         d = parse_json(r)
         if not d.get("success"):
@@ -139,8 +137,7 @@ def fetch_order_item_ids(cred, order_id):
     form = {"orderItemIq": order_id, "tableBase": "1", "source": "common",
             "cloudStatus": "", "orderItemBy": "platformSku asc,isCombo asc,id asc,stockId asc",
             "tabId": "7"}
-    r = requests.post(WWW_BASE, params={"mod": "order.showOrderItems"},
-                      headers=www_headers(cred), data=form, timeout=60)
+    r = form_request(cred, WWW_BASE, 'order.showOrderItems', read_only=True, data=form)
     r.raise_for_status()
     d = parse_json(r)
     if not d.get("success"):
@@ -154,9 +151,9 @@ def search_stock(cred, sku, warehouse_id, page_size=20):
             "status": [1, 2, 3, 4, 5], "stockSkuOperate": "like",
             "stockNameCNOperate": "like", "stockNameENOperate": "like",
             "warehouseOperate": "like"}
-    r = api_post(cred, "/product/Stock/searchStockList", body)
+    r = api_post(cred, "/product/Stock/searchStockList", body, read_only=True)
     r.raise_for_status()
-    d = r.json()
+    d = parse_json(r)
     if d.get("code") != 200:
         raise RuntimeError(f"searchStockList 失败: {d.get('message')}")
     want = sku.strip().lower()
@@ -182,12 +179,11 @@ def fetch_stock_list(cred, timeout=120):
             "isGift": "", "exceptionDeclaration": "", "singleWarehouseType": "",
             "isGoogsExpireManageSearch": "", "page": "", "rowsPerPage": "",
             "stockOrderby": "a.stockQuantity desc"}
-    r = requests.post(AAMZ_BASE, params={"mod": "stock.getStockList"},
-                      headers=aamz_headers(cred), data=form, timeout=timeout)
+    r = form_request(cred, AAMZ_BASE, 'stock.getStockList', read_only=True, data=form, timeout=timeout)
     r.raise_for_status()
-    d = json.loads(r.text.lstrip("\ufeff"))
+    d = parse_json(r)
     if not d.get("success"):
-        raise RuntimeError(f"stock.getStockList 返回失败: {str(d)[:150]}")
+        raise RuntimeError(f"stock.getStockList 返回失败: {d.get('message')}")
     return [{"stockSku": it.get("stockSku") or "",
              "nameCN": it.get("nameCN") or "",
              "stockQuantity": it.get("stockQuantity"),
@@ -212,7 +208,7 @@ def replace_order_item(cred, order_item_id, stock_id, warehouse_id):
             "skuType": 1, "warehouseId": int(warehouse_id)}
     r = api_post(cred, "/order/order/replaceOrderItem", body)
     r.raise_for_status()
-    d = r.json()
+    d = parse_json(r)
     if d.get("code") != 200:
         raise RuntimeError(f"replaceOrderItem 失败: {d.get('msg') or d.get('message')}")
     return d

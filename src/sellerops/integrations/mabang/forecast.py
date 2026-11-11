@@ -3,17 +3,19 @@
 import re
 import time
 import urllib.parse
-import requests
 
 
 from sellerops.integrations.mabang.client import AAMZ_BASE
-from sellerops.integrations.mabang.client import CHANNEL_OBJ_RE
 from sellerops.integrations.mabang.client import DEF_FORECAST_CHANNEL
 from sellerops.integrations.mabang.client import DEF_FORECAST_LOGISTICS
 from sellerops.integrations.mabang.client import WWW_BASE
-from sellerops.integrations.mabang.client import aamz_headers
+from sellerops.integrations.mabang.client import form_request
 from sellerops.integrations.mabang.client import parse_json
-from sellerops.integrations.mabang.client import www_headers
+from sellerops.integrations.mabang.session import MabangAuthError
+
+CHANNEL_OBJ_RE = re.compile(
+    r'\{"id":"(\d+)","source":"\d+","logisticsId":"(\d+)","myLogisticsId":"(\d+)",'
+    r'"logisticsChannelName":"((?:\\u[0-9a-fA-F]{4})+)"')
 
 FORECAST_PAGE_TOTAL_RE = re.compile(r"共\s*(\d+)\s*条")
 
@@ -41,8 +43,7 @@ def parse_forecast_page(page_html):
 
 def get_forecast_logistics(cred):
     """获取物流方式与默认预报参数"""
-    r = requests.post(WWW_BASE, params={"mod": "ordera.getForecastLogistics"},
-                      headers=www_headers(cred), data="", timeout=60)
+    r = form_request(cred, WWW_BASE, 'ordera.getForecastLogistics', read_only=True, data='')
     r.raise_for_status()
     d = parse_json(r)
     if not d.get("success"):
@@ -61,8 +62,8 @@ def batch_create_forecast(cred, order_ids, logistics, channel):
         "tiktokPackType": "tiktok_pickup", "tiktokCrossStorePack": "1",
         "wildberriesCrossPack": "1", "activeTab": "platform",
     }
-    r = requests.post(WWW_BASE, params={"mod": "ordera.doBatchCreateForecast"},
-                      headers=www_headers(cred), data=urllib.parse.urlencode(form), timeout=120)
+    r = form_request(cred, WWW_BASE, 'ordera.doBatchCreateForecast', read_only=False,
+                     data=urllib.parse.urlencode(form), timeout=120)
     r.raise_for_status()
     d = parse_json(r)
     if not d.get("success"):
@@ -85,8 +86,7 @@ def get_forecast_list(cred, status=1, rows_per_page=200, page=1):
             "numberId": "", "datepicker-from": "", "datepicker-to": "", "status": str(status),
             "uploadlogisticschannel": "", "type": "1", "page": str(page),
             "rowsPerPage": str(rows_per_page)}
-    r = requests.post(AAMZ_BASE, params={"mod": "uploadforecastorderv2.getForecastOrderList"},
-                      headers=aamz_headers(cred), data=form, timeout=60)
+    r = form_request(cred, AAMZ_BASE, 'uploadforecastorderv2.getForecastOrderList', read_only=True, data=form)
     r.raise_for_status()
     d = parse_json(r)
     if not d.get("success"):
@@ -98,8 +98,8 @@ def get_forecast_list(cred, status=1, rows_per_page=200, page=1):
 
 def get_forecast_config(cred, my_logistics_id="262534"):
     """取上传预报单配置模板（aamz 域）"""
-    r = requests.post(AAMZ_BASE, params={"mod": "uploadforecastorderv2.getForecastConfig"},
-                      headers=aamz_headers(cred), data={"myLogisticsId": my_logistics_id}, timeout=60)
+    r = form_request(cred, AAMZ_BASE, 'uploadforecastorderv2.getForecastConfig',
+                     read_only=True, data={"myLogisticsId": my_logistics_id})
     r.raise_for_status()
     d = parse_json(r)
     return d.get("forecast_config_json") if d.get("success") else None
@@ -150,8 +150,11 @@ def upload_forecast_batch(cred, batch_nos):
                     "shein_fcs_reach_time": "", "shein_fcs_shipping_tracknumber": "",
                     "shein_fcs_pickup_time": "", "shein_fcs_package_number": "",
                     "shein_fcs_package_weight": "", "wb_supplier_no": ""}
-        r = requests.post(AAMZ_BASE, params={"mod": "uploadforecastorderv2.uploadForecastBatch"},
-                          headers=aamz_headers(cred), data=form, timeout=120)
+        try:
+            r = form_request(cred, AAMZ_BASE, 'uploadforecastorderv2.uploadForecastBatch',
+                             read_only=False, data=form, timeout=120)
+        except MabangAuthError as exc:
+            raise MabangUploadInterrupted(str(exc), tuple(batch_nos[:i])) from None
         r.raise_for_status()
         d = parse_json(r)
         if not d.get("success"):
@@ -164,12 +167,18 @@ def upload_forecast_batch(cred, batch_nos):
             time.sleep(1)
     return msgs[-1] if msgs else ""
 
+
+class MabangUploadInterrupted(MabangAuthError):
+    def __init__(self, message: str, submitted: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.submitted = submitted
+
 def discover_handover_channel(cred):
     """从 order.list 页面内嵌渠道数组动态发现交运渠道（按 handover_keyword 匹配）"""
     keyword = cred.get("handover_keyword") or "七库海外仓"
     kw_esc = keyword.encode("unicode_escape").decode("latin-1")
-    r = requests.get(WWW_BASE, params={"mod": "order.list", "Order_orderStatus": "2"},
-                     headers={**www_headers(cred), "Content-Type": ""}, timeout=120)
+    r = form_request(cred, WWW_BASE, 'order.list', read_only=True, method='GET',
+                     params={"Order_orderStatus": "2"}, timeout=120)
     r.raise_for_status()
     txt = r.text
     for m in CHANNEL_OBJ_RE.finditer(txt):
@@ -193,8 +202,7 @@ def get_handover_channel_value(cred, sample_order_id):
         try:
             form = {"orderId": str(sample_order_id), "tableBase": "1",
                     "myLogisticsChannelId": channel_id, "orderLogisticsSearchId": ""}
-            r = requests.post(WWW_BASE, params={"mod": "order.getReportingInformation"},
-                              headers=www_headers(cred), data=form, timeout=60)
+            r = form_request(cred, WWW_BASE, 'order.getReportingInformation', read_only=True, data=form)
             r.raise_for_status()
             d = parse_json(r)
             if d.get("success"):
@@ -203,6 +211,8 @@ def get_handover_channel_value(cred, sample_order_id):
                     if keyword in v:
                         return v
             print("  [提示] getReportingInformation 未解析到渠道选项，转配置兜底...")
+        except MabangAuthError:
+            raise
         except Exception as e:
             print(f"  [提示] getReportingInformation 失败({str(e)[:60]})，转配置兜底...")
     fallback = cred.get("handover_channel_value") or ""
@@ -217,8 +227,8 @@ def set_handover(cred, order_ids, channel_value):
             "orderId": ",".join(str(x) for x in order_ids),
             "source": "3", "trackNumber": "", "tableBase": "1",
             "quickaccessBol": "2", "dataChanges": "1", "isSyncLogistics": "1"}
-    r = requests.post(WWW_BASE, params={"mod": "order.doReportingInformation"},
-                      headers=www_headers(cred), data=urllib.parse.urlencode(form), timeout=120)
+    r = form_request(cred, WWW_BASE, 'order.doReportingInformation', read_only=False,
+                     data=urllib.parse.urlencode(form), timeout=120)
     r.raise_for_status()
     d = parse_json(r)
     if not d.get("success"):

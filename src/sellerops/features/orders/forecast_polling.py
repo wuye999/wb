@@ -5,6 +5,7 @@ import time
 
 
 from sellerops.integrations.mabang.forecast import get_forecast_list as mb_client_get_forecast_list
+from sellerops.integrations.mabang.session import MabangAuthError
 
 DEF_UPLOAD_TIMEOUT = 900
 
@@ -157,6 +158,8 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
                 last_stats = prescan["stats"]
             _merge(prescan["found"])
             break
+        except MabangAuthError:
+            raise
         except Exception as e:
             prescan = None
             tail = "重试一次" if attempt == 1 else "跳过（映射稍后由 status=3/99 命中补齐）"
@@ -187,6 +190,8 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
                 n0 = len(success)
                 _merge(r3["found"], mark_success=True)
                 added = len(success) - n0
+            except MabangAuthError:
+                raise
             except Exception as e:
                 print(f"  [警告] status=3 查询异常（{str(e)[:80]}），稍后重试 ...")
         miss_rounds = 0 if added else miss_rounds + 1
@@ -202,6 +207,8 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
                 if r5["stats"]:
                     last_stats = r5["stats"]
                 _merge(r5["found"], mark_success=True)
+            except MabangAuthError:
+                raise
             except Exception as e:
                 print(f"  [警告] status=5 查询异常（{str(e)[:80]}），稍后重试 ...")
             did5_miss3 = did5_miss3 or trig_miss3
@@ -226,6 +233,8 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
                         store_of.setdefault(bn, row.get("shopId"))
                         print(f"  [✗ 失败] {bn}[{row.get('shopId') or '-'}] 已进入「预报失败」"
                               f"列表（失败 {row.get('failNum')}/{row.get('total')} 单），停止等待")
+                except MabangAuthError:
+                    raise
                 except Exception as e:
                     print(f"  [警告] status=99 核实异常（{str(e)[:80]}），继续轮询 ...")
         prev_fail = fail_now
@@ -264,6 +273,8 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
             if rf["stats"]:
                 last_stats = rf["stats"]
             _merge(rf["found"])
+        except MabangAuthError:
+            raise
         except Exception as e:
             print(f"  [警告] 超时补查 status=1 映射异常（{str(e)[:80]}），映射可能不全")
     try:
@@ -272,6 +283,8 @@ def wait_upload_done(cred, batch_nos, timeout=DEF_UPLOAD_TIMEOUT,
             failed.add(bn)
             rows[bn] = row
             store_of.setdefault(bn, row.get("shopId"))
+    except MabangAuthError:
+        raise
     except Exception as e:
         print(f"  [警告] status=99 定性查询异常（{str(e)[:80]}），未成功批次按未完成处理")
     still = want - success - failed

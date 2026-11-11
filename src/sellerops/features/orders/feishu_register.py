@@ -1,5 +1,6 @@
 """feishu register。"""
 from sellerops.integrations.mabang.client import get_mabang_cred as mabang_api_get_mabang_cred
+from sellerops.integrations.mabang.session import MabangAuthError
 from sellerops.integrations.mabang.orders import fetch_pending_orders as mabang_api_fetch_pending_orders
 from sellerops.integrations.mabang.orders import fetch_all_orders as mabang_api_fetch_all_orders
 import csv
@@ -132,6 +133,8 @@ def _merge_pending(orders, cred, args):
 
     try:
         pend = mabang_api_fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
+    except MabangAuthError:
+        raise
     except Exception as e:
         print(f"  [警告] 待处理订单拉取失败（本次仅用 orderalllist 登记）: {str(e)[:120]}")
         return orders

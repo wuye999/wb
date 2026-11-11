@@ -26,6 +26,7 @@
 | Playwright/Chromium 不存在 | 当前 Playwright 尚未启动，浏览器自动续期未启用；沿用手动抓包，不因这个提示自行安装或启动它 |
 | 保留的浏览器 profile 被占用 | 关闭占用该资料目录的浏览器再复制/备份；当前不为刷新会话而启动 Playwright，也不删除整个 profile 或凭证来排错 |
 | 马帮缺少 www_cookie/shop_map | 按 CONFIGURATION 准备真实字段；shop_map 键须与马帮订单中的店铺文本一致 |
+| 马帮要求腾讯验证码或短信验证 | 人工登录并进入上传预报单页面，按 [马帮配置](CONFIGURATION.md#马帮mabang) 导入成功 HAR；认证失败前已有的业务提交应先核对状态 |
 | 马帮 NO_SKU / 匹配失败 | 查看本次报表，核对中文归属及价格表库存SKU；更换失败单不得直接推进预报/交运 |
 | lark-cli 未找到 | 配置 PATH 或 SELLEROPS_LARK_CLI，确认对应工具支持 base 子命令和用户身份 |
 | 飞书链接/表不存在、无权限 | 核对 base_url、--table、用户登录态和表权限；项目不会自动创建整份业务表 |

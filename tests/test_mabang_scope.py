@@ -22,7 +22,7 @@ class TestPendingOrderScope(unittest.TestCase):
 
     def fetch(self, pages, **kwargs):
         responses = [Mock(json=Mock(return_value={'success':True,'orderDataList':rows})) for rows in pages]
-        with patch.object(orders.requests,'post',side_effect=responses) as post, \
+        with patch.object(orders,'form_request',side_effect=responses) as post, \
                 patch.object(orders.time,'sleep'), contextlib.redirect_stdout(io.StringIO()):
             result = orders.fetch_pending_orders({'www_cookie':'fixture'}, **kwargs)
         return result, [parse_qs(call.kwargs['data'], keep_blank_values=True) for call in post.call_args_list]
@@ -47,7 +47,7 @@ class TestPendingOrderScope(unittest.TestCase):
 
     def test_bad_days_fail_before_network(self):
         for days in [-1,True,1.5]:
-            with self.subTest(days=days), patch.object(orders.requests,'post') as post, self.assertRaises(ValueError):
+            with self.subTest(days=days), patch.object(orders,'form_request') as post, self.assertRaises(ValueError):
                 orders.fetch_pending_orders({'www_cookie':'fixture'},days=days)
             post.assert_not_called()
 
@@ -59,7 +59,7 @@ class TestPendingOrderScope(unittest.TestCase):
 
     def test_missing_order_list_is_not_reported_as_empty(self):
         response = Mock(json=Mock(return_value={'success':True}))
-        with patch.object(orders.requests,'post',return_value=response), self.assertRaisesRegex(RuntimeError,'有效订单列表'):
+        with patch.object(orders,'form_request',return_value=response), self.assertRaisesRegex(RuntimeError,'有效订单列表'):
             orders.fetch_pending_orders({'www_cookie':'fixture'})
 
     def test_all_dates_still_only_allow_configured_shops(self):

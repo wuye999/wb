@@ -111,12 +111,25 @@ python run.py cookies-update "session.md"
 | `aamz_cookie` | aamz 域会话；未填时代码回退 www_cookie，实际是否可用取决于会话 |
 | `api_bearer` | api 域 Bearer 值，不加 Bearer 前缀；可由程序续期 |
 | `api_key` | api 域 key；也可从 www_cookie 的指定登录 Cookie 中提取 |
+| `login` | 本地登录配置：`username`、`password`、`timezone`、`headers`、`auto_refresh`；导入 HAR 时同时记录是否经过 passport |
+| `cookie_jar` / `auth_updated_at` | 程序维护的分域 Cookie 状态和最近认证更新时间；已有的四个凭证字段仍保留 |
 | `handover_keyword` | 用于匹配交运物流渠道的关键词；核对自己账户的渠道 |
 | `handover_channel_id` / `handover_channel_value` | 渠道识别及配置回退值，按自己账户保留/设置 |
 | `upload_timeout_seconds` | 预报等待超时，缺省 900 秒；CLI 可覆盖 |
 | `upload_poll_interval` | 预报状态轮询间隔，缺省 20 秒；CLI 可覆盖 |
 
-马帮读取方法要求非空 www_cookie 和 shop_map。部分接口会自动续期 api token，并回写自己的凭证文件。预报物流还使用集成模块中的协议默认值；换马帮账户或物流方案时，要让维护者核对这些默认值与渠道，不能只填示例 JSON 就假定可发货。
+首次配置或遇到验证码、短信验证后，先在浏览器完成登录并进入「上传预报单」，等预报列表返回。导出包含登录表单、Cookie 和响应内容的 HAR，保存在本机。相对文件名从 `data/har/` 读取，也可传绝对路径：
+
+```powershell
+python run.py mabang-login --from-har "mabang-session.har"
+python run.py mabang-login
+```
+
+第一条从成功的 HAR 导入账号、请求配置及 www/aamz 会话，并换取对应 Bearer；不会再次提交密码。第二条用已保存的账号密码登录并更新三域凭证。只有在凭证完整取得后才替换马帮认证字段；失败保留之前的配置。命令不读取或提交业务订单，不需要 `shop_map`。
+
+HAR 导入后启用 `mabang.login.auto_refresh`。可改为 `false`，改用独立命令更新。认证 Cookie 临近到期或读取明确返回登录失效时，程序可自动更新会话；业务预览也可能更新本地凭证。服务器要求验证时，重新人工登录并导入新 HAR。账号密码、Cookie 和 HAR 只保存在本机，不发到聊天或提交到 Git。
+
+只配置旧 Cookie 的用户可继续沿用旧凭证及 API Bearer 换取方式。启用新方式后，使用登录命令维护分域 Cookie，避免单独替换生成的 Cookie 字符串。马帮业务仍要求 `shop_map`；更换马帮账户或物流方案时，应先核对目标店铺、莫斯科仓及物流渠道。WB 继续使用原有人工登录流程。
 
 订单处理默认只覆盖 `shop_map` 配置店铺的全部新增待处理订单。`--days 0`（默认）不发送日期限制，显式正数才限制最近 N 天；不将其他店铺或历史已完成订单纳入履约。
 

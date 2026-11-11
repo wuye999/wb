@@ -5,6 +5,10 @@ from sellerops.cli.binding import bind
 
 
 def register(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("mabang-login", help="登录马帮或导入人工 HAR，更新本地会话与 API 凭证")
+    p.add_argument("--from-har", metavar="PATH", help="导入成功登录和预报列表 HAR（相对路径从数据目录 har/ 读取）")
+    bind(p, 'sellerops.features.orders.mabang_login', 'run')
+
     p = sub.add_parser("cookies-update", help="从抓包 md 刷新凭证")
     p.add_argument("md_file", help="含 fetch 块的 md 文件（相对路径从数据目录 har/ 读取，或传绝对路径）")
     bind(p, 'sellerops.integrations.sessions.capture', 'run_cookies_update')

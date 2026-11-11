@@ -14,6 +14,7 @@ from sellerops.integrations.mabang.client import api_ready as mb_client_api_read
 from sellerops.integrations.mabang.orders import fetch_order_item_ids as mb_client_fetch_order_item_ids
 from sellerops.integrations.mabang.orders import search_stock as mb_client_search_stock
 from sellerops.integrations.mabang.orders import replace_order_item as mb_client_replace_order_item
+from sellerops.integrations.mabang.session import MabangAuthError
 
 VC_RE = re.compile(r"(BCS-[A-Z]{4}-(?:(?:ozon-card-)?[A-Za-z0-9-]+|[^/*\s]+/\d+))(?:\*\d+)?$")
 
@@ -141,13 +142,14 @@ def apply_replace(cred, recs, warehouse_id):
     """对所有 REPLACE 订单强制执行更换；返回（成功数，失败数）。
 
     失败时把 `status` 改成 `REPLACE_FAIL`（区别于「计划更换」），并保留中文备注；
-    网络类异常（Read timed out 等）整段重试 `REPLACE_RETRY` 次，减少假失败导致漏发。
+    提交前的读取网络异常可重试；更换请求一旦发出，不重放未知结果。
     """
     ok = fail = 0
     for rec in recs:
         if rec["status"] != "REPLACE":
             continue
         err = None
+        write_started = False
         for attempt in range(REPLACE_RETRY + 1):
             try:
                 ids = mb_client_fetch_order_item_ids(cred, rec["order_id"])
@@ -156,15 +158,20 @@ def apply_replace(cred, recs, warehouse_id):
                 stock = mb_client_search_stock(cred, rec["expected_sku"], warehouse_id)
                 if stock is None:
                     raise RuntimeError(f"马帮未找到库存 SKU {rec['expected_sku']}")
+                write_started = True
                 mb_client_replace_order_item(cred, ids[0], stock["id"], warehouse_id)
                 suffix = "（首次异常，重试成功）" if attempt else ""
                 rec["note"] = f"已更换 -> {stock['stockSku']}(stockId={stock['id']}){suffix}"
                 ok += 1
                 err = None
                 break
-            except Exception as e:          # noqa: BLE001 —— 逐单兜底，失败不中断整批
+            except MabangAuthError as exc:
+                rec["status"] = STATUS_REPLACE_FAIL
+                rec["note"] = f"认证中止: {exc}"
+                raise
+            except Exception as e:          # noqa: BLE001 —— 逐单业务失败不中断整批
                 err = e
-                if attempt < REPLACE_RETRY and _retryable(e):
+                if not write_started and attempt < REPLACE_RETRY and _retryable(e):
                     print(f"  [重试] {rec['order_id']} 更换异常"
                           f"（{type(e).__name__}: {str(e)[:60]}），{REPLACE_RETRY_DELAY}s 后重试 ...")
                     time.sleep(REPLACE_RETRY_DELAY)
@@ -172,7 +179,7 @@ def apply_replace(cred, recs, warehouse_id):
                 break
         if err is not None:
             rec["status"] = STATUS_REPLACE_FAIL
-            suffix = "（已重试1次）" if _retryable(err) else ""
+            suffix = "（已重试1次）" if attempt else ""
             rec["note"] = f"更换失败: {str(err)[:80]}{suffix}"
             fail += 1
         time.sleep(mb_client_REQUEST_INTERVAL)
@@ -264,8 +271,7 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
     shop_map = cred["shop_map"]
     print(f"[配置] 目标店铺: {'、'.join(f'{k}→{v}' for k, v in shop_map.items())}")
     if args.apply and not mb_client_api_ready(cred):
-        print("[错误] 更换订单商品需要 api 域凭证：请在 credentials.json 的 mabang.api_bearer "
-              "填入 api.mabangerp.com 请求头 Authorization: Bearer 的值后重试")
+        print("[错误] 更换订单商品需要马帮 API 凭证，请先运行 mabang-login 更新会话。")
         return 1
 
     scope = f"最近 {args.days} 天" if args.days else "全部新增，不限日期"
@@ -293,7 +299,14 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
     if args.apply:
         n = stat.get("REPLACE", 0)
         print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；仓库 {warehouse_id}）...")
-        ok, fail = apply_replace(cred, recs, warehouse_id)
+        try:
+            ok, fail = apply_replace(cred, recs, warehouse_id)
+        except MabangAuthError:
+            report_replace_fail(recs)
+            path = write_csv(recs)
+            if path:
+                print(f"[汇总] 认证中止前的更换明细: {path}")
+            raise
         tail = "（失败单已标 REPLACE_FAIL，本轮不进预报/交运）" if fail else ""
         print(f"  更换成功 {ok} / 失败 {fail}{tail}")
         # 供 mabang-process 步骤②按订单ID排除（此处赋值须早于下方报告/CSV）

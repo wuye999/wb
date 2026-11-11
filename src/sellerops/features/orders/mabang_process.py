@@ -5,7 +5,7 @@ sellerops 马帮订单处理一体脚本：
 兼容 status=5 历史归档；超时经 status=99 定性失败）→ 物流交运 → 自动登记飞书
 过滤机制与既有流程一致：shop_map 店铺过滤 / 取消单排除（WB 门户）/
 NO_SKU（价格表缺库存SKU）只匹配不预报 /
-REPLACE_FAIL（步骤①更换库存SKU失败，网络类异常已重试1次）：同样只匹配不预报——
+REPLACE_FAIL（步骤①更换库存SKU失败）：同样只匹配不预报——
 本轮失败单ID经 args.replace_fail_order_ids 传给步骤②按订单ID排除（**仅本链路内**，
 单独跑 mabang-forecast 不做该排除）；飞书登记照常 /
 幂等跳过（已预报、已交运）

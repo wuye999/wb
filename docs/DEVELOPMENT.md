@@ -106,6 +106,8 @@ BCS 重复商品由 [domain.bcs_products](../src/sellerops/domain/bcs_products.p
 
 **履约**：本地 VC→中文名→库存 SKU → 马帮匹配 → 预报与上传 → 有限轮询成功/失败/历史状态 → 成功部分交运 → 配置飞书时登记。失败与未完成的批次不绕过等待直接交运。
 
+马帮认证由 [auth](../src/sellerops/integrations/mabang/auth.py) 处理密码登录、HAR 导入与 Bearer 换取；[client](../src/sellerops/integrations/mabang/client.py) 按读取/写入区分恢复策略。会话刷新锁按数据目录隔离，认证字段合并时重新读取并锁定凭证文件；普通响应的 Cookie 更新不得覆盖并发的新登录。认证异常需穿过逐单、模板、轮询和登记降级逻辑，保留已有受理记录。离线 [认证测试](../tests/test_mabang_auth.py) 使用合成 HAR 与 HTTP 替身。
+
 ## 测试和变更范围
 
 [tests](../tests/test_core.py) 按基础设施、平台协议、商品、订单、报表、客服和运行策略分组。生产数据不作为默认测试夹具；替身隔离网络和外部命令。文档语法和链接由 [check_docs](../scripts/check_docs.py) 校验，参数参考由 [generate_cli_docs](../scripts/generate_cli_docs.py) 生成。
