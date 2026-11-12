@@ -24,7 +24,7 @@
 
 - 所有仓库操作默认且仅使用该店铺的莫斯科仓库 ID，包括读取、修改库存、清零、下架前清库存、回收站归零、上架和临时脚本。全店/全部商品不扩大仓库范围；不能回退到成都或其他俄语地区仓。名称和 ID 无法确认时中止该店操作。
 - WB 仓库列表的 `id` 才是库存使用的仓库标识，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对；马帮仓库 ID 属于另一套体系，也须核实为莫斯科业务仓。
-- 当前 WB 凭证由用户人工登录、手动抓包后填写或导入；Playwright 尚未启动、自动登录/浏览器续期流程未启用。不得把可选依赖、浏览器模块、401 刷新钩子或 CLI 定义的存在写成“当前已启用自动续期”。保留 [受限浏览器手动抓包步骤](CONFIGURATION.md#手动抓包更新凭证当前方式)。
+- WB 凭证更新由用户人工登录、抓取一店会话后显式执行 `cookies-update`。浏览器自动登录和自动续期未启用。保留 [受限浏览器手动抓包步骤](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 - 这些是现行操作约定，不能因重组代码、压缩文档或删除历史记录而丢失。将来变更运行方案时，必须同步修改 AGENTS、配置、操作指南及生成参考，不能只改某一处说明。
 
 ### 已有实现与约束的差异
@@ -33,7 +33,7 @@
 
 底层显式实时库存读取不传 store_id 时仍可读取多仓；`stock --resolve live` 已限定确认的莫斯科仓，仅补充当前库存，写入规格仍来自完整计划，不能因库存缺行减少目标。`warehouse-clear` 专门操作成都仓，当前不使用。调用方仍须核对仓库范围，不能把底层函数的存在当作其他仓库的操作授权。默认本地快照流程不调用全量远端商品或库存查询。
 
-[WB 客户端](../src/sellerops/integrations/wildberries/client.py) 也保留 401 浏览器刷新钩子，当前不依赖或启用该机制。运营任务出现认证失败走人工抓包更新；未来若另行授权启用浏览器方案，应先处理部署和运行约定的一致性。
+[WB 客户端](../src/sellerops/integrations/wildberries/client.py) 遇到 401/403 立即抛出认证异常。`cookies-update` 由 [抓包更新模块](../src/sellerops/integrations/sessions/capture.py) 解析一店抓包和本地店铺归属，[WB 会话接口](../src/sellerops/integrations/wildberries/auth.py) 逐店签发并调用提问接口做单页鉴权。确认全部店铺后，持 `credentials.json` 的文件锁重读配置，核对签发期间 `wb.shops` 是否改变，然后原子保存。其他平台并发更新随重读结果保留。离线测试使用合成抓包与 HTTP 替身。
 
 ## 项目入口
 
@@ -47,7 +47,7 @@ run.py / python -m sellerops
   → cli.<组>.register：参数与处理器在一处 bind
   → cli.binding.dispatch：按需 import 具体处理器
   → features：业务计划、编排、结果输出
-      → integrations：平台协议、会话、HTTP / CLI / 浏览器
+      → integrations：平台协议、会话、HTTP / CLI
       → persistence：本地价格表、映射、快照与索引
       → domain / core / settings
 ```
@@ -119,7 +119,7 @@ BCS 重复商品由 [domain.bcs_products](../src/sellerops/domain/bcs_products.p
 
 - `src/sellerops/cli/`：参数定义、命令绑定、退出码。每个命令的参数与处理器放在同一注册函数里；帮助信息不得读取凭证、联网或写文件。
 - `features/`：catalog 商品映射、listings 上架与库存、pricing 折扣促销、orders 履约、support 客服。按实际职责拆分，禁止仅为保留历史名字增加转发类、单例或模块。
-- `integrations/`：Wildberries、BCS、马帮、飞书 CLI、AI、浏览器会话的通信实现。可依赖 settings、core、domain；不得依赖 features、cli、persistence。
+- `integrations/`：Wildberries、BCS、马帮、飞书 CLI、AI 的通信与会话实现。可依赖 settings、core、domain；不得依赖 features、cli、persistence。
 - `persistence/`：本地表格、快照、索引读写；不得依赖 features、cli、integrations。
 - `domain/`：纯模型与规则；`core/`：通用 I/O、异常和基础工具；`settings/`：路径与凭证。底层不得导入业务层。
 - 跨功能复用可以直接调用有明确名称的公开函数。不要为了「同层隔离」强建无业务意义的门面。协议客户端不负责商品中文名等业务补全。

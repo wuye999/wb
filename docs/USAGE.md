@@ -11,7 +11,7 @@
 | 本地工作台与映射 | mapping、review、mapping-check、mismatch-check、merge、mapping-import、mapping-rename、shops-mapping | 写本地 HTML、表格或状态，没有通用 --apply 保护；部分主店模式可能枚举 BCS 店铺 |
 | 数据更新 | fetch | 默认走 BCS 快照（先同步再读 BASE 缓存）；显式 --source wb-openapi 才从 WB 官方接口完整采集商品、价格及莫斯科仓库存 |
 | 业务写入 | 改价、库存、上架、清理、折扣、促销、订单处理、飞书写入、客服发送 | 默认预览，--apply 提交；范围和确认机制逐命令核对 |
-| 会话/AI | cookies-update、cookie-refresh-wb、ai-test、客服监听 | 可能回写凭证/状态或调用 LLM；细节见下文 |
+| 会话/AI | cookies-update、ai-test、客服监听 | 可能回写凭证/状态或调用 LLM；细节见下文 |
 
 所有 WB/BCS 写入提交并记录结果后结束，不做写后查询，不追加同步或映射表合并。终端中的“提交成功”不是即时最终状态证明。本地日志、接口错误和任务号是本次汇报依据。
 
@@ -21,7 +21,7 @@
 
 涉及仓库的读取与修改，**默认且仅允许各店自己的莫斯科仓库 ID**。这包括库存、下架前清库存、回收站归零和上架；“全店”“全部商品”也只在莫斯科仓范围内操作。先核对仓库名称和 `id`，不跨店复用 ID，不把 office 字段 `warehouseId` 当成库存仓库；没有可确认的莫斯科仓时中止，不换成都或其他俄罗斯地区仓。详见 [仓库范围](CONFIGURATION.md#仓库范围仅允许莫斯科)。
 
-WB 凭证目前通过人工登录、手动抓包并写入维护；Playwright 尚未启动、浏览器自动续期未启用。鉴权失败时按 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式) 处理，包括受限浏览器打开 Network 的方法，不把启动自动浏览器作为默认排错步骤。
+WB 后台鉴权失败时，人工登录并抓取一个已配置店铺的会话，用 `cookies-update` 为同一登录下的已配置店铺更新凭证。受限浏览器打开 Network 的方法见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 
 ## 商品映射与人工审核
 

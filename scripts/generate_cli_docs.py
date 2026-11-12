@@ -18,7 +18,7 @@ def render() -> str:
              '远端业务写入显式加 `--apply`；部分命令另需 `--yes`，具体以实际参数及操作流程为准。',
              '本地映射、凭证导入等命令会直接写本地数据。dry-run 不等于离线；写命令结束后不追加验证或同步。', '',
              '当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。',
-             '当前 WB 凭证使用人工登录、手动抓包并填写/导入；Playwright 尚未启动，`cookie-refresh-wb` 保留但未启用。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。', '',
+             'WB 凭证使用一店人工抓包，通过 `cookies-update` 为同一登录下的已配置店铺逐店签发。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。', '',
              f'共 {len(sub.choices)} 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。', '',
              '| 命令 | 用途 | 实现入口 |', '| --- | --- | --- |']
     for name, command in sub.choices.items():
@@ -31,8 +31,6 @@ def render() -> str:
         lines += ['', '## ' + name, '']
         if name == 'warehouse-clear':
             lines += ['当前不使用：此命令操作成都仓，不能用于仅允许莫斯科仓的日常任务。命令仍被注册，不代表代码已强制禁用。', '']
-        if name == 'cookie-refresh-wb':
-            lines += ['当前未启用：Playwright 尚未启动，凭证按 [手动抓包流程](CONFIGURATION.md#手动抓包更新凭证当前方式) 更新；不能把保留的参数定义当作自动续期已部署。', '']
         lines += ['```text', command.format_help().strip(), '```']
     return '\n'.join(lines) + '\n'
 

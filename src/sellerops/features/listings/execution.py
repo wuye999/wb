@@ -247,7 +247,7 @@ def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, in
                 if not shop:
                     print(f"  {RED}✗ 错误{RESET} 店{sid} 无 WB 凭证，本条通道无法下架"
                           f"（{len(nms)} 个 nmID 计入失败）")
-                    print(f"    {RED}处置：先补该店 WB 凭证（python -m sellerops cookies-update）后重跑 trash。"
+                    print(f"    {RED}处置：先补该店 WB 凭证（sellerops cookies-update <抓包文件>）后重跑 trash。"
                           f"不自动改走 BCS，也不建议用 trash-bcs 替代。{RESET}")
                     fail += len(nms)
                     results.extend([sid, nm, tag, "", "SKIP: 无 WB 凭证", ts] for nm in nms)
@@ -273,7 +273,7 @@ def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, in
                     if r.get("aborted"):
                         print(f"  {RED}✗ 错误{RESET} 店{sid} 移回收站中止：{r['aborted']}")
                         print(f"    {RED}本店剩余 nmID 已计入失败。请修好 WB 会话"
-                              f"（cookie-refresh-wb / cookies-update）后重跑 trash；"
+                              f"（sellerops cookies-update <抓包文件>）后重跑 trash；"
                               f"不会自动改走 BCS。{RESET}")
             else:
                 for i in range(0, len(nms), step):
@@ -310,8 +310,7 @@ def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, in
         # WB 通道失败：只报错，不自动改走 BCS（BCS 限流/成功率均不可靠，不能当兜底）
         print(f"{RED}★ WB 通道有 {fail} 条未成功下架 —— 请按上面的报错先修原因，再重跑 trash。"
               f"{RESET}")
-        print(f"{RED}  常见原因：WB cookie/seller-lk 过期（sellerops cookies-update 或 "
-              f"cookie-refresh-wb）、商品有库存/在途被平台拒收（先归零库存）。{RESET}")
+        print(f"{RED}  常见原因：WB cookie/seller-lk 过期、商品有库存或在途。{RESET}")
         print(f"{RED}  本工具不会自动切换 trash-bcs，也不建议用它替代。{RESET}")
 
     if zero_items:

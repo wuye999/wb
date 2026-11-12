@@ -16,7 +16,7 @@
 | mabang-orders、mabang-forecast、mabang-process | 马帮凭证与店铺映射、本地商品/库存 SKU 映射；取消单过滤还可能读取 WB |
 | 飞书登记、库存表、飞书统计、promo-gap | 可用的 lark-cli 用户身份、表格权限和目标表；其中登记/库存还需马帮相关配置 |
 | AI 草稿与 ai-test | LLM key、完整请求端点和模型；自动发送还需 WB 凭证及显式 --apply |
-| WB 凭证维护 | 当前由用户手动登录、抓包并写入；Playwright 浏览器刷新能力保留，但尚未启动或启用 |
+| WB 凭证维护 | 人工登录并抓取一个已配置店铺的会话，再运行 `cookies-update` 逐店签发和保存 |
 
 表中是主要依赖。dry-run 也可能调用这些平台的读取接口，不能等同离线检查。
 
@@ -65,17 +65,25 @@
 | --- | --- |
 | `shopId` | 整数店铺 ID，与相应业务中的店铺一致 |
 | `shopName` | 显示名称 |
-| `authorizev3` | 对应店铺的授权值 |
-| `wb_seller_lk` | 卖家会话令牌 |
-| `cookie` | 同一店铺的完整 Cookie 字符串 |
+| `authorizev3` | 同一 WB 登录账号共享的授权值 |
+| `wb_seller_lk` | 绑定本店 UUID 的卖家会话令牌 |
+| `cookie` | 本店完整 Cookie 字符串，其中 `x-supplier-id-external` 是该店 UUID |
 
 后三项缺少任何一项，店铺就不会进入可用 WB 店铺列表。已有配置中的其他键也应保留；不要把不同店铺的三件套拼在一起。可选 `wb.root_version` 用于请求版本，未填时采用代码缺省值，不要把文档示例版本当成必须替换的最新值。
 
 ### 手动抓包更新凭证：当前方式
 
-当前由用户在已登录的浏览器里手动抓包，再手工填写 `data/credentials.json`，或用 `cookies-update` 导入人工保存的 fetch 文本。**Playwright 尚未启动，浏览器自动登录/自动续期流程未启用**。源码里的浏览器模块、401 刷新钩子和 `cookie-refresh-wb` 命令属于保留能力，不能当作当前已部署方案；遇到鉴权失败仍走以下人工流程，不自行安装或启动 Playwright。
+`cookies-update` 用一份人工抓包更新同一 WB 登录下 `wb.shops` 的全部已配置店铺。WB 卖家后台遇到 401/403 时按以下步骤更新，浏览器自动登录和自动续期未启用。
 
-1. 人工登录对应店铺的 `seller.wildberries.ru`，确认当前店铺。按 F12 打开开发者工具。
+#### 确认店铺已登记
+
+程序从每家店现有 Cookie 的 `x-supplier-id-external` 或 `wb_seller_lk` 的 `Z-Sid` 读取完整店铺 UUID。每个 UUID 必须唯一，两处都能读到时必须一致。全部已配置店铺须属于同一 WB 登录账号，提供抓包的店铺也须在 `wb.shops` 内。
+
+新店首次接入时，人工确认 `shopId` 和 `shopName`，从该店的抓包取得完整 UUID，在对应行的 `cookie` 填入 `x-supplier-id-external=<完整 UUID>`。随后按下文更新，程序会为新店补齐三件套。
+
+#### 抓包并运行命令
+
+1. 人工登录 `seller.wildberries.ru`，打开任一已配置店铺（例如袁州1）。按 F12 打开开发者工具。
 2. 正常浏览器直接打开 **Network（网络）** 面板，再刷新页面或触发一次普通页面读取。
 3. 某些受限浏览器只显示 **Console（控制台）** 和 **Elements（检查元素）**，看不到 Network。可在 Console 运行下面的定位代码，再点击产生的红色失败请求进入 Network：
 
@@ -87,20 +95,19 @@ fetch('https://seller.wildberries.ru/api/__devtools_open__' + Date.now() + Math.
 这里访问的是故意构造的不存在的地址，失败是预期结果；这条请求只用于打开面板，**不能作为凭证来源**。
 
 4. 进入 Network 后刷新页面，选择一个真实的后台 API 请求，例如促销列表读取，查看 **Request Headers**。
-5. 从同一店铺的同一会话提取 `authorizev3`、`seller-lk`（也兼容 `wb-seller-lk`）和完整 `Cookie` 请求头。Cookie 要从 Network 的请求头复制；`document.cookie` 取不到 HttpOnly 项，不能代替完整值。
-6. 手工填写时，对应到 `wb.shops` 中正确的 `shopId` / `shopName`：`authorizev3` → `authorizev3`，`seller-lk` / `wb-seller-lk` → `wb_seller_lk`，`Cookie` → `cookie`。备份原文件，保留 JSON 格式和其他字段，不把不同店铺的三件套混用。
-
-如需导入文本，在 Network 对真实请求选择 **Copy as fetch**，把代码作为文本保存到 `data/har/session.md`。检查 fetch 的 `headers` 中三个值齐全，使用双引号、小写键名 `authorizev3`、`seller-lk`（或 `wb-seller-lk`）、`cookie`；复制结果若未包含 Cookie，需把 Request Headers 中的完整值补到文本里。无需再次执行这段带会话的 fetch。
+5. 对该请求选择 **Copy as fetch**，将单个 fetch 块以 UTF-8 保存到 `data/har/session.md`。`headers` 需要同一请求的完整 `authorizev3` 和 `Cookie`，键名大小写均可。若复制结果缺少 Cookie，从 **Request Headers** 复制完整值并补入 `headers`。`document.cookie` 取不到 HttpOnly 项。程序会重新签发 `seller-lk`，抓包只需作为文本保存。
 
 ```powershell
 python run.py cookies-update "session.md"
 ```
 
-`cookies-update` 的相对输入路径以当前数据目录的 `har/` 为基准，因此上述命令读取 `data/har/session.md`；不要再把 `data/har/` 前缀重复传入。其他位置可传绝对路径。它直接修改凭证，没有 `--apply` 预览机制。
+相对路径从当前数据目录的 `har/` 读取，因此示例只传 `session.md`。其他位置可传绝对路径。该命令直接执行凭证更新。
 
-导入按现有 `wb_seller_lk` 的 `Z-Sid` 前 8 位匹配店铺。首次配置、现有令牌损坏或出现“未识别 sid”时，先人工核实店铺并填写对应项，不能按抓包顺序猜测归属；导入后查看更新的店铺名单。抓包原文、Cookie、Token 与备份只保存在自己的数据区，不放入源码、公开文档或 Git。
+#### 查看更新结果
 
-更新凭证不等于商品写后验证，不因此自动执行同步、拉取或合并。以后若另行决定启用 Playwright，应由维护者先明确部署与操作方案，再同步修改这里的运行约定；不能只因代码里存在相应功能就改用它。
+命令逐店替换 Cookie 模板里的店铺 UUID、签发 `seller-lk`、核对新令牌的 `Z-Sid`，并用单页提问查询确认鉴权。全部通过后一次性保存 `data/credentials.json` 中 `wb.shops` 的 `authorizev3`、`wb_seller_lk` 和 `cookie`，终端会列出已更新的店铺 ID。任一店失败则保留原凭证，按报错中的店铺 ID 检查账号、UUID 或网络。抓包和凭证只保存在自己的数据区。
+
+此流程适用于 WB 卖家后台会话。BCS 登录凭证和各店 WB Open API 令牌的更新方式见 [BCS 配置](#bcsbcs)。
 
 ## 马帮：mabang
 

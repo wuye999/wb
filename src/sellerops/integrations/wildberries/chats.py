@@ -4,7 +4,7 @@ sellerops WB 买家聊天(chat-with-clients)接口适配器
 来源：api/网络请求/wb购买后消息处理.har（2026-10-14）。
 Host `https://seller-chat.wildberries.ru`，业务前缀 `/ns/sellers-chat-srv-1`。
 鉴权复用 `wb_client.make_session` 的 cookie 三件套（Origin/Referer=seller.wildberries.ru），
-请求统一走 `wb_client.request`（403→CookieExpiredError；401→自动刷新重试；其余退避重试）。
+请求统一走 `wb_client.request`，401/403 直接返回认证异常，其余错误按客户端策略退避。
 
 关键事实（HAR 实测确认）：
 - 会话列表响应「**顶层即数组**」。

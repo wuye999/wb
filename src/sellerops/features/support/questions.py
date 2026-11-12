@@ -19,7 +19,7 @@ from sellerops.persistence.mappings import MappingRepository
 from sellerops.integrations.wildberries import client as wb_api
 
 
-QUESTIONS = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-ext-seller-portal/api/v2/questions"
+QUESTIONS = wb_api.QUESTIONS_URL
 ANSWER = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-ext-seller-portal/api/v2/questions/answer"
 
 

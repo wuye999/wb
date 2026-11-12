@@ -19,12 +19,11 @@
 | --- | --- |
 | BCS 401 / 网关错误 | 核对自己 data/credentials.json 的 bcs.token、limit_key、cookie_extra，不更换源码中的请求逻辑来试 |
 | WB 店铺不在可用列表 | shopId 应是整数；authorizev3、wb_seller_lk、cookie 三项都要非空且属于同一店 |
-| WB 401/403 或会话仍失效 | 停止该店操作，人工登录对应店铺，按 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式) 更新三件套；当前不以 cookie-refresh-wb 作为默认处理方式 |
+| WB 后台 401/403 | 停止该店操作，人工登录并抓取一店会话，按 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式) 运行 `cookies-update` |
 | 受限浏览器只有 Console / Elements，看不到 Network | 按配置文档运行定位用的失败 GET，再点击红色请求进入 Network；刷新页面后抓真实 API 请求，定位请求本身不作为凭证来源 |
-| cookies-update 没有提取到会话 / 未识别 sid | 检查 fetch 文本三个小写请求头和完整 Cookie；首次配置或已有 lk 损坏时先人工核实店铺并填写，不能按文本顺序猜店铺 |
+| cookies-update 抓包无效 / 店铺 UUID 缺失或冲突 | 检查单个 fetch 块的 `authorizev3` 和完整 Cookie。按报错店铺 ID 核对登记的 `x-supplier-id-external`、已有 `Z-Sid` 和所属账号 |
 | cookies-update 抓包文件找不到 | 相对文件名从 data/har/ 读取，使用 `session.md` 或绝对路径，避免重复拼入 data/har/ |
-| Playwright/Chromium 不存在 | 当前 Playwright 尚未启动，浏览器自动续期未启用；沿用手动抓包，不因这个提示自行安装或启动它 |
-| 保留的浏览器 profile 被占用 | 关闭占用该资料目录的浏览器再复制/备份；当前不为刷新会话而启动 Playwright，也不删除整个 profile 或凭证来排错 |
+| cookies-update 签发或只读探针失败 | 整轮保留旧凭证。全店会话失效时重新抓包，单店失败时按报错 ID 核对店铺 UUID 和登录账号权限；限流或网络故障恢复后可重试 |
 | 马帮缺少 www_cookie/shop_map | 按 CONFIGURATION 准备真实字段；shop_map 键须与马帮订单中的店铺文本一致 |
 | 马帮要求腾讯验证码或短信验证 | 人工登录并进入上传预报单页面，按 [马帮配置](CONFIGURATION.md#马帮mabang) 导入成功 HAR；认证失败前已有的业务提交应先核对状态 |
 | 马帮 NO_SKU / 匹配失败 | 查看本次报表，核对中文归属及价格表库存SKU；更换失败单不得直接推进预报/交运 |

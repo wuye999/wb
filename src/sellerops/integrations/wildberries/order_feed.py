@@ -27,7 +27,7 @@ sellerops WB 卖家后台「订单动态」适配器 (wb_order_feed_client)
 - HTTP 200 但 `error: true` 属于业务错误，必须抛异常，**绝不能**当空页继续翻。
 
 鉴权：WB 三件套会话（`wb_api.make_session`）。会话由调用方构建，本模块不建 session。
-   ⚠ 必须走 `wb_api.request`（有 401 自动续期分支），**不要**用 `request_post`
+   请求通过 `wb_api.request`，401/403 直接返回认证异常。
    （它没有 401 分支，会把 401 当网络异常重试 4 次后失败）。
 """
 import base64
@@ -79,7 +79,7 @@ def fetch_orders_page(session, start: str, end: str, cursor: Optional[str] = Non
 
     Raises:
         common.CookieExpiredError: 403（cookie 失效，该店应整体中止）
-        AuthenticationError: 401 且自动续期未恢复
+        AuthenticationError: 401（需显式更新卖家后台会话）
         PlatformApiError: 4xx/5xx，或 HTTP 200 但 error=true
     """
     res = wb_api.request(session, "POST", ORDER_FEED_URL,

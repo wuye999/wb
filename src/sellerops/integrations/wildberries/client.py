@@ -12,6 +12,8 @@ from sellerops.core.errors import AuthenticationError
 from sellerops.core.errors import PlatformApiError
 
 RETRY_SLEEPS = [1, 3, 8]
+QUESTIONS_URL = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-ext-seller-portal/api/v2/questions"
+_UPDATE_SESSION = "请用一店的新抓包运行 sellerops cookies-update <抓包文件>"
 
 
 def make_session(shop: Dict[str, Any], root_version: Optional[str] = None) -> requests.Session:
@@ -34,57 +36,27 @@ def make_session(shop: Dict[str, Any], root_version: Optional[str] = None) -> re
         "root-version": root_version,
         "User-Agent": common.UA,
     })
-    s._wb_shop_id = shop.get("shopId")  # 401 钩子定位店铺（cookie_bridge 刷新用）
     return s
 
 
-def _apply_fresh_session(session: requests.Session, shop_id: int) -> bool:
-    """401 后从 credentials.json 重载该店最新凭证并原地更新 session。
-
-    Returns:
-        True 表示凭证有变化且已应用；False 表示刷新失败或凭证未变化。
-    """
-    from sellerops.integrations.sessions import browser as cookie_bridge  # 懒加载：避免无 playwright 环境时导入失败
-    if not cookie_bridge.try_refresh(shop_id):
-        return False
-    shop = credentials.get().wb_shop(shop_id)
-    if not shop:
-        return False
-    session.cookies.clear()
-    for c in (shop.get("cookie") or "").split(";"):
-        c = c.strip()
-        if "=" in c:
-            k, v = c.split("=", 1)
-            session.cookies.set(k.strip(), v.strip())
-    session.headers["authorizev3"] = shop["authorizev3"]
-    session.headers["seller-lk"] = shop["wb_seller_lk"]
-    session.headers["wb-seller-lk"] = shop["wb_seller_lk"]
-    return True
+def _check_auth(status: int) -> None:
+    if status == 401:
+        raise AuthenticationError(f"WB 401：卖家后台会话失效，{_UPDATE_SESSION}")
+    if status == 403:
+        raise common.CookieExpiredError(f"WB 403：卖家后台请求被拒绝，{_UPDATE_SESSION}")
 
 
 def request(session: requests.Session, method: str, url: str, **kwargs) -> Any:
     """WB 接口统一请求。
 
-    403 抛 CookieExpiredError；401 触发 cookie_bridge 自动刷新会话后重试一次；
+    401/403 立即抛出认证异常，由用户显式更新凭证；
     其他 4xx/5xx 指数退避重试。
     """
     last = None
-    retried_401 = False
-    for i, wait in enumerate([0] + RETRY_SLEEPS):
+    for wait in [0] + RETRY_SLEEPS:
         try:
             r = session.request(method, url, timeout=30, **kwargs)
-            if r.status_code == 403:
-                raise common.CookieExpiredError("403：cookie 已失效（cfidsw-wb 过期），请刷新 credentials.json 该店 cookie")
-            if r.status_code == 401 and not retried_401:
-                retried_401 = True
-                shop_id = getattr(session, "_wb_shop_id", None)
-                print(f"    [401] 触发会话自动刷新（店铺 {shop_id}）...")
-                if shop_id and _apply_fresh_session(session, shop_id):
-                    continue  # 刷新成功，立即用新凭证重试本请求
-                raise AuthenticationError(
-                    "401 且自动刷新未恢复：临时方案=在浏览器打开/刷新一次 seller.wildberries.ru"
-                    "（开启约 10 分钟会话窗口）后重跑本命令；"
-                    "根治方案=sellerops cookie-refresh-wb --apply --headed 完成一次人工登录（profile 持久化后全程自动）")
+            _check_auth(r.status_code)
             if r.status_code >= 400:
                 raise PlatformApiError(f"HTTP {r.status_code}: {r.text[:200]}", status_code=r.status_code)
             return r.json()
@@ -101,11 +73,10 @@ def request(session: requests.Session, method: str, url: str, **kwargs) -> Any:
 def request_post(session: requests.Session, url: str, payload: Any, allow_400_json: bool = False) -> Any:
     """POST 专用请求。"""
     last = None
-    for i, wait in enumerate([0] + RETRY_SLEEPS):
+    for wait in [0] + RETRY_SLEEPS:
         try:
             r = session.post(url, json=payload, timeout=30)
-            if r.status_code == 403:
-                raise common.CookieExpiredError("403：cookie 已失效（cfidsw-wb 过期），请刷新 credentials.json 该店 cookie")
+            _check_auth(r.status_code)
             if r.status_code == 400 and allow_400_json:
                 try:
                     return r.json()
@@ -262,7 +233,7 @@ class WBClient:
 
         Args:
             data_payload: 待提交记录列表（vendorCode / nmID / discount / currencyIsoCode）。
-            precheck: 是否先做预检（默认 True）。预检异常时降级直连提交，不阻断业务。
+            precheck: 是否先做预检（默认 True）。认证失败结束本批，其他预检异常时降级直连提交。
 
         Returns:
             DiscountUploadResult：含 task_id（真实提交的任务号）、是否已存在、
@@ -288,6 +259,8 @@ class WBClient:
                         price_modal=price_modal,
                         quarantine_modal=quarantine_modal,
                     )
+            except (common.CookieExpiredError, AuthenticationError) as e:
+                return DiscountUploadResult(success=False, error_message=str(e), shop_id=self.shop_id)
             except Exception as e:
                 # 保留已授权写入的降级提交路径；最终按确认响应记录受理结果，不宣称即时生效。
                 print(f"    [预检降级] {e}（跳过预检，直接提交）")

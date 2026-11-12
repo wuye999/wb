@@ -6,7 +6,7 @@
 
 | 路径（相对 data） | 用途 | 谁维护 |
 | --- | --- | --- |
-| `credentials.json` | BCS、WB、马帮、飞书和 AI 配置 | 用户；当前 WB 三件套由人工抓包填写或导入 |
+| `credentials.json` | BCS、WB、马帮、飞书和 AI 配置 | 用户；WB 三件套按 [手动抓包更新流程](CONFIGURATION.md#手动抓包更新凭证当前方式) 维护 |
 | `商品价格表.xlsx` | 商品名、卖家 SKU、目标售价、包装、前缀、库存 SKU | 用户，是商品主数据 |
 | `价格映射表.xlsx` | vendorCode 与中文商品的映射、店铺信息 | merge 等本地命令生成/更新 |
 | `products/shop<ID>_products_all.json` | 店铺快照 | fetch 生成；业务读取时可能滞后 |
@@ -16,7 +16,7 @@
 | `workbench/` | 本地 HTML 工作台 | mapping、review、核查命令生成 |
 | `logs/` | 结果 CSV、报表和运行日志 | 各业务命令生成，按终端打印路径查看 |
 | `har/` | 用户自己的抓包/会话输入 | 用户，不纳入公开仓库 |
-| `wb_browser_profiles/<ID>/` | 保留的浏览器持久化登录资料 | 当前 Playwright 未启动；保留资料不代表自动续期已启用，复制时关闭占用它的浏览器 |
+| `wb_browser_profiles/<ID>/` | 旧浏览器方案可能留下的登录资料 | 用户保管；复制时关闭占用它的浏览器 |
 | `ai_test_qa.json` | 本地 AI 对照样例集 | 用户；格式见下文 |
 
 普通用户可维护这些自己的数据。项目源码与说明文档按 [使用边界](../AGENTS.md) 保持只读，临时脚本放项目根目录的 `_scratch/`。

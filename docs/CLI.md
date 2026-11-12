@@ -10,9 +10,9 @@
 本地映射、凭证导入等命令会直接写本地数据。dry-run 不等于离线；写命令结束后不追加验证或同步。
 
 当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。
-当前 WB 凭证使用人工登录、手动抓包并填写/导入；Playwright 尚未启动，`cookie-refresh-wb` 保留但未启用。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
+WB 凭证使用一店人工抓包，通过 `cookies-update` 为同一登录下的已配置店铺逐店签发。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 
-共 59 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
+共 58 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
 
 | 命令 | 用途 | 实现入口 |
 | --- | --- | --- |
@@ -71,8 +71,7 @@
 | `ratings` | 查询商品链接评分与评价情况（只读；支持按评分/店铺/1星评论筛选，导出包含价格表数据的报表） | [sellerops.features.support.ratings:run](../src/sellerops/features/support/ratings.py) |
 | `ai-test` | 使用本地问答集调用 LLM 对照生成回复（会联网） | [sellerops.features.support.ai_reply_test:run](../src/sellerops/features/support/ai_reply_test.py) |
 | `mabang-login` | 登录马帮或导入人工 HAR，更新本地会话与 API 凭证 | [sellerops.features.orders.mabang_login:run](../src/sellerops/features/orders/mabang_login.py) |
-| `cookies-update` | 从抓包 md 刷新凭证 | [sellerops.integrations.sessions.capture:run_cookies_update](../src/sellerops/integrations/sessions/capture.py) |
-| `cookie-refresh-wb` | Playwright 刷新 WB 会话（当前未启用，凭证手动抓包更新） | [sellerops.integrations.sessions.browser:run_cookie_refresh_wb](../src/sellerops/integrations/sessions/browser.py) |
+| `cookies-update` | 用一店人工抓包为同一 WB 登录下的已配置店铺重签凭证 | [sellerops.integrations.sessions.capture:run_cookies_update](../src/sellerops/integrations/sessions/capture.py) |
 | `daily` | 每日任务（morning=报名+改价 / check=只改价） | [sellerops.automation.daily:run_daily_cmd](../src/sellerops/automation/daily.py) |
 | `schedule` | 创建/删除 Windows 计划任务（默认预览，--apply 执行） | [sellerops.automation.schedule:run](../src/sellerops/automation/schedule.py) |
 
@@ -1172,24 +1171,10 @@ options:
 usage: sellerops cookies-update [-h] md_file
 
 positional arguments:
-  md_file     含 fetch 块的 md 文件（相对路径从数据目录 har/ 读取，或传绝对路径）
+  md_file     含单个 fetch 块的文件（相对路径从数据目录 har/ 读取，或传绝对路径）
 
 options:
   -h, --help  show this help message and exit
-```
-
-## cookie-refresh-wb
-
-当前未启用：Playwright 尚未启动，凭证按 [手动抓包流程](CONFIGURATION.md#手动抓包更新凭证当前方式) 更新；不能把保留的参数定义当作自动续期已部署。
-
-```text
-usage: sellerops cookie-refresh-wb [-h] [--shops SHOPS] [--headed] [--apply]
-
-options:
-  -h, --help     show this help message and exit
-  --shops SHOPS  限定店铺 id 逗号分隔（默认全部 WB 店铺）
-  --headed       有头浏览器人工登录（仅供后续另行启用浏览器方案时使用）
-  --apply        实际执行刷新（默认 dry-run 预览）
 ```
 
 ## daily
