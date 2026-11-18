@@ -3,7 +3,7 @@ sellerops 货不对板筛查工作台（人工看图筛选「上架商品图片�
 
 读映射表（已归属的中文名→vendorCode），按中文名分组带图展示：
 - 同中文名商品放一起，一行一条，完整俄文标题 + 缩略图；
-- 点击缩略图弹高清大图（/tm/ → /big/）；
+- 列表按需加载中尺寸图，失败时尝试高清图和原链接；点击图片查看大图；
 - 点击标题即可勾选「货不对板」（勾选状态本地保存，刷新不丢）；
 - 顶部可多选筛选中文名（单/多/全部）+ 搜索；
 - 导出勾选的 vendorCode（JSON / 复制逗号分隔），用 sellerops trash --vc ... 下架。
@@ -15,8 +15,38 @@ import re
 from collections import defaultdict
 from html import escape
 
+from sellerops.integrations.wildberries.client import basket_base
 from sellerops.settings import paths as config
 from sellerops.features.catalog.mapping_check import load_mapping_rows
+
+
+_WB_IMAGE = re.compile(
+    r'(https://basket-\d+\.wbbasket\.ru/vol\d+/part\d+/\d+/images/)'
+    r'(?:tm|big|c\d+x\d+)(/\d+\.[^/]+)'
+)
+
+
+def _image_cell(row: dict) -> str:
+    image = row.get("img")
+    original = image.strip() if isinstance(image, str) else ""
+    if not original:
+        nm_id = str(row.get("nm_id") or "").strip()
+        if not re.fullmatch(r"[1-9][0-9]*", nm_id):
+            return '<span class="image-unavailable">暂无商品图</span>'
+        original = f"{basket_base(nm_id)}/images/big/1.webp"
+
+    preview = large = original
+    if sizes := _WB_IMAGE.fullmatch(original):
+        preview = sizes[1] + "c246x328" + sizes[2]
+        large = sizes[1] + "big" + sizes[2]
+    fallback = [url for url in dict.fromkeys((large, original)) if url != preview]
+    return (
+        f'<img src="{escape(preview)}" loading="lazy" decoding="async"'
+        f' class="thumb" alt="商品主图" data-big="{escape(large)}"'
+        f' data-fallback="{escape(json.dumps(fallback, ensure_ascii=False))}"'
+        ' onerror="nextProductImage(this)" onclick="showBig(this)" title="点击查看大图">'
+        '<span class="image-unavailable" hidden>图片暂不可用</span>'
+    )
 
 
 def render_html(rows):
@@ -30,7 +60,6 @@ def render_html(rows):
         items = groups[cn]
         row_html = []
         for r in items:
-            img = escape(r["img"] or "")
             vc = escape(r["vc"])
             title = escape(r["title"] or "")
             price = r["price"]
@@ -45,8 +74,7 @@ def render_html(rows):
 <tr class="mrow" data-vc="{vc}">
   <td class="picktd"><input type="checkbox" class="badpick" data-vc="{vc}"
        title="勾选 = 货不对板"></td>
-  <td class="imgtd"><img src="{img}" loading="lazy" class="thumb" onclick="showBig('{escape(img)}')"
-       onerror="this.style.opacity=.12" title="点击查看大图"></td>
+  <td class="imgtd">{_image_cell(r)}</td>
   <td class="titletd" onclick="toggleRow(this)">
     <div class="vc">{vc}</div>
     <div class="ru">{title}</div>
@@ -91,6 +119,8 @@ select[multiple]{padding:4px;border:1px solid #ccc;border-radius:6px;min-width:3
 .gtable img{width:96px;height:96px;object-fit:contain;border-radius:6px;background:#fafafa;border:1px solid #eee}
 .gtable .thumb{cursor:zoom-in;transition:transform .15s}
 .gtable .thumb:hover{transform:scale(1.05);border-color:#c0392b}
+.image-unavailable:not([hidden]){display:inline-grid;place-items:center;width:96px;
+  height:96px;border-radius:6px;background:#fafafa;color:#555;font-size:12px}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:none;
   align-items:center;justify-content:center;flex-direction:column;cursor:zoom-out}
 #lightbox.show{display:flex}
@@ -102,7 +132,21 @@ select[multiple]{padding:4px;border:1px solid #ccc;border-radius:6px;min-width:3
 .ru{font-size:13px;margin:2px 0;color:#2c3e50}
 .meta{font-size:12px;color:#555;margin:2px 0}
 .hint{color:#8e44ad;font-size:12px;margin:6px 0}
-</style></head>
+</style>
+<script>
+function nextProductImage(img){
+  const remaining = JSON.parse(img.dataset.fallback);
+  const next = remaining.shift();
+  img.dataset.fallback = JSON.stringify(remaining);
+  if (next){
+    img.src = next;
+  } else if (img.classList.contains('thumb')){
+    img.hidden = true;
+    img.nextElementSibling.hidden = false;
+  }
+}
+</script>
+</head>
 <body>
 <div class="bar">
   <b>货不对板筛查工作台</b>
@@ -130,7 +174,7 @@ GROUPS_PLACEHOLDER
 </div>
 <div id="lightbox" onclick="closeBig(event)">
   <span id="lb-close" onclick="closeBig()">×</span>
-  <img id="lb-img" src="" alt="">
+  <img id="lb-img" alt="高清图暂不可用">
   <div id="lb-title"></div>
 </div>
 <script>
@@ -254,20 +298,27 @@ function clearPicked(){
   document.querySelectorAll('.badpick:checked').forEach(c => c.checked = false);
   savePicked(); applyFilter();
 }
-function showBig(thumbUrl){
+function showBig(thumb){
   const box = document.getElementById('lightbox');
   const img = document.getElementById('lb-img');
-  const ttl = document.getElementById('lb-title');
-  const big = thumbUrl.replace('/tm/', '/big/');
-  img.onerror = function(){ if (this.src !== thumbUrl) this.src = thumbUrl; };
-  img.src = big;
-  ttl.textContent = big;
+  const candidates = [...new Set([
+    thumb.dataset.big,
+    thumb.getAttribute('src'),
+    ...JSON.parse(thumb.dataset.fallback)
+  ])];
+  const first = candidates.shift();
+  img.dataset.fallback = JSON.stringify(candidates);
+  img.onerror = () => nextProductImage(img);
+  img.src = first;
+  document.getElementById('lb-title').textContent = first;
   box.classList.add('show');
 }
 function closeBig(ev){
   if (ev && ev.target.id !== 'lightbox' && ev.target.id !== 'lb-close') return;
   document.getElementById('lightbox').classList.remove('show');
-  document.getElementById('lb-img').src = '';
+  const img = document.getElementById('lb-img');
+  img.onerror = null;
+  img.removeAttribute('src');
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBig(); });
 applyFilter();

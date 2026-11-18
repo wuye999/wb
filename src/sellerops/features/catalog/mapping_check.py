@@ -17,6 +17,7 @@ from sellerops.settings import paths as config
 from sellerops.core.files import safe_load_json
 from sellerops.persistence.headers import COL_ACTUAL_PRICE
 from sellerops.persistence.headers import COL_CN
+from sellerops.persistence.headers import COL_NM
 from sellerops.persistence.headers import COL_VC
 from sellerops.persistence.headers import find_col
 from sellerops.persistence.headers import warn_missing
@@ -59,6 +60,7 @@ def load_mapping_rows():
                 "stock": r[idx["库存"]] if "库存" in idx else None,
                 "title": r[idx["俄文标题"]] if "俄文标题" in idx else "",
                 "img": r[idx["主图链接"]] if "主图链接" in idx else "",
+                "nm_id": r[idx[COL_NM]] if COL_NM in idx else None,
                 "d_l": r[idx["尺寸长(cm)"]] if "尺寸长(cm)" in idx else None,
                 "d_w": r[idx["尺寸宽(cm)"]] if "尺寸宽(cm)" in idx else None,
                 "d_h": r[idx["尺寸高(cm)"]] if "尺寸高(cm)" in idx else None,

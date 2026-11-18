@@ -34,7 +34,9 @@ python run.py mapping-check --tol 5
 python run.py mismatch-check --cn "示例商品" --days 7
 ```
 
-按输出路径打开 `data/workbench/` 中的 HTML，核对候选归属、图片、中文名或商品码。默认 mapping 和 review 的 VC 中心审核导出交给 merge；不同工作台的结果协议不能混用：
+按输出路径打开 `data/workbench/` 中的 HTML，核对候选归属、图片、中文名或商品码。`mismatch-check` 滚动时加载 WB 中尺寸图，失败时自动尝试高清图和原链接，点击图片可放大。映射行缺少主图链接时，会尝试使用该行的 WB 商品码加载首图。
+
+默认 mapping 和 review 的 VC 中心审核导出交给 merge；不同工作台的结果协议不能混用：
 
 ```powershell
 python run.py merge "_scratch/review.json"
