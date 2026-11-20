@@ -42,8 +42,21 @@
 | `token` | 登录 Token，填写值本身；代码会拼接 Bearer 和 Cookie |
 | `limit_key` | 网关 X-Limit-Key |
 | `cookie_extra` | 其他需要附带的 Cookie 内容，保留原格式 |
+| `login.username` / `login.password` | 本机 BCS 账号和密码，供 `bcs-login` 和自动续期使用 |
+| `login.auto_refresh` | 账号密码齐全时默认启用自动续期，可设为 `false` 改为手动更新 |
 
-401 通常表示凭证失效；网关错误还可能与 limit_key 有关。店铺枚举来自 BCS 的 `shops` 命令，与 WB Cookie 是否完整是两项检查。
+### 获取与更新 BCS 会话
+
+在自己的 `data/credentials.json` 填写 `bcs.login` 后，可主动登录或导入人工登录的 HAR。两种方式均使用默认 BCS 服务地址，并在保存三项会话字段前核对账号归属。
+
+```powershell
+python run.py bcs-login
+python run.py bcs-login --from-har bcs-login.har
+```
+
+命令使用默认数据目录，也可在命令名前用 `--data-dir` 指定。HAR 相对路径从该数据目录的 `har/` 读取，也接受绝对路径。遇到滑块、设备验证或网关校验时，用浏览器人工完成 BCS 登录，在 Network 中保留成功登录和随后的 WB 业务 API 请求，导出包含鉴权头和 Cookie 的完整 HAR。导入只使用匹配的会话，密码仍以本机配置为准。原始 HAR 和凭证文件仅在本机保管。
+
+配置自动续期后，本机会话缺少 token 或 limit_key、收到 HTTP 401 或 BCS 业务码 401 时，会尝试密码登录。已发出的只读请求在续期成功后最多重试一次，已发出的业务写请求（含商品同步提交）保留原结果。权限拒绝与网关错误需要单独排查。缺少账号密码的旧配置仍可使用原会话字段。`shops` 查询的是 BCS 店铺列表，WB 卖家后台 Cookie 有独立的更新流程。
 
 店铺原始响应的 `apiKey` 是该店 **WB Open API** 令牌，不能填到 `bcs.token` 或 `wb.authorizev3`。现有 `fetch_shop_list()` 只返回 id/name；显式 `--source wb-openapi` 的商品快照、只读报告和 Open API 商品写入通过内部 `fetch_open_api_shops()` 分页读取对应店铺的官方令牌，不输出或保存密钥副本，也无需新增凭证段。
 

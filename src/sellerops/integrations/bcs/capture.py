@@ -1,4 +1,4 @@
-"""只解析人工复制的 BCS fetch 文本；会话仅驻留内存，不执行或保存抓包。"""
+"""BCS 会话表示及人工复制的 fetch 文本解析。"""
 from dataclasses import dataclass, field
 import json
 import re
@@ -6,6 +6,9 @@ from urllib.parse import urlsplit
 
 
 BCS_BASE_URL = 'https://wb.bcserp.com/prod-api'
+LOGIN_ORIGIN = 'https://bcserp.com'
+LOGIN_URL = LOGIN_ORIGIN + '/prod-api/login'
+SESSION_COOKIES = {'admin-token', 'limit-key', 'username', 'password', 'rememberme'}
 MAX_CAPTURE_CHARS = 1024 * 1024
 
 
@@ -40,6 +43,35 @@ class BCSSession:
                 'Referer': 'https://wb.bcserp.com/productList',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                               'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36'}
+
+
+def cookie_fields(header: str) -> dict[str, str]:
+    """Parse Cookie without silently accepting ambiguous duplicate names."""
+    if re.search(r'[\x00-\x1f\x7f]', header):
+        raise ValueError('BCS Cookie 格式无效')
+    cookies: dict[str, str] = {}
+    for pair in header.split(';'):
+        if not pair.strip():
+            continue
+        name, separator, value = pair.strip().partition('=')
+        if not separator or not re.fullmatch(r"[\w!#$%&'*+.^`|~-]+", name, re.ASCII) or name in cookies:
+            raise ValueError('BCS Cookie 格式无效或名称重复')
+        cookies[name] = value
+    return cookies
+
+
+def extra_cookie_header(cookies: dict[str, str]) -> str:
+    return '; '.join(f'{name}={value}' for name, value in cookies.items()
+                     if name.lower() not in SESSION_COOKIES)
+
+
+def login_session(token: object, limit_key: object, cookies: dict[str, str]) -> BCSSession:
+    for value in (token, limit_key):
+        if not isinstance(value, str) or not re.fullmatch(r'[^\s;]+', value):
+            raise ValueError('BCS 登录响应缺少有效 token 或 limitKey')
+    cookie = f'Admin-Token={token}; Limit-Key={limit_key}'
+    extra = extra_cookie_header(cookies)
+    return BCSSession(token, limit_key, f'{cookie}; {extra}' if extra else cookie)
 
 
 def _session(url: object, options: object) -> BCSSession:

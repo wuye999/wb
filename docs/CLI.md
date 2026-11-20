@@ -12,7 +12,7 @@
 当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。
 WB 凭证使用一店人工抓包，通过 `cookies-update` 为同一登录下的已配置店铺逐店签发。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
 
-共 58 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
+共 59 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
 
 | 命令 | 用途 | 实现入口 |
 | --- | --- | --- |
@@ -70,6 +70,7 @@ WB 凭证使用一店人工抓包，通过 `cookies-update` 为同一登录下�
 | `appeals` | 查询 WB 平台投诉单（只读；未处理/剩余天数筛选，输出去重商品编号与供应商代码） | [sellerops.features.support.complaints:run](../src/sellerops/features/support/complaints.py) |
 | `ratings` | 查询商品链接评分与评价情况（只读；支持按评分/店铺/1星评论筛选，导出包含价格表数据的报表） | [sellerops.features.support.ratings:run](../src/sellerops/features/support/ratings.py) |
 | `ai-test` | 使用本地问答集调用 LLM 对照生成回复（会联网） | [sellerops.features.support.ai_reply_test:run](../src/sellerops/features/support/ai_reply_test.py) |
+| `bcs-login` | 登录 BCS 或导入人工 HAR，更新本地 BCS 会话 | [sellerops.integrations.bcs.auth_command:run](../src/sellerops/integrations/bcs/auth_command.py) |
 | `mabang-login` | 登录马帮或导入人工 HAR，更新本地会话与 API 凭证 | [sellerops.features.orders.mabang_login:run](../src/sellerops/features/orders/mabang_login.py) |
 | `cookies-update` | 用一店人工抓包为同一 WB 登录下的已配置店铺重签凭证 | [sellerops.integrations.sessions.capture:run_cookies_update](../src/sellerops/integrations/sessions/capture.py) |
 | `daily` | 每日任务（morning=报名+改价 / check=只改价） | [sellerops.automation.daily:run_daily_cmd](../src/sellerops/automation/daily.py) |
@@ -218,11 +219,12 @@ options:
 ## price
 
 ```text
-usage: sellerops price [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                       [--price PRICE] [--discount DISCOUNT]
-                       [--club-discount CLUB_DISCOUNT] [--keep-price]
-                       [--auto-review] [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops price [-h]
+                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                       [--shops SHOPS] [--apply] [--yes] [--price PRICE]
+                       [--discount DISCOUNT] [--club-discount CLUB_DISCOUNT]
+                       [--keep-price] [--auto-review] [--chunk CHUNK]
+                       [--interval INTERVAL]
 
 options:
   -h, --help            show this help message and exit
@@ -247,9 +249,10 @@ options:
 ## price-bcs
 
 ```text
-usage: sellerops price-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                           [--price PRICE] [--discount DISCOUNT]
+usage: sellerops price-bcs [-h]
+                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                           [--shops SHOPS] [--apply] [--yes] [--price PRICE]
+                           [--discount DISCOUNT]
                            [--club-discount CLUB_DISCOUNT] [--keep-price]
                            [--auto-review]
 
@@ -274,9 +277,10 @@ options:
 ## stock
 
 ```text
-usage: sellerops stock [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                       [--amount AMOUNT] [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops stock [-h]
+                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                       [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
+                       [--chunk CHUNK] [--interval INTERVAL]
                        [--max-pages MAX_PAGES] [--resolve {snapshot,live}]
 
 options:
@@ -302,9 +306,9 @@ options:
 ## stock-bcs
 
 ```text
-usage: sellerops stock-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                           [--amount AMOUNT]
+usage: sellerops stock-bcs [-h]
+                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                           [--shops SHOPS] [--apply] [--yes] [--amount AMOUNT]
 
 options:
   -h, --help       show this help message and exit
@@ -322,9 +326,10 @@ options:
 ## trash
 
 ```text
-usage: sellerops trash [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                       --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                       [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops trash [-h]
+                       [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                       [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
+                       [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -343,9 +348,10 @@ options:
 ## trash-bcs
 
 ```text
-usage: sellerops trash-bcs [-h] [--sku SKU | --name NAME | --prefix PREFIX |
-                           --vc VC | --all] [--shops SHOPS] [--apply] [--yes]
-                           [--chunk CHUNK] [--interval INTERVAL]
+usage: sellerops trash-bcs [-h]
+                           [--sku SKU | --name NAME | --prefix PREFIX | --vc VC | --all]
+                           [--shops SHOPS] [--apply] [--yes] [--chunk CHUNK]
+                           [--interval INTERVAL]
 
 options:
   -h, --help           show this help message and exit
@@ -609,10 +615,10 @@ options:
 ## sync-cards-openapi
 
 ```text
-usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP (--vc VC |
-                                    --nm NM | --all) [--shops SHOPS]
-                                    [--fields FIELDS] [--limit LIMIT]
-                                    [--apply]
+usage: sellerops sync-cards-openapi [-h] --source-shop SOURCE_SHOP
+                                    (--vc VC | --nm NM | --all)
+                                    [--shops SHOPS] [--fields FIELDS]
+                                    [--limit LIMIT] [--apply]
 
 options:
   -h, --help            show this help message and exit
@@ -1153,6 +1159,16 @@ usage: sellerops ai-test [-h] [--qa QA]
 options:
   -h, --help  show this help message and exit
   --qa QA     测试数据集 json（默认 data/ai_test_qa.json）
+```
+
+## bcs-login
+
+```text
+usage: sellerops bcs-login [-h] [--from-har PATH]
+
+options:
+  -h, --help       show this help message and exit
+  --from-har PATH  导入成功登录 HAR（相对路径从数据目录 har/ 读取）
 ```
 
 ## mabang-login

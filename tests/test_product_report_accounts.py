@@ -1,5 +1,6 @@
 """临时BCS账号的离线解析、隔离、合并及不落盘边界。"""
 from contextlib import ExitStack, redirect_stdout
+from functools import partial
 import io
 import json
 from pathlib import Path
@@ -282,7 +283,8 @@ class TestTemporaryReportAccounts(unittest.TestCase):
             stdin = io.TextIOWrapper(io.BytesIO(capture().encode('utf-8')), encoding='gbk')
             self.addCleanup(stdin.close)
             stdout = io.StringIO()
-            with patch.object(workflow.sys, 'stdin', stdin), redirect_stdout(stdout):
+            with patch.object(workflow.sys, 'stdin', stdin), redirect_stdout(stdout), \
+                    patch.object(workflow, 'collect', wraps=partial(workflow.collect, now=NOW)):
                 self.assertEqual(workflow.run(args), 0)
             self.assertEqual(sentinel.read_bytes(), b'{"local":"unchanged"}')
             self.assertEqual({path.name for path in root.iterdir()}, {'credentials.json', 'report.xlsx'})

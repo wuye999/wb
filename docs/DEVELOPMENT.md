@@ -110,6 +110,8 @@ BCS 重复商品由 [domain.bcs_products](../src/sellerops/domain/bcs_products.p
 
 马帮认证由 [auth](../src/sellerops/integrations/mabang/auth.py) 处理密码登录、HAR 导入与 Bearer 换取；[client](../src/sellerops/integrations/mabang/client.py) 按读取/写入区分恢复策略。会话刷新锁按数据目录隔离，认证字段合并时重新读取并锁定凭证文件；普通响应的 Cookie 更新不得覆盖并发的新登录。认证异常需穿过逐单、模板、轮询和登记降级逻辑，保留已有受理记录。离线 [认证测试](../tests/test_mabang_auth.py) 使用合成 HAR 与 HTTP 替身。
 
+BCS [认证模块](../src/sellerops/integrations/bcs/auth.py) 处理密码登录、人工 HAR 导入、账号鉴权和原子会话更新。刷新按数据目录串行化，并与其他平台的凭证更新合并。客户端仅在明确失效时恢复已发出的读取，商品同步的 GET 标记为写入。离线 [认证测试](../tests/test_bcs_auth.py) 使用合成 HAR 和 HTTP 替身。
+
 ## 测试和变更范围
 
 [tests](../tests/test_core.py) 按基础设施、平台协议、商品、订单、报表、客服和运行策略分组。生产数据不作为默认测试夹具；替身隔离网络和外部命令。文档语法和链接由 [check_docs](../scripts/check_docs.py) 校验，参数参考由 [generate_cli_docs](../scripts/generate_cli_docs.py) 生成。

@@ -17,7 +17,8 @@
 
 | 现象 | 处理 |
 | --- | --- |
-| BCS 401 / 网关错误 | 核对自己 data/credentials.json 的 bcs.token、limit_key、cookie_extra，不更换源码中的请求逻辑来试 |
+| BCS 会话失效 | 检查本机 `bcs.login` 配置，或主动运行 `bcs-login` 更新会话。仅手工管理会话时核对 `bcs.token`、`limit_key` 和 `cookie_extra` |
+| BCS 要求滑块、设备验证或网关校验 | 用浏览器完成人工登录，并按 [BCS 配置](CONFIGURATION.md#bcsbcs) 导入包含后续业务请求的 HAR |
 | WB 店铺不在可用列表 | shopId 应是整数；authorizev3、wb_seller_lk、cookie 三项都要非空且属于同一店 |
 | WB 后台 401/403 | 停止该店操作，人工登录并抓取一店会话，按 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式) 运行 `cookies-update` |
 | 受限浏览器只有 Console / Elements，看不到 Network | 按配置文档运行定位用的失败 GET，再点击红色请求进入 Network；刷新页面后抓真实 API 请求，定位请求本身不作为凭证来源 |

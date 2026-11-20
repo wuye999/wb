@@ -17,6 +17,7 @@
 - 先用仓库列表核对该店莫斯科仓库名称和 `id`，不要把 office 字段 `warehouseId` 当作库存仓库 ID，不跨店复制 ID。找不到莫斯科或无法确认时中止；不回退其他俄语地区仓，不操作成都，不调用 `warehouse-clear`。已有预览或底层结果出现其他仓库 ID 时不得提交。
 - WB 凭证由用户人工登录并抓取一店会话，显式运行 `cookies-update` 后为同一登录下的已配置店铺逐店签发并保存。浏览器自动登录和自动续期未启用，遇到报错不自行安装或启动 Playwright。
 - 受限浏览器进入 Network、复制完整 Cookie 和登记店铺 UUID 的步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
+- 已配置 `bcs.login` 自动续期的 BCS 命令可在会话缺失或失效时更新本地会话。已发出的业务写请求保留原结果。遇到滑块或网关校验时，由用户人工完成 BCS 登录，再运行 `bcs-login --from-har` 导入。见 [BCS 配置](CONFIGURATION.md#bcsbcs)。
 
 ## 选择与执行命令
 

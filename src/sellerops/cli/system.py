@@ -5,6 +5,10 @@ from sellerops.cli.binding import bind
 
 
 def register(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("bcs-login", help="登录 BCS 或导入人工 HAR，更新本地 BCS 会话")
+    p.add_argument("--from-har", metavar="PATH", help="导入成功登录 HAR（相对路径从数据目录 har/ 读取）")
+    bind(p, 'sellerops.integrations.bcs.auth_command', 'run')
+
     p = sub.add_parser("mabang-login", help="登录马帮或导入人工 HAR，更新本地会话与 API 凭证")
     p.add_argument("--from-har", metavar="PATH", help="导入成功登录和预报列表 HAR（相对路径从数据目录 har/ 读取）")
     bind(p, 'sellerops.features.orders.mabang_login', 'run')

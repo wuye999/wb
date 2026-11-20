@@ -14,10 +14,16 @@ from sellerops.core.errors import AuthenticationError
 from sellerops.core.errors import RateLimitError
 from sellerops.core.errors import PlatformApiError
 from sellerops.domain.bcs_products import deduplicate_bcs_products
+from sellerops.integrations.bcs.auth import auto_refresh_enabled, refresh_login
 from sellerops.integrations.bcs.capture import BCS_BASE_URL, BCSSession
 
 RETRY_MAX = 3
 PAGE_SIZE_BIG = 10000
+READ_METHODS = {'GET', 'HEAD', 'OPTIONS'}
+
+
+class _SessionExpired(AuthenticationError):
+    """The platform explicitly rejected authentication for this session."""
 
 
 @dataclass(frozen=True)
@@ -43,18 +49,46 @@ class BCSClient:
         return self._session.headers() if self._session is not None else credentials.get().bcs_headers()
 
     def request_json(self, method: str, url: str, retry: int = RETRY_MAX,
-                     idempotent: bool = False, **kwargs) -> Dict[str, Any]:
-        """Retry read requests; never replay ambiguous writes by default."""
-        headers = self._headers()
+                     idempotent: bool = False, *, mutating: bool = False, **kwargs) -> Dict[str, Any]:
+        """Renew a configured session; only retry a rejected business read."""
         method = method.upper()
+        read_only = method in READ_METHODS and not mutating
+        attempts = max(1, retry) if read_only or (idempotent and not mutating) else 1
+        current = None
+        if self._session is None and url.startswith(BCS_BASE_URL + '/'):
+            candidate = credentials.get()
+            if auto_refresh_enabled(candidate):
+                current = candidate
+                kwargs['allow_redirects'] = False
+        if current is None:
+            return self._send_json(method, url, self._headers(), attempts, **kwargs)
+        if not current.token or not current.limit_key:
+            updated = refresh_login(expected=current)
+            return self._send_json(method, url, updated.bcs_headers(), attempts, **kwargs)
+        try:
+            return self._send_json(method, url, current.bcs_headers(), attempts, **kwargs)
+        except _SessionExpired:
+            try:
+                updated = refresh_login(expected=current)
+            except AuthenticationError as error:
+                if read_only:
+                    raise
+                raise AuthenticationError(f'BCS 业务请求鉴权失败，未重新提交。{error}') from None
+            if not read_only:
+                raise AuthenticationError('BCS 业务请求鉴权失败。会话已更新，本次请求未重新提交。') from None
+        return self._send_json(method, url, updated.bcs_headers(), 1, **kwargs)
+
+    def _send_json(self, method: str, url: str, headers: Dict[str, str], attempts: int,
+                   **kwargs) -> Dict[str, Any]:
         if method == 'POST':
-            headers['Content-Type'] = 'application/json;charset=UTF-8'
-        attempts = max(1, retry) if method in {'GET', 'HEAD', 'OPTIONS'} or idempotent else 1
+            headers = {**headers, 'Content-Type': 'application/json;charset=UTF-8'}
         for attempt in range(attempts):
             try:
                 response = requests.request(method, url, headers=headers, timeout=60, **kwargs)
-                if response.status_code in {401, 403}:
-                    raise AuthenticationError('BCS 凭证无效或已过期')
+                if response.status_code == 401:
+                    raise _SessionExpired('BCS 凭证无效或已过期')
+                if response.status_code == 403:
+                    raise AuthenticationError('BCS 请求被拒绝，请检查账号权限或网关状态')
                 if response.status_code == 429:
                     if attempt + 1 < attempts:
                         time.sleep(3 * (attempt + 1))
@@ -64,7 +98,10 @@ class BCSClient:
                     time.sleep(2 * (attempt + 1))
                     continue
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                if self._session is None and isinstance(data, dict) and data.get('code') in (401, '401'):
+                    raise _SessionExpired('BCS 凭证无效或已过期')
+                return data
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                 if attempt + 1 == attempts:
                     raise NetworkError('BCS 网络请求失败') from exc
@@ -192,7 +229,8 @@ class BCSClient:
     def sync_shop(self, shop_id: int, filter_type: str = "ALL") -> str:
         task_id = f"TASK_{int(time.time() * 1000)}"
         url = f"{self.base_url}/shopKeeper/product/sync?taskId={task_id}&shopId={shop_id}&filter={filter_type}"
-        d = self.get(url)
+        # This GET submits a synchronization task and must not be replayed as a read.
+        d = self.request_json('GET', url, mutating=True)
         if d.get("code") != 200:
             raise PlatformApiError(f"触发同步失败 shop={shop_id} code={d.get('code')} msg={d.get('msg')}")
         return task_id
