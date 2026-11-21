@@ -4,11 +4,10 @@ from pathlib import Path
 import requests
 
 from sellerops.core.errors import AuthenticationError, DataConsistencyError
-from sellerops.core.files import FileLock, atomic_dump_json, safe_load_json
-from sellerops.integrations.bcs.capture import (
+from sellerops.core.files import FileLock, atomic_dump_json
+from sellerops.integrations.bcs.session import (
     BCS_BASE_URL, LOGIN_ORIGIN, LOGIN_URL, BCSSession, cookie_fields, extra_cookie_header, login_session,
 )
-from sellerops.integrations.bcs.har import read_login_har
 from sellerops.settings import credentials, paths
 from sellerops.settings.credentials import Credentials
 
@@ -16,10 +15,13 @@ from sellerops.settings.credentials import Credentials
 BUSINESS_HOME = 'https://wb.bcserp.com/productList'
 LOGIN_PAGE = LOGIN_ORIGIN + '/login_v1'
 PROFILE_URL = BCS_BASE_URL + '/system/user/profile'
-SESSION_FIELDS = ('token', 'limit_key', 'cookie_extra')
 TIMEOUT = (6, 10)
-MANUAL_LOGIN = '请在浏览器完成人工登录，再用 bcs-login --from-har PATH 导入。'
+MANUAL_LOGIN = '请运行 login bcs，在 BCS 官网完成人工验证。'
 _failed_refresh: dict[Path, tuple[Credentials, str]] = {}
+
+
+class BrowserVerificationRequired(AuthenticationError):
+    """The BCS login flow needs a human in the browser."""
 
 
 def _login_settings(cred: Credentials) -> dict:
@@ -56,7 +58,7 @@ def _request(send, url: str, stage: str, **kwargs) -> requests.Response:
     except requests.RequestException:
         raise AuthenticationError(f'BCS {stage}请求失败，请检查网络。') from None
     if response.status_code in {403, 405, 412} or 300 <= response.status_code < 400:
-        raise AuthenticationError(f'BCS {stage}遇到网关校验或访问限制。{MANUAL_LOGIN}')
+        raise BrowserVerificationRequired(f'BCS {stage}遇到网关校验或访问限制。{MANUAL_LOGIN}')
     if response.status_code != 200:
         raise AuthenticationError(f'BCS {stage}失败（HTTP {response.status_code}）。')
     return response
@@ -66,7 +68,7 @@ def _json(response: requests.Response, stage: str) -> dict:
     try:
         data = response.json()
     except ValueError:
-        raise AuthenticationError(f'BCS {stage}未返回登录数据，可能需要验证。{MANUAL_LOGIN}') from None
+        raise BrowserVerificationRequired(f'BCS {stage}未返回登录数据，可能需要验证。{MANUAL_LOGIN}') from None
     if not isinstance(data, dict):
         raise AuthenticationError(f'BCS {stage}响应格式无效。')
     return data
@@ -83,7 +85,7 @@ def password_login(username: str, password: str) -> BCSSession:
                          headers=headers, params={'username': username})
         precheck = _json(check, '检查滑块')
         if precheck.get('code') != 200 or precheck.get('needSlider') is not False:
-            raise AuthenticationError(f'BCS 未确认可免滑块登录。{MANUAL_LOGIN}')
+            raise BrowserVerificationRequired(f'BCS 未确认可免滑块登录。{MANUAL_LOGIN}')
         response = _request(login.post, LOGIN_URL, '密码登录', headers={**headers, 'Origin': LOGIN_ORIGIN},
                             json={'username': username, 'password': password, 'captchaVerifyParam': ''})
         data = _json(response, '密码登录')
@@ -118,7 +120,18 @@ def _save_session(path: Path, baseline: Credentials, session: BCSSession) -> Cre
         return credentials.reload()
 
 
-def refresh_login(*, expected: Credentials | None = None, har: Path | None = None) -> Credentials:
+def connect_browser_session(baseline: Credentials, session: BCSSession) -> None:
+    login = _login_settings(baseline)
+    if baseline.base_url != BCS_BASE_URL or not _has_field(login, 'username'):
+        raise AuthenticationError('请先核对 BCS 服务地址和本机配置的登录账号。')
+    path = Path(baseline.path).resolve()
+    with FileLock(path.with_name('bcs-auth'), timeout=90):
+        verify_account(session, login['username'].strip())
+        _save_session(path, baseline, session)
+        _failed_refresh.pop(path, None)
+
+
+def refresh_login(*, expected: Credentials | None = None) -> Credentials:
     """Serialize refreshes per data directory and reuse a concurrent successful renewal."""
     path = Path(paths.CREDENTIALS_JSON).resolve()
     with FileLock(path.with_name('bcs-auth'), timeout=90):
@@ -126,7 +139,7 @@ def refresh_login(*, expected: Credentials | None = None, har: Path | None = Non
         if not isinstance(baseline.bcs, dict):
             raise DataConsistencyError('credentials.json 的 bcs 必须是对象。')
         if baseline.base_url != BCS_BASE_URL:
-            raise AuthenticationError('BCS 自动登录与 HAR 导入仅支持默认 BCS 服务地址。')
+            raise AuthenticationError('BCS 密码登录仅支持默认 BCS 服务地址。')
         if expected is not None:
             if not _same_config(baseline, expected):
                 raise AuthenticationError('BCS 登录配置已更新，请重新运行命令。')
@@ -136,11 +149,11 @@ def refresh_login(*, expected: Credentials | None = None, har: Path | None = Non
             if failure is not None and _same_generation(baseline, failure[0]):
                 raise AuthenticationError(failure[1])
         login = _login_settings(baseline)
-        if not _has_field(login, 'username') or (har is None and not _has_field(login, 'password')):
+        if not _has_field(login, 'username') or not _has_field(login, 'password'):
             raise AuthenticationError('请先在 credentials.json 配置 bcs.login 的账号和密码。')
         username = login['username'].strip()
         try:
-            session = read_login_har(har, username) if har is not None else password_login(username, login['password'])
+            session = password_login(username, login['password'])
             verify_account(session, username)
             updated = _save_session(path, baseline, session)
         except AuthenticationError as error:

@@ -1,6 +1,5 @@
 """Mabang login, auth recovery and session storage without real credentials/network."""
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 from html import escape
 import json
 from pathlib import Path
@@ -9,12 +8,11 @@ from threading import Barrier, local
 import time
 import unittest
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 
 from sellerops.integrations.mabang import auth, client, forecast
-from sellerops.integrations.mabang.capture import read_har
 from sellerops.integrations.mabang.session import (
     AAMZ_BASE, LOGIN_KEY, WWW_BASE, MabangAuthError, MabangVerificationRequired,
     auth_signature, new_session, request,
@@ -50,37 +48,6 @@ def _response(prepared, value, status=200, headers=None):
     return response
 
 
-def _har() -> dict:
-    now = datetime.now(timezone.utc)
-    expires = (now + timedelta(hours=12)).isoformat()
-    www = 'www.mabangerp.com'
-    aamz = 'aamz.mabangerp.com'
-
-    def entry(method, url, body, *, cookies=(), sets=(), post=None):
-        req = dict(method=method, url=url, cookies=list(cookies), headers=[
-            {'name': 'User-Agent', 'value': 'fixture-agent'}, {'name': 'Content-Length', 'value': '10'}])
-        if post:
-            req['postData'] = dict(mimeType='application/x-www-form-urlencoded; charset=UTF-8', text=urlencode(post),
-                                   params=[{'name': 'password', 'value': 'incorrect HAR params projection'}])
-        return dict(startedDateTime=now.isoformat(), request=req,
-                    response=dict(status=200, headers=[{'name': 'Set-Cookie', 'value': s} for s in sets],
-                                  content={'text': body if isinstance(body, str) else json.dumps(body)}))
-
-    return {'log': {'entries': [
-        entry('POST', WWW_BASE + '?mod=main.doLogin', {'success': True},
-              cookies=[_cookie('PHPSESSID', 'www-php', www, expires=expires)],
-              sets=[f'{LOGIN_KEY}=new-key; Max-Age=43200; Secure; HttpOnly'],
-              post={'username': USER, 'password': PASSWORD, 'timezone': 'UTC+8'}),
-        entry('GET', WWW_BASE + '?mod=main.gotoApp&v=v3&menuKey=M0010212',
-              f'<iframe src="{escape(FORECAST_URL)}"></iframe>'),
-        entry('GET', FORECAST_URL, '<html>forecast</html>',
-              sets=['PHPSESSID=aamz-php; Max-Age=43200; Path=/; HttpOnly; Secure',
-                    f'{LOGIN_KEY}=new-key; Max-Age=43200; Secure', 'discarded=gone; Max-Age=0']),
-        entry('POST', AAMZ_BASE + '?mod=uploadforecastorderv2.getForecastOrderList',
-              {'success': True, 'orderList': []}, cookies=[_cookie('PHPSESSID', 'aamz-php', aamz, expires=expires)]),
-    ]}}
-
-
 class TestMabangAuth(unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory()
@@ -93,8 +60,6 @@ class TestMabangAuth(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.path = Path(paths.CREDENTIALS_JSON)
-        self.capture = self.path.with_name('fixture.har')
-        self.capture.write_text(json.dumps(_har()), encoding='utf-8')
         self.calls = []
 
     def seed(self, *, managed=True, passport=False, expires_in=3600) -> dict:
@@ -157,27 +122,31 @@ class TestMabangAuth(unittest.TestCase):
             return _response(prepared, {'code': 200, 'data': {'token': key + '-token'}})
         self.fail('Unexpected synthetic HTTP endpoint')
 
-    def test_har_preserves_encoding_cookie_scope_expiry_and_required_flow(self):
-        result = read_har(self.capture)
-        self.assertEqual(result['login']['password'], PASSWORD)
-        self.assertEqual(result['login']['timezone'], 'UTC+8')
-        self.assertEqual(result['login']['headers'], {'user-agent': 'fixture-agent'})
-        self.assertIn('PHPSESSID=www-php', result['www_cookie'])
-        self.assertIn('PHPSESSID=aamz-php', result['aamz_cookie'])
-        self.assertNotIn('www-php', result['aamz_cookie'])
-        self.assertNotIn('discarded', result['aamz_cookie'])
-        self.assertTrue(all(c['expires'] > time.time() for c in result['cookie_jar']))
-        incomplete = _har()
-        incomplete['log']['entries'].pop()
-        self.capture.write_text(json.dumps(incomplete), encoding='utf-8')
-        with self.assertRaises(MabangAuthError):
-            read_har(self.capture)
+    def test_browser_connection_verifies_both_domains_without_password_login(self):
+        cred = self.seed()
+        expires = int(time.time()) + 3600
+        cookies = [_cookie(name, value, host, expires=expires)
+                   for host, php in [('www.mabangerp.com', 'www-php'), ('aamz.mabangerp.com', 'aamz-php')]
+                   for name, value in [('PHPSESSID', php), (LOGIN_KEY, 'new-key')]]
+        verified_hosts = []
 
-    def test_har_import_exchanges_token_without_password_login(self):
-        cred = self.seed(managed=False)
-        with patch.object(requests.Session, 'send', autospec=True, side_effect=self.fake):
-            auth.refresh_login(cred, har=self.capture)
+        def send(session, prepared, **kwargs):
+            url = urlsplit(prepared.url)
+            mod = parse_qs(url.query).get('mod', [''])[0]
+            domain_sessions = {'ordera.getForecastLogistics': 'www-php',
+                               'uploadforecastorderv2.getForecastOrderList': 'aamz-php'}
+            if mod in domain_sessions:
+                verified_hosts.append(url.hostname)
+                self.assertIn(f'PHPSESSID={domain_sessions[mod]}', prepared.headers['Cookie'])
+                self.assertIn(f'{LOGIN_KEY}=new-key', prepared.headers['Cookie'])
+                return _response(prepared, {'success': True})
+            return self.fake(session, prepared, **kwargs)
+
+        with patch.object(requests.Session, 'send', autospec=True, side_effect=send):
+            auth.connect_browser_session(cred, USER, cookies)
+        self.assertEqual(verified_hosts, ['www.mabangerp.com', 'aamz.mabangerp.com'])
         self.assertEqual(len(self.calls), 1)
+        self.assertTrue(self.calls[0][2].endswith('/getTokenByKey'))
         self.assertEqual(cred['api_key'], 'new-key')
         self.assertEqual(cred['api_bearer'], 'new-key-token')
         stored = json.loads(self.path.read_text(encoding='utf-8'))

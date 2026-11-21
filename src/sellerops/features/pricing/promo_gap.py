@@ -143,7 +143,7 @@ def promo_gap(days: int = 7, begin: str = "", end: str = "", date: str = "",
             adv = collect_adverted(shop, cred.root_version, statuses, page_size=page_size,
                                    max_pages=max_pages, limit=limit, with_cn=with_cn)
         except common.CookieExpiredError as e:
-            warnings.append(f"店铺 {name}: {e}（该店中止，继续下一店；cookie 失效请跑 sellerops cookies-update）")
+            warnings.append(f"店铺 {name}: {e}（该店中止，继续下一店；cookie 失效请跑 sellerops login wb）")
             per_shop.append(_empty_shop(sid, name, "cookie_expired"))
             adverted_by_shop[sid] = set()
             snapshots[sid] = None

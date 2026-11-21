@@ -17,16 +17,14 @@
 
 | 现象 | 处理 |
 | --- | --- |
-| BCS 会话失效 | 检查本机 `bcs.login` 配置，或主动运行 `bcs-login` 更新会话。仅手工管理会话时核对 `bcs.token`、`limit_key` 和 `cookie_extra` |
-| BCS 要求滑块、设备验证或网关校验 | 用浏览器完成人工登录，并按 [BCS 配置](CONFIGURATION.md#bcsbcs) 导入包含后续业务请求的 HAR |
-| WB 店铺不在可用列表 | shopId 应是整数；authorizev3、wb_seller_lk、cookie 三项都要非空且属于同一店 |
-| WB 后台 401/403 | 停止该店操作，人工登录并抓取一店会话，按 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式) 运行 `cookies-update` |
-| 受限浏览器只有 Console / Elements，看不到 Network | 按配置文档运行定位用的失败 GET，再点击红色请求进入 Network；刷新页面后抓真实 API 请求，定位请求本身不作为凭证来源 |
-| cookies-update 抓包无效 / 店铺 UUID 缺失或冲突 | 检查单个 fetch 块的 `authorizev3` 和完整 Cookie。按报错店铺 ID 核对登记的 `x-supplier-id-external`、已有 `Z-Sid` 和所属账号 |
-| cookies-update 抓包文件找不到 | 相对文件名从 data/har/ 读取，使用 `session.md` 或绝对路径，避免重复拼入 data/har/ |
-| cookies-update 签发或只读探针失败 | 整轮保留旧凭证。全店会话失效时重新抓包，单店失败时按报错 ID 核对店铺 UUID 和登录账号权限；限流或网络故障恢复后可重试 |
+| BCS 会话失效 | 检查本机 `bcs.login`，运行 `login bcs` 更新会话 |
+| BCS 要求滑块、设备验证或网关校验 | 运行 `login bcs`，在官网完成验证 |
+| WB 后台 401/403 | 停止该店操作，另行运行 `login wb` |
+| WB 直连登录或恢复较慢 | 页面连接最多等待 3 分钟，恢复店铺列表最多等待 4 分钟。页面接通后有 20 分钟完成验证和关窗。已经登录但店铺列表恢复超时，可用 `login wb --resume` 检查已保存的登录态 |
+| WB 提示缺少店铺、绑定冲突或只读鉴权失败 | 原凭证保留。按报错核对当前 WB 账号、店铺访问权限和 BCS 对应关系 |
 | 马帮缺少 www_cookie/shop_map | 按 CONFIGURATION 准备真实字段；shop_map 键须与马帮订单中的店铺文本一致 |
-| 马帮要求腾讯验证码或短信验证 | 人工登录并进入上传预报单页面，按 [马帮配置](CONFIGURATION.md#马帮mabang) 导入成功 HAR；认证失败前已有的业务提交应先核对状态 |
+| 马帮要求腾讯验证码或短信验证 | 运行 `login mabang` 并在官网验证。认证失败前已有业务提交时先核对状态。|
+| 专用浏览器缺少、版本不符或资料被占用 | 关闭占用资料的专用窗口，按 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台) 检查依赖并运行 `login setup` |
 | 马帮 NO_SKU / 匹配失败 | 查看本次报表，核对中文归属及价格表库存SKU；更换失败单不得直接推进预报/交运 |
 | lark-cli 未找到 | 配置 PATH 或 SELLEROPS_LARK_CLI，确认对应工具支持 base 子命令和用户身份 |
 | 飞书链接/表不存在、无权限 | 核对 base_url、--table、用户登录态和表权限；项目不会自动创建整份业务表 |

@@ -5,17 +5,14 @@ from sellerops.cli.binding import bind
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser("bcs-login", help="登录 BCS 或导入人工 HAR，更新本地 BCS 会话")
-    p.add_argument("--from-har", metavar="PATH", help="导入成功登录 HAR（相对路径从数据目录 har/ 读取）")
-    bind(p, 'sellerops.integrations.bcs.auth_command', 'run')
-
-    p = sub.add_parser("mabang-login", help="登录马帮或导入人工 HAR，更新本地会话与 API 凭证")
-    p.add_argument("--from-har", metavar="PATH", help="导入成功登录和预报列表 HAR（相对路径从数据目录 har/ 读取）")
-    bind(p, 'sellerops.features.orders.mabang_login', 'run')
-
-    p = sub.add_parser("cookies-update", help="用一店人工抓包为同一 WB 登录下的已配置店铺重签凭证")
-    p.add_argument("md_file", help="含单个 fetch 块的文件（相对路径从数据目录 har/ 读取，或传绝对路径）")
-    bind(p, 'sellerops.integrations.sessions.capture', 'run_cookies_update')
+    p = sub.add_parser('login', help='安装专用浏览器或连接 BCS、马帮、WB')
+    p.add_argument('platform', choices=['setup', 'bcs', 'mabang', 'wb'])
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument('--resume', action='store_true', help='仅检查专用浏览器中已保存的登录态')
+    mode.add_argument('--keep-open', action='store_true', help='等待网页登录成功后，在同一个窗口完成连接')
+    p.add_argument('--bind', action='append', default=[], metavar='BCS_ID=WB_UUID',
+                   help='仅 WB，确认一组新店对应关系，可重复指定')
+    bind(p, 'sellerops.features.login', 'run')
 
     p = sub.add_parser("daily", help="每日任务（morning=报名+改价 / check=只改价）")
     p.add_argument("mode", choices=["morning", "check"])

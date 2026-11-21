@@ -147,7 +147,7 @@ def run(args: Any) -> int:
             listed = cc_api.fetch_appeals(session, appeal_type=appeal_type, limit=limit, stats=stats)
         except common.CookieExpiredError as e:
             failures += 1
-            print(f"  [警告] 店铺 {name}: {e}（该店中止，继续下一店；cookie 失效请跑 sellerops cookies-update）")
+            print(f"  [警告] 店铺 {name}: {e}（该店中止，继续下一店；cookie 失效请跑 sellerops login wb）")
             continue
         except Exception as e:
             failures += 1

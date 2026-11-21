@@ -8,12 +8,10 @@ from unittest.mock import patch
 
 import requests
 
-from sellerops.cli.binding import dispatch
-from sellerops.cli.main import build_parser
 from sellerops.core.errors import AuthenticationError, RateLimitError
 from sellerops.core.files import atomic_dump_json, safe_load_json
 from sellerops.integrations.bcs import auth
-from sellerops.integrations.bcs.capture import BCS_BASE_URL, LOGIN_URL, BCSSession
+from sellerops.integrations.bcs.session import BCS_BASE_URL, LOGIN_URL, BCSSession
 from sellerops.integrations.bcs.client import BCSClient
 from sellerops.settings import credentials, paths
 
@@ -29,22 +27,6 @@ def reply(status=200, **payload):
     response.status_code = status
     response._content = json.dumps(payload).encode('utf-8')
     return response
-
-
-def login_har(*, token='new-token', account=USERNAME, limit='new-limit'):
-    return {'log': {'entries': [
-        {'request': {'method': 'POST', 'url': LOGIN_URL, 'postData': {'text': json.dumps({
-            'username': account, 'password': 'har-only-password',
-        })}}, 'response': {'status': 200, 'content': {'text': json.dumps({
-            'code': 200, 'token': 'new-token', 'limitKey': 'new-limit',
-        })}}},
-        {'request': {'method': 'GET', 'url': SHOP_LIST + '?pageSize=1', 'headers': [
-            {'name': 'authorization', 'value': 'Bearer ' + token},
-            {'name': 'x-limit-key', 'value': limit},
-            {'name': 'cookie', 'value': f'Admin-Token={token}; Limit-Key={limit}; '
-             'acw_tc=new-cookie; password=har-only-password; username=har-name; rememberMe=true'},
-        ]}, 'response': {'status': 200}},
-    ]}}
 
 
 class TestPasswordLogin(TestCase):
@@ -73,7 +55,7 @@ class TestPasswordLogin(TestCase):
 
     def test_slider_stops_before_password_submission(self):
         self.login_get.side_effect = [reply(), reply(code=200, needSlider=True)]
-        with self.assertRaisesRegex(AuthenticationError, 'bcs-login --from-har'):
+        with self.assertRaisesRegex(AuthenticationError, 'login bcs'):
             auth.password_login(USERNAME, PASSWORD)
         self.login_post.assert_not_called()
 
@@ -191,22 +173,20 @@ class TestBCSRefresh(TestCase):
         auth.refresh_login()
         self.assertEqual(safe_load_json(self.path)['mabang'], {'concurrent': 'field'})
 
-    def test_valid_har_command_only_replaces_bcs_session(self):
-        har_path = Path(paths.HAR_DIR) / 'fixture.har'
-        atomic_dump_json(har_path, login_har())
-        result = dispatch(build_parser().parse_args(['bcs-login', '--from-har', har_path.name]))
-        self.assertEqual(result, 0)
-        self.assertEqual(safe_load_json(self.path)['bcs']['cookie_extra'], 'acw_tc=new-cookie')
-        self.assertNotIn('har-only-password', self.path.read_text(encoding='utf-8'))
+    def test_browser_connection_only_replaces_bcs_session(self):
+        session = BCSSession(NEW_SESSION.token, NEW_SESSION.limit_key,
+                             NEW_SESSION.cookie + '; password=remembered; username=fixture; rememberMe=true')
+        auth.connect_browser_session(credentials.get(), session)
+        self.assertEqual(safe_load_json(self.path), {
+            **self.original, 'bcs': {**self.original['bcs'], 'token': 'new-token',
+                                     'limit_key': 'new-limit', 'cookie_extra': 'acw_tc=new-cookie'},
+        })
         self.password_login.assert_not_called()
 
-    def test_har_mismatch_preserves_existing_session(self):
+    def test_browser_account_mismatch_preserves_existing_session(self):
         original_bytes = self.path.read_bytes()
-        har_path = self.path.with_name('fixture.har')
-        for capture in (login_har(token='different'), login_har(limit='different'), login_har(account='different')):
-            atomic_dump_json(har_path, capture)
-            with self.assertRaisesRegex(AuthenticationError, '匹配'):
-                auth.refresh_login(har=har_path)
+        self.verify.return_value = reply(code=200, data={'userName': 'different'})
+        with self.assertRaisesRegex(AuthenticationError, '归属'):
+            auth.connect_browser_session(credentials.get(), NEW_SESSION)
         self.assertEqual(self.path.read_bytes(), original_bytes)
         self.password_login.assert_not_called()
-        self.verify.assert_not_called()

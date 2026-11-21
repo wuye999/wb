@@ -16,9 +16,9 @@ def render() -> str:
              '使用方法见 [操作流程](USAGE.md)，配置见 [CONFIGURATION](CONFIGURATION.md)，AI 边界见 [AI_GUIDE](AI_GUIDE.md)。', '',
              '源码运行时将下方 usage 的 `sellerops` 换成 `python run.py`。全局 `--data-dir` 放在子命令之前。', '',
              '远端业务写入显式加 `--apply`；部分命令另需 `--yes`，具体以实际参数及操作流程为准。',
-             '本地映射、凭证导入等命令会直接写本地数据。dry-run 不等于离线；写命令结束后不追加验证或同步。', '',
+             '本地映射、连接平台等命令会直接写本地数据。dry-run 不等于离线；写命令结束后不追加验证或同步。', '',
              '当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。',
-             'WB 凭证使用一店人工抓包，通过 `cookies-update` 为同一登录下的已配置店铺逐店签发。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。', '',
+             '用 `login` 独立连接 BCS、马帮和 WB，见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。', '',
              f'共 {len(sub.choices)} 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。', '',
              '| 命令 | 用途 | 实现入口 |', '| --- | --- | --- |']
     for name, command in sub.choices.items():

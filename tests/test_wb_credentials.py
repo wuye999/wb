@@ -1,4 +1,4 @@
-"""Exercise one-capture WB renewal with synthetic credentials and no platform access."""
+"""Exercise WB browser session renewal with synthetic credentials and no platform access."""
 import base64
 from contextlib import redirect_stdout
 from io import StringIO
@@ -14,8 +14,8 @@ from sellerops.cli.main import main
 from sellerops.core.errors import AuthenticationError, DataConsistencyError, ValidationError
 from sellerops.core.files import atomic_dump_json, safe_load_json
 from sellerops.core.utils import CookieExpiredError
-from sellerops.integrations.sessions import capture
-from sellerops.integrations.wildberries import auth, client
+from sellerops.integrations.wildberries.browser_session import WBSession, WBShop
+from sellerops.integrations.wildberries import auth, client, session_update
 from sellerops.settings import paths
 
 FIRST = 'aabbccdd-0000-0000-0000-000000000001'
@@ -58,14 +58,14 @@ class TestWBCredentials(unittest.TestCase):
         }
         atomic_dump_json(self.path, self.original)
 
-    def fetch(self, *, token=None, cookie=None):
-        headers = {'AuthorizeV3': token or self.token, 'Cookie': cookie or self.template}
-        return f'```js\nfetch("https://seller.wildberries.ru/test", {json.dumps({"headers": headers})});\n```'
+    def update_shops(self, *, token=None, cookie=None):
+        config = safe_load_json(self.path)['wb']
+        session_update.update_shops(self.path, config, config['shops'],
+                                    self.token if token is None else token,
+                                    self.template if cookie is None else cookie)
 
     def test_cli_signs_and_probes_each_shop_before_one_atomic_update(self):
-        har = Path(paths.HAR_DIR)
-        har.mkdir()
-        (har / 'session.md').write_text(self.fetch(), encoding='utf-8-sig')
+        session = WBSession(self.token, self.template, (WBShop(FIRST, 111, '第一店'), WBShop(SECOND, 112, '第二店')))
         calls = []
 
         def send(request, **kwargs):
@@ -93,8 +93,9 @@ class TestWBCredentials(unittest.TestCase):
                     else response(200, {'error': False, 'data': {'questions': []}}))
 
         output = StringIO()
-        with patch.object(requests.Session, 'send', side_effect=send), redirect_stdout(output):
-            self.assertEqual(main(['--data-dir', paths.DATA_DIR, 'cookies-update', 'session.md']), 0)
+        with (patch('sellerops.features.login._browser_session', return_value=session),
+              patch.object(requests.Session, 'send', side_effect=send), redirect_stdout(output)):
+            self.assertEqual(main(['--data-dir', paths.DATA_DIR, 'login', 'wb', '--resume']), 0)
         self.assertEqual([request.method for request in calls], ['POST', 'GET', 'POST', 'GET'])
         saved = safe_load_json(self.path)
         for shop, supplier in zip(saved['wb']['shops'], [FIRST, SECOND]):
@@ -107,18 +108,15 @@ class TestWBCredentials(unittest.TestCase):
         self.assertIn('11, 12', output.getvalue())
         self.assertNotIn(self.token, output.getvalue())
 
-    def test_invalid_capture_and_local_conflicts_fail_before_http(self):
+    def test_invalid_session_and_local_conflicts_fail_before_http(self):
         cases = [
-            (self.fetch(token='a.b.c'), {}, 'authorizev3'),
-            (self.fetch() + '\n' + self.fetch(), {}, '一个 Copy as fetch'),
-            (self.fetch(cookie=self.template + f'; x-supplier-id-external={SECOND}'), {}, '重复'),
-            (self.fetch(cookie=self.template.replace(FIRST, '12345678-0000-0000-0000-000000000001')),
-             {}, '不在本地'),
-            (self.fetch(), {'cookie': f'x-supplier-id-external={FIRST}'}, 'UUID 与其他店铺重复'),
-            (self.fetch(), {'wb_seller_lk': lk(FIRST)}, 'Z-Sid 冲突'),
-            (self.fetch(), {'authorizev3': jwt({'user': 'other-account'})}, '登录账号不一致'),
+            ({'token': 'a.b.c'}, {}, 'WB 登录会话缺少有效凭证'),
+            ({'cookie': self.template + f'; x-supplier-id-external={SECOND}'}, {}, '重复'),
+            ({}, {'cookie': f'x-supplier-id-external={FIRST}'}, 'UUID 与其他店铺重复'),
+            ({}, {'wb_seller_lk': lk(FIRST)}, 'Z-Sid 冲突'),
+            ({}, {'authorizev3': jwt({'user': 'other-account'})}, '登录账号不一致'),
         ]
-        for text, second, error in cases:
+        for session, second, error in cases:
             with self.subTest(error=error):
                 config = safe_load_json(self.path)
                 config['wb'] = {**self.original['wb'], 'shops': [
@@ -127,7 +125,7 @@ class TestWBCredentials(unittest.TestCase):
                 atomic_dump_json(self.path, config)
                 before = self.path.read_bytes()
                 with patch.object(requests.Session, 'send') as send, self.assertRaisesRegex(ValidationError, error):
-                    capture.refresh(text, self.path)
+                    self.update_shops(**session)
                 send.assert_not_called()
                 self.assertEqual(self.path.read_bytes(), before)
 
@@ -140,7 +138,7 @@ class TestWBCredentials(unittest.TestCase):
                              response(probe_status, {'secret': self.token})]
                 with patch.object(requests.Session, 'send', side_effect=responses) as send, \
                         self.assertRaisesRegex(ValidationError, f'店铺 12.*{expected}') as error:
-                    capture.refresh(self.fetch(), self.path)
+                    self.update_shops()
                 self.assertNotIn(self.token, str(error.exception))
                 self.assertEqual(send.call_count, 3 if expected == 'Z-Sid' else 4)
                 self.assertEqual(self.path.read_bytes(), before)
@@ -154,7 +152,7 @@ class TestWBCredentials(unittest.TestCase):
         with patch.object(auth, 'sign_seller_token', side_effect=[lk(FIRST), lk(SECOND)]), \
                 patch.object(auth, 'probe_session', side_effect=probe), \
                 self.assertRaisesRegex(DataConsistencyError, 'wb.shops 在签发期间已变更'):
-            capture.refresh(self.fetch(), self.path)
+            self.update_shops()
         self.assertEqual(safe_load_json(self.path)['wb']['shops'][0],
                          {**self.original['wb']['shops'][0], 'custom': 'concurrent-edit'})
 
@@ -163,11 +161,11 @@ class TestWBCredentials(unittest.TestCase):
             with self.subTest(status=status):
                 session = Mock()
                 session.request.return_value = session.post.return_value = response(status)
-                with self.assertRaisesRegex(error, 'cookies-update'):
+                with self.assertRaisesRegex(error, 'login wb'):
                     client.request_post(session, 'https://fixture.invalid', {})
                 with patch.object(client, 'make_session', return_value=session):
                     result = client.WBClient({'shopId': 11}).upload_batch_discount([{}])
                 self.assertFalse(result.success)
-                self.assertIn('cookies-update', result.error_message)
+                self.assertIn('login wb', result.error_message)
                 session.post.assert_called_once()
                 session.request.assert_called_once()

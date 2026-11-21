@@ -252,7 +252,7 @@ def run(args: Any) -> int:
         except common.CookieExpiredError as e:
             failures += 1
             print(f"  [警告] 店铺 {shop.get('shopName')}: {e}"
-                  f"（该店中止，继续下一店；cookie 失效请跑 sellerops cookies-update）")
+                  f"（该店中止，继续下一店；cookie 失效请跑 sellerops login wb）")
         except Exception as e:
             failures += 1
             print(f"  [警告] 店铺 {shop.get('shopName')} 处理失败: {e}（该店中止，继续下一店）")

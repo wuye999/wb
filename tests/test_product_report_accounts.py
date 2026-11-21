@@ -17,7 +17,8 @@ from sellerops.domain.product_reports import ReportCatalog
 from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLimitError
 from sellerops.features.catalog import product_report as workflow
 from sellerops.features.catalog.product_report_analysis import analyze
-from sellerops.integrations.bcs.capture import BCS_BASE_URL, BCSSession, MAX_CAPTURE_CHARS, parse_sessions
+from sellerops.integrations.bcs.capture import MAX_CAPTURE_CHARS, parse_sessions
+from sellerops.integrations.bcs.session import BCS_BASE_URL, BCSSession
 from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop
 from sellerops.settings import credentials
 from test_product_report import NOW, VC, feedback, order, register

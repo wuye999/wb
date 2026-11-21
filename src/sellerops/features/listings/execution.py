@@ -247,7 +247,7 @@ def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, in
                 if not shop:
                     print(f"  {RED}✗ 错误{RESET} 店{sid} 无 WB 凭证，本条通道无法下架"
                           f"（{len(nms)} 个 nmID 计入失败）")
-                    print(f"    {RED}处置：先补该店 WB 凭证（sellerops cookies-update <抓包文件>）后重跑 trash。"
+                    print(f"    {RED}处置：先补该店 WB 凭证（sellerops login wb）后重跑 trash。"
                           f"不自动改走 BCS，也不建议用 trash-bcs 替代。{RESET}")
                     fail += len(nms)
                     results.extend([sid, nm, tag, "", "SKIP: 无 WB 凭证", ts] for nm in nms)
@@ -273,7 +273,7 @@ def run_apply(plans, action, auto_review=False, *, channel="bcs", chunk=None, in
                     if r.get("aborted"):
                         print(f"  {RED}✗ 错误{RESET} 店{sid} 移回收站中止：{r['aborted']}")
                         print(f"    {RED}本店剩余 nmID 已计入失败。请修好 WB 会话"
-                              f"（sellerops cookies-update <抓包文件>）后重跑 trash；"
+                              f"（sellerops login wb）后重跑 trash；"
                               f"不会自动改走 BCS。{RESET}")
             else:
                 for i in range(0, len(nms), step):

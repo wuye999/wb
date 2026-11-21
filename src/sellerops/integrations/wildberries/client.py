@@ -13,7 +13,7 @@ from sellerops.core.errors import PlatformApiError
 
 RETRY_SLEEPS = [1, 3, 8]
 QUESTIONS_URL = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-ext-seller-portal/api/v2/questions"
-_UPDATE_SESSION = "请用一店的新抓包运行 sellerops cookies-update <抓包文件>"
+_UPDATE_SESSION = "请独立运行 sellerops login wb 更新凭证"
 
 
 def make_session(shop: Dict[str, Any], root_version: Optional[str] = None) -> requests.Session:

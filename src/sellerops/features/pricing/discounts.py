@@ -141,7 +141,7 @@ class Discounts:
                         if plan.limit and len(matched_items) >= plan.limit:
                             break
             except Exception as error:
-                reason = ('WB网页会话失效，请人工抓包更新' if isinstance(error, common.CookieExpiredError)
+                reason = ('WB 网页会话失效，请运行 sellerops login wb' if isinstance(error, common.CookieExpiredError)
                           else f'本店商品准备失败（{type(error).__name__}）')
                 targets = plan.target_vcs or ['（本店商品读取失败，无法枚举完整VC）']
                 for vc in targets:

@@ -292,7 +292,7 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
                 cnt[r["kind"]] += 1
                 rows.append(r)
         except common.CookieExpiredError as ex:
-            print(f"  [警告] 店铺 {name}: {ex}（该店中止，继续下一店；cookie 失效请跑 sellerops cookies-update）")
+            print(f"  [警告] 店铺 {name}: {ex}（该店中止，继续下一店；cookie 失效请跑 sellerops login wb）")
             per_shop.append({"shop": name, "shop_id": sid, "label": label, "orders": 0,
                              "returns": 0, "pending": 0, "unknown": 0, "error": str(ex)[:160]})
             continue

@@ -124,7 +124,7 @@ class Credentials:
         return (len(problems) == 0), problems
 
 
-# ---- 模块级单例（懒加载，cookies-update 后 reload 即可） ----
+# ---- 模块级单例（懒加载，登录更新后 reload） ----
 _CRED = None
 
 

@@ -1,14 +1,14 @@
-"""Password login, HAR bootstrap and coherent web/API credential rotation."""
+"""Password and browser login with coherent web/API credential rotation."""
 from __future__ import annotations
 
 import json
 import time
 from copy import deepcopy
-from pathlib import Path
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 
-from sellerops.integrations.mabang.capture import forecast_frame, read_har
 from sellerops.integrations.mabang.session import (
     AAMZ_BASE, SSO_GET_TOKEN_URL, WWW_BASE, MabangAuthError,
     auth_expired, auth_signature, cookie_header, cookie_key, headers, new_session, request,
@@ -19,6 +19,30 @@ from sellerops.integrations.mabang.state import auth_lock, commit_auth, reload_a
 
 class MabangKeyRejected(MabangAuthError):
     """SSO rejected the web session key rather than failing for an unrelated reason."""
+
+
+class _ForecastFrame(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.urls: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != 'iframe':
+            return
+        src = dict(attrs).get('src') or ''
+        url = urlsplit(src)
+        if (url.scheme == 'https' and url.hostname == 'aamz.mabangerp.com'
+                and not url.username and not url.password and url.path == '/index.php'
+                and parse_qs(url.query).get('mod') == ['uploadforecastorderv2.list']):
+            self.urls.add(src)
+
+
+def _forecast_frame(html: str) -> str:
+    parser = _ForecastFrame()
+    parser.feed(html)
+    if len(parser.urls) != 1:
+        raise MabangAuthError('未在马帮页面找到唯一的上传预报入口。')
+    return next(iter(parser.urls))
 
 
 def auto_enabled(cred: dict) -> bool:
@@ -66,7 +90,7 @@ def _page(response: requests.Response, stage: str) -> None:
 def _password_login(candidate: dict, session: requests.Session) -> None:
     login = candidate.get('login') or {}
     if not (login.get('username') and login.get('password')):
-        raise MabangAuthError('未配置马帮账号密码；请运行 mabang-login --from-har <文件> 初始化。')
+        raise MabangAuthError('未配置马帮账号密码，请在本机配置后运行 login mabang。')
     nav = headers(candidate, 'www.mabangerp.com', navigation=True)
     stage = '打开登录页'
     try:
@@ -105,7 +129,7 @@ def _password_login(candidate: dict, session: requests.Session) -> None:
         menu = request(session, 'GET', WWW_BASE, headers=nav,
                        params={'mod': 'main.gotoApp', 'v': 'v3', 'menuKey': 'M0010212'})
         _page(menu, stage)
-        target = forecast_frame(menu.text)
+        target = _forecast_frame(menu.text)
         stage = '建立预报域会话'
         _page(request(session, 'GET', target, headers={**nav, 'Sec-Fetch-Dest': 'iframe'}), stage)
     except MabangAuthError:
@@ -114,32 +138,59 @@ def _password_login(candidate: dict, session: requests.Session) -> None:
         raise MabangAuthError(f'马帮登录失败（{stage}）；原完整凭证保留。') from None
 
 
-def refresh_login(cred: dict, *, expected: str | None = None, har: Path | None = None) -> None:
-    """Serialize login/import and publish the full credential generation only after success."""
-    imported = read_har(har) if har is not None else None
+def refresh_login(cred: dict, *, expected: str | None = None) -> None:
+    """Serialize password login and save credentials only after a successful renewal."""
     with auth_lock():
         reload_auth(cred)
         if expected is not None and auth_signature(cred) != expected:
             return  # Another process already refreshed the session we were trying to replace.
         baseline = auth_signature(cred)
         candidate = deepcopy(cred)
-        if imported is not None:
-            previous = (cred.get('login') or {}).get('username')
-            if previous and previous != imported['login']['username']:
-                raise MabangAuthError('HAR 账号与现有马帮登录账号不一致，未覆盖凭证。')
-            candidate.update(imported)
         with new_session(candidate) as session:
-            if imported is None:
-                _password_login(candidate, session)
-            key = cookie_key(cookie_header(session, WWW_BASE))
-            aamz = cookie_header(session, AAMZ_BASE)
-            if not key or cookie_key(aamz) != key or not cookie_key(aamz, 'PHPSESSID'):
-                raise MabangAuthError('马帮未取得同次登录的 www/aamz 凭证；原完整凭证保留。')
-            token = exchange_token(candidate, session, key)
-            candidate.update(api_key=key, api_bearer=token)
-            result = snapshot(candidate, session)
+            _password_login(candidate, session)
+            result = _complete_session(candidate, session)
         if not commit_auth(cred, result, expected=baseline):
             raise MabangAuthError('马帮凭证在登录期间被其他操作更新，已保留较新的本地配置。')
+
+
+def _complete_session(candidate: dict, session: requests.Session) -> dict:
+    key = cookie_key(cookie_header(session, WWW_BASE))
+    aamz = cookie_header(session, AAMZ_BASE)
+    if not key or cookie_key(aamz) != key or not cookie_key(aamz, 'PHPSESSID'):
+        raise MabangAuthError('马帮未取得同次登录的 www/aamz 凭证；原完整凭证保留。')
+    token = exchange_token(candidate, session, key)
+    return snapshot({**candidate, 'api_key': key, 'api_bearer': token}, session)
+
+
+def connect_browser_session(cred: dict, username: str, cookies: list[dict]) -> None:
+    """Commit a scoped browser session only for the account configured at startup."""
+    if not username or username != (cred.get('login') or {}).get('username'):
+        raise MabangAuthError('马帮浏览器账号与本机配置不一致，原凭证保留。')
+    expected = auth_signature(cred)
+    with auth_lock():
+        reload_auth(cred)
+        if auth_signature(cred) != expected:
+            raise MabangAuthError('马帮凭证在浏览器登录期间已更新，请重新连接。')
+        candidate = {**cred, 'cookie_jar': cookies}
+        with new_session(candidate) as session:
+            for url, mod, data in (
+                (WWW_BASE, 'ordera.getForecastLogistics', ''),
+                (AAMZ_BASE, 'uploadforecastorderv2.getForecastOrderList',
+                 {'searchType': '1', 'status': '1', 'type': '1', 'page': '1', 'rowsPerPage': '1'}),
+            ):
+                host = 'www.mabangerp.com' if url == WWW_BASE else 'aamz.mabangerp.com'
+                try:
+                    response = request(session, 'POST', url, headers=headers(candidate, host),
+                                       params={'mod': mod}, data=data, follow_redirects=False)
+                    _page(response, '会话检查')
+                    authenticated = response_json(response).get('success') is True
+                except (requests.RequestException, ValueError, RuntimeError):
+                    authenticated = False
+                if not authenticated:
+                    raise MabangAuthError('马帮双域会话未通过只读检查，原凭证保留。')
+            result = _complete_session(candidate, session)
+        if not commit_auth(cred, result, expected=expected):
+            raise MabangAuthError('马帮凭证在浏览器登录期间已更新，请重新连接。')
 
 
 def refresh_bearer(cred: dict, *, expected: str | None = None) -> None:

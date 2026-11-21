@@ -41,7 +41,7 @@ def get_mabang_cred() -> dict:
     if not data.get('shop_map'):
         raise MabangAuthError('credentials.json 缺少 mabang.shop_map（店铺映射不完整）。')
     if not (data.get('www_cookie') or auto_enabled(data)):
-        raise MabangAuthError('马帮缺少登录凭证，请运行 mabang-login --from-har <文件>。')
+        raise MabangAuthError('马帮缺少登录凭证，请运行 login mabang。')
     return data
 
 
@@ -80,7 +80,7 @@ def _recover(cred: dict, conn: _Connection, *, api: bool) -> _Connection:
         elif auto_enabled(cred):
             refresh_login(cred, expected=conn.signature)
         else:
-            raise MabangAuthError('马帮登录会话已失效，请运行 mabang-login --from-har <文件> 更新。')
+            raise MabangAuthError('马帮登录会话已失效，请运行 login mabang 更新。')
     except MabangAuthError as exc:
         conn.blocked = exc
         raise

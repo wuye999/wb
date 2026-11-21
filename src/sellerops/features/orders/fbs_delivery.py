@@ -304,7 +304,7 @@ def collect(days: int = 0, begin: str = "", end: str = "", date: str = "", shops
             supplies = wb_supply.iter_delivery_supplies(session, max_pages=max_pages,
                                                         limit=limit, verbose=verbose)
         except common.CookieExpiredError as ex:
-            print(f"  [警告] 店铺 {name}: {ex}（该店中止，继续下一店；cookie 失效请跑 sellerops cookies-update）")
+            print(f"  [警告] 店铺 {name}: {ex}（该店中止，继续下一店；cookie 失效请跑 sellerops login wb）")
             per_shop.append({"shop": name, "shop_id": sid, "supply_count": 0, "item_count": 0, "error": str(ex)[:120]})
             continue
         except Exception as ex:

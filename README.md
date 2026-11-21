@@ -8,7 +8,7 @@ Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需�
 | --- | --- |
 | 第一次使用 | 本页安装与数据准备 → [配置](docs/CONFIGURATION.md) → [操作流程](docs/USAGE.md) |
 | 日常查询与运营 | [操作流程](docs/USAGE.md)、[命令参考](docs/CLI.md) |
-| 更新 WB 卖家后台凭证 | [单店抓包、逐店签发](docs/CONFIGURATION.md#手动抓包更新凭证当前方式) |
+| 连接或更新平台凭证 | [WorkBuddy 平台连接](docs/CONFIGURATION.md#通过-workbuddy-连接平台) |
 | 数据准备与备份 | [数据契约](docs/DATA.md) |
 | 让 AI 协助操作 | [项目约束](AGENTS.md)、[AI 操作指南](docs/AI_GUIDE.md) |
 | 开发与维护 | [开发指南](docs/DEVELOPMENT.md)，包含架构、代码入口、复用能力和开发准则 |
@@ -29,9 +29,7 @@ python -m venv .venv
 
 下文的 `python` 应替换为实际使用的解释器，或先激活环境。也可以使用已装基础依赖的 Python 执行 `python run.py --help`。
 
-WB 凭证更新只需人工登录并抓取一个已配置店铺的会话，再运行 `cookies-update` 为同一登录下的已配置店铺逐店签发令牌。浏览器自动续期未启用。受限浏览器的抓包步骤见 [配置](docs/CONFIGURATION.md#手动抓包更新凭证当前方式)。飞书功能另需已登录的配套 lark-cli。
-
-马帮有独立的 `mabang-login` 命令。首次可导入人工成功登录的 HAR；之后可通过本机账号密码续期，遇到验证码或短信验证时仍由用户人工处理。见 [马帮配置](docs/CONFIGURATION.md#马帮mabang)。
+在 WorkBuddy 里说「连接 WB」「连接 BCS」或「连接马帮」即可进入对应的 `login` 流程。BCS、马帮优先使用本机账号密码，平台要求验证时在官网操作；WB 从专用浏览器恢复会话。首次安装和登录步骤见 [平台连接配置](docs/CONFIGURATION.md#通过-workbuddy-连接平台)。飞书功能另需已登录的配套 lark-cli。
 
 ## 更新已有环境
 

@@ -32,8 +32,7 @@ class MabangVerificationRequired(MabangAuthError):
 
 def verification_error(kind: str) -> MabangVerificationRequired:
     return MabangVerificationRequired(
-        f'马帮要求{kind}，已停止自动登录；请人工登录后录制完整 HAR，'
-        '运行 mabang-login --from-har <文件> 导入。原完整凭证保留。')
+        f'马帮要求{kind}，已停止自动登录。请运行 login mabang，在官网完成验证。原完整凭证保留。')
 
 
 def new_session(cred: dict) -> requests.Session:
@@ -89,7 +88,7 @@ def cookie_key(raw: str, name: str = LOGIN_KEY) -> str:
     values = {part.strip().partition('=')[2] for part in raw.split(';')
               if part.strip().partition('=')[0] == name and '=' in part}
     if len(values) > 1:
-        raise MabangAuthError('马帮同域登录 Cookie 冲突，请重新导入完整登录 HAR。')
+        raise MabangAuthError('马帮同域登录 Cookie 冲突，请运行 login mabang 重新连接。')
     return next(iter(values), '')
 
 

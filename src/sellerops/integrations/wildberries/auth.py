@@ -1,4 +1,4 @@
-"""Sign and check WB seller-portal sessions using a manually captured login."""
+"""Sign and check WB seller-portal sessions."""
 import requests
 
 from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError

@@ -24,7 +24,7 @@
 
 - 所有仓库操作默认且仅使用该店铺的莫斯科仓库 ID，包括读取、修改库存、清零、下架前清库存、回收站归零、上架和临时脚本。全店/全部商品不扩大仓库范围；不能回退到成都或其他俄语地区仓。名称和 ID 无法确认时中止该店操作。
 - WB 仓库列表的 `id` 才是库存使用的仓库标识，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对；马帮仓库 ID 属于另一套体系，也须核实为莫斯科业务仓。
-- WB 凭证更新由用户人工登录、抓取一店会话后显式执行 `cookies-update`。浏览器自动登录和自动续期未启用。保留 [受限浏览器手动抓包步骤](CONFIGURATION.md#手动抓包更新凭证当前方式)。
+- 浏览器登录由用户显式发起 `login`，业务命令不启动浏览器。平台登录和续期见 [配置说明](CONFIGURATION.md#通过-workbuddy-连接平台)。
 - 这些是现行操作约定，不能因重组代码、压缩文档或删除历史记录而丢失。将来变更运行方案时，必须同步修改 AGENTS、配置、操作指南及生成参考，不能只改某一处说明。
 
 ### 已有实现与约束的差异
@@ -33,7 +33,9 @@
 
 底层显式实时库存读取不传 store_id 时仍可读取多仓；`stock --resolve live` 已限定确认的莫斯科仓，仅补充当前库存，写入规格仍来自完整计划，不能因库存缺行减少目标。`warehouse-clear` 专门操作成都仓，当前不使用。调用方仍须核对仓库范围，不能把底层函数的存在当作其他仓库的操作授权。默认本地快照流程不调用全量远端商品或库存查询。
 
-[WB 客户端](../src/sellerops/integrations/wildberries/client.py) 遇到 401/403 立即抛出认证异常。`cookies-update` 由 [抓包更新模块](../src/sellerops/integrations/sessions/capture.py) 解析一店抓包和本地店铺归属，[WB 会话接口](../src/sellerops/integrations/wildberries/auth.py) 逐店签发并调用提问接口做单页鉴权。确认全部店铺后，持 `credentials.json` 的文件锁重读配置，核对签发期间 `wb.shops` 是否改变，然后原子保存。其他平台并发更新随重读结果保留。离线测试使用合成抓包与 HTTP 替身。
+[WB 客户端](../src/sellerops/integrations/wildberries/client.py) 遇到 401/403 立即抛出认证异常。`login wb` 从专用浏览器恢复账号和店铺列表。[归属与会话保存](../src/sellerops/integrations/wildberries/session_update.py) 校验店铺绑定，通过 [WB 会话接口](../src/sellerops/integrations/wildberries/auth.py) 逐店签发并用单页提问查询鉴权。全部通过后持文件锁重读 `credentials.json`，核对 WB 配置是否变更，再原子保存。其他平台并发更新随重读结果保留。离线测试使用合成会话与 HTTP 替身。
+
+[统一登录用例](../src/sellerops/features/login.py) 编排密码登录、资料加锁、人工操作和 WB 店铺绑定。[共享浏览器模块](../src/sellerops/integrations/sessions/browser.py) 管理项目内的固定 Chromium，并打开所选数据目录的平台资料。[BCS](../src/sellerops/integrations/bcs/browser_session.py)、[马帮](../src/sellerops/integrations/mabang/browser_session.py) 和 [WB](../src/sellerops/integrations/wildberries/browser_session.py) 的浏览器适配器在各自的集成目录读取官网会话。BCS 的密码登录、浏览器和临时报告共用 [会话表示](../src/sellerops/integrations/bcs/session.py)。固定版本和构建号变更时，同时更新可选依赖和配置说明，并验收现有登录资料的兼容性。
 
 ## 项目入口
 
@@ -61,6 +63,7 @@ integrations 不依赖 features、cli、persistence；persistence 不依赖 feat
 | 领域 | 入口与职责 |
 | --- | --- |
 | CLI | [分发](../src/sellerops/cli/binding.py)、[各命令组](../src/sellerops/cli/main.py)；完整处理器位置见 [CLI 表格](CLI.md) |
+| 登录 | [用例编排](../src/sellerops/features/login.py)、[浏览器运行](../src/sellerops/integrations/sessions/browser.py)，鉴权和凭证更新在各平台的集成目录 |
 | catalog | [mapping](../src/sellerops/features/catalog/mapping.py) 归属/工作台，[mapping_sync](../src/sellerops/features/catalog/mapping_sync.py) 审核合并，[single_shop](../src/sellerops/features/catalog/single_shop.py) 单店表 |
 | listings | [plans](../src/sellerops/features/listings/plans.py) 计划，[execution](../src/sellerops/features/listings/execution.py) 执行，[prices](../src/sellerops/features/listings/prices.py)/[stocks](../src/sellerops/features/listings/stocks.py) WB 用例，[bulk_publish](../src/sellerops/features/listings/bulk_publish.py)/[card_publish](../src/sellerops/features/listings/card_publish.py) 两种发布协议 |
 | pricing | [discounts](../src/sellerops/features/pricing/discounts.py) 折扣，[promo_gap](../src/sellerops/features/pricing/promo_gap.py) 数据采集编排，[promotion_rules](../src/sellerops/features/pricing/promotion_rules.py) 纯计算，[promotion_report](../src/sellerops/features/pricing/promotion_report.py) 输出 |
@@ -108,9 +111,9 @@ BCS 重复商品由 [domain.bcs_products](../src/sellerops/domain/bcs_products.p
 
 发货群使用 [独立 FBS 用例](../src/sellerops/features/orders/fbs_group_ship.py) 和 [中国区 FBS 客户端](../src/sellerops/integrations/wildberries/fbs_api.py)。供货状态在数据目录内加锁保存，提交前写入 submitting。配送受理后只获取生成本组 PDF 必需的二维码和标签。两份 PDF 均校验后逐个原子保存到供货日期对应的共享目录，失败保留已配送记录供独立续办。
 
-马帮认证由 [auth](../src/sellerops/integrations/mabang/auth.py) 处理密码登录、HAR 导入与 Bearer 换取；[client](../src/sellerops/integrations/mabang/client.py) 按读取/写入区分恢复策略。会话刷新锁按数据目录隔离，认证字段合并时重新读取并锁定凭证文件；普通响应的 Cookie 更新不得覆盖并发的新登录。认证异常需穿过逐单、模板、轮询和登记降级逻辑，保留已有受理记录。离线 [认证测试](../tests/test_mabang_auth.py) 使用合成 HAR 与 HTTP 替身。
+马帮认证由 [auth](../src/sellerops/integrations/mabang/auth.py) 处理密码登录、浏览器会话校验与 Bearer 换取；[client](../src/sellerops/integrations/mabang/client.py) 按读取/写入区分恢复策略。会话刷新锁按数据目录隔离，认证字段合并时重新读取并锁定凭证文件；普通响应的 Cookie 更新不得覆盖并发的新登录。认证异常需穿过逐单、模板、轮询和登记降级逻辑，保留已有受理记录。离线 [认证测试](../tests/test_mabang_auth.py) 使用合成会话与 HTTP 替身。
 
-BCS [认证模块](../src/sellerops/integrations/bcs/auth.py) 处理密码登录、人工 HAR 导入、账号鉴权和原子会话更新。刷新按数据目录串行化，并与其他平台的凭证更新合并。客户端仅在明确失效时恢复已发出的读取，商品同步的 GET 标记为写入。离线 [认证测试](../tests/test_bcs_auth.py) 使用合成 HAR 和 HTTP 替身。
+BCS [认证模块](../src/sellerops/integrations/bcs/auth.py) 处理密码登录、浏览器会话接入、账号鉴权和原子会话更新。刷新按数据目录串行化，并与其他平台的凭证更新合并。客户端仅在明确失效时恢复已发出的读取，商品同步的 GET 标记为写入。离线 [认证测试](../tests/test_bcs_auth.py) 使用合成会话与 HTTP 替身。
 
 ## 测试和变更范围
 

@@ -52,7 +52,7 @@ def commit_auth(target: dict, candidate: dict, *, expected: str | None = None) -
         old_user = (current.get('login') or {}).get('username')
         new_user = (candidate.get('login') or {}).get('username')
         if old_user and new_user and old_user != new_user:
-            raise MabangAuthError('HAR 账号与现有马帮登录账号不一致，未覆盖凭证。')
+            raise MabangAuthError('本次连接账号与现有马帮登录账号不一致，未覆盖凭证。')
         if expected is not None and auth_signature(current) != expected:
             copy_auth(target, current)
             return False

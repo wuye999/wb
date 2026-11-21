@@ -7,12 +7,12 @@
 源码运行时将下方 usage 的 `sellerops` 换成 `python run.py`。全局 `--data-dir` 放在子命令之前。
 
 远端业务写入显式加 `--apply`；部分命令另需 `--yes`，具体以实际参数及操作流程为准。
-本地映射、凭证导入等命令会直接写本地数据。dry-run 不等于离线；写命令结束后不追加验证或同步。
+本地映射、连接平台等命令会直接写本地数据。dry-run 不等于离线；写命令结束后不追加验证或同步。
 
 当前凡涉及仓库的操作默认且仅限各店莫斯科仓库 ID，不回退其他地区仓；全店/全部商品不扩大到全仓。`warehouse-clear` 面向成都仓，当前不使用。
-WB 凭证使用一店人工抓包，通过 `cookies-update` 为同一登录下的已配置店铺逐店签发。受限浏览器步骤见 [手动抓包说明](CONFIGURATION.md#手动抓包更新凭证当前方式)。
+用 `login` 独立连接 BCS、马帮和 WB，见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
 
-共 59 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
+共 57 个命令。处理器链接用于维护者定位实现，不会在生成文档时加载处理器。
 
 | 命令 | 用途 | 实现入口 |
 | --- | --- | --- |
@@ -70,9 +70,7 @@ WB 凭证使用一店人工抓包，通过 `cookies-update` 为同一登录下�
 | `appeals` | 查询 WB 平台投诉单（只读；未处理/剩余天数筛选，输出去重商品编号与供应商代码） | [sellerops.features.support.complaints:run](../src/sellerops/features/support/complaints.py) |
 | `ratings` | 查询商品链接评分与评价情况（只读；支持按评分/店铺/1星评论筛选，导出包含价格表数据的报表） | [sellerops.features.support.ratings:run](../src/sellerops/features/support/ratings.py) |
 | `ai-test` | 使用本地问答集调用 LLM 对照生成回复（会联网） | [sellerops.features.support.ai_reply_test:run](../src/sellerops/features/support/ai_reply_test.py) |
-| `bcs-login` | 登录 BCS 或导入人工 HAR，更新本地 BCS 会话 | [sellerops.integrations.bcs.auth_command:run](../src/sellerops/integrations/bcs/auth_command.py) |
-| `mabang-login` | 登录马帮或导入人工 HAR，更新本地会话与 API 凭证 | [sellerops.features.orders.mabang_login:run](../src/sellerops/features/orders/mabang_login.py) |
-| `cookies-update` | 用一店人工抓包为同一 WB 登录下的已配置店铺重签凭证 | [sellerops.integrations.sessions.capture:run_cookies_update](../src/sellerops/integrations/sessions/capture.py) |
+| `login` | 安装专用浏览器或连接 BCS、马帮、WB | [sellerops.features.login:run](../src/sellerops/features/login.py) |
 | `daily` | 每日任务（morning=报名+改价 / check=只改价） | [sellerops.automation.daily:run_daily_cmd](../src/sellerops/automation/daily.py) |
 | `schedule` | 创建/删除 Windows 计划任务（默认预览，--apply 执行） | [sellerops.automation.schedule:run](../src/sellerops/automation/schedule.py) |
 
@@ -1161,36 +1159,21 @@ options:
   --qa QA     测试数据集 json（默认 data/ai_test_qa.json）
 ```
 
-## bcs-login
+## login
 
 ```text
-usage: sellerops bcs-login [-h] [--from-har PATH]
-
-options:
-  -h, --help       show this help message and exit
-  --from-har PATH  导入成功登录 HAR（相对路径从数据目录 har/ 读取）
-```
-
-## mabang-login
-
-```text
-usage: sellerops mabang-login [-h] [--from-har PATH]
-
-options:
-  -h, --help       show this help message and exit
-  --from-har PATH  导入成功登录和预报列表 HAR（相对路径从数据目录 har/ 读取）
-```
-
-## cookies-update
-
-```text
-usage: sellerops cookies-update [-h] md_file
+usage: sellerops login [-h] [--resume | --keep-open] [--bind BCS_ID=WB_UUID]
+                       {setup,bcs,mabang,wb}
 
 positional arguments:
-  md_file     含单个 fetch 块的文件（相对路径从数据目录 har/ 读取，或传绝对路径）
+  {setup,bcs,mabang,wb}
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help            show this help message and exit
+  --resume              仅检查专用浏览器中已保存的登录态
+  --keep-open           等待网页登录成功后，在同一个窗口完成连接
+  --bind BCS_ID=WB_UUID
+                        仅 WB，确认一组新店对应关系，可重复指定
 ```
 
 ## daily

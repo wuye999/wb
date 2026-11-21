@@ -10,7 +10,8 @@ from sellerops.core.errors import AuthenticationError, RateLimitError
 from sellerops.domain.product_reports import ProductReport, ReportIssue
 from sellerops.features.catalog import product_report_data as data
 from sellerops.features.listings.publish_records import load_records
-from sellerops.integrations.bcs.capture import BCSSession, MAX_CAPTURE_CHARS, parse_sessions
+from sellerops.integrations.bcs.capture import MAX_CAPTURE_CHARS, parse_sessions
+from sellerops.integrations.bcs.session import BCSSession
 from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop, client as bcs
 from sellerops.integrations.feishu import tables
 from sellerops.integrations.wildberries.open_api import WBOpenAPI, OpenAPIResponseError

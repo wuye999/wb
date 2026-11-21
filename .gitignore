@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+/.runtime/
 
 # 生产凭证、商业数据、快照、抓包、浏览器登录态和运行日志
 # data/ 整体保护，仅保留不含敏感信息的说明文件
@@ -16,6 +17,7 @@ dist/
 /logs/
 /har/
 /wb_browser_profiles/
+browser_profiles/
 /secrets/
 
 # 临时脚本、测试副本和本机工具资料可能包含生产数据

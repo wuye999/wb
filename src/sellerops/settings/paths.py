@@ -6,6 +6,7 @@ from sellerops.domain.vendor_codes import VC_PREFIX_RE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+BROWSER_RUNTIME_DIR = PROJECT_ROOT / '.runtime' / 'browsers'
 MAIN_SHOP = None
 DEFAULT_SHOP_ID = MAIN_SHOP
 DISCOUNT_THRESHOLD_DEF = 50
@@ -20,9 +21,9 @@ def configure(data_dir: str | Path | None = None) -> None:
     """Select the data root before loading command implementations; does not create it."""
     root = Path(data_dir or os.environ.get('SELLEROPS_DATA_DIR') or PROJECT_ROOT / 'data').expanduser().resolve()
     globals()['DATA_DIR'] = str(root)
-    directories = {'PRODUCTS_DIR': 'products', 'STATE_DIR': 'state', 'HAR_DIR': 'har',
+    directories = {'PRODUCTS_DIR': 'products', 'STATE_DIR': 'state',
                    'WORKBENCH_DIR': 'workbench', 'LOG_DIR': 'logs', 'SHOPS_DIR': 'shops',
-                   'SHOPS_ARCHIVE_DIR': 'shops/_archive'}
+                   'SHOPS_ARCHIVE_DIR': 'shops/_archive', 'BROWSER_PROFILES_DIR': 'browser_profiles'}
     files = {'CREDENTIALS_JSON': 'credentials.json', 'AI_TEST_QA': 'ai_test_qa.json',
              'PRICE_BOOK_XLSX': '商品价格表.xlsx', 'MAPPING_XLSX': '价格映射表.xlsx',
              'STATUS_JSON': 'state/多店铺同步状态.json', 'AUTO_ADD_JSON': 'state/多店铺自动新增清单.json',

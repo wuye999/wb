@@ -15,7 +15,7 @@ from sellerops.core.errors import RateLimitError
 from sellerops.core.errors import PlatformApiError
 from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.integrations.bcs.auth import auto_refresh_enabled, refresh_login
-from sellerops.integrations.bcs.capture import BCS_BASE_URL, BCSSession
+from sellerops.integrations.bcs.session import BCS_BASE_URL, BCSSession
 
 RETRY_MAX = 3
 PAGE_SIZE_BIG = 10000

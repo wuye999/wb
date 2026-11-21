@@ -308,7 +308,7 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
     n = stat.get("REPLACE", 0)
     if args.apply and n:
         if not mb_client_api_ready(cred):
-            print("[错误] 更换订单商品需要马帮 API 凭证，请先运行 mabang-login 更新会话。")
+            print("[错误] 更换订单商品需要马帮 API 凭证，请先运行 sellerops login mabang 更新会话。")
             write_csv(recs)
             return 1
         print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；仓库 {warehouse_id}）...")
