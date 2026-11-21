@@ -11,7 +11,10 @@ import os
 import sys
 
 
-class CookieExpiredError(RuntimeError):
+from sellerops.core.errors import AuthenticationError
+
+
+class CookieExpiredError(AuthenticationError):
     """WB cookie 失效（HTTP 403，cfidsw-wb 过期）"""
 
 

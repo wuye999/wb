@@ -8,8 +8,8 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from sellerops.domain.models import PublishItem
-from sellerops.features.listings import card_publish, publish_details, replicate
-from sellerops.features.listings.card_payload import build_card_payload
+from sellerops.features.publishing import card_publish, publish_details, replicate
+from sellerops.features.publishing.card_payload import build_card_payload
 
 
 def item(vc='BCS-TEST-1', targets=None):
@@ -79,7 +79,7 @@ class TestReplication(TestCase):
     def test_minimum_formula_and_package_columns_follow_headers(self):
         import openpyxl
         from sellerops.persistence.mappings import MappingRepository
-        from sellerops.features.listings import product_details
+        from sellerops.features.publishing import product_details
         with tempfile.TemporaryDirectory() as directory:
             file = Path(directory) / 'book.xlsx'
             book = openpyxl.Workbook()
@@ -89,11 +89,11 @@ class TestReplication(TestCase):
             sheet.append(['10*20*30/0.5','=83.05/2',90,'fixture','sku'])
             book.save(file)
             book.close()
-            with patch.object(replicate.config,'PRICE_BOOK_XLSX',str(file)), \
-                    patch.object(product_details,'_pkg_cache',None):
+            with patch.object(replicate.config.current,'price_book_xlsx',str(file)), \
+                    patch.object(product_details.config, 'current', product_details.config.current):
                 rows = MappingRepository.load_price_book()
                 self.assertEqual(rows[0]['minimum_price'],41.525)
-                self.assertEqual(product_details.price_book_packages()['fixture'],(10,20,30,0.5))
+                self.assertEqual(product_details.price_book_packages(product_details.config.current)['fixture'],(10,20,30,0.5))
 
     def test_all_reads_finish_before_first_write_and_only_target_warehouse_is_read(self):
         events = []
@@ -120,7 +120,7 @@ class TestReplication(TestCase):
                 patch.object(card_publish.bcs,'fetch_shop_list',side_effect=AssertionError('unrelated shop read')), \
                 patch.object(card_publish,'load_records',return_value={}), \
                 patch.object(card_publish,'save_records'), \
-                patch.object(card_publish.bcs, 'client', base_url='https://fixture.invalid') as client:
+                patch.object(card_publish, 'bcs', base_url='https://fixture.invalid') as client:
             client.post.side_effect = submit
             result = card_publish.execute_publish([one,two],apply=True,interval=0,writer=Mock(),check_exists=False)
         wh.assert_called_once_with(42)
@@ -139,7 +139,7 @@ class TestReplication(TestCase):
     def test_one_missing_target_warehouse_blocks_group_instead_of_silent_partial_success(self):
         with contextlib.redirect_stdout(io.StringIO()), \
                 patch.object(card_publish,'load_records',return_value={}), \
-                patch.object(card_publish.bcs.client,'post') as post:
+                patch.object(card_publish.bcs,'post') as post:
             result = card_publish.execute_publish([item(targets=[42,43])],apply=True,writer=Mock(),
                                                  check_exists=False,warehouses={42:100})
         self.assertEqual(result['fail'],1)
@@ -149,7 +149,7 @@ class TestReplication(TestCase):
         with contextlib.redirect_stdout(io.StringIO()), \
                 patch.object(card_publish,'load_records',return_value={}), \
                 patch.object(card_publish,'save_records'), \
-                patch.object(card_publish.bcs.client,'post',return_value={'code':200}) as post:
+                patch.object(card_publish.bcs,'post',return_value={'code':200}) as post:
             result = card_publish.execute_publish([item(),item()],apply=True,writer=Mock(),
                                                  interval=0,check_exists=False,warehouses={42:100})
         self.assertEqual((result['ok'],result['skip']),(1,1))
@@ -161,8 +161,8 @@ class TestReplication(TestCase):
                 patch.object(snapshots,'exists',return_value=True), \
                 patch.object(snapshots,'load_shop_products',return_value=[{'vendorCode':'BCS-TEST-1','trashedAt':'date'}]), \
                 patch.object(card_publish,'load_records',return_value={}), \
-                patch.object(card_publish.bcs.client,'get',side_effect=AssertionError('remote catalog read')), \
-                patch.object(card_publish.bcs.client,'post') as post:
+                patch.object(card_publish.bcs,'get',side_effect=AssertionError('remote catalog read')), \
+                patch.object(card_publish.bcs,'post') as post:
             result = card_publish.execute_publish([item()],apply=True,writer=Mock(),warehouses={42:100})
         self.assertEqual((result['ok'],result['skip'],result['fail']),(0,1,0))
         post.assert_not_called()
@@ -171,7 +171,7 @@ class TestReplication(TestCase):
         from sellerops.persistence.snapshots import ProductSnapshotRepository as snapshots
         with patch.object(snapshots,'exists',return_value=False), \
                 patch.object(card_publish,'load_records',return_value={}), \
-                patch.object(card_publish.bcs.client,'post') as post, \
+                patch.object(card_publish.bcs,'post') as post, \
                 self.assertRaisesRegex(ValueError,'缺少本地快照'):
             card_publish.execute_publish([item()],apply=True,writer=Mock(),warehouses={42:100})
         post.assert_not_called()

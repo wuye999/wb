@@ -133,7 +133,7 @@ def connect_browser_session(baseline: Credentials, session: BCSSession) -> None:
 
 def refresh_login(*, expected: Credentials | None = None) -> Credentials:
     """Serialize refreshes per data directory and reuse a concurrent successful renewal."""
-    path = Path(paths.CREDENTIALS_JSON).resolve()
+    path = Path(paths.current.credentials_json).resolve()
     with FileLock(path.with_name('bcs-auth'), timeout=90):
         baseline = credentials.reload()
         if not isinstance(baseline.bcs, dict):

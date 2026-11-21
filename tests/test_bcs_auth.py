@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import requests
 
-from sellerops.core.errors import AuthenticationError, RateLimitError
+from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
 from sellerops.core.files import atomic_dump_json, safe_load_json
 from sellerops.integrations.bcs import auth
 from sellerops.integrations.bcs.session import BCS_BASE_URL, LOGIN_URL, BCSSession
@@ -70,9 +70,9 @@ class TestPasswordLogin(TestCase):
 class TestBCSRefresh(TestCase):
     def setUp(self):
         directory = self.enterContext(TemporaryDirectory())
-        self.addCleanup(paths.configure, paths.DATA_DIR)
+        self.addCleanup(paths.configure, paths.current.data_dir)
         paths.configure(directory)
-        self.path = Path(paths.CREDENTIALS_JSON)
+        self.path = Path(paths.current.credentials_json)
         self.original = {'bcs': {'token': 'old-token', 'limit_key': 'old-limit', 'cookie_extra': 'acw_tc=old',
                                  'login': {'username': USERNAME, 'password': PASSWORD}},
                          'wb': {'shops': []}, 'mabang': {'unrelated': 'preserve'}}
@@ -81,6 +81,43 @@ class TestBCSRefresh(TestCase):
         self.password_login = self.enterContext(patch.object(auth, 'password_login', return_value=NEW_SESSION))
         self.verify = self.enterContext(patch.object(auth.requests, 'get', return_value=reply(
             code=200, data={'userName': USERNAME})))
+
+    def test_named_writes_use_the_existing_wire_format_once(self):
+        stock = [{'chrtId': 303, 'amount': 0}]
+        price = [{'nmID': 101, 'price': 12, 'discount': 40, 'clubDiscount': None}]
+        client = BCSClient(NEW_SESSION)
+        with patch.object(requests, 'request', return_value=reply(code=200, msg='fixture')) as send:
+            for func, args, endpoint, payload in [
+                (client.batch_set_prices, (42, price), 'price/batch', {'dataList': [{**price[0], 'shopId': 42}]}),
+                (client.batch_set_stock, (42, 55, stock), 'stock/batchSetByChrtIdsBatch',
+                 {'shopId': 42, 'warehouses': [{'warehouseId': 55, 'stockItems': stock}]}),
+                (client.remove_to_trash, (42, [101]), 'clean/removeToTrash', [{'shopId': 42, 'nmId': 101}]),
+            ]:
+                with self.subTest(endpoint=endpoint):
+                    send.reset_mock()
+                    self.assertEqual(func(*args)['code'], 200)
+                    self.assertEqual(send.call_count, 1)
+                    self.assertEqual(send.call_args.args, ('POST', BCS_BASE_URL + '/shopKeeper/' + endpoint))
+                    self.assertEqual(send.call_args.kwargs['json'], payload)
+                    send.reset_mock()
+                    send.side_effect = requests.Timeout()
+                    with self.assertRaises(NetworkError):
+                        func(*args)
+                    self.assertEqual(send.call_count, 1)
+                    send.side_effect = None
+        self.assertNotIn('shopId', price[0])
+
+    def test_discount_batches_keep_the_original_price_and_individual_receipts(self):
+        from sellerops.features.products import discount_bcs
+        items = [{'nmID': number, 'price': number + 10} for number in (1, 2, 3)]
+        with patch.object(discount_bcs, 'CHUNK', 2), patch.object(discount_bcs.time, 'sleep'), \
+                patch.object(discount_bcs.bcs, 'post', side_effect=[{'code': 200}, {'code': 400}]) as send:
+            result = discount_bcs.apply(42, items, 55)
+        batches = [call.args[1]['dataList'] for call in send.call_args_list]
+        expected = [{**item, 'discount': 55, 'clubDiscount': None, 'shopId': 42} for item in items]
+        self.assertEqual(batches, [expected[:2], expected[2:]])
+        self.assertEqual((result[1], result[2]), ('成功', '成功'))
+        self.assertIn('400', result[3])
 
     def test_auto_refresh_retries_rejected_read_once_with_new_headers(self):
         client = BCSClient()
@@ -104,7 +141,10 @@ class TestBCSRefresh(TestCase):
 
     def test_post_and_get_sync_are_never_reissued_after_renewal(self):
         client = BCSClient()
-        for call in (lambda: client.post(BCS_BASE_URL + '/shopKeeper/price/batch', []), lambda: client.sync_shop(1)):
+        writes = [lambda: client.batch_set_prices(42, [{'nmID': 123, 'price': 40}]),
+                  lambda: client.batch_set_stock(42, 55, [{'chrtId': 303, 'amount': 0}]),
+                  lambda: client.remove_to_trash(42, [123]), lambda: client.sync_shop(1)]
+        for call in writes:
             with self.subTest(call=call):
                 atomic_dump_json(self.path, self.original)
                 credentials.reload()
@@ -112,7 +152,7 @@ class TestBCSRefresh(TestCase):
                     with self.assertRaisesRegex(AuthenticationError, '未重新提交'):
                         call()
                 send.assert_called_once()
-        self.assertEqual(self.password_login.call_count, 2)
+        self.assertEqual(self.password_login.call_count, len(writes))
 
     def test_missing_session_renews_before_first_request(self):
         self.original['bcs']['limit_key'] = ''

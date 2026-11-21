@@ -73,7 +73,7 @@ def fetch_feedback_page(
         "limit": limit,
         "offset": offset,
     }
-    resp = wb_api.request_post(session, FEEDBACK_DETAILS_URL, payload)
+    resp = wb_api.request_post(session, FEEDBACK_DETAILS_URL, payload, read_only=True)
     if not isinstance(resp, dict):
         return []
     data = resp.get("data") or {}

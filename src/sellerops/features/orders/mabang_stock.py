@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from sellerops.core import utils as common
 from sellerops.settings import credentials
 from sellerops.integrations.mabang.orders import fetch_stock_list as mbc_fetch_stock_list
-from sellerops.integrations.mabang.client import get_mabang_cred as mbc_get_mabang_cred
+from sellerops.integrations.mabang.client import get_mabang_cred
 from sellerops.integrations.mabang.orders import download_file as mbc_download_file   # 马帮 HTTP 原语（唯一实现，勿经服务层转发模块调用）
 from sellerops.integrations.feishu.tables import invoke
 from sellerops.integrations.feishu.tables import resolve_base
@@ -132,7 +132,7 @@ def _resolve_attachment_field(base_token, table_id):
 
 def run(args):
     common.ensure_utf8_stdout()
-    cred = mbc_get_mabang_cred()
+    cred = get_mabang_cred()
     url = args.url or credentials.get().feishu_base_url()
     if not url:
         print("[错误] 未提供 --url 且配置 feishu.base_url 缺失")

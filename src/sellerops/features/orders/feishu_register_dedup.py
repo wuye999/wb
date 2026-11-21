@@ -1,5 +1,5 @@
 """
-sellerops 飞书「订单登记」存量重复清理（sellerops feishu-register-dedup）
+sellerops 飞书「订单登记」存量重复清理（sellerops order deduplicate）
 
 背景（2026-10 事故）：
   `feishu_register.fetch_existing_order_ids` 旧实现只读 lark-cli ndjson 第一页
@@ -107,7 +107,7 @@ def write_report(groups, to_delete):
                 w.writerow({"订单编号": g["order_id"], "日期": d, "record_id": rid,
                             "动作": "删除", "组内序号": i})
 
-    return common.write_csv_preferred(config.LOG_DIR, "飞书订单登记去重_{ts}.csv",
+    return common.write_csv_preferred(config.current.log_dir, "飞书订单登记去重_{ts}.csv",
                                       "feishu_order_register_dedup_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 
@@ -156,5 +156,5 @@ def run(args):
     print(f"\n[写入] 开始删除 {len(rids)} 行（≤{DELETE_BATCH}/批）...")
     n = delete_records(base_token, table_id, rids)
     print(f"\n[完成] 共删除 {n} 行；预期剩余 {total - n} 行")
-    print("[复核] 请再跑一次 `python -m sellerops feishu-register-dedup`（dry-run）确认「多余重复行 0」")
+    print("[复核] 请再跑一次 `python -m sellerops order deduplicate`（dry-run）确认「多余重复行 0」")
     return 0

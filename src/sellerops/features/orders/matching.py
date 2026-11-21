@@ -1,19 +1,18 @@
 """matching。"""
 import csv
-
-
+from dataclasses import dataclass, field
 import re
 import time
 import requests
 from sellerops.settings import paths as config
 from sellerops.core import utils as common
-from sellerops.integrations.mabang.client import get_mabang_cred as mb_client_get_mabang_cred
-from sellerops.integrations.mabang.orders import fetch_pending_orders as mb_client_fetch_pending_orders
-from sellerops.integrations.mabang.client import REQUEST_INTERVAL as mb_client_REQUEST_INTERVAL
-from sellerops.integrations.mabang.client import api_ready as mb_client_api_ready
-from sellerops.integrations.mabang.orders import fetch_order_item_ids as mb_client_fetch_order_item_ids
-from sellerops.integrations.mabang.orders import search_stock as mb_client_search_stock
-from sellerops.integrations.mabang.orders import replace_order_item as mb_client_replace_order_item
+from sellerops.integrations.mabang.client import get_mabang_cred
+from sellerops.integrations.mabang.orders import fetch_pending_orders
+from sellerops.integrations.mabang.client import REQUEST_INTERVAL
+from sellerops.integrations.mabang.client import api_ready
+from sellerops.integrations.mabang.orders import fetch_order_item_ids
+from sellerops.integrations.mabang.orders import search_stock
+from sellerops.integrations.mabang.orders import replace_order_item
 from sellerops.integrations.mabang.session import MabangAuthError
 from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
 
@@ -44,10 +43,10 @@ def load_local_mapping():
     vc2cn = {str(vc).strip(): str(st.get("cn") or "").strip() for vc, st in state.items() if vc}
 
     cn2sku = {}
-    wb = load_workbook(config.PRICE_BOOK_XLSX, read_only=True)
+    wb = load_workbook(config.current.price_book_xlsx, read_only=True)
     try:
         ws = wb[wb.sheetnames[0]]
-        cols = price_book_columns(ws, config.PRICE_BOOK_XLSX, required=("cn",))
+        cols = price_book_columns(ws, config.current.price_book_xlsx, required=("cn",))
         i_cn, i_stock = cols["cn"], cols["stock_sku"]
         if i_stock is None:
             print("[警告] 商品价格表缺少「库存SKU」列：所有订单将判 NO_SKU，请先补该列")
@@ -162,14 +161,14 @@ def apply_replace(cred, recs, warehouse_id):
         write_started = False
         for attempt in range(REPLACE_RETRY + 1):
             try:
-                ids = mb_client_fetch_order_item_ids(cred, rec["order_id"])
+                ids = fetch_order_item_ids(cred, rec["order_id"])
                 if len(ids) != 1:
                     raise RuntimeError(f"orderItemId 数量={len(ids)}，需人工处理")
-                stock = mb_client_search_stock(cred, rec["expected_sku"], warehouse_id)
+                stock = search_stock(cred, rec["expected_sku"], warehouse_id)
                 if stock is None:
                     raise RuntimeError(f"马帮未找到库存 SKU {rec['expected_sku']}")
                 write_started = True
-                mb_client_replace_order_item(cred, ids[0], stock["id"], warehouse_id)
+                replace_order_item(cred, ids[0], stock["id"], warehouse_id)
                 suffix = "（首次异常，重试成功）" if attempt else ""
                 rec["note"] = f"已更换 -> {stock['stockSku']}(stockId={stock['id']}){suffix}"
                 ok += 1
@@ -192,7 +191,7 @@ def apply_replace(cred, recs, warehouse_id):
             suffix = "（已重试1次）" if attempt else ""
             rec["note"] = f"更换失败: {str(err)[:80]}{suffix}"
             fail += 1
-        time.sleep(mb_client_REQUEST_INTERVAL)
+        time.sleep(REQUEST_INTERVAL)
     return ok, fail
 
 CSV_FIELDS = ["状态", "订单ID", "平台单号", "店铺", "付款时间", "VC码", "中文名",
@@ -215,7 +214,7 @@ def write_csv(recs):
                         "中文名": r["cn_name"], "系统匹配SKU": r["matched_sku"],
                         "期望SKU": r["expected_sku"], "备注": r["note"]})
 
-    return common.write_csv_preferred(config.LOG_DIR, CSV_NAME_TPL, CSV_NAME_ALIAS,
+    return common.write_csv_preferred(config.current.log_dir, CSV_NAME_TPL, CSV_NAME_ALIAS,
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 
 def report_no_sku(recs):
@@ -236,7 +235,7 @@ def report_no_sku(recs):
             w.writerow([r["order_id"], r["shop_bcs"] or r["shop"],
                         r["cn_name"], r["vc"], r["note"]])
 
-    path = common.write_csv_preferred(config.LOG_DIR, "缺库存SKU订单_{ts}.csv",
+    path = common.write_csv_preferred(config.current.log_dir, "缺库存SKU订单_{ts}.csv",
                                       "mabang_no_stock_sku_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
     if path:
@@ -265,32 +264,44 @@ def report_replace_fail(recs):
                         r["shop_bcs"] or r["shop"], r["cn_name"], r["vc"],
                         r["expected_sku"], r["matched_sku"], r["note"]])
 
-    path = common.write_csv_preferred(config.LOG_DIR, "更换失败订单_{ts}.csv",
+    path = common.write_csv_preferred(config.current.log_dir, "更换失败订单_{ts}.csv",
                                       "mabang_replace_fail_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
     if path:
         print(f"[报告] 更换失败明细: {path}")
     return path
 
-def run(args, *, continue_on_item_failure: bool = False) -> int:
+
+
+@dataclass
+class MatchResult:
+    stopped: bool = False
+    failures: dict[str, str] = field(default_factory=dict)
+    group_ids: set[str] = field(default_factory=set)
+    matched_ids: set[str] = field(default_factory=set)
+
+    @property
+    def failed_ids(self) -> set[str]:
+        return set(self.failures)
+
+
+def match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
     common.ensure_utf8_stdout()
     # 保留本轮分流和更换失败的订单 ID，供组合流程复用。
-    setattr(args, "replace_fail_order_ids", [])
-    args.group_shipping_order_ids = set()
-    cred = mb_client_get_mabang_cred()
-    warehouse_id = int(cred.get("warehouse_id") or 1457537)
+    result = MatchResult()
+    cred = get_mabang_cred()
     shop_map = cred["shop_map"]
     print(f"[配置] 目标店铺: {'、'.join(f'{k}→{v}' for k, v in shop_map.items())}")
-    scope = f"最近 {args.days} 天" if args.days else "全部新增，不限日期"
+    scope = f"最近 {days} 天" if days else "全部新增，不限日期"
     print(f"\n[查询] 待处理订单（{scope}，仅处理配置店铺，tabId=7）...")
-    orders = mb_client_fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
+    orders = fetch_pending_orders(cred, days=days, page_size=page_size)
     if not orders:
         print("[完成] 无待处理订单")
-        return 0
+        return result
 
     vc2cn, cn2sku = load_local_mapping()
     recs = classify(orders, vc2cn, cn2sku, shop_map)
-    args.group_shipping_order_ids = {str(r["order_id"]) for r in recs
+    result.group_ids = {str(r["order_id"]) for r in recs
                                      if r["status"] == STATUS_GROUP_SHIPPING and r["order_id"]}
 
     stat = {}
@@ -301,16 +312,23 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
           f"跳过非目标店铺 {stat.get('SKIP_SHOP', 0)} 单；"
           + " / ".join(f"{k}={v}" for k, v in sorted(stat.items())))
     for r in recs:
-        if r["status"] not in ("SKIP_SHOP", "REPLACE") or not args.apply:
+        if r["status"] not in ("SKIP_SHOP", "REPLACE") or not apply:
             print(f"  [{r['status']}] {r['order_id']} [{r['shop_bcs'] or r['shop']}] "
                   f"{r['vc'] or '(无VC)'} {r['cn_name']} | {r['note']}")
 
     n = stat.get("REPLACE", 0)
-    if args.apply and n:
-        if not mb_client_api_ready(cred):
+    if apply and n:
+        from sellerops.domain.snapshot_values import positive_id
+        warehouse_id = positive_id(cred.get("warehouse_id"))
+        if warehouse_id is None:
+            print("[中止] 请在马帮配置中填写经核实的莫斯科业务仓 warehouse_id")
+            result.stopped = True
+            return result
+        if not api_ready(cred):
             print("[错误] 更换订单商品需要马帮 API 凭证，请先运行 sellerops login mabang 更新会话。")
             write_csv(recs)
-            return 1
+            result.stopped = True
+            return result
         print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；仓库 {warehouse_id}）...")
         try:
             ok, fail = apply_replace(cred, recs, warehouse_id)
@@ -322,10 +340,7 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
             raise
         tail = "（失败单已标 REPLACE_FAIL，本轮不进预报/交运）" if fail else ""
         print(f"  更换成功 {ok} / 失败 {fail}{tail}")
-        # 供 mabang-process 步骤②按订单ID排除（此处赋值须早于下方报告/CSV）
-        setattr(args, "replace_fail_order_ids",
-                [str(r["order_id"]) for r in recs if r["status"] == STATUS_REPLACE_FAIL])
-    elif not args.apply:
+    elif not apply:
         print("\n（dry-run 模式未做任何更换；确认无误后加 --apply 执行）")
 
     report_no_sku(recs)
@@ -334,4 +349,12 @@ def run(args, *, continue_on_item_failure: bool = False) -> int:
     csv_path = write_csv(recs)
     print(f"\n[汇总] 明细: {csv_path or '（未生成，见上方警告）'}")
     # The combined workflow handles failed IDs explicitly and keeps other orders moving.
-    return 1 if args.replace_fail_order_ids and not continue_on_item_failure else 0
+    result.failures = {str(r["order_id"]): r["note"] for r in recs if r["order_id"]
+                       and r["status"] not in {"SKIP_SHOP", STATUS_GROUP_SHIPPING, "REPLACE"}}
+    result.matched_ids = {str(r["order_id"]) for r in recs if r["status"] == "REPLACE" and r["order_id"]}
+    return result
+
+
+def run(args) -> int:
+    result = match_orders(days=args.days, page_size=args.page_size, apply=args.apply)
+    return int(result.stopped or bool(result.failed_ids))

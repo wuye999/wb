@@ -15,8 +15,8 @@ from openpyxl import load_workbook
 from sellerops.cli.main import build_parser
 from sellerops.domain.product_reports import ReportCatalog
 from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLimitError
-from sellerops.features.catalog import product_report as workflow
-from sellerops.features.catalog.product_report_analysis import analyze
+from sellerops.features.reports import product_report as workflow
+from sellerops.features.reports.product_report_analysis import analyze
 from sellerops.integrations.bcs.capture import MAX_CAPTURE_CHARS, parse_sessions
 from sellerops.integrations.bcs.session import BCS_BASE_URL, BCSSession
 from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop
@@ -278,7 +278,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
             sentinel = root / 'credentials.json'
             sentinel.write_bytes(b'{"local":"unchanged"}')
             output = root / 'report.xlsx'
-            args = build_parser().parse_args(['product-report', '--shops', '11', '--extra-bcs-stdin', '--details',
+            args = build_parser().parse_args(['report', 'products', '--shops', '11', '--extra-bcs-stdin', '--details',
                                               '--url', 'fixture', '--out', str(output)])
             # UTF-8管道不受Windows文本流默认编码影响。
             stdin = io.TextIOWrapper(io.BytesIO(capture().encode('utf-8')), encoding='gbk')
@@ -329,7 +329,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
         self.fixture([AuthenticationError('temporary-token-a; temporary-cookie-a')])
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'report.xlsx'
-            args = build_parser().parse_args(['product-report', '--extra-bcs-stdin', '--details',
+            args = build_parser().parse_args(['report', 'products', '--extra-bcs-stdin', '--details',
                                               '--url', 'fixture', '--out', str(output)])
             stdout = io.StringIO()
             with patch.object(workflow.sys, 'stdin', io.StringIO(capture())), redirect_stdout(stdout):
@@ -351,7 +351,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
         report = workflow.collect(now=NOW, url='fixture')
         with tempfile.TemporaryDirectory() as directory, patch.object(workflow.sys, 'stdin', stdin), \
                 patch.object(workflow, 'collect', return_value=report):
-            args = build_parser().parse_args(['product-report', '--out', str(Path(directory) / 'report.xlsx')])
+            args = build_parser().parse_args(['report', 'products', '--out', str(Path(directory) / 'report.xlsx')])
             self.assertEqual(workflow.run(args), 0)
         self.bcs_factory.assert_not_called()
         self.assertEqual(report.target_shop_ids, {11, 12})

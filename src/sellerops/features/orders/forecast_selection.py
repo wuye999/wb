@@ -7,8 +7,8 @@ import time
 
 from sellerops.settings import paths as config
 from sellerops.core import utils as common
-from sellerops.integrations.mabang.client import get_mabang_cred as mb_client_get_mabang_cred
-from sellerops.integrations.mabang.orders import fetch_pending_orders as mb_client_fetch_pending_orders
+from sellerops.integrations.mabang.client import get_mabang_cred
+from sellerops.integrations.mabang.orders import fetch_pending_orders
 from sellerops.features.orders.matching import STATUS_GROUP_SHIPPING
 from sellerops.features.orders.matching import classify
 from sellerops.features.orders.matching import load_local_mapping
@@ -40,35 +40,36 @@ def write_forecast_csv(order_recs, batch_rows):
                         "批次重量": b.get("orderWeight", ""),
                         "上传货代": b.get("forecastLogisticsName", "")})
 
-    return common.write_csv_preferred(config.LOG_DIR, "马帮预报批次_{ts}.csv",
+    return common.write_csv_preferred(config.current.log_dir, "马帮预报批次_{ts}.csv",
                                       "mabang_forecast_batch_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 
-def collect_forecast_orders(args):
+def collect_forecast_orders(args, *, failed_ids=(), group_shipping_ids=(), matched_ids=None):
     """查待处理订单 → 目标店铺 → VC 链路解析成功(REPLACE)的订单，返回 (recs, cred)"""
-    cred = mb_client_get_mabang_cred()
+    cred = get_mabang_cred()
     shop_map = cred["shop_map"]
     print(f"[配置] 目标店铺: {'、'.join(f'{k}→{v}' for k, v in shop_map.items())}")
     scope = f"最近 {args.days} 天" if args.days else "全部新增，不限日期"
     print(f"\n[查询] 待处理订单（{scope}）...")
-    orders = mb_client_fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
+    orders = fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
     if not orders:
         print("[完成] 无待处理订单")
         return [], cred
     vc2cn, cn2sku = load_local_mapping()
     recs = classify(orders, vc2cn, cn2sku, shop_map)
-    group_shipping_ids = getattr(args, "group_shipping_order_ids", ())
     for rec in recs:
         if rec["status"] != "SKIP_SHOP" and str(rec["order_id"]) in group_shipping_ids:
             rec["status"] = STATUS_GROUP_SHIPPING
     target = [r for r in recs if r["status"] == "REPLACE"]
+    if matched_ids is not None:
+        target = [r for r in target if str(r["order_id"]) in matched_ids]
     other = {}
     for r in recs:
         if r["status"] != "REPLACE":
             other[r["status"]] = other.get(r["status"], 0) + 1
     # 步骤① 更换失败的单：仅当 mabang-process 把失败ID传进来才排除
     # （单独跑 mabang-forecast 时 args 上无此属性 ⇒ 行为与旧版完全一致，不做 matched_sku 自检）
-    fail_ids = {str(x) for x in (getattr(args, "replace_fail_order_ids", None) or ())}
+    fail_ids = {str(x) for x in failed_ids}
     if fail_ids:
         hit = [r for r in target if str(r["order_id"]) in fail_ids]
         if hit:
@@ -83,6 +84,8 @@ def collect_forecast_orders(args):
             continue
         try:
             canceled |= wb_api.fetch_canceled_ids(int(m.group(1)))
+        except wb_api.AuthenticationError:
+            raise
         except Exception as e:
             print(f"  [警告] 店{m.group(1)} 取消单查询失败（跳过排除）: {e}")
     n_cancel = sum(1 for r in target if str(r["platform_order_id"]) in canceled)

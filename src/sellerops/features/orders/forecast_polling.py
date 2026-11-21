@@ -4,7 +4,7 @@
 import time
 
 
-from sellerops.integrations.mabang.forecast import get_forecast_list as mb_client_get_forecast_list
+from sellerops.integrations.mabang.forecast import get_forecast_list
 from sellerops.integrations.mabang.session import MabangAuthError
 
 DEF_UPLOAD_TIMEOUT = 900
@@ -59,7 +59,7 @@ def find_batches(cred, batch_nos, status, rows_per_page=200, max_pages=50):
         return res
     page, total_pages = 1, None
     while page <= max_pages:
-        rows, stats = mb_client_get_forecast_list(cred, status=status,
+        rows, stats = get_forecast_list(cred, status=status,
                                         rows_per_page=rows_per_page, page=page)
         res["pages_fetched"] = page
         res["stats"] = stats or {}

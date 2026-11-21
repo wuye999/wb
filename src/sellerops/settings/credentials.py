@@ -11,6 +11,7 @@ BCS 三件套（token/limit_key/cookie_extra）+ WB 全部店铺 cookie 全在�
 """
 
 
+from functools import lru_cache
 from sellerops.settings import paths as config
 from sellerops.core.files import safe_load_json
 DEFAULT_ROOT_VERSION = "v1.108.1"
@@ -20,7 +21,7 @@ class Credentials:
     """凭证访问器：读 credentials.json，提供 BCS header 与 WB 店铺会话数据。"""
 
     def __init__(self, path=None):
-        self.path = path or config.CREDENTIALS_JSON
+        self.path = path or config.current.credentials_json
         self.reload()
 
     def reload(self):
@@ -124,18 +125,15 @@ class Credentials:
         return (len(problems) == 0), problems
 
 
-# ---- 模块级单例（懒加载，登录更新后 reload） ----
-_CRED = None
+@lru_cache(maxsize=1)
+def _credentials(data: config.DataPaths) -> Credentials:
+    return Credentials(data.credentials_json)
 
 
-def get():
-    global _CRED
-    if _CRED is None or _CRED.path != config.CREDENTIALS_JSON:
-        _CRED = Credentials()
-    return _CRED
+def get() -> Credentials:
+    return _credentials(config.current)
 
 
-def reload():
-    global _CRED
-    _CRED = Credentials()
-    return _CRED
+def reload() -> Credentials:
+    _credentials.cache_clear()
+    return get()

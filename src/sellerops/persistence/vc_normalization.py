@@ -47,13 +47,13 @@ def load_catalog() -> NormalizationCatalog:
     """按表头读取所需两列；不依赖价格、图片、包装、库存或快照。"""
     import openpyxl
 
-    result = NormalizationCatalog(owners=_read_ownership(paths.VC_KNOWN_JSON),
-                                  overrides=_read_ownership(paths.VC_OVERRIDE_JSON))
-    excluded = safe_load_json(paths.VC_EXCLUDED_JSON, default={})
+    result = NormalizationCatalog(owners=_read_ownership(paths.current.vc_known_json),
+                                  overrides=_read_ownership(paths.current.vc_override_json))
+    excluded = safe_load_json(paths.current.vc_excluded_json, default={})
     if not isinstance(excluded, dict):
         raise ValueError('vc_excluded.json 必须为排除对象')
     result.excluded.update(_text(vc).upper() for vc in excluded)
-    path = Path(paths.PRICE_BOOK_XLSX)
+    path = Path(paths.current.price_book_xlsx)
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         ws = wb['Sheet1']
@@ -65,7 +65,7 @@ def load_catalog() -> NormalizationCatalog:
     finally:
         wb.close()
 
-    path = Path(paths.MAPPING_XLSX)
+    path = Path(paths.current.mapping_xlsx)
     if path.exists():
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
         try:
@@ -90,7 +90,7 @@ def load_catalog() -> NormalizationCatalog:
 def load_attempts() -> list[RenameAttempt]:
     """损坏日志阻止提交；预览及从未发送的项不占用历史分配。"""
     result = []
-    for path in sorted(Path(paths.LOG_DIR).glob(f'{COMMAND}_*.json')):
+    for path in sorted(Path(paths.current.log_dir).glob(f'{COMMAND}_*.json')):
         doc = safe_load_json(path)
         if (not isinstance(doc, dict) or doc.get('version') != 1 or doc.get('command') != COMMAND
                 or type(doc.get('apply')) is not bool or not isinstance(doc.get('items'), list)):

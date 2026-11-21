@@ -45,6 +45,7 @@ class WBOpenAPI:
             token = token[7:].strip()
         if not token or '\r' in token or '\n' in token:
             raise AuthenticationError('缺少有效 WB Open API 令牌')
+        self.auth_failed = False
         self.region = region
         self.session = requests.Session()
         self.session.headers.update({'Authorization': token, 'Accept': 'application/json'})
@@ -54,6 +55,8 @@ class WBOpenAPI:
         self.session.close()
 
     def _request(self, service: str, method: str, path: str, **kwargs: Any) -> Any:
+        if self.auth_failed:
+            raise AuthenticationError("该店令牌鉴权失败，本次操作已停止")
         allowed = {
             ('content-api', 'POST', '/content/v2/get/cards/list'): 0.61,
             ('discounts-prices-api', 'POST', '/api/v2/list/goods/filter'): 0.61,
@@ -88,6 +91,7 @@ class WBOpenAPI:
                 raise NetworkError(f'WB Open API {service} 请求失败') from None
             status = response.status_code
             if status in {401, 403}:
+                self.auth_failed = True
                 raise AuthenticationError(f'WB Open API {service} 令牌失效或类别权限不足')
             if status == 429:
                 # 不自动等待数小时或重复请求低限额基础令牌。

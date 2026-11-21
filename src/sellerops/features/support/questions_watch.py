@@ -29,26 +29,24 @@ from sellerops.persistence.mappings import MappingRepository
 from sellerops.features.support import questions
 from sellerops.integrations.wildberries import client as wb_api
 
-REPLIED_JSON = os.path.join(config.STATE_DIR, "questions_replied.json")
-SHOWN_JSON = os.path.join(config.STATE_DIR, "questions_front_shown.json")
 
 
 def load_replied():
-    data = safe_load_json(REPLIED_JSON, default=[], use_lock=True)
+    data = safe_load_json(config.current.questions_replied, default=[], use_lock=True)
     return set(data) if isinstance(data, list) else set()
 
 
 def save_replied(s):
-    atomic_dump_json(REPLIED_JSON, sorted(list(s)), indent=2, use_lock=True)
+    atomic_dump_json(config.current.questions_replied, sorted(list(s)), indent=2, use_lock=True)
 
 
 def load_shown():
-    data = safe_load_json(SHOWN_JSON, default=[], use_lock=True)
+    data = safe_load_json(config.current.questions_shown, default=[], use_lock=True)
     return set(data) if isinstance(data, list) else set()
 
 
 def save_shown(s):
-    atomic_dump_json(SHOWN_JSON, sorted(list(s)), indent=2, use_lock=True)
+    atomic_dump_json(config.current.questions_shown, sorted(list(s)), indent=2, use_lock=True)
 
 
 def product_info_str(vc, nm_id, cn_map):
@@ -183,10 +181,10 @@ def poll_once(args, cn_map, reply_cfg, replied, shown, csv_writer, front_log):
 
 def run(args):
     common.ensure_utf8_stdout()
-    # 解析模式：--apply（未显式 --mode）或 --mode back → 后台AI；否则前台AI（默认）
-    if getattr(args, "mode", "") != "back" and getattr(args, "apply", False):
-        args.mode = "back"
-    front = (getattr(args, "mode", "front") != "back")
+    if args.mode == "front" and args.apply:
+        raise ValueError("展示模式不能发送回复。请核对本次任务是查看、起草还是发送。")
+    args.mode = args.mode or ("back" if args.apply else "front")
+    front = args.mode == "front"
     cred = credentials.get()
     interval = args.interval or cred.ai_watch_interval
     common.validate_batch_options(interval=interval)
@@ -199,9 +197,9 @@ def run(args):
         except Exception:
             pass
         shown = load_shown()
-        os.makedirs(config.LOG_DIR, exist_ok=True)
+        os.makedirs(config.current.log_dir, exist_ok=True)
         front_log = open(os.path.join(
-            config.LOG_DIR, f"questions_front_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+            config.current.log_dir, f"questions_front_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
             "a", encoding="utf-8")
         print(f"  日志: {front_log.name}")
         if args.once:
@@ -237,8 +235,8 @@ def run(args):
         pass
     replied = load_replied()
 
-    csv_path = os.path.join(config.LOG_DIR, f"questions_watch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    os.makedirs(config.LOG_DIR, exist_ok=True)
+    csv_path = os.path.join(config.current.log_dir, f"questions_watch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    os.makedirs(config.current.log_dir, exist_ok=True)
     csv_file = open(csv_path, "w", newline="", encoding="utf-8-sig")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow(["时间", "店铺", "提问ID", "供应商编码", "买家问题", "AI回复", "结果"])

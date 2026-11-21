@@ -1,6 +1,7 @@
 """mapping excel。"""
 
 
+from sellerops.persistence.mappings import MappingRepository
 from collections import defaultdict
 import openpyxl
 from sellerops.domain.snapshot_values import stock_values
@@ -58,17 +59,15 @@ def row_for(item, vc, c, match="", status="", stock_summary_fn=None):
     ]
 
 def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage=None, shops_meta=None,
-               main_sid=None, stock_summary_fn=None, load_boss_fn=None):
+               main_sid=None, stock_summary_fn=None, load_boss_fn=None, out_path=None):
     """生成映射表 xlsx（8 Sheet）。"""
     if stock_summary_fn is None:
-        from sellerops.features.catalog import mapping as mapping
-        stock_summary_fn = mapping.stock_summary
+        stock_summary_fn = stock_summary
     if load_boss_fn is None:
-        from sellerops.features.catalog import mapping as mapping
-        load_boss_fn = mapping.load_price_book
+        load_boss_fn = MappingRepository.load_price_book
     if main_sid is None:
         from sellerops.features.catalog import mapping as mapping
-        main_sid = mapping.shop_id()
+        main_sid = mapping.main_shop(config.current)
 
     excluded_vcs = excluded_vcs or set()
     shop_coverage = shop_coverage or {}
@@ -267,6 +266,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     for i, w in enumerate([28, 26, 14, 10, 14, 50], 1):
         ws7.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
-    wb.save(config.MAPPING_XLSX)
+    wb.save(out_path or config.current.mapping_xlsx)
+    wb.close()
     n_unmapped = sum(1 for c in bcs if c["vc"] not in picked)
     return len(result_list), len(picked), n_unmapped, len(multi)

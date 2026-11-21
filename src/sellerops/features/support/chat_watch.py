@@ -38,8 +38,6 @@ from sellerops.features.support.questions_watch import product_info_str
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.product_index import NmResolver
 
-REPLIED_JSON = os.path.join(config.STATE_DIR, "chat_replied.json")
-SHOWN_JSON = os.path.join(config.STATE_DIR, "chat_front_shown.json")
 
 
 def load_state(path):
@@ -52,19 +50,19 @@ def save_state(path, data):
 
 
 def load_replied():
-    return load_state(REPLIED_JSON)
+    return load_state(config.current.chat_replied)
 
 
 def save_replied(d):
-    save_state(REPLIED_JSON, d)
+    save_state(config.current.chat_replied, d)
 
 
 def load_shown():
-    return load_state(SHOWN_JSON)
+    return load_state(config.current.chat_shown)
 
 
 def save_shown(d):
-    save_state(SHOWN_JSON, d)
+    save_state(config.current.chat_shown, d)
 
 
 def _state_key(shop_id, chat_id):
@@ -223,10 +221,10 @@ def _csv_row(csv_writer, now, sid, chat_id, nm_id, buyer_msg, reply_text, result
 
 def run(args) -> int:
     common.ensure_utf8_stdout()
-    # 解析模式：--apply（未显式 --mode）或 --mode back → 后台AI；否则前台AI（默认）
-    if getattr(args, "mode", "") != "back" and getattr(args, "apply", False):
-        args.mode = "back"
-    front = (getattr(args, "mode", "front") != "back")
+    if args.mode == "front" and args.apply:
+        raise ValueError("展示模式不能发送回复。请核对本次任务是查看、起草还是发送。")
+    args.mode = args.mode or ("back" if args.apply else "front")
+    front = args.mode == "front"
     cred = credentials.get()
     interval = args.interval or cred.ai_watch_interval
     common.validate_batch_options(interval=interval)
@@ -242,9 +240,9 @@ def run(args) -> int:
     if front:
         print(f"监听启动（前台AI/展示+手动）：间隔 {interval}s，检测「{win_txt}最新一条来自买家」的消息，不自动发送")
         shown = load_shown()
-        os.makedirs(config.LOG_DIR, exist_ok=True)
+        os.makedirs(config.current.log_dir, exist_ok=True)
         front_log = open(os.path.join(
-            config.LOG_DIR, f"chat_watch_front_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+            config.current.log_dir, f"chat_watch_front_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
             "a", encoding="utf-8")
         print(f"  日志: {front_log.name}")
         if args.once:
@@ -275,8 +273,8 @@ def run(args) -> int:
         return 1
     replied = load_replied()
 
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    csv_path = os.path.join(config.LOG_DIR,
+    os.makedirs(config.current.log_dir, exist_ok=True)
+    csv_path = os.path.join(config.current.log_dir,
                             f"chat_watch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     csv_file = open(csv_path, "w", newline="", encoding="utf-8-sig")
     csv_writer = csv.writer(csv_file)

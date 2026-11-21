@@ -10,7 +10,7 @@ import csv
 import time
 from datetime import datetime, timedelta
 
-from sellerops.integrations.bcs import client as bcs
+from sellerops.integrations.bcs.client import client as bcs
 from sellerops.settings import paths as config
 from sellerops.core import utils as common
 
@@ -19,7 +19,7 @@ OZON = "/system/ozonOrder"
 
 def create_task(shop_ids, begin, end):
     """POST 创建订单拉取任务。shop_ids=[] 表示全部店铺。返回 taskId（从 msg 提取）。"""
-    d = bcs.http_post_json(f"{bcs.base_url()}{OZON}/createPullProductTask",
+    d = bcs.post(f"{bcs.base_url}{OZON}/createPullProductTask",
                            {"shopIds": shop_ids, "beginTime": begin, "endTime": end})
     if d.get("code") != 200:
         raise RuntimeError(f"创建订单同步任务失败 code={d.get('code')} msg={d.get('msg')}")
@@ -30,7 +30,7 @@ def wait_progress(task_id, interval=2, timeout=600):
     """轮询订单同步进度直到 COMPLETED。"""
     start = time.time()
     while time.time() - start < timeout:
-        d = bcs.http_get_json(f"{bcs.base_url()}{OZON}/getPullProductTaskProgress")
+        d = bcs.get(f"{bcs.base_url}{OZON}/getPullProductTaskProgress")
         data = d.get("data") or []
         task = next((t for t in data if t.get("taskId") == task_id), None)
         if task is None:
@@ -49,7 +49,7 @@ def wait_progress(task_id, interval=2, timeout=600):
 
 def fetch_orders(page_num=1, page_size=50):
     """GET 订单列表（分页）。返回 (total, rows)。"""
-    d = bcs.http_get_json(f"{bcs.base_url()}{OZON}/user/list"
+    d = bcs.get(f"{bcs.base_url}{OZON}/user/list"
                           f"?pageNum={page_num}&pageSize={page_size}&type=0")
     if d.get("code") != 200:
         raise RuntimeError(f"查询订单失败 code={d.get('code')} msg={d.get('msg')}")
@@ -70,7 +70,7 @@ def fetch_all_orders(page_size=50):
 
 def fetch_status_count():
     """GET 订单状态分类计数。"""
-    d = bcs.http_get_json(f"{bcs.base_url()}{OZON}/getOrderStatusCategoryCount")
+    d = bcs.get(f"{bcs.base_url}{OZON}/getOrderStatusCategoryCount")
     return d.get("data") or []
 
 
@@ -137,7 +137,7 @@ def run(args):
                     "状态分类": r.get("orderStatusCategory"),
                 })
 
-        path = common.write_csv_preferred(config.LOG_DIR, "订单查询_{ts}.csv",
+        path = common.write_csv_preferred(config.current.log_dir, "订单查询_{ts}.csv",
                                           "orders_query_{ts}.csv", ts, _w)
         print(f"\n[日志] {path or '（未生成，见上方警告）'}")
     else:

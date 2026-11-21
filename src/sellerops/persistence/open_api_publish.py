@@ -7,7 +7,7 @@ from sellerops.settings import paths
 
 
 def state_path() -> Path:
-    return Path(paths.STATE_DIR) / 'WB_OpenAPI上架记录.json'
+    return Path(paths.current.state_dir) / 'WB_OpenAPI上架记录.json'
 
 
 def operation_lock() -> FileLock:
@@ -43,7 +43,7 @@ def item_key(shop_id: int, vc: str) -> str:
 
 
 def load_shared_records() -> dict[str, Any]:
-    records = safe_load_json(Path(paths.STATE_DIR) / '复制上架记录.json', default={})
+    records = safe_load_json(Path(paths.current.state_dir) / '复制上架记录.json', default={})
     if not isinstance(records, dict) or any(not isinstance(v, dict) for v in records.values()):
         raise ValueError('复制上架记录损坏')
     return records
@@ -56,7 +56,7 @@ def legacy_submitted(shop_id: int, vc: str, records: dict[str, Any] | None = Non
 
 
 def record_shared(shop_id: int, vcs: list[str]) -> None:
-    path = Path(paths.STATE_DIR) / '复制上架记录.json'
+    path = Path(paths.current.state_dir) / '复制上架记录.json'
     with FileLock(path):
         records = load_shared_records()
         from datetime import datetime

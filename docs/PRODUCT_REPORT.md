@@ -1,16 +1,16 @@
 # 商品运营报告
 
-`product-report` 默认生成低评分VC、高退货率VC及近期出单筛选三类简洁清单，附数据覆盖与异常说明。是否修改、下架、重新上架由用户判断；命令没有 `--apply`，不修改平台或飞书，不触发BCS同步、fetch、merge或任务注册。
+`report products` 默认生成低评分VC、高退货率VC及近期出单筛选三类简洁清单，附数据覆盖与异常说明。是否修改、下架、重新上架由用户判断；命令没有 `--apply`，不修改平台或飞书，不触发BCS同步、fetch、merge或任务注册。
 
 ## 配置与使用
 
 复用项目根目录 `data/`，无需更改既有凭证格式：BCS凭证用于读取账号店铺列表及每店 `apiKey`；飞书通过已登录的lark-cli读取 `feishu.base_url` 指定的「订单登记」表。准备本地商品快照、中文名映射及已有提交记录。默认目标为本机BCS账号当前返回的店铺；`--shops` 仅缩小本机目标店，不过滤临时账号或飞书来源店铺。
 
 ```powershell
-python run.py product-report
-python run.py product-report --shops 1001,1002 --wb-region cn
-python run.py product-report --order-days 30 --feedback-days 365 --out data/logs/product_report.xlsx
-python run.py product-report --details
+python run.py report products
+python run.py report products --shops 1001,1002 --wb-region cn
+python run.py report products --order-days 30 --feedback-days 365 --out data/logs/product_report.xlsx
+python run.py report products --details
 ```
 
 示例ID为占位。默认 `.ru` 官方主机；需要 `.cn` 时显式指定，不会自动跨主机或使用Cookie兜底。官方令牌需具备 Analytics、Feedbacks and Questions、Marketplace 类别权限。后台Cookie和BCS登录Token都不能替代官方令牌；令牌仅在内存使用，不写入工作簿或日志。
@@ -22,8 +22,8 @@ python run.py product-report --details
 需要扩大统计样本时，可提供其他账号在 `https://wb.bcserp.com/prod-api/` 下人工复制的完整fetch抓包。接收命令如下，调用方或AI须通过子进程标准输入管道传入UTF-8文本，传完关闭输入流；不在终端交互粘贴，不将凭证拼进命令行或保存到脚本、抓包文件。
 
 ```powershell
-python run.py product-report --extra-bcs-stdin
-python run.py product-report --shops 1001 --extra-bcs-stdin --wb-region cn
+python run.py report products --extra-bcs-stdin
+python run.py report products --shops 1001 --extra-bcs-stdin --wb-region cn
 ```
 
 - 输入支持JSON形式的 `fetch("地址", {"headers": ...})`，多个完整fetch块依次排列，可带Markdown代码围栏；输入上限1MiB。请求头必须含 `Authorization: Bearer ...`、`X-Limit-Key` 和 `Cookie`，名称大小写不敏感；Cookie中已有的认证值必须与请求头一致，重复JSON字段会被拒绝。这里只解析认证，不执行JavaScript，也不重放原请求。

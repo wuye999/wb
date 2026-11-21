@@ -2,6 +2,10 @@
 
 Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需要 Python 3.10+，基础依赖为 requests 和 openpyxl。
 
+## 用中文交代运营任务
+
+可以对 AI 说“把 A 店和 B 店里中文名为旅行杯的商品库存改成 25”或“生成 A 店近 14 天的商品运营报告”。AI 用店铺列表定位 ID，按完整中文名匹配，输出命中链接、目标数量、受理结果和明细路径。有相似名称时，只有明确要求“名称包含”才采用包含筛选。
+
 ## 从这里开始
 
 | 读者或任务 | 阅读入口 |
@@ -32,6 +36,8 @@ python -m venv .venv
 在 WorkBuddy 里说「连接 WB」「连接 BCS」或「连接马帮」即可进入对应的 `login` 流程。BCS、马帮优先使用本机账号密码，平台要求验证时在官网操作；WB 从专用浏览器恢复会话。首次安装和登录步骤见 [平台连接配置](docs/CONFIGURATION.md#通过-workbuddy-连接平台)。飞书功能另需已登录的配套 lark-cli。
 
 ## 更新已有环境
+
+从 1.0 升级时先看 [57 个旧命令的迁移对照及回退步骤](docs/MIGRATION.md)。
 
 已有用户可继续使用原来的 `data/` 和 `.venv`，无需重建数据或重新填写凭证。更新前先停止本项目的运行进程，在项目根目录执行：
 
@@ -69,45 +75,47 @@ wb/
 默认 data 路径由项目位置确定，不随终端工作目录变化。只有需要单独存放数据时才使用 `--data-dir` 或 `SELLEROPS_DATA_DIR`；优先级为命令行、环境变量、项目根目录 data。全局参数放在子命令之前：
 
 ```powershell
-python run.py --data-dir "D:\SellerData" shops
+python run.py --data-dir "D:\SellerData" shop list
 ```
+
+要同时处理两份运营数据，可在两个终端分别启动命令，各用自己的 `--data-dir`。每条命令、该目录的凭证和未完成的映射保存都会跟随各自的数据目录。
 
 ## 检查入口并开始使用
 
 以下命令显示帮助或预览，不访问平台、不注册任务：
 
 ```powershell
-python run.py price --help
-python run.py daily morning
-python run.py schedule
+python run.py product price --help
+python run.py task run morning --all-shops
+python run.py task schedule
 ```
 
 配置完成后可查询 BCS 店铺列表：
 
 ```powershell
-python run.py shops
+python run.py shop list
 ```
 
 这只能检查 BCS 店铺查询，不能证明其他平台已登录可用。已有表格和快照时，按自己的店铺和商品生成操作预览：
 
 ```powershell
-python run.py price --shops 1001 --name "示例商品"
+python run.py product price --shops 1001 --name "示例商品"
 ```
 
 店铺 ID 和商品名都是占位示例。核对范围、数量、价格及授权后，再对相同范围显式提交：
 
 ```powershell
-python run.py price --shops 1001 --name "示例商品" --apply --yes
+python run.py product price --shops 1001 --name "示例商品" --apply --yes
 ```
 
-业务命令的 dry-run 可能读取平台并生成本地报告。首次需要初始化或更新商品快照时，按 [操作流程](docs/USAGE.md) 单独执行 fetch / merge。`fetch` 默认走 BCS 快照接口：先同步 WB → BCS，再读取各店 BASE 缓存；已在后台同步过可加 `--no-sync` 直接读取。显式 `--source wb-openapi` 才会改用 BCS 保存的各店 apiKey 直接读取 WB 官方中国区商品、价格及莫斯科仓库存（全店默认4店并发，`--parallel` 可调整，不等待 BCS 商品同步）。不要把同步当作每次启动或写入后的固定步骤。
+业务命令的 dry-run 可能读取平台并生成本地报告。首次需要初始化或更新商品快照时，按 [操作流程](docs/USAGE.md) 单独执行 fetch / merge。`catalog fetch` 默认走 BCS 快照接口：先同步 WB → BCS，再读取各店 BASE 缓存；已在后台同步过可加 `--no-sync` 直接读取。显式 `--source wb-openapi` 才会改用 BCS 保存的各店 apiKey 直接读取 WB 官方中国区商品、价格及莫斯科仓库存（全店默认4店并发，`--parallel` 可调整，不等待 BCS 商品同步）。不要把同步当作每次启动或写入后的固定步骤。
 
 ## 日常使用边界
 
 - 凡涉及仓库的操作，**默认且仅限各店铺自己的莫斯科仓库 ID**。全店/全部商品不等于全仓；成都及其他地区仓不操作，也不作为找不到莫斯科时的备用仓。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许莫斯科)。
 - 普通用户及其运营 AI 使用已有命令，维护自己的 data；源码、文档、依赖声明和项目配置保持只读，临时脚本与产物放 `_scratch/`。维护者及其明确授权的开发任务按开发指南修改项目。
 - WB/BCS 写入异步处理。提交并记录接口结果后结束，不进行写后查询验证，不附加同步、拉取或合并。需要更新数据时，由用户单独要求运行 fetch / merge。
-- `publish-openapi` 包含建卡、有限等待新商品/规格标识、图片与莫斯科仓库存提交；该标识轮询是上架必要步骤，图片/库存受理后不回读验证。超时可用同一命令的 `--resume` 续办，不重复建卡。
+- `listing publish-openapi` 包含建卡、有限等待新商品/规格标识、图片与莫斯科仓库存提交；该标识轮询是上架必要步骤，图片/库存受理后不回读验证。超时可用同一命令的 `--resume` 续办，不重复建卡。
 - `--apply` 提交业务写入，部分操作还需 `--yes`；不同命令的确认机制不同。保留任务号与成功、失败、跳过明细，非零退出可能已有部分提交，不能盲目整批重试。
 - Windows 任务记录注册时的解释器、代码和数据路径；移动项目或更换环境后需重新注册，并避免同一业务重复执行。
 

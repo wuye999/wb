@@ -1,8 +1,8 @@
 """feishu register。"""
-from sellerops.integrations.mabang.client import get_mabang_cred as mabang_api_get_mabang_cred
+from sellerops.integrations.mabang.client import get_mabang_cred
 from sellerops.integrations.mabang.session import MabangAuthError
-from sellerops.integrations.mabang.orders import fetch_pending_orders as mabang_api_fetch_pending_orders
-from sellerops.integrations.mabang.orders import fetch_all_orders as mabang_api_fetch_all_orders
+from sellerops.integrations.mabang.orders import fetch_pending_orders
+from sellerops.integrations.mabang.orders import fetch_all_orders
 import csv
 import json
 
@@ -133,7 +133,7 @@ def _merge_pending(orders, cred, args):
         return str(o.get("platformOrderId") or o.get("id") or "")
 
     try:
-        pend = mabang_api_fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
+        pend = fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
     except MabangAuthError:
         raise
     except Exception as e:
@@ -146,19 +146,19 @@ def _merge_pending(orders, cred, args):
           f"其中 orderalllist 未覆盖 {len(extra)} 单已并入登记范围")
     return orders + extra
 
-def build_records(args):
+def build_records(args, *, group_shipping_ids=()):
     """查询订单 → 目标店铺全量（含 NO_VC）→ 登记记录；返回 (records, skip_stats, cred)"""
-    cred = mabang_api_get_mabang_cred()
+    cred = get_mabang_cred()
     shop_map = cred["shop_map"]
     print(f"[配置] 目标店铺: {'、'.join(f'{k}→{v}' for k, v in shop_map.items())}")
-    if args.scope == "all":
+    if getattr(args, "scope", "latest") == "all":
         begin = args.begin or args.date
         end = args.end or args.date
         if not (begin and end):
             raise RuntimeError("--scope all 需要指定日期：--date 2026-09-05（单天）"
                                " 或 --begin/--end（区间）")
         print(f"\n[查询] 全部状态订单全量（服务端不支持日期过滤，拉取后本地筛 {begin}~{end}）...")
-        orders = mabang_api_fetch_all_orders(cred)
+        orders = fetch_all_orders(cred)
         # 本地按付款日期过滤（paidTime 精确到天）
         in_range, no_paid = [], 0
         for o in orders:
@@ -171,16 +171,16 @@ def build_records(args):
         print(f"[过滤] 日期 {begin}~{end} 命中 {len(in_range)} 单"
               f"（无付款时间 {no_paid} 单不计）")
         orders = in_range
-    elif args.scope == "latest":
+    elif getattr(args, "scope", "latest") == "latest":
         # 默认：最近 500 条全状态订单（最新在前）+「待处理订单」两路合并（见 _merge_pending）
         print("\n[查询] 最近 500 条全状态订单（orderalllist，最新在前）...")
-        orders = mabang_api_fetch_all_orders(cred, page_size=500, max_pages=1)
+        orders = fetch_all_orders(cred, page_size=500, max_pages=1)
         if not getattr(args, "no_pending", False):
             orders = _merge_pending(orders, cred, args)
     else:
         scope = f"最近 {args.days} 天" if args.days else "全部新增，不限日期"
         print(f"\n[查询] 待处理订单（{scope}）...")
-        orders = mabang_api_fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
+        orders = fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
     if not orders:
         return [], {"空": 0}, {}, cred
 
@@ -220,7 +220,6 @@ def build_records(args):
             print(f"  [警告] 店{sid} 取消单查询失败（跳过排除）: {e}")
 
     records, skip, notice = [], {}, {}
-    group_shipping_ids = getattr(args, "group_shipping_order_ids", ())
     for o in orders:
         p = mabang_parse_order(o)
         if p["shop"] not in shop_map:
@@ -285,11 +284,11 @@ def write_csv(records, existing_ids):
                 "已写入" if r.get("_written") else "待写入")
             w.writerow(row)
 
-    return common.write_csv_preferred(config.LOG_DIR, "飞书订单登记_{ts}.csv",
+    return common.write_csv_preferred(config.current.log_dir, "飞书订单登记_{ts}.csv",
                                       "feishu_order_register_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 
-def run(args):
+def run(args, *, group_shipping_ids=()):
     common.ensure_utf8_stdout()
     url = args.url or credentials.get().feishu_base_url()
     if not url or not args.table:
@@ -299,7 +298,7 @@ def run(args):
     table_id = resolve_table(base_token, args.table)
     print(f"[表格] base_token={base_token} table_id={table_id}（{args.table}）")
 
-    records, skip, notice, _cred = build_records(args)
+    records, skip, notice, _cred = build_records(args, group_shipping_ids=group_shipping_ids)
     if not records:
         print("[完成] 无可登记订单")
         return 0
@@ -312,7 +311,7 @@ def run(args):
         top = sorted(scan["dup_ids"].items(), key=lambda kv: -kv[1])[:5]
         print(f"[警告] 表内已存在重复订单编号 {len(scan['dup_ids'])} 个"
               f"（多余 {scan['dup_rows']} 行）：" + "、".join(f"{k}×{n}" for k, n in top) +
-              " —— 建议执行 `python -m sellerops feishu-register-dedup` 清理")
+              " —— 建议执行 `python -m sellerops order deduplicate` 清理")
     # 双重去重：① 表内已登记（existing）② 本批 records 自身（seen）
     seen, todo, dup_in_batch = set(), [], 0
     for r in records:
@@ -330,7 +329,6 @@ def run(args):
           (" / ".join(f"{k}={v}" for k, v in sorted(skip.items())) or "无") +
           ("；字段留空: " + " / ".join(f"{k}={v}" for k, v in sorted(notice.items())) if notice else ""))
     # 供调用方（如 mabang-process / 人工）读取本次新登记订单
-    args.registered_new = todo if args.apply else []
     for r in todo[:15]:
         print(f"  {r['订单编号']} | {r['店铺'][0] if r['店铺'] else '-'} | "
               f"{r['BCS编号'] or '(无BCS)'} {r['商品中文名'] or ''} wb={r['wb编号'] or '-'} "

@@ -1,23 +1,18 @@
-"""
-sellerops 多店铺同步 / 待审核 / 增量合并（原 sync_shops.py）
-
-review：找出其他店铺在架但映射表中没有的 vc（前缀命中→自动补录，其余→待审核）。
-merge：增量合并（映射表 xlsx = 唯一状态源，继承旧归属 + 追加审核 + 消失即移除）。
-"""
-from sellerops.features.catalog.single_shop import list_active_shop_mappings as mapping_list_active_shop_mappings
-from sellerops.features.catalog.single_shop import build_single_shop_xlsx as mapping_build_single_shop_xlsx
-from sellerops.features.catalog.single_shop import load_single_shop_rows as mapping_load_single_shop_rows
-
-
+"""多店铺商品审核、归属纠偏与本地映射表合并。"""
+from datetime import datetime
+import json
 import os
+from pathlib import Path
 import re
 
 from sellerops.settings import paths as config
-from sellerops.core import utils as common
 from sellerops.core.files import safe_load_json
-from sellerops.features.catalog import mapping
-from sellerops.features.catalog import products
-from sellerops.features.catalog import workbench
+from sellerops.domain.bcs_products import deduplicate_bcs_products
+from sellerops.persistence.mapping_batch import mapping_batch
+from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.snapshots import ProductSnapshotRepository
+from sellerops.features.catalog import mapping, products, single_shop, workbench
+
 VC_PREFIX_RE = re.compile(config.VC_PREFIX_RE)
 
 
@@ -28,8 +23,8 @@ def load_known_vcs():
     known_set.update(kn.keys())
     known_set.update(ov.keys())
     known_set.update(ex.keys())
-    if os.path.exists(config.MAPPING_XLSX):
-        st, excl = mapping.load_mapping_state()
+    if os.path.exists(config.current.mapping_xlsx):
+        st, excl = MappingRepository.load_mapping_state()
         known_set.update(st.keys())
         known_set.update(excl.keys())
     return known_set
@@ -40,7 +35,7 @@ def calc_new_vcs():
     返回 (normal_items, auto_items, shops_meta)"""
     shops_data, shops_meta = products.load_all_shops()
     known = load_known_vcs()
-    prefix_map = mapping.load_prefix_map()
+    prefix_map = MappingRepository.load_prefix_map()
 
     vc_info = {}
     for sid, rows in shops_data.items():
@@ -76,7 +71,7 @@ def calc_new_vcs():
 
 
 def gen_review_html(normal_items, shops_meta):
-    boss = mapping.load_price_book()
+    boss = MappingRepository.load_price_book()
     boss_opts = workbench._boss_opts_html(boss)
     cards = [workbench._review_card_html(i, x, boss_opts) for i, x in enumerate(normal_items, 1)]
 
@@ -156,284 +151,10 @@ function resetAll(){ cards.forEach(cd => { cd.querySelector('select').value=''; 
 refresh();
 </script></body></html>'''
     html = html.replace("CARDS_PLACEHOLDER", "\n".join(cards))
-    workbench._write(config.OUT_REVIEW_HTML, html)
-    print(f"待审核工作台已生成：{config.OUT_REVIEW_HTML}（{len(normal_items)} 个新商品）")
+    workbench._write(config.current.out_review_html, html)
+    print(f"待审核工作台已生成：{config.current.out_review_html}（{len(normal_items)} 个新商品）")
 
 
-def build_shop_coverage():
-    """从全部店铺 JSON 或单店表构建 shop_coverage: {vc: {sid: {price, stock, title, img}}}"""
-    shops_data, shops_meta = products.load_all_shops()
-    cov = {}
-    for sid, rows in shops_data.items():
-        for r in rows:
-            vc = r.get("vendorCode")
-            if not vc or r.get("trashedAt"):
-                continue
-            cov.setdefault(vc, {})[sid] = {"price": mapping.price_of(r), "stock": mapping.stock_summary(r),
-                                           "title": r.get("title") or "", "img": r.get("repImg") or "",
-                                           "nmId": r.get("nmId"), "createAt": r.get("createAt"),
-                                           "updateAt": r.get("updateAt")}
-    return cov, shops_meta
-
-
-def sync_all_shops_mapping(shop_id=None, force=False):
-    """刷新或生成指定店铺（或全部活跃店铺）的独立映射表（data/shops/shop_*.xlsx）。"""
-    try:
-        shops_data, shops_meta = products.load_all_shops()
-    except Exception as e:
-        print(f"[提示] 未能从快照加载全部店铺：{e}")
-        shops_data, shops_meta = {}, []
-
-    known, overrides, excluded = mapping.load_vc_registry()
-    boss = mapping.load_price_book()
-    prefix_map = mapping.load_prefix_map()
-
-    target_shops = [s for s in shops_meta if (shop_id is None or s["id"] == shop_id)]
-    if not target_shops:
-        print(f"[提示] 未找到店铺 {shop_id} 的快照数据，请确认是否已运行 sellerops fetch")
-        return
-
-    print(f"\n>>> 正在同步 {len(target_shops)} 个店铺的独立映射表（data/shops/）...")
-    for s in target_shops:
-        sid = s["id"]
-        sname = s.get("name") or f"shop{sid}"
-        if config.is_shop_archived(sid):
-            print(f"  [跳过] 店铺 {sid} ({sname}) 已在 _archive/ 归档，跳过单店同步")
-            continue
-        rows = shops_data.get(sid, [])
-        m, u = mapping_build_single_shop_xlsx(sid, sname, rows=rows,
-                                              registry=(known, overrides, excluded),
-                                              boss=boss, prefix_map=prefix_map)
-        print(f"  店 {sid} ({sname})：在架归属 {m} 个 · 未映射 {u} 个 → {os.path.basename(config.shop_mapping_xlsx(sid, sname))}")
-
-
-def _sync_known_on_rename(known, vc, new_cn, boss_by_cn, ts):
-    """改名纠偏时把新名同步写入全局已知池（vc_known.json）。
-
-    背景（2026-09-21 修复）：原实现为 `if v in known: known[v]["cn"] = c`，
-    只有 vc 已存在于已知池时才回写，导致**前缀码匹配不到的「怪 vc」**（随机前缀、
-    含 `/` 的旧格式等）其名字仅存于 vc_override.json —— 一旦该文件丢失即失效，
-    且单店表/总表下次重建时会掉进「未映射商品」。现改为无条件 upsert。
-
-    - 已存在：只更新 `cn`，保留原 `dp/sku/尺寸/source` 等字段（不覆盖 provenance）；
-    - 不存在：新建条目，`dp/sku` 按新中文名从商品价格表补齐（查不到留 None/""）。
-
-    Returns:
-        "new" 表示新建条目，"updated" 表示更新已有条目。
-    """
-    entry = known.get(vc)
-    if isinstance(entry, dict):
-        entry["cn"] = new_cn
-        return "updated"
-    b = boss_by_cn.get(new_cn) or {}
-    known[vc] = {
-        "cn": new_cn,
-        "dp": b.get("dp"),
-        "sku": b.get("sku") or "",
-        "source": "人工纠偏",
-        "cnUpdatedAt": ts,
-    }
-    return "new"
-
-
-def set_vc_override(vc=None, new_cn=None, reason="人工纠偏", file_path=None):
-    """设置 VC 中文名纠偏改名，同步写入全局已知池，并自动级联更新所有单店表与总表。
-
-    ⚠ 纠偏结果**同时**写入 vc_known.json 与 vc_override.json（2026-09-21 起）：
-    两层都带上新名后，单层文件丢失不会导致纠偏失效；分发到各店 xlsx 与聚合总表
-    仍走下方 merge(None) 级联（重建时按 registry 解析，已知池命中即带上新名）。
-    """
-    from datetime import datetime
-    known, overrides, excluded = mapping.load_vc_registry()
-    boss_by_cn = {b["cn"]: b for b in mapping.load_price_book() if b.get("cn")}
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    updated, n_new = [], 0
-    if file_path and os.path.exists(file_path):
-        items = safe_load_json(file_path, default=[])
-        for it in items:
-            v = str(it.get("vc") or "").strip()
-            c = str(it.get("cn") or "").strip()
-            r = str(it.get("reason") or reason).strip()
-            if v and c:
-                overrides[v] = {"cn": c, "reason": r, "updatedAt": ts}
-                if _sync_known_on_rename(known, v, c, boss_by_cn, ts) == "new":
-                    n_new += 1
-                updated.append(v)
-    elif vc and new_cn:
-        v = str(vc or "").strip()
-        c = str(new_cn or "").strip()
-        r = str(reason or "人工纠偏").strip()
-        if v and c:
-            overrides[v] = {"cn": c, "reason": r, "updatedAt": ts}
-            if _sync_known_on_rename(known, v, c, boss_by_cn, ts) == "new":
-                n_new += 1
-            updated.append(v)
-    else:
-        print("[错误] 未指定 --vc 和 --cn，或未指定有效 --file")
-        return False
-
-    mapping.save_vc_registry(known=known, overrides=overrides)
-    print(f"[纠偏登记] 已将 {len(updated)} 个 VC 改名写入 {config.VC_OVERRIDE_JSON}")
-    print(f"[已知池同步] 同步写入 {config.VC_KNOWN_JSON}：新建 {n_new} 条 / 更新 {len(updated) - n_new} 条")
-    for v in updated:
-        print(f"  {v} → {overrides[v]['cn']} ({overrides[v]['reason']})")
-
-    # 重新执行 merge，自动级联更新所有包含该 VC 的单店表与总表
-    print("\n>>> 开始级联刷新各单店表与聚合总表...")
-    merge(None)
-    print("\n[成功] 全店铺单表与聚合总表现已全部同步为最新名称！")
-    return True
-
-
-def merge(review_file=None, sync_shops=True):
-    """多店铺增量合并映射表：
-    1. 审核文件录入：若有 review_file，更新全局已知/排除池；
-    2. 同步单店映射表：若有快照，更新 data/shops/ 下各单店表；
-    3. 汇聚活跃单店表：扫描 data/shops/ 活跃单表（排除 _archive/），做 Outer Join；
-    4. 重建全景总表：生成 8-Sheet data/价格映射表.xlsx，完全向下兼容。
-    """
-    known, overrides, excluded = mapping.load_vc_registry()
-    boss = mapping.load_price_book()
-    dp_by_sku = {b["sku"]: b["dp"] for b in boss if b.get("sku")}
-    boss_by_cn = {b["cn"]: b for b in boss if b.get("cn")}
-    prefix_map = mapping.load_prefix_map()
-
-    # 1. 处理审核文件
-    um = []
-    if review_file and os.path.exists(review_file):
-        um = safe_load_json(review_file, default=[])
-        n_map, n_excl = 0, 0
-        for x in um:
-            act = x.get("action")
-            vc = x.get("vc")
-            if not vc:
-                continue
-            if act == "exclude":
-                excluded[vc] = "非货盘商品（人工确认排除）"
-                n_excl += 1
-            elif act == "mapped":
-                sku = x.get("bossSku") or ""
-                dp = dp_by_sku.get(sku) or x.get("bossDp")
-                cn = x.get("bossCn") or ""
-                known[vc] = {"cn": cn, "sku": sku, "dp": dp, "source": "审核补录"}
-                n_map += 1
-        mapping.save_vc_registry(known=known, excluded=excluded)
-        print(f"[审核补录] 已将 {n_map} 条归属、{n_excl} 条排除同步至全局归属池")
-    elif review_file:
-        print(f"[警告] 审核文件不存在：{review_file}，按无新审核执行")
-
-    # 2. 同步刷新各店铺独立映射表
-    shops_data, shops_meta = {}, []
-    if sync_shops:
-        shops_data, shops_meta = products.load_all_shops()
-        missing = [s["id"] for s in shops_meta
-                   if not config.is_shop_archived(s["id"]) and s["id"] not in shops_data]
-        if missing:
-            raise RuntimeError(f"店铺 {missing} 缺少商品快照，未刷新单店映射；"
-                               "请先完成拉取，不能将缺失快照当作空店铺")
-
-    if sync_shops and shops_meta:
-        print(f"\n>>> 正在同步各店铺独立映射表（data/shops/）...")
-        for s in shops_meta:
-            sid = s["id"]
-            sname = s.get("name") or f"shop{sid}"
-            if config.is_shop_archived(sid):
-                continue
-            rows = shops_data[sid]
-            n_m, n_u = mapping_build_single_shop_xlsx(
-                sid, sname, rows=rows,
-                registry=(known, overrides, excluded),
-                boss=boss, prefix_map=prefix_map
-            )
-            print(f"  [单店同步] 店铺 {sid} ({sname})：已映射 {n_m} · 未映射 {n_u} → {os.path.basename(config.shop_mapping_xlsx(sid, sname))}")
-
-    # 3. 扫描 data/shops/ 下活跃单店映射表（排除 _archive/ 目录）
-    active_shops = mapping_list_active_shop_mappings()
-    if not active_shops:
-        if shops_meta:
-            sync_all_shops_mapping()
-            active_shops = mapping_list_active_shop_mappings()
-
-    if not active_shops:
-        print("[错误] 未能找到任何活跃单店映射表，请先运行 sellerops fetch 并在 data/shops/ 确认文件")
-        return
-
-    all_shop_rows = {}
-    shop_coverage = {}
-    for s in active_shops:
-        sid = s["id"]
-        sname = s["name"]
-        mapped, unmapped = mapping_load_single_shop_rows(sid, sname)
-        all_shop_rows[sid] = mapped
-        for vc, r in mapped.items():
-            shop_coverage.setdefault(vc, {})[sid] = {
-                "price": r.get("price"),
-                "stock": r.get("stock") if r.get("stock") is not None else "",
-                "title": r.get("title") or "",
-                "img": r.get("img") or "",
-                "nmId": r.get("nmId"),
-                "createAt": r.get("createAt"),
-                "updateAt": r.get("updateAt"),
-            }
-
-    # 4. 构建 Outer Join 活跃在架 VC 并集
-    alive_vcs = sorted(shop_coverage.keys())
-    sid_main = mapping.shop_id()
-    active_shops_meta = [{"id": s["id"], "name": s["name"]} for s in active_shops]
-
-    extra = []
-    for vc in alive_vcs:
-        cov_shops = shop_coverage[vc]
-        rep_sid = sid_main if sid_main in cov_shops else sorted(cov_shops.keys())[0]
-        rep_row = all_shop_rows[rep_sid].get(vc, {})
-        cn = rep_row.get("cn") or (known.get(vc, {}).get("cn") if vc in known else "")
-        dp = rep_row.get("dp")
-        b = boss_by_cn.get(cn)
-        if b and b.get("dp") is not None:
-            dp = b["dp"]
-        sku = b["sku"] if b else (known.get(vc, {}).get("sku") or "")
-
-        extra.append({
-            "sku": sku,
-            "cn": cn,
-            "dp": dp,
-            "vendorCodes": [vc],
-            "note": rep_row.get("match_type") or "店铺映射汇聚",
-        })
-
-    # 5. 店铺全量商品（Sheet5）
-    bcs_rows = []
-    try:
-        bcs_rows = mapping.load_bcs()
-    except Exception:
-        if active_shops:
-            first_sid = active_shops[0]["id"]
-            p_json = config.shop_json_path(first_sid)
-            if os.path.exists(p_json):
-                d = safe_load_json(p_json, default={})
-                rows = [r for r in d.get("rows", []) if not r.get("trashedAt")]
-                for r in rows:
-                    p = mapping.price_of(r)
-                    if p is not None:
-                        c = dict(r)
-                        c["price"] = p
-                        c["vc"] = r.get("vendorCode") or ""
-                        c["wbnm"] = str(r.get("nmId")) if r.get("nmId") else ""
-                        c["img"] = r.get("repImg") or ""
-                        bcs_rows.append(c)
-
-    # 6. 生成全景 8-Sheet 价格映射表.xlsx
-    n_boss, n_pick, n_unmap, n_multi = mapping.build_xlsx(
-        [], extra, bcs_rows, excluded_vcs=excluded,
-        shop_coverage=shop_coverage, shops_meta=active_shops_meta
-    )
-
-    print(f"\n[合并完成] 聚合总表已生成：{config.MAPPING_XLSX}")
-    print(f"  活跃店铺：{len(active_shops)} 个 ({', '.join(s['name'] for s in active_shops)})")
-    print(f"  映射商品：在架归属 {n_pick} 个 · 货盘匹配 {n_boss} · 多重映射 {n_multi} · 已排除 {len(excluded)}")
-
-
-# ---------------- 入口逻辑（供 cli 调用） ----------------
 def run_review():
     normal, auto, shops_meta = calc_new_vcs()
     print(f"全部店铺新商品: 普通 {len(normal)} 个 · 前缀自动补录 {len(auto)} 个")
@@ -442,8 +163,167 @@ def run_review():
     gen_review_html(normal, shops_meta)
 
 
-def run_merge(review_file=None):
-    merge(review_file)
+def _target_shops(shop_id):
+    tables = {s["id"]: s for s in single_shop.list_active_shop_mappings()}
+    shops = tables.copy()
+    for shop in products.snapshot_shops():
+        sid = int(shop["id"])
+        existing = tables.get(sid, {})
+        name = shop.get("name") or existing.get("name") or f"shop{sid}"
+        path = config.shop_mapping_xlsx(sid, name) if shop.get("name") or not existing else existing["path"]
+        shops[sid] = {"id": sid, "name": name, "path": path}
+    if shop_id is not None and config.is_shop_archived(shop_id):
+        print(f"店铺 {shop_id} 已归档，跳过刷新。")
+        return []
+    if shop_id is not None and shop_id not in shops:
+        raise ValueError(f"找不到目标店铺 {shop_id}，未更新映射")
+    candidates = [shops[shop_id]] if shop_id is not None else list(shops.values())
+    active = [s for s in candidates if not config.is_shop_archived(s["id"])]
+    if not active:
+        raise ValueError("没有活跃店铺可生成映射，未更新文件")
+    return active
 
 
-print_write_hint = common.print_write_hint
+def _snapshot_rows(shop):
+    sid = shop["id"]
+    path = config.shop_json_path(sid)
+    try:
+        document = ProductSnapshotRepository.load_snapshot_document(sid)
+        if document is None:
+            raise ValueError("缺少商品快照")
+        return document["rows"]
+    except Exception as exc:
+        raise ValueError(f"店铺 {sid} 的快照 {path}：{exc}。本次未更新映射。") from exc
+
+
+def _apply_review(rows, known, excluded, boss):
+    if not isinstance(rows, list):
+        raise ValueError("审核文件应为审核工作台导出的商品列表")
+    prices = {b["sku"]: b["dp"] for b in boss if b.get("sku")}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("vc"):
+            raise ValueError("审核记录缺少商品编码 vc")
+        vc = row["vc"]
+        if row.get("action") == "pending":
+            continue
+        if row.get("action") == "exclude":
+            excluded[vc] = "非货盘商品（人工确认排除）"
+        elif row.get("action") == "mapped" and row.get("bossCn"):
+            sku = row.get("bossSku") or ""
+            price = prices.get(sku)
+            known[vc] = {"cn": row["bossCn"], "sku": sku, "source": "审核补录",
+                         "dp": row.get("bossDp") if price is None else price}
+        else:
+            raise ValueError(f"商品 {vc} 的审核动作或中文名无效")
+
+
+def _apply_renames(rows, reason, known, overrides, boss):
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("请提供要改名的商品编码和中文名")
+    by_name = {b["cn"]: b for b in boss}
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("改名记录应包含 vc 和 cn")
+        vc, cn = (str(row.get(k) or "").strip() for k in ("vc", "cn"))
+        if not vc or not cn:
+            raise ValueError("改名记录的商品编码和中文名不能为空")
+        overrides[vc] = {"cn": cn, "reason": row.get("reason") or reason, "updatedAt": stamp}
+        if vc not in known:
+            product = by_name.get(cn, {})
+            known[vc] = {"sku": product.get("sku", ""), "dp": product.get("dp"),
+                         "source": "人工纠偏", "cnUpdatedAt": stamp}
+        known[vc]["cn"] = cn
+
+
+def _write_total(batch, shops, mapped_rows, snapshots, registry, boss):
+    known, _, excluded = registry
+    boss_by_name = {b["cn"]: b for b in boss}
+    main_id = mapping.main_shop(config.current)
+    coverage = {}
+    for sid, rows in mapped_rows.items():
+        for vc, row in rows.items():
+            coverage.setdefault(vc, {})[sid] = row
+
+    entries = []
+    for vc, stores in sorted(coverage.items()):
+        row = stores[main_id] if main_id in stores else stores[min(stores)]
+        history = known.get(vc, {})
+        cn = row.get("cn") or history.get("cn") or ""
+        product = boss_by_name.get(cn, {})
+        price = product.get("dp")
+        entries.append({"sku": product.get("sku", history.get("sku", "")), "cn": cn,
+                        "dp": row.get("dp") if price is None else price, "vendorCodes": [vc],
+                        "note": row.get("match_type") or "店铺映射汇聚"})
+
+    if main_id in snapshots:
+        main_rows = deduplicate_bcs_products(snapshots[main_id], main_id)
+        bcs_rows = mapping.priced_rows(main_rows)
+    else:
+        bcs_rows = [] if snapshots else mapping.load_bcs()
+    mapping.build_xlsx([], entries, bcs_rows, excluded_vcs=excluded, shop_coverage=coverage,
+                       shops_meta=shops, main_sid=main_id, load_boss_fn=lambda: boss,
+                       out_path=batch.stage(config.current.mapping_xlsx))
+
+
+def _refresh(command, *, shop_id=None, input_file=None, vc=None, new_cn=None,
+             reason=None, sync_shops=True):
+    with mapping_batch(command, input_file=input_file, shop_id=shop_id, vc=vc, cn=new_cn,
+                       reason=reason, sync_shops=sync_shops) as batch:
+        if batch is None:
+            return
+        shops = _target_shops(shop_id)
+        if not shops:
+            return
+        snapshots = {s["id"]: _snapshot_rows(s) for s in shops} if sync_shops else {}
+        if not Path(config.current.price_book_xlsx).is_file():
+            raise FileNotFoundError(f"缺少商品价格表：{config.current.price_book_xlsx}")
+        boss = MappingRepository.load_price_book()
+        prefix_map = MappingRepository.load_prefix_map(strict=True)
+        registry = mapping.load_vc_registry()
+        known, overrides, excluded = registry
+        if command == "rename":
+            rows = batch.input_data if input_file else [{"vc": vc, "cn": new_cn}]
+            _apply_renames(rows, reason, known, overrides, boss)
+        elif input_file:
+            _apply_review(batch.input_data, known, excluded, boss)
+
+        mapped_rows = {}
+        for shop in shops:
+            sid, name, path = shop["id"], shop["name"], shop["path"]
+            if sync_shops:
+                path = batch.stage(path)
+                try:
+                    counts = single_shop.build_single_shop_xlsx(
+                        sid, name, rows=snapshots[sid], registry=registry, boss=boss,
+                        prefix_map=prefix_map, out_path=path)
+                except ValueError as exc:
+                    raise ValueError(f"店铺 {sid} 的快照 {config.shop_json_path(sid)}：{exc}。本次未更新映射。") from exc
+                print(f"已准备店铺 {sid}（{name}）：已映射 {counts[0]}，未映射 {counts[1]}")
+            if command != "shop-mappings":
+                if not Path(path).is_file():
+                    raise FileNotFoundError(f"缺少店铺 {sid} 的映射表：{path}")
+                mapped_rows[sid], _ = single_shop.load_single_shop_rows(sid, name, path=path)
+
+        data = config.current
+        for path, values in zip((data.vc_known_json, data.vc_override_json, data.vc_excluded_json), registry):
+            previous = safe_load_json(path, default=None if path == data.vc_known_json else {})
+            if values != previous:
+                batch.stage(path).write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n", encoding="utf8")
+        if command != "shop-mappings":
+            _write_total(batch, shops, mapped_rows, snapshots, registry, boss)
+    output = data.shops_dir if command == "shop-mappings" else data.mapping_xlsx
+    print(f"映射已保存：共 {len(shops)} 个店铺。文件位置：{output}")
+
+
+def merge(review_file=None, sync_shops=True):
+    _refresh("merge", input_file=review_file, sync_shops=sync_shops)
+
+
+def set_vc_override(vc=None, new_cn=None, reason="人工纠偏", file_path=None):
+    _refresh("rename", input_file=file_path, vc=vc, new_cn=new_cn, reason=reason)
+    return True
+
+
+def sync_all_shops_mapping(shop_id=None, force=False):
+    _refresh("shop-mappings", shop_id=shop_id)

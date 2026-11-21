@@ -57,13 +57,13 @@ def api_ready(cred: dict) -> bool:
 def _connection(cred: dict) -> _Connection:
     signature = auth_signature(cred)
     current = getattr(_local, 'connection', None)
-    if current and current.path == paths.CREDENTIALS_JSON and current.signature == signature:
+    if current and current.path == paths.current.credentials_json and current.signature == signature:
         if current.blocked:
             raise current.blocked
         return current
     if current:
         current.session.close()
-    current = _Connection(paths.CREDENTIALS_JSON, signature, new_session(cred))
+    current = _Connection(paths.current.credentials_json, signature, new_session(cred))
     _local.connection = current
     return current
 

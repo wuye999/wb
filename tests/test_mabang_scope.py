@@ -14,11 +14,11 @@ from sellerops.integrations.mabang import orders
 class TestPendingOrderScope(unittest.TestCase):
     def test_cli_defaults_are_unlimited_and_explicit_days_remain_available(self):
         parser = build_parser()
-        for command in ['mabang-process', 'mabang-orders', 'mabang-forecast', 'feishu-register']:
+        for command in ['process', 'match', 'forecast', 'register']:
             with self.subTest(command=command):
-                self.assertEqual(parser.parse_args([command]).days, 0)
-                self.assertEqual(parser.parse_args([command, '--days', '7']).days, 7)
-        self.assertEqual(parser.parse_args(['orders']).days, 0)
+                self.assertEqual(parser.parse_args(["order", command]).days, 0)
+                self.assertEqual(parser.parse_args(["order", command, '--days', '7']).days, 7)
+        self.assertEqual(parser.parse_args(['order', 'list']).days, 0)
 
     def fetch(self, pages, **kwargs):
         responses = [Mock(json=Mock(return_value={'success':True,'orderDataList':rows})) for rows in pages]

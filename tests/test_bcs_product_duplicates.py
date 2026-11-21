@@ -14,7 +14,7 @@ from sellerops.core.errors import PlatformApiError
 from sellerops.core.files import atomic_dump_json
 from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.features.catalog import mapping, products, single_shop
-from sellerops.features.pricing import discount_bcs
+from sellerops.features.products import discount_bcs
 from sellerops.integrations.bcs.client import BCSClient
 from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.settings import paths
@@ -87,7 +87,7 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         self.addCleanup(paths.configure, previous)
         self.data = Path(folder.name)
         paths.configure(self.data)
@@ -98,7 +98,7 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
         stack.enter_context(redirect_stderr(self.output))
         stack.enter_context(patch.object(BCSClient, 'base_url', new_callable=PropertyMock,
                                         return_value='https://example.invalid'))
-        stack.enter_context(patch.object(mapping, '_shop_id_cache', 1))
+        stack.enter_context(patch.object(mapping, 'main_shop', return_value=1))
 
     def run_cli(self, *args):
         from sellerops.cli.main import main
@@ -115,9 +115,9 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
 
     def test_fetch_persists_unique_rows_and_merge_preserves_full_values(self):
         raw = [incomplete_row(), complete_row()]
-        with patch.object(products.bcs.client, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}), \
+        with patch.object(products.bcs, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}), \
                 patch.object(products.bcs, 'sync_shop') as sync:
-            self.assertEqual(self.run_cli('fetch', '--shop-id', '1', '--no-sync'), 0)
+            self.assertEqual(self.run_cli('catalog', 'fetch', '--shop-id', '1', '--no-sync'), 0)
             sync.assert_not_called()
         document = ProductSnapshotRepository.load_snapshot_document(1)
         self.assertEqual(document['rows'], [complete_row()])
@@ -130,12 +130,12 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
         book.active.title = 'Sheet1'
         book.active.append(['卖家SKU', '产品中文名', '实际售价', 'vendorCode前缀码'])
         book.active.append(['SKU1', '商品', 10, 'TEST'])
-        book.save(paths.PRICE_BOOK_XLSX)
+        book.save(paths.current.price_book_xlsx)
         book.close()
-        atomic_dump_json(paths.STATUS_JSON, {'shops': [{'id': 1, 'name': '店1'}]})
-        self.assertEqual(self.run_cli('merge'), 0)
+        atomic_dump_json(paths.current.status_json, {'shops': [{'id': 1, 'name': '店1'}]})
+        self.assertEqual(self.run_cli('catalog', 'merge'), 0)
         self.assert_single_values(1)
-        book = load_workbook(paths.MAPPING_XLSX, read_only=True, data_only=True)
+        book = load_workbook(paths.current.mapping_xlsx, read_only=True, data_only=True)
         try:
             values = list(book['映射总表'].iter_rows(values_only=True))
             self.assertEqual(len(values), 2)
@@ -159,8 +159,8 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
         atomic_dump_json(path, {'shopId': 1, 'total': 1, 'rows': [complete_row()]})
         before = path.read_bytes()
         raw = [complete_row(), complete_row(discount=50)]
-        with patch.object(products.bcs.client, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}):
-            self.assertEqual(self.run_cli('fetch', '--shop-id', '1', '--no-sync'), 1)
+        with patch.object(products.bcs, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}):
+            self.assertEqual(self.run_cli('catalog', 'fetch', '--shop-id', '1', '--no-sync'), 1)
         self.assertEqual(path.read_bytes(), before)
 
     def test_old_snapshot_single_table_is_unique_and_conflict_cannot_overwrite(self):
@@ -179,7 +179,7 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
 
     def test_direct_bcs_discount_also_collects_each_product_once(self):
         raw = [complete_row(), complete_row(id=20)]
-        with patch.object(discount_bcs.bcs.client, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}):
+        with patch.object(discount_bcs.bcs, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}):
             items, _ = discount_bcs.collect(1, 40, 0)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['nmID'], 101)

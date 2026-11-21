@@ -1,10 +1,6 @@
 """
 sellerops nmId → 供应商代码 / 中文名 本地反查（storage 层公共件）
 
-从 services/support/complaints.py 的私有 _LocalResolver 原样上移，
-供多个业务域（appeals 投诉单 / promo-goods 推广商品 / …）共用，
-避免跨域 import 别域私有实现（docs/REUSE_GUIDE.md 第 3、6 条铁律）。
-
 真源优先级（**只用本地真源，不联网核实**）：
   ① 本店在架快照 `{vendorCode: row}` 的 nmId 字段（最准，含该店真实在架商品）
   ② 映射总表 state 的 nmId 字段（跨店兜底：vc 为跨店唯一键，商品可能在别的店在架）

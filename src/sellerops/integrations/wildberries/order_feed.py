@@ -82,7 +82,7 @@ def fetch_orders_page(session, start: str, end: str, cursor: Optional[str] = Non
         AuthenticationError: 401（需显式更新卖家后台会话）
         PlatformApiError: 4xx/5xx，或 HTTP 200 但 error=true
     """
-    res = wb_api.request(session, "POST", ORDER_FEED_URL,
+    res = wb_api.request(session, "POST", ORDER_FEED_URL, read_only=True,
                          json=build_payload(start, end, cursor, limit, timezone))
     if not isinstance(res, dict):
         raise PlatformApiError(f"订单动态返回非对象：{type(res).__name__}")

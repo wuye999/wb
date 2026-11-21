@@ -16,10 +16,21 @@ QUESTIONS_URL = "https://seller-reviews.wildberries.ru/ns/fa-seller-api/reviews-
 _UPDATE_SESSION = "请独立运行 sellerops login wb 更新凭证"
 
 
+from functools import lru_cache
+from sellerops.settings import paths
+
+
+@lru_cache(maxsize=1)
+def _stopped_shops(data: paths.DataPaths) -> dict:
+    return {}
+
+
 def make_session(shop: Dict[str, Any], root_version: Optional[str] = None) -> requests.Session:
     """按店铺构建 requests.Session（cookie + 三个业务头）。"""
     root_version = root_version or credentials.get().root_version
     s = requests.Session()
+    s._sellerops_shop = shop.get("shopId") or shop.get("shop_id")
+    s._sellerops_stopped = _stopped_shops(paths.current)
     for c in (shop.get("cookie") or "").split(";"):
         c = c.strip()
         if "=" in c:
@@ -41,58 +52,47 @@ def make_session(shop: Dict[str, Any], root_version: Optional[str] = None) -> re
 
 def _check_auth(status: int) -> None:
     if status == 401:
-        raise AuthenticationError(f"WB 401：卖家后台会话失效，{_UPDATE_SESSION}")
+        raise common.CookieExpiredError(f"WB 401：卖家后台会话失效，{_UPDATE_SESSION}")
     if status == 403:
         raise common.CookieExpiredError(f"WB 403：卖家后台请求被拒绝，{_UPDATE_SESSION}")
 
 
-def request(session: requests.Session, method: str, url: str, **kwargs) -> Any:
-    """WB 接口统一请求。
-
-    401/403 立即抛出认证异常，由用户显式更新凭证；
-    其他 4xx/5xx 指数退避重试。
-    """
-    last = None
-    for wait in [0] + RETRY_SLEEPS:
+def request(session: requests.Session, method: str, url: str, *, read_only: bool | None = None,
+            allow_400_json: bool = False, **kwargs) -> Any:
+    """只有业务读取可以重试。写入超时或回执无法解析时保留未知结果。"""
+    shop_id = vars(session).get("_sellerops_shop")
+    stopped = vars(session).get("_sellerops_stopped", {})
+    failure = stopped.get(shop_id) or vars(session).get("_sellerops_auth_failure")
+    if failure:
+        raise common.CookieExpiredError(failure)
+    read = method.upper() in {"GET", "HEAD"} if read_only is None else read_only
+    delays = [0, *RETRY_SLEEPS] if read else [0]
+    for attempt, delay in enumerate(delays):
+        if delay:
+            time.sleep(delay)
         try:
-            r = session.request(method, url, timeout=30, **kwargs)
-            _check_auth(r.status_code)
-            if r.status_code >= 400:
-                raise PlatformApiError(f"HTTP {r.status_code}: {r.text[:200]}", status_code=r.status_code)
-            return r.json()
-        except (common.CookieExpiredError, AuthenticationError):
+            response = session.request(method, url, timeout=30, allow_redirects=False, **kwargs)
+            _check_auth(response.status_code)
+            if response.status_code == 400 and allow_400_json:
+                return response.json()
+            if not 200 <= response.status_code < 300:
+                raise PlatformApiError(f"WB HTTP {response.status_code}", status_code=response.status_code)
+            return response.json()
+        except AuthenticationError as error:
+            session._sellerops_auth_failure = str(error)
+            if shop_id is not None:
+                stopped[shop_id] = str(error)
             raise
-        except Exception as e:
-            last = e
-            if wait:
-                print(f"    [重试] 等待 {wait}s ...")
-                time.sleep(wait)
-    raise last
+        except (requests.RequestException, ValueError, PlatformApiError) as error:
+            if not read:
+                raise PlatformApiError(f"提交结果未知（{type(error).__name__}），请求已停止") from error
+            if attempt + 1 == len(delays):
+                raise
 
 
-def request_post(session: requests.Session, url: str, payload: Any, allow_400_json: bool = False) -> Any:
-    """POST 专用请求。"""
-    last = None
-    for wait in [0] + RETRY_SLEEPS:
-        try:
-            r = session.post(url, json=payload, timeout=30)
-            _check_auth(r.status_code)
-            if r.status_code == 400 and allow_400_json:
-                try:
-                    return r.json()
-                except Exception:
-                    raise PlatformApiError(f"HTTP 400: {r.text[:200]}", status_code=400)
-            if r.status_code >= 400:
-                raise PlatformApiError(f"HTTP {r.status_code}: {r.text[:200]}", status_code=r.status_code)
-            return r.json()
-        except (common.CookieExpiredError, AuthenticationError):
-            raise
-        except Exception as e:
-            last = e
-            if wait:
-                print(f"    [重试] 等待 {wait}s ...")
-                time.sleep(wait)
-    raise last
+def request_post(session: requests.Session, url: str, payload: Any, allow_400_json: bool = False,
+                 *, read_only: bool = False) -> Any:
+    return request(session, "POST", url, json=payload, read_only=read_only, allow_400_json=allow_400_json)
 
 
 class WBClient:
@@ -164,7 +164,7 @@ class WBClient:
                 "sort": "discount",
                 "sortOrder": sort_order,
             }
-            res = request(self.session, "POST", self.DISC_LIST, json=body)
+            res = request(self.session, "POST", self.DISC_LIST, read_only=True, json=body)
             goods = (res.get("data") or {}).get("listGoods") or []
             pages += 1
             if not goods:
@@ -205,10 +205,12 @@ class WBClient:
 
         Returns:
             {"priceModal": bool, "quarantineModal": bool, "error": bool, "errorText": str}；
-            网络/解析异常直接抛出，由调用方决定是否降级提交。
+            网络或解析异常时中止本批并记录阶段。
         """
         res = request(self.session, "POST", self._disc_upload_url(check_change=True),
                       json={"data": data_payload})
+        if not isinstance(res.get("error"), bool) or (res["error"] is False and not isinstance(res.get("data"), dict)):
+            raise ValueError("预检回执缺少明确状态")
         r_data = res.get("data") or {}
         return {
             "priceModal": bool(r_data.get("priceModal")),
@@ -233,7 +235,7 @@ class WBClient:
 
         Args:
             data_payload: 待提交记录列表（vendorCode / nmID / discount / currencyIsoCode）。
-            precheck: 是否先做预检（默认 True）。认证失败结束本批，其他预检异常时降级直连提交。
+            precheck: 是否先做预检（默认 True）。预检失败或结果未知时中止本批。
 
         Returns:
             DiscountUploadResult：含 task_id（真实提交的任务号）、是否已存在、
@@ -259,11 +261,11 @@ class WBClient:
                         price_modal=price_modal,
                         quarantine_modal=quarantine_modal,
                     )
-            except (common.CookieExpiredError, AuthenticationError) as e:
-                return DiscountUploadResult(success=False, error_message=str(e), shop_id=self.shop_id)
-            except Exception as e:
-                # 保留已授权写入的降级提交路径；最终按确认响应记录受理结果，不宣称即时生效。
-                print(f"    [预检降级] {e}（跳过预检，直接提交）")
+            except AuthenticationError:
+                raise
+            except Exception as error:
+                return DiscountUploadResult(success=False, shop_id=self.shop_id,
+                                            error_message=f"预检结果未知，已停止：{error}")
 
         try:
             res = request(self.session, "POST", self._disc_upload_url(check_change=False),
@@ -288,13 +290,16 @@ class WBClient:
 
             return DiscountUploadResult(
                 task_id=task_id,
-                success=True,
-                processed_count=len(data_payload),
+                success=bool(task_id),
+                error_message="" if task_id else "结果未知：缺少受理任务号",
+                processed_count=len(data_payload) if task_id else 0,
                 shop_id=self.shop_id,
                 already_exists=already_exists,
                 price_modal=price_modal,
                 quarantine_modal=quarantine_modal,
             )
+        except AuthenticationError:
+            raise
         except Exception as e:
             return DiscountUploadResult(
                 success=False,

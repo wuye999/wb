@@ -5,13 +5,13 @@ import time
 
 
 from sellerops.core import utils as common
-from sellerops.integrations.mabang.client import get_mabang_cred as mb_client_get_mabang_cred
-from sellerops.integrations.mabang.forecast import get_forecast_logistics as mb_client_get_forecast_logistics
-from sellerops.integrations.mabang.forecast import batch_create_forecast as mb_client_batch_create_forecast
-from sellerops.integrations.mabang.forecast import upload_forecast_batch as mb_client_upload_forecast_batch
-from sellerops.integrations.mabang.forecast import get_forecast_list as mb_client_get_forecast_list
-from sellerops.integrations.mabang.forecast import get_handover_channel_value as mb_client_get_handover_channel_value
-from sellerops.integrations.mabang.forecast import set_handover as mb_client_set_handover
+from sellerops.integrations.mabang.client import get_mabang_cred
+from sellerops.integrations.mabang.forecast import get_forecast_logistics
+from sellerops.integrations.mabang.forecast import batch_create_forecast
+from sellerops.integrations.mabang.forecast import upload_forecast_batch
+from sellerops.integrations.mabang.forecast import get_forecast_list
+from sellerops.integrations.mabang.forecast import get_handover_channel_value
+from sellerops.integrations.mabang.forecast import set_handover
 from sellerops.integrations.mabang.forecast import MabangUploadInterrupted
 from sellerops.integrations.mabang.session import MabangAuthError
 from sellerops.features.orders.forecast_polling import _resolve_poll_interval
@@ -38,7 +38,7 @@ def _record_auth_stop(target: list[dict], batches: list[str], submitted: tuple[s
 
 def _upload(cred: dict, target: list[dict], batches: list[str]) -> str:
     try:
-        return mb_client_upload_forecast_batch(cred, batches)
+        return upload_forecast_batch(cred, batches)
     except MabangAuthError as exc:
         _record_auth_stop(target, batches, exc.submitted if isinstance(exc, MabangUploadInterrupted) else (), exc)
         raise
@@ -59,11 +59,11 @@ def _print_forecast_rows(rows):
         if fl:
             print(f"     [⚠ 告警] 该批次失败 {fl} 单，请核查")
 
-def run_forecast(args):
+def run_forecast(args, *, failed_ids=(), group_shipping_ids=(), matched_ids=None):
     common.ensure_utf8_stdout()
-    cred_check = mb_client_get_mabang_cred()
+    cred_check = get_mabang_cred()
 
-    if args.check:
+    if getattr(args, "check", False):
         tabs = [(1, "待预报"), (3, "预报成功"), (99, "预报失败"), (5, "历史预报")]
         labels = dict(tabs)
         status = getattr(args, "status", None)
@@ -78,7 +78,7 @@ def run_forecast(args):
             page, max_pages = 1, (99 if pages == 0 else pages)
             while page <= max_pages:
                 try:
-                    rows, st = mb_client_get_forecast_list(cred_check, status=status,
+                    rows, st = get_forecast_list(cred_check, status=status,
                                                  rows_per_page=200, page=page)
                 except Exception as e:
                     print(f"  [错误] 查询失败: {str(e)[:80]}")
@@ -100,7 +100,7 @@ def run_forecast(args):
         first, stats0 = {}, {}
         for st_code, _label in tabs:
             try:
-                rows, st = mb_client_get_forecast_list(cred_check, status=st_code,
+                rows, st = get_forecast_list(cred_check, status=st_code,
                                              rows_per_page=200, page=1)
                 first[st_code] = (rows, st or {})
                 if not stats0:
@@ -127,7 +127,7 @@ def run_forecast(args):
                     print(f"  ...（仅列前 3 行；完整明细请用 --status {st_code}）")
         return 1 if any(st.get("_err") for _, st in first.values()) else 0
 
-    target, cred = collect_forecast_orders(args)
+    target, cred = collect_forecast_orders(args, failed_ids=failed_ids, group_shipping_ids=group_shipping_ids, matched_ids=matched_ids)
     if not target:
         return 0
 
@@ -150,11 +150,11 @@ def run_forecast(args):
     to_create = [r for r in target if not r["has_forecast"]]
     batch_nos_new = []
     if to_create:
-        logistics, channel = mb_client_get_forecast_logistics(cred)
+        logistics, channel = get_forecast_logistics(cred)
         print(f"\n[① 生成批次] 物流={logistics} 渠道={channel}；"
               f"提交 {len(to_create)} 个平台单号...")
         pids = [str(r["platform_order_id"]) for r in to_create if r["platform_order_id"]]
-        batch_nos_new, msg = mb_client_batch_create_forecast(cred, pids, logistics, channel)
+        batch_nos_new, msg = batch_create_forecast(cred, pids, logistics, channel)
         if not batch_nos_new:
             raise RuntimeError("预报生成未返回批次号，已中止上传与交运")
         print(f"  {msg}；新批次 {len(batch_nos_new)} 个: {','.join(batch_nos_new)}")
@@ -177,7 +177,7 @@ def run_forecast(args):
         for r in to_create:
             r["_step_upload"] = "已提交上传"
     elif getattr(args, "upload_waiting", False):
-        waiting, _stats = mb_client_get_forecast_list(cred, status=1)
+        waiting, _stats = get_forecast_list(cred, status=1)
         wb_nos = [b["batchNo"] for b in waiting]
         if wb_nos:
             up_msg = _upload(cred, target, wb_nos)
@@ -256,9 +256,9 @@ def run_forecast(args):
         print(f"[④ 交运] 对 {len(to_handover)} 个未选择交运方式的订单设置 "
               f"「{cred.get('handover_keyword') or '七库海外仓'}」...")
         try:
-            channel_value = mb_client_get_handover_channel_value(cred, to_handover[0]["order_id"])
+            channel_value = get_handover_channel_value(cred, to_handover[0]["order_id"])
             print(f"  交运渠道值: {channel_value}")
-            ok_ids, not_found = mb_client_set_handover(
+            ok_ids, not_found = set_handover(
                 cred, [str(r["order_id"]) for r in to_handover], channel_value)
             for r in to_handover:
                 if str(r["order_id"]) in ok_ids:
@@ -321,5 +321,5 @@ def run_forecast(args):
         print("[⚠ 告警] 存在上传未完成批次：对应订单未交运；稍后重跑 mabang-process 幂等补齐。")
     failed = auth_interrupted or n_fail or n_skip or handover_errors or failed_nos or still_nos
     if not failed:
-        print("（本次已轮询确认批次预报成功；如需核对可运行 sellerops mabang-forecast --check）")
+        print("（本次已轮询确认批次预报成功；如需核对可运行 sellerops order forecast --check）")
     return 1 if failed else 0

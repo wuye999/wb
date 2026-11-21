@@ -1,5 +1,6 @@
 """官方商品、价格和单一莫斯科仓库存 → 兼容本地商品快照。"""
 from math import isfinite
+from sellerops.domain.warehouses import moscow_warehouse
 from typing import Any
 
 from sellerops.integrations.bcs.client import OpenAPIShop
@@ -25,15 +26,6 @@ def _number(value: Any, field: str, maximum: int | None = None) -> int | float |
     if not isfinite(number) or number < 0 or (maximum is not None and number > maximum):
         raise OpenAPIResponseError(f'商品快照 {field} 超出有效范围')
     return int(number) if number.is_integer() else number
-
-
-def resolve_moscow(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """只接受本店唯一可用的莫斯科仓库 id，不使用 officeId。"""
-    matches = [row for row in rows if config.DEFAULT_WAREHOUSE_NAME in str(row.get('name') or '')
-               and '成都' not in str(row.get('name') or '') and not row.get('isDeleting')]
-    if len(matches) != 1 or matches[0].get('isProcessing'):
-        raise OpenAPIResponseError('无法确认唯一可用的莫斯科仓库，已中止该店快照采集')
-    return {'id': _id(matches[0].get('id')), 'name': str(matches[0]['name'])}
 
 
 def normalize_rows(shop_id: int, cards: list[dict[str, Any]], prices: list[dict[str, Any]],
@@ -135,7 +127,7 @@ def collect_shop(shop: OpenAPIShop) -> tuple[list[dict[str, Any]], dict[str, Any
     """完成本店全部读取后返回归一化行；本函数不写文件。"""
     api = WBOpenAPI(shop.api_key, region='cn')
     try:
-        warehouse = resolve_moscow(api.warehouses())
+        warehouse = moscow_warehouse(api.warehouses())
         cards = api.cards()
         # 在库存请求前验证完整规格，避免只查询部分规格后生成成功快照。
         normalize_rows(shop.id, cards, [], [], warehouse)

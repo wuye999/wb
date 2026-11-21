@@ -52,14 +52,13 @@ class TestMabangAuth(unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         paths.configure(temporary.name)
         self.addCleanup(paths.configure, previous)
-        for obj, name, value in [(credentials, '_CRED', None), (client, '_local', local())]:
-            patcher = patch.object(obj, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        self.path = Path(paths.CREDENTIALS_JSON)
+        patcher = patch.object(client, '_local', local())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.path = Path(paths.current.credentials_json)
         self.calls = []
 
     def seed(self, *, managed=True, passport=False, expires_in=3600) -> dict:

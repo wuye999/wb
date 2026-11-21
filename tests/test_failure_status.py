@@ -27,20 +27,21 @@ class TestCommandFailures(unittest.TestCase):
         self.addCleanup(self.output.__exit__, None, None, None)
 
     def test_shop_and_item_failures_propagate_in_preview_and_apply(self):
-        from sellerops.features.listings import banned
-        from sellerops.features.pricing import promo, price_review
+        from sellerops.features.products import banned
+        from sellerops.features.marketing import promo
+        from sellerops.features.products import price_review
         from sellerops.features.support import questions
         cases = [
-            (banned, 'banned', {'total': 1, 'moved': 0, 'failed': 1}),
-            (promo, 'promo-apply', {'joinable': 1, 'applied': 0, 'skipped': 0, 'failed': 1}),
-            (price_review, 'price-review', {'total': 1, 'applied': 0, 'failed': 1}),
-            (questions, 'questions', {'unanswered': 1, 'replied': 0, 'failed': 1}),
+            (banned, 'product banned --all-shops', {'total': 1, 'moved': 0, 'failed': 1}),
+            (promo, 'marketing enroll', {'joinable': 1, 'applied': 0, 'skipped': 0, 'failed': 1}),
+            (price_review, 'product review-price --all-shops', {'total': 1, 'applied': 0, 'failed': 1}),
+            (questions, 'support questions', {'unanswered': 1, 'replied': 0, 'failed': 1}),
         ]
         for module, command, stats in cases:
             for error in [RuntimeError('fixture query failed'), module.common.CookieExpiredError('expired'), None]:
                 for apply in [False, True]:
                     with self.subTest(command=command, error=error, apply=apply), ExitStack() as stack:
-                        args = self.parser.parse_args([command, *(['--apply'] if apply else [])])
+                        args = self.parser.parse_args([*command.split(), *(['--apply'] if apply else [])])
                         args.yes = True
                         stack.enter_context(patch.object(module.credentials, 'get', return_value=credential_fixture()))
                         stack.enter_context(patch.object(module.time, 'sleep'))
@@ -53,8 +54,8 @@ class TestCommandFailures(unittest.TestCase):
                         self.assertEqual(module.run(args), 1)
 
     def test_banned_rejecting_confirmation_prevents_all_platform_requests(self):
-        from sellerops.features.listings import banned
-        args = self.parser.parse_args(['banned', '--apply'])
+        from sellerops.features.products import banned
+        args = self.parser.parse_args(['product', 'banned', '--shops', '42', '--apply'])
         with patch.object(banned.credentials, 'get', return_value=credential_fixture()), \
                 patch('builtins.input', return_value='n') as prompt, \
                 patch.object(banned.wb_api, 'make_session') as session, \
@@ -65,7 +66,7 @@ class TestCommandFailures(unittest.TestCase):
         process.assert_not_called()
 
     def test_price_stock_and_bcs_operations_return_partial_failure(self):
-        from sellerops.features.listings import prices, stocks, operations
+        from sellerops.features.products import prices, stocks, operations
         plan = [{'shopId': 42, 'items': [{'nmID': 123, 'vc': 'BCS-TEST-123',
                  'price': 10, 'chrtId': 456, 'amount': 1}]}]
         for module, command, planner, executor in [
@@ -74,26 +75,26 @@ class TestCommandFailures(unittest.TestCase):
             (operations, 'price-bcs', 'plan_price', 'run_apply'),
         ]:
             with self.subTest(command=command), ExitStack() as stack:
-                args = self.parser.parse_args([command, '--apply', '--yes'])
+                args = self.parser.parse_args(['product', command.removesuffix('-bcs'), '--shops','42', '--all-products', *(['--amount','0'] if command == 'stock' else []), '--apply', '--yes'])
                 stack.enter_context(patch.object(module, 'resolve_filters', return_value=(['BCS-TEST-123'], 'fixture')))
                 stack.enter_context(patch.object(module, 'load_state', return_value=({}, {}, [])))
                 stack.enter_context(patch.object(module, planner, return_value=plan))
                 stack.enter_context(patch.object(module, executor, return_value=(1, 1)))
                 if module is operations:
-                    stack.enter_context(patch.object(module, 'get_shops', return_value=[42]))
-                    result = module.run('price', args)
+                    stack.enter_context(patch.object(module, 'selected_shops', return_value=[42]))
+                    result = module.run('price', args, channel='bcs')
                 else:
-                    stack.enter_context(patch.object(module, '_filter_shops', return_value=[42]))
+                    stack.enter_context(patch.object(module, 'selected_shops', return_value=[42]))
                     stack.enter_context(patch.object(module.credentials, 'get', return_value=credential_fixture()))
                     stack.enter_context(patch.object(module.wb_api, 'make_session'))
-                    stack.enter_context(patch.object(module, '_append_csv'))
+                    stack.enter_context(patch.object(module, 'write_product_receipts'))
                     stack.enter_context(patch.object(module, '_report_zero_items'))
                     result = module.run(args)
                 self.assertEqual(result, 1)
 
     def test_clean_all_preserves_failures_from_first_target(self):
-        from sellerops.features.listings import clean
-        args = self.parser.parse_args(['clean', '--target', 'all', '--apply'])
+        from sellerops.features.products import clean
+        args = self.parser.parse_args(['product', 'clean', '--shops', '42', '--yes', '--target', 'all', '--apply'])
         for first_error in [None, RuntimeError('draft query failed')]:
             with self.subTest(error=first_error), \
                     patch.object(clean.credentials, 'get', return_value=credential_fixture()), \
@@ -107,26 +108,26 @@ class TestCommandFailures(unittest.TestCase):
                 basket.assert_called_once()
 
     def test_discount_bcs_does_not_report_empty_after_failed_collection(self):
-        from sellerops.features.pricing import discount_bcs
-        args = self.parser.parse_args(['discount-bcs'])
+        from sellerops.features.products import discount_bcs
+        args = self.parser.parse_args(['product', 'discount', '--channel', 'bcs', '--all-products', '--all-shops', '--threshold', '50'])
         with patch.object(discount_bcs.bcs, 'fetch_shop_list', return_value=[{'id': 42, 'name': 'fixture'}]), \
                 patch.object(discount_bcs, 'collect', side_effect=RuntimeError('expired')), \
                 patch.object(discount_bcs.time, 'sleep'):
             self.assertEqual(discount_bcs.run(args), 1)
 
     def test_discount_bcs_missing_item_response_is_failure(self):
-        from sellerops.features.pricing import discount_bcs
-        args = self.parser.parse_args(['discount-bcs', '--apply'])
+        from sellerops.features.products import discount_bcs
+        args = self.parser.parse_args(['product', 'discount', '--channel', 'bcs', '--all-products', '--all-shops', '--threshold', '50', '--apply'])
         item = {'nmID': 123, 'vc': 'BCS-TEST-123', 'title': 'fixture', 'old_d': 50, 'price': 100}
         with patch.object(discount_bcs.bcs, 'fetch_shop_list', return_value=[{'id': 42, 'name': 'fixture'}]), \
-                patch.object(discount_bcs, 'collect', return_value=([item], {'skip_no_price': 0})), \
+                patch.object(discount_bcs, 'collect', return_value=([item], {'blocked': []})), \
                 patch.object(discount_bcs, 'apply', return_value={}), \
                 patch.object(discount_bcs, 'write_csv', return_value='fixture.csv'), \
                 patch.object(discount_bcs.time, 'sleep'):
             self.assertEqual(discount_bcs.run(args), 1)
 
     def test_publish_partial_success_and_existing_only_results(self):
-        from sellerops.features.listings import bulk_publish, card_publish
+        from sellerops.features.publishing import bulk_publish, card_publish
         from sellerops.domain.models import PublishItem
         item = PublishItem(nm_id=123, price=10, prefix='BCS-TEST')
         for module, command in [(bulk_publish, 'publish'), (card_publish, 'create-cards')]:
@@ -137,20 +138,20 @@ class TestCommandFailures(unittest.TestCase):
                         patch.object(module, 'price_book_packages', return_value={}), \
                         patch.object(module, 'resolve_publish_details', return_value=(item, None)), \
                         patch.object(module, 'execute_publish', return_value=counts):
-                    self.assertEqual(module.run(self.parser.parse_args([command, '123', '--apply'])), expected)
+                    self.assertEqual(module.run(self.parser.parse_args(['listing', command, '123', '--shops','42', '--apply'])), expected)
 
     def test_daily_stops_before_discount_after_failed_promo(self):
-        from sellerops.automation import daily
-        with tempfile.TemporaryDirectory() as directory, patch.object(daily.config, 'LOG_DIR', directory), \
+        from sellerops.features.system import daily
+        with tempfile.TemporaryDirectory() as directory, patch.object(daily.config.current, 'log_dir', directory), \
                 patch.object(daily.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stdout='', stderr='')) as run:
-            self.assertEqual(daily.run_daily_cmd(self.parser.parse_args(['daily', 'morning', '--apply'])), 1)
+            self.assertEqual(daily.run_daily_cmd(self.parser.parse_args(['task', 'run', 'morning', '--all-shops', '--apply'])), 1)
             run.assert_called_once()
-            self.assertIn('promo-apply', run.call_args.args[0])
+            self.assertIn('enroll', run.call_args.args[0])
 
     def test_read_reports_propagate_failed_shop_queries(self):
         from sellerops.features.support import complaints, chat_inspect
-        from sellerops.features.pricing import adverts
-        for module, command in [(complaints, 'appeals'), (chat_inspect, 'chats'), (adverts, 'promo-goods')]:
+        from sellerops.features.marketing import adverts
+        for module, command in [(complaints, 'support appeals'), (chat_inspect, 'support chats'), (adverts, 'marketing ads')]:
             with self.subTest(command=command), ExitStack() as stack:
                 stack.enter_context(patch.object(module.credentials, 'get', return_value=credential_fixture()))
                 stack.enter_context(patch.object(module.time, 'sleep'))
@@ -158,16 +159,16 @@ class TestCommandFailures(unittest.TestCase):
                     stack.enter_context(patch.object(module, 'process_shop', side_effect=RuntimeError('query failed')))
                 else:
                     stack.enter_context(patch.object(module.wb_api, 'make_session', side_effect=RuntimeError('query failed')))
-                    stack.enter_context(patch.object(module, '_LocalResolver' if module is complaints else 'NmResolver'))
-                self.assertEqual(module.run(self.parser.parse_args([command])), 1)
+                    stack.enter_context(patch.object(module, 'NmResolver'))
+                self.assertEqual(module.run(self.parser.parse_args(command.split())), 1)
 
     def test_dimension_partial_failure_is_nonzero(self):
-        from sellerops.features.listings import dimension
-        args = self.parser.parse_args(['dimension', '--vc', 'BCS-TEST-123', '--dims', '1*2*3/0.5', '--apply'])
-        with tempfile.TemporaryDirectory() as directory, patch.object(dimension.config, 'LOG_DIR', directory), \
-                patch.object(dimension.ops, 'load_state', return_value=({}, {}, [])), \
-                patch.object(dimension.ops, 'get_shops', return_value=[42]), \
-                patch.object(dimension, '_resolve_filters', return_value=['BCS-TEST-123']), \
+        from sellerops.features.products import dimension
+        args = self.parser.parse_args(['product', 'dimensions', '--shops', '42', '--vc', 'BCS-TEST-123', '--dims', '1*2*3/0.5', '--apply'])
+        with tempfile.TemporaryDirectory() as directory, patch.object(dimension.config.current, 'log_dir', directory), \
+                patch.object(dimension, 'load_state', return_value=({}, {}, [])), \
+                patch.object(dimension, 'selected_shops', return_value=[42]), \
+                patch.object(dimension, 'resolve_filters', return_value=(['BCS-TEST-123'], 'fixture')), \
                 patch.object(dimension, 'build_plans', return_value=[{}]), \
                 patch.object(dimension, 'apply_plans', return_value=(1, 1, [])):
             self.assertEqual(dimension.run(args), 1)
@@ -179,7 +180,7 @@ class TestCommandFailures(unittest.TestCase):
             qa = directory + '/qa.json'
             with open(qa, 'w', encoding='utf8') as file:
                 json.dump([{'question': 'fixture', 'product': {}}], file)
-            with patch.object(ai_reply_test.config, 'LOG_DIR', directory), \
+            with patch.object(ai_reply_test.config.current, 'log_dir', directory), \
                     patch.object(ai_reply_test.credentials, 'get', return_value=credential_fixture()), \
                     patch.object(ai_reply_test, 'LLMClient') as client:
                 client.return_value.generate_reply.return_value = None
@@ -218,45 +219,27 @@ class TestWatchFailures(unittest.TestCase):
 
 
 class TestWarehouseAndParameters(unittest.TestCase):
-    def test_warehouse_clear_reads_once_and_propagates_auth_failure(self):
-        from sellerops.features.listings import warehouse_clear as warehouse
-        args = SimpleNamespace(apply=True, interval=0)
-        for expired in [False, True]:
-            results = []
-            with self.subTest(expired=expired), redirect_stdout(io.StringIO()), \
-                    patch.object(warehouse.wb_api, 'make_session', side_effect=warehouse.common.CookieExpiredError('expired') if expired else None), \
-                    patch.object(warehouse, 'fetch_stocks', return_value=[{'chrtId': 456}]) as fetch, \
-                    patch.object(warehouse, 'delete_stock', return_value=(True, '')) as delete, \
-                    patch.object(warehouse.time, 'sleep'):
-                warehouse.process_shop(SHOP, 100, credential_fixture(), args, results)
-            self.assertEqual(len(results), 1)
-            self.assertEqual(results[0][1]['shop_errors'], int(expired))
-            self.assertEqual(fetch.call_count, 0 if expired else 1)
-            self.assertEqual(delete.call_count, 0 if expired else 1)
-
     def test_invalid_batch_options_fail_before_any_platform_request(self):
         from sellerops.cli.main import build_parser
-        from sellerops.features.listings import prices, stocks, operations, bulk_publish, card_publish
+        from sellerops.features.products import prices, stocks, operations
+        from sellerops.features.publishing import bulk_publish, card_publish
         parser = build_parser()
         for command, module in [('price', prices), ('stock', stocks), ('trash', operations)]:
             for option, value in [('--chunk', '0'), ('--chunk', '-1'), ('--interval', '-1'), ('--interval', 'nan')]:
                 with self.subTest(command=command, option=option, value=value), \
                         patch.object(module, 'resolve_filters') as resolve:
-                    args = parser.parse_args([command, '--apply', '--yes', option, value])
+                    args = parser.parse_args(['product', command.removesuffix('-bcs'), '--shops','42', '--all-products', *(['--amount','0'] if command == 'stock' else []), '--apply', '--yes', option, value])
                     with self.assertRaises(ValueError):
-                        module.run('trash', args) if module is operations else module.run(args)
+                        module.run('trash', args, channel='wb') if module is operations else module.run(args)
                     resolve.assert_not_called()
         for module in [bulk_publish, card_publish]:
             with patch.object(module.bcs, 'fetch_shop_list') as fetch:
                 with self.assertRaises(ValueError):
                     module.execute_publish([], apply=True, interval=-1)
                 fetch.assert_not_called()
-        for module, function, arguments in [(prices, prices.apply_prices, (SHOP, [])),
-                                              (stocks, stocks.set_stock, (SHOP, 100, []))]:
-            with patch.object(module.wb_api, 'make_session') as session:
-                with self.assertRaises(ValueError):
-                    function(*arguments, interval=-1)
-                session.assert_not_called()
+        with patch.object(stocks.wb_api, "make_session") as session, self.assertRaises(ValueError):
+            stocks.set_stock(SHOP, 100, [], interval=-1)
+        session.assert_not_called()
 
 
 class TestOrderFailures(unittest.TestCase):
@@ -275,21 +258,21 @@ class TestOrderFailures(unittest.TestCase):
         parser = build_parser()
         for replace_failed in [False, True]:
             for registration in [0, 1, RuntimeError('lark-cli failed')]:
-                def match(args, **kwargs):
-                    args.replace_fail_order_ids = ['failed-order'] if replace_failed else []
-                    args.group_shipping_order_ids = {'group-order'}
-                    return 0
+                def match(**kwargs):
+                    from sellerops.features.orders.matching import MatchResult
+                    return MatchResult(failures={'failed-order': '更换失败'} if replace_failed else {},
+                                       group_ids={'group-order'})
                 with self.subTest(replace_failed=replace_failed, registration=registration), redirect_stdout(io.StringIO()), \
-                        patch.object(pipeline, 'mabang_run', side_effect=match), \
+                        patch.object(pipeline, 'match_orders', side_effect=match), \
                         patch.object(pipeline, 'mabang_run_forecast', return_value=0) as forecast, \
                         patch.object(pipeline, 'feishu_register_run', return_value=registration,
                                      side_effect=registration if isinstance(registration, Exception) else None) as register:
-                    code = pipeline.run(parser.parse_args(['mabang-process', '--url', 'https://fixture.invalid', '--apply']))
+                    code = pipeline.run(parser.parse_args(['order', 'process', '--url', 'https://fixture.invalid', '--apply']))
                     self.assertEqual(code, int(replace_failed or registration != 0))
-                    self.assertEqual(forecast.call_args.args[0].replace_fail_order_ids,
+                    self.assertEqual(sorted(forecast.call_args.kwargs['failed_ids']),
                                      ['failed-order'] if replace_failed else [])
-                    self.assertEqual(forecast.call_args.args[0].group_shipping_order_ids, {'group-order'})
-                    self.assertEqual(register.call_args.args[0].group_shipping_order_ids, {'group-order'})
+                    self.assertEqual(forecast.call_args.kwargs['group_shipping_ids'], {'group-order'})
+                    self.assertEqual(register.call_args.kwargs['group_shipping_ids'], {'group-order'})
 
     def test_forecast_does_not_handover_when_one_failed_batch_has_unknown_shop(self):
         from sellerops.features.orders import forecast
@@ -299,14 +282,14 @@ class TestOrderFailures(unittest.TestCase):
         result = {'rows': {}, 'store_of': {'B1': 'known-shop'}, 'success': set(),
                   'failed': {'B1', 'B2'}, 'still': set()}
         with redirect_stdout(io.StringIO()), \
-                patch.object(forecast, 'mb_client_get_mabang_cred', return_value={}), \
+                patch.object(forecast, 'get_mabang_cred', return_value={}), \
                 patch.object(forecast, 'collect_forecast_orders', return_value=(target, {})), \
-                patch.object(forecast, 'mb_client_get_forecast_logistics', return_value=('logistics', 'channel')), \
-                patch.object(forecast, 'mb_client_batch_create_forecast', return_value=(['B1', 'B2'], 'created')), \
-                patch.object(forecast, 'mb_client_upload_forecast_batch', return_value='uploaded'), \
+                patch.object(forecast, 'get_forecast_logistics', return_value=('logistics', 'channel')), \
+                patch.object(forecast, 'batch_create_forecast', return_value=(['B1', 'B2'], 'created')), \
+                patch.object(forecast, 'upload_forecast_batch', return_value='uploaded'), \
                 patch.object(forecast, 'wait_upload_done', return_value=result), \
                 patch.object(forecast, 'find_batches', return_value={'found': {}}), \
-                patch.object(forecast, 'mb_client_set_handover') as handover, \
+                patch.object(forecast, 'set_handover') as handover, \
                 patch.object(forecast, 'write_forecast_csv', return_value='fixture.csv'):
             self.assertEqual(forecast.run_forecast(args), 1)
         self.assertEqual(target[0]['_step_handover'], '跳过-预报失败')
@@ -319,12 +302,12 @@ class TestOrderFailures(unittest.TestCase):
             target = [{'order_id': 'order', 'platform_order_id': 'platform', 'shop': 'fixture',
                        'has_forecast': has_forecast, 'channel_selected': False}]
             with self.subTest(has_forecast=has_forecast), redirect_stdout(io.StringIO()), \
-                    patch.object(forecast, 'mb_client_get_mabang_cred', return_value={}), \
+                    patch.object(forecast, 'get_mabang_cred', return_value={}), \
                     patch.object(forecast, 'collect_forecast_orders', return_value=(target, {})), \
-                    patch.object(forecast, 'mb_client_get_forecast_logistics', return_value=('logistics', 'channel')), \
-                    patch.object(forecast, 'mb_client_batch_create_forecast', return_value=([], 'missing')), \
-                    patch.object(forecast, 'mb_client_get_handover_channel_value', return_value='fixture'), \
-                    patch.object(forecast, 'mb_client_set_handover', return_value=([], [])) as handover, \
+                    patch.object(forecast, 'get_forecast_logistics', return_value=('logistics', 'channel')), \
+                    patch.object(forecast, 'batch_create_forecast', return_value=([], 'missing')), \
+                    patch.object(forecast, 'get_handover_channel_value', return_value='fixture'), \
+                    patch.object(forecast, 'set_handover', return_value=([], [])) as handover, \
                     patch.object(forecast, 'write_forecast_csv', return_value='fixture.csv'):
                 if has_forecast:
                     self.assertEqual(forecast.run_forecast(args), 1)

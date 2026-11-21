@@ -200,9 +200,14 @@ class BCSClient:
             raise PlatformApiError(f"countByFilter 失败 code={d.get('code')}")
         return d.get("data") or {}
 
-    # 2026-10-29：fetch_warehouses() / default_warehouse_id() 已删除。
-    # 仓库 ID 统一改由 WB 原生接口获取（adapters/wb_warehouse_client.py +
-    # services/replicate/warehouse.py），不再依赖 BCS。
+    def batch_set_prices(self, shop_id: int, items: list[dict]) -> dict:
+        rows = [{**item, "shopId": shop_id} for item in items]
+        return self.post(f"{self.base_url}/shopKeeper/price/batch", {"dataList": rows})
+
+    def batch_set_stock(self, shop_id: int, warehouse_id: int, items: list[dict]) -> dict:
+        warehouse = {"warehouseId": warehouse_id, "stockItems": items}
+        return self.post(f"{self.base_url}/shopKeeper/stock/batchSetByChrtIdsBatch",
+                         {"shopId": shop_id, "warehouses": [warehouse]})
 
     def remove_to_trash(self, shop_id: int, nm_ids: List[int]) -> Dict[str, Any]:
         return self.post(f"{self.base_url}/shopKeeper/clean/removeToTrash",
@@ -249,34 +254,16 @@ class BCSClient:
         raise PlatformApiError(f"同步超时 task={task_id}")
 
 
+    def sync_shops_parallel(self, shop_ids: list[int], workers: int = 2) -> None:
+        """Synchronize explicitly requested shops with bounded concurrency."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def synchronize(shop_id: int) -> None:
+            task_id = self.sync_shop(shop_id)
+            self.wait_sync_done(task_id, shop_id=shop_id)
+
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, 4))) as pool:
+            list(pool.map(synchronize, shop_ids))
+
+
 client = BCSClient()
-base_url = lambda: client.base_url
-http_get_json = client.get
-http_post_json = client.post
-fetch_shop_list = client.fetch_shop_list
-get_main_shop = client.get_main_shop
-fetch_shop_products = client.fetch_shop_products
-count_by_filter = client.count_by_filter
-remove_to_trash = client.remove_to_trash
-batch_push_products = client.batch_push_products
-sync_shop = client.sync_shop
-wait_sync_done = client.wait_sync_done
-
-
-def print_shops(args=None):
-    """打印全部店铺列表"""
-    for s in fetch_shop_list():
-        print(f"{s['id']} | {s['name']}")
-    return 0
-
-
-def sync_shops_parallel(shop_ids: list[int], workers: int = 2) -> None:
-    """Synchronize explicitly requested shops with bounded concurrency."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    def synchronize(shop_id: int) -> None:
-        task_id = client.sync_shop(shop_id)
-        client.wait_sync_done(task_id, shop_id=shop_id)
-
-    with ThreadPoolExecutor(max_workers=max(1, min(workers, 4))) as pool:
-        list(pool.map(synchronize, shop_ids))

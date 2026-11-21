@@ -7,8 +7,8 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 
 from sellerops.domain.product_reports import ProductReport, ReportCatalog
-from sellerops.features.catalog.product_report_screening import product_key, screen_products
-from sellerops.features.catalog.product_report_xlsx import write_report
+from sellerops.features.reports.product_report_screening import product_key, screen_products
+from sellerops.features.reports.product_report_xlsx import write_report
 from sellerops.persistence.report_catalog import load_report_catalog
 from sellerops.settings import paths
 
@@ -148,7 +148,7 @@ class TestReportCatalog(unittest.TestCase):
                 wb.save(target)
                 wb.close()
             before = price.read_bytes(), mapping.read_bytes()
-            with patch.object(paths, 'PRICE_BOOK_XLSX', str(price)), patch.object(paths, 'MAPPING_XLSX', str(mapping)):
+            with patch.object(paths.current, 'price_book_xlsx', str(price)), patch.object(paths.current, 'mapping_xlsx', str(mapping)):
                 result = load_report_catalog()
             self.assertEqual(result.price_names, {'新商品'})
             self.assertEqual(result.mapped_names, {OTHER: '新商品'})

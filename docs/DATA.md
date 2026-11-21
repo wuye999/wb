@@ -10,7 +10,7 @@
 | `商品价格表.xlsx` | 商品名、卖家 SKU、目标售价、包装、前缀、库存 SKU | 用户，是商品主数据 |
 | `价格映射表.xlsx` | vendorCode 与中文商品的映射、店铺信息 | merge 等本地命令生成/更新 |
 | `products/shop<ID>_products_all.json` | 店铺快照 | fetch 生成；业务读取时可能滞后 |
-| `shops/shop_<ID>_<名称>.xlsx` | 各店独立映射 | shops-mapping、merge 等维护 |
+| `shops/shop_<ID>_<名称>.xlsx` | 各店独立映射 | shop-mappings、merge 等维护 |
 | `shops/_archive/` | 停用店铺映射 | 用户归档；聚合会跳过归档店铺 |
 | `state/` | 已知归属、纠偏、排除、提交记录、客服去重等 | 业务程序；保留原状态以避免重复处理 |
 | `workbench/` | 本地 HTML 工作台 | mapping、review、核查命令生成 |
@@ -18,11 +18,13 @@
 | `browser_profiles/<平台>/` | 固定 Chromium 的平台登录资料 | 本机专用浏览器，按数据目录隔离 |
 | `ai_test_qa.json` | 本地 AI 对照样例集 | 用户；格式见下文 |
 
+映射保存中断时，`state/.mapping-pending.json` 和 `state/.mapping-work/` 会保留恢复信息。关闭占用表格后重新运行映射命令即可续完。备份时请一起保留这些文件。
+
 普通用户可维护这些自己的数据。项目源码与说明文档按 [使用边界](../AGENTS.md) 保持只读，临时脚本放项目根目录的 `_scratch/`。
 
 固定 Chromium 程序安装在项目根目录的 `.runtime/browsers/`。`--data-dir` 选择登录资料和凭证的位置，各数据目录共用项目内的浏览器程序。安装步骤见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
 
-`product-report` 在 `logs/` 生成商品运营工作簿，只读现有快照、归属和提交记录，不覆盖这些数据。BCS提供对应店铺官方令牌，无需新增凭证段；`--extra-bcs-stdin` 接收的临时账号仅驻留本轮内存，不增加凭证文件或额外店铺快照。报告按账号标注统计来源，链接缺口仅针对本机目标店；来源链接、UTC+8日期及未知数据约定见 [报告说明](PRODUCT_REPORT.md)。
+`report products` 在 `logs/` 生成商品运营工作簿，只读现有快照、归属和提交记录，不覆盖这些数据。BCS提供对应店铺官方令牌，无需新增凭证段；`--extra-bcs-stdin` 接收的临时账号仅驻留本轮内存，不增加凭证文件或额外店铺快照。报告按账号标注统计来源，链接缺口仅针对本机目标店；来源链接、UTC+8日期及未知数据约定见 [报告说明](PRODUCT_REPORT.md)。
 
 ## 商品价格表
 
@@ -55,13 +57,13 @@
 
 快照通常为 JSON 对象，含 `shopId`、`total`、`rows` 等信息。保留原封装与字段；业务会过滤已经有 `trashedAt` 的商品。`state/多店铺同步状态.json` 保存店铺元信息；缺少时可从快照文件名扫描店铺。
 
-默认 `fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存，经下述商品去重后保存完整原行；显式 `--source wb-openapi` 时以 WB Open API 重建非回收站商品快照，文件名和行字段兼容旧 BCS 快照。该来源的顶层增加 `source=wb-openapi`、`region=cn`、已确认的 `warehouse.id/name` 和 `warnings` 缺失统计；`fetchMethod/fetchedAt/fetchedCount` 记录采集来源、时间及数量。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店莫斯科仓。未返回库存记录保持空列表，价格缺失保留 null，不补零；合法零价与零库存原样保留。图片缺失为空字符串。`createAt/updateAt` 来自商品卡创建/更新时间，不使用采集时间替代。状态文件的 `fetched` 记录成功店铺数量，`errors` 记录失败店铺；两类文件均不包含密钥。显式 BCS 来源标记为 `source=bcs`，不隐式迁移旧文件。
+默认 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存，经下述商品去重后保存完整原行；显式 `--source wb-openapi` 时以 WB Open API 重建非回收站商品快照，文件名和行字段兼容旧 BCS 快照。该来源的顶层增加 `source=wb-openapi`、`region=cn`、已确认的 `warehouse.id/name` 和 `warnings` 缺失统计；`fetchMethod/fetchedAt/fetchedCount` 记录采集来源、时间及数量。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店莫斯科仓。未返回库存记录保持空列表，价格缺失保留 null，不补零；合法零价与零库存原样保留。图片缺失为空字符串。`createAt/updateAt` 来自商品卡创建/更新时间，不使用采集时间替代。状态文件的 `fetched` 记录成功店铺数量，`errors` 记录失败店铺；两类文件均不包含密钥。显式 BCS 来源标记为 `source=bcs`，不隐式迁移旧文件。
 
 BCS 商品响应先按原始行数核对接口 total，确认完整后才按本店 nmId 和完整 VC 去重。忽略 BCS 记录元信息 `id/createTime/updateTime/createBy/updateBy` 的差异；其余非空字段必须一致，且必须存在一条包含全部已知业务值的完整原行。例如一行有币种/折扣、另一行这些字段为空时保留前者；不跨行拼接，0 和 false 都是有效值。业务值完全一致的完整行再按 BCS updateTime、id 选择代表。同 VC 对应不同或缺失 nmId、同 nmId 对应不同或缺失 VC、在架/回收站状态冲突、非空字段冲突或没有完整原行时，读取失败并保留旧快照。终端报告原始行数和移除条数；快照 `total/fetchedCount` 及同步状态中的店铺 total 均为去重后行数。直接读取 BCS 商品列表的业务也使用去重结果。单店表生成沿用同一规则，避免旧快照重复行进入 Excel。
 
 BCS 来源不会将“无规格”解释为零库存：空规格、无效或重复 chrtId，以及任一规格缺少有效库存记录时，单店表、总表与覆盖矩阵的库存留空。无完整规格时，附带的占位价格0也不作为实际售价；有完整规格的真实零价、零库存仍保留，展示的小数价格不截断为整数。库存数量的空值、布尔值、负数、非整数或重复仓库记录均视为未知。总表优先展示主店数据，主店缺失的库存或售价不借用别店填充；主店没有该VC时，使用最小店铺ID的同一条代表记录。BCS 快照 `warnings` 增加规格不完整、库存未知、价格未知的商品数。已有文件不会因升级自动改写，快照更新仍由独立 fetch、表格更新仍由独立 merge 完成；离线整理旧文件前先备份。
 
-映射总表主要工作表为「映射总表」，核心列为「产品中文名」「vendorCode」「实际售价」等。`merge` 会根据本地快照、单店映射和状态池重建总表，不会自动刷新远端数据。
+映射总表主要工作表为「映射总表」，核心列为「产品中文名」「vendorCode」「实际售价」等。`catalog merge` 会根据本地快照、单店映射和状态池重建总表，不会自动刷新远端数据。
 
 ## 关键状态文件
 
@@ -84,13 +86,13 @@ BCS 来源不会将“无规格”解释为零库存：空规格、无效或重�
 
 ## 工作台与批量输入
 
-HTML 工作台在浏览器中人工核对后导出 JSON，再传给对应导入命令。默认 `mapping` 和 `review` 导出的 VC 中心审核结果交给 `merge 文件.json`；单店格式工作台结果用 `mapping-import`。两种导入协议不同，不要混用或随意重写导出字段。
+HTML 工作台在浏览器中人工核对后导出 JSON，再传给对应导入命令。默认 `catalog mapping` 和 `catalog review` 导出的 VC 中心审核结果交给 `catalog merge 文件.json`；单店格式工作台结果用 `catalog import-mapping`。两种导入协议不同，不要混用或随意重写导出字段。
 
-`mapping-rename --file` 接受 `[{"vc":"BCS-TEST-123456789","cn":"新中文名"}]` 形式的 JSON，会修改本地归属和相关映射文件，没有 `--apply` 开关。
+`catalog rename --file` 接受 `[{"vc":"BCS-TEST-123456789","cn":"新中文名"}]` 形式的 JSON，会修改本地归属和相关映射文件，没有 `--apply` 开关。
 
 `publish/create-cards --file` 支持 `.txt`、`.json`、`.csv`。纯文本每行一个商品码；JSON 可为商品码数组或带 `nmId`（也识别 `sku` / `nm`）的对象数组，参考 [发布样例](../examples/publish.example.json)。CSV 既有普通解析，也有根据中文名/VC 联动价格表推导的分支；带 `nmId` 与 VC/中文名列时可能采用价格表中的价格与尺寸，不要假设 CSV 的 price 总能覆盖主数据。明确覆盖参数时优先使用 JSON 并检查预览。
 
-`import-publish` 则读取另一份 Excel 映射表，按自己的商品价格表与目标店铺做差集；不是上述批量文件的同一种输入。
+`listing import` 则读取另一份 Excel 映射表，按自己的商品价格表与目标店铺做差集；不是上述批量文件的同一种输入。
 
 ## 飞书业务表
 
@@ -101,13 +103,13 @@ HTML 工作台在浏览器中人工核对后导出 JSON，再传给对应导入�
 | 订单登记 | `订单编号`（去重键）、`日期`（付款时间）、`店铺`（多选标签列表）、`BCS编号`、`商品中文名`、`库存SKU`、`wb编号`、`商品链接`、`订单量` |
 | 马帮库存登记表 | `库存SKU`、`商品中文名`、`库存总量`、`状态`、图片附件列 `图`（也识别图片/图片附件或附件类型列）、日期列、`总新增订单量` |
 
-订单登记中的库存 SKU 来自本地价格表，缺失时允许留空；wb编号来自下单店铺自己的快照。登记会完整分页读取现有订单编号去重；已有重复不会由普通登记自动清理，单独使用 `feishu-register-dedup`。
+订单登记中的库存 SKU 来自本地价格表，缺失时允许留空；wb编号来自下单店铺自己的快照。登记会完整分页读取现有订单编号去重；已有重复不会由普通登记自动清理，单独使用 `order deduplicate`。
 
-`mabang-stock-register --apply` 会先删除库存表已有记录再全量写入，原日期列对应的历史数据不能因此自动保留。`mabang-stock-daily` 的显式日期/区间模式会删除早于起始日期的旧日期列；默认模式和区间模式不能当作同一动作。
+`order stock-register --apply` 会先删除库存表已有记录再全量写入，原日期列对应的历史数据不能因此自动保留。`order stock-days` 的显式日期/区间模式会删除早于起始日期的旧日期列；默认模式和区间模式不能当作同一动作。
 
 ## AI 对照样例集
 
-`ai_test_qa.json` 是对象数组，每项有 `question`、`human_answer`、`product`。product 的 cn、title、brand、colors、price、description、options 按字符串提供。可参考 [问答样例](../examples/ai_test_qa.example.json)。`ai-test` 会调用真实 LLM，不是离线单元测试。
+`ai_test_qa.json` 是对象数组，每项有 `question`、`human_answer`、`product`。product 的 cn、title、brand、colors、price、description、options 按字符串提供。可参考 [问答样例](../examples/ai_test_qa.example.json)。`support ai-test` 会调用真实 LLM，不是离线单元测试。
 
 ## 备份与更新
 

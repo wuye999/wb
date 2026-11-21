@@ -44,7 +44,7 @@ class TestRegression(unittest.TestCase):
             `api/网络请求/wb推广活动列表.har`（2026-09-23，status=[4,9,11]）。
             """
         from sellerops.integrations.wildberries import advertising as ads
-        from sellerops.features.pricing import adverts as adverts
+        from sellerops.features.marketing import adverts as adverts
         url = ads.adverts_url(1, 100)
         self.assertIn('status=%5B4,9,11%5D', url)
         self.assertIn('bid_type=%5B1,2%5D', url)
@@ -88,7 +88,7 @@ class TestRegression(unittest.TestCase):
             **不返回成功条数** ⇒ 只能按 nmID 逐条记账。
             """
         from sellerops.core import utils as common
-        from sellerops.features.listings import trash as T
+        from sellerops.features.products import trash as T
         self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {}}, [1, 2]), {})
         self.assertEqual(T.parse_move_response({'error': True, 'errorText': 'boom'}, [1, 2]), {1: 'boom', 2: 'boom'})
         self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {'2': '有库存'}}, [1, 2]), {2: '有库存'})
@@ -140,23 +140,23 @@ class TestRegression(unittest.TestCase):
 
             2026-10-29 起不再依赖 BCS，也不再读 known_warehouses.json。
             """
-        from sellerops.features.listings import warehouse as wh
+        from sellerops.features.products import warehouse as wh
         orig = wh.list_stores
         try:
-            wh._cache.clear()
+            wh.clear_cache()
             wh.list_stores = lambda sid: [{'id': 111, 'name': '成都仓库', 'warehouseName': 'Chengdu'}, {'id': 222, 'name': '莫斯科仓库', 'warehouseName': 'Москва (Белая дача)'}]
             self.assertEqual(wh.resolve_warehouse(9352), 222)
-            wh._cache.clear()
+            wh.clear_cache()
             wh.list_stores = lambda sid: [{'id': 333, 'name': '成都仓库', 'warehouseName': 'Chengdu'}, {'id': 444, 'name': '二号仓', 'warehouseName': 'Подольск'}]
             self.assertIsNone(wh.resolve_warehouse(9352))
-            wh._cache.clear()
+            wh.clear_cache()
             wh.list_stores = lambda sid: [{'id': 333, 'name': '成都仓库', 'warehouseName': 'Chengdu'}]
             self.assertIsNone(wh.resolve_warehouse(9352))
-            self.assertEqual(wh._cache, {})
-            wh._cache.clear()
+            self.assertEqual(wh.warehouse_ids(wh.config.current), {})
+            wh.clear_cache()
             wh.list_stores = lambda sid: []
             self.assertIsNone(wh.resolve_warehouse(9352))
-            wh._cache.clear()
+            wh.clear_cache()
             calls = []
             wh.list_stores = lambda sid: calls.append(sid) or [{'id': 222, 'name': '莫斯科仓库'}]
             wh.resolve_warehouse(9352)
@@ -164,7 +164,7 @@ class TestRegression(unittest.TestCase):
             self.assertEqual(len(calls), 1)
         finally:
             wh.list_stores = orig
-            wh._cache.clear()
+            wh.clear_cache()
 
     def test_warehouse_client_field_trap(self):
         """WB 仓库接口字段陷阱：必须取 `id`，不能取 `warehouseId`（后者是 officeId）（离线）。
@@ -197,12 +197,14 @@ class TestRegression(unittest.TestCase):
         finally:
             wc.wb_api.make_session, wc.wb_api.request = (orig_ms, orig_req)
 
-    def test_ops_channel_default(self):
-        """默认通道映射：trash → wb（WB 原生）；price/stock → bcs（其 WB 通道走 price_wb/stock_wb）。"""
-        from sellerops.features.listings.operations import _default_channel
-        self.assertEqual(_default_channel('trash'), 'wb')
-        self.assertEqual(_default_channel('price'), 'bcs')
-        self.assertEqual(_default_channel('stock'), 'bcs')
+    def test_product_channel_defaults(self):
+        from sellerops.cli.main import build_parser
+        parser = build_parser()
+        for action in ("trash", "price", "stock"):
+            tail = ["--amount", "10"] if action == "stock" else []
+            args = ["product", action, "--all-shops", "--all-products", *tail]
+            self.assertEqual(parser.parse_args(args).channel, "wb")
+            self.assertEqual(parser.parse_args([*args, "--channel", "bcs"]).channel, "bcs")
 
     def test_price_wb_offline(self):
         """price_wb 离线断言（**不触网、不写平台**）。
@@ -215,7 +217,7 @@ class TestRegression(unittest.TestCase):
         from unittest import mock
         from argparse import Namespace
         from sellerops.integrations.wildberries import client as wc
-        from sellerops.features.listings import prices as price_wb
+        from sellerops.features.products import prices as price_wb
         shop = {'shopId': 9352, 'shopName': '袁州1', 'cookie': '', 'authorizev3': 't', 'wb_seller_lk': 't'}
         it = {'vc': 'BCS-X-1', 'nmID': 123, 'price': 150, 'cur_price': 198.0, 'orig_zero': False, 'discount': None, 'clubDiscount': None, 'cn': '测试'}
         p0 = price_wb._build_payload(it, None)
@@ -246,14 +248,10 @@ class TestRegression(unittest.TestCase):
             if url.endswith('checkChange=true'):
                 return {'data': {'priceModal': False, 'quarantineModal': False}, 'error': False, 'errorText': ''}
             return {'data': {'id': 166628902, 'alreadyExists': True}, 'error': False, 'errorText': ''}
-        witems = [{'vendorCode': f'BCS-WB-{i}', 'nmID': 2000 + i, 'price': 88} for i in range(3)]
-        calls.clear()
+        results = []
         with mock.patch.object(wc, 'request', side_effect=fake_request_exists):
-            r = price_wb.apply_prices(shop, witems, root_version='v1.113.3', chunk=2, interval=0)
-        self.assertEqual((r['ok'], r['fail']), (3, 0))
-        self.assertEqual(r['task_ids'], [166628902, 166628902])
-        self.assertEqual(len(r['details']), 3)
-        self.assertTrue(all((d['ok'] for d in r['details'])))
+            self.assertEqual(price_wb.exec_shop(client, plan, pargs, results, ts), (4, 0))
+        self.assertTrue(all("166628902" in row[4] and "已存在" in row[4] for row in results))
         bad_items = [{'vc': 'BCS-WB-9', 'nmID': 9999, 'price': 99, 'cur_price': 198.0, 'orig_zero': False, 'discount': None, 'clubDiscount': None, 'cn': '测试'}]
         plan_bad = {'shopId': 9352, 'items': bad_items}
         calls.clear()
@@ -277,7 +275,7 @@ class TestRegression(unittest.TestCase):
         from unittest import mock
         import openpyxl
         from sellerops.settings import paths as config
-        from sellerops.features.listings import plans as ops_plan
+        from sellerops.features.products import plans as ops_plan
         from sellerops.persistence.mappings import MappingRepository
         header = ['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '库存SKU']
         rows = [['', 'SKU-1', '旧格式', '=F2*2', '10*10*10/0.1', 40.25, 'AAAA', 's1'], ['', 'SKU-2', '无乘数', '=F3', '10*10*10/0.1', 41.525, 'BBBB', 's2'], ['', 'SKU-3', '绝对引用', '=$F$4*2', '10*10*10/0.1', 39.775, 'CCCC', 's3'], ['', 'SKU-4', 'ROUND', '=ROUND(F5*1.3,2)', '10*10*10/0.1', 46.2, 'DDDD', 's4'], ['', 'SKU-5', '走缓存', '=VLOOKUP(A2,A:F,6,0)', '10*10*10/0.1', 50, 'EEEE', 's5'], ['', 'SKU-6', '纯数值', 100.75, '10*10*10/0.1', 60, 'FFFF', 's6'], ['', 'SKU-7', '无缓存', '=IF(A2>0,1,2)', '10*10*10/0.1', 70, 'GGGG', 's7']]
@@ -303,7 +301,7 @@ class TestRegression(unittest.TestCase):
             path = os.path.join(tmp, 'boss.xlsx')
             wb_formula.save(path)
             err = _io.StringIO()
-            with mock.patch('openpyxl.load_workbook', side_effect=lambda p, data_only=False, **kw: wb_cached if data_only else wb_formula), mock.patch.object(config, 'PRICE_BOOK_XLSX', path), contextlib.redirect_stderr(err):
+            with mock.patch('openpyxl.load_workbook', side_effect=lambda p, data_only=False, **kw: wb_cached if data_only else wb_formula), mock.patch.object(config.current, 'price_book_xlsx', path), contextlib.redirect_stderr(err):
                 boss = MappingRepository.load_price_book()
             self.assertEqual([b['dp'] for b in boss], [80.5, 41.525, 79.55, 60.06, 88.88, 100.75, None])
             self.assertEqual([b['floor'] for b in boss], [80, 41, 79, 60, 88, 100, None])
@@ -324,7 +322,7 @@ class TestRegression(unittest.TestCase):
             """
         from unittest import mock
         from sellerops.integrations.wildberries import stocks as wsc
-        from sellerops.features.listings import stocks as stock_wb
+        from sellerops.features.products import stocks as stock_wb
         shop = {'shopId': 9352, 'shopName': '袁州1', 'cookie': '', 'authorizev3': 't', 'wb_seller_lk': 't'}
         posts = []
 
@@ -398,7 +396,7 @@ class TestRegression(unittest.TestCase):
         from unittest import mock
         import openpyxl
         from sellerops.settings import paths as config
-        from sellerops.features.listings import publish_inputs as shelve_common
+        from sellerops.features.publishing import publish_inputs as shelve_common
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'Sheet1'
@@ -411,7 +409,7 @@ class TestRegression(unittest.TestCase):
             csv_path = os.path.join(tmp, 'orders.csv')
             with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
                 f.write('商品中文名,现在商品的nmId,VC\n测试品,123456,OTHER-1\n')
-            with mock.patch('openpyxl.load_workbook', return_value=wb), mock.patch.object(config, 'PRICE_BOOK_XLSX', boss_path):
+            with mock.patch('openpyxl.load_workbook', return_value=wb), mock.patch.object(config.current, 'price_book_xlsx', boss_path):
                 items, _raw = shelve_common.load_publish_file(csv_path)
             self.assertEqual(len(items), 1)
             self.assertEqual(items[0]['price'], 88)
@@ -440,7 +438,7 @@ class TestRegression(unittest.TestCase):
             ws.append(['产品中文名', 'vendorCode', '店铺9352价格(CNY)', '折扣%', '实际售价'])
             ws.append(['测试品', 'BCS-AAAA-1', 100, 10, 88.9])
             wb.save(path)
-            with mock.patch.object(config, 'MAPPING_XLSX', path), mock.patch.object(MappingRepository, 'load_vc_override', return_value={}):
+            with mock.patch.object(config.current, 'mapping_xlsx', path), mock.patch.object(MappingRepository, 'load_vc_override', return_value={}):
                 state, _ex = MappingRepository.load_mapping_state()
             self.assertEqual(state['BCS-AAAA-1']['dp'], 88.9)
             self.assertEqual(state['BCS-AAAA-1']['shop_price'], 100)
@@ -471,7 +469,7 @@ class TestRegression(unittest.TestCase):
             ws.append(['测试品', 'BCS-AAAA-2', 88.9, 100])
             wb.save(path)
             err = _io.StringIO()
-            with mock.patch.object(config, 'MAPPING_XLSX', path), mock.patch.object(MappingRepository, 'load_vc_override', return_value={}), contextlib.redirect_stderr(err):
+            with mock.patch.object(config.current, 'mapping_xlsx', path), mock.patch.object(MappingRepository, 'load_vc_override', return_value={}), contextlib.redirect_stderr(err):
                 state, _ex = MappingRepository.load_mapping_state()
             self.assertIsNone(state['BCS-AAAA-2']['dp'])
             self.assertEqual(state['BCS-AAAA-2']['shop_price'], 100)
@@ -529,7 +527,7 @@ class TestRegression(unittest.TestCase):
         import tempfile
         import openpyxl
         from sellerops.persistence import headers as xlsx_headers
-        from sellerops.features.listings import foreign_table as foreign_table
+        from sellerops.features.publishing import foreign_table as foreign_table
         from sellerops.persistence.headers import HeaderError
         tmp = tempfile.mkdtemp()
         try:
@@ -566,7 +564,7 @@ class TestRegression(unittest.TestCase):
         from sellerops.settings import paths as config
         from sellerops.persistence import headers as xlsx_headers
         from sellerops.persistence.headers import HeaderError
-        from sellerops.features.listings import publish_inputs as shelve_common
+        from sellerops.features.publishing import publish_inputs as shelve_common
         from sellerops.persistence.mappings import MappingRepository
         tmp = tempfile.mkdtemp()
         try:
@@ -584,7 +582,7 @@ class TestRegression(unittest.TestCase):
             row = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 88.9, 'TEST', 's9']
             p_ok = build('boss_ok.xlsx', headers, row)
             xlsx_headers.reset_warnings()
-            with mock.patch.object(config, 'PRICE_BOOK_XLSX', p_ok):
+            with mock.patch.object(config.current, 'price_book_xlsx', p_ok):
                 boss = MappingRepository.load_price_book()
                 pmap = MappingRepository.load_prefix_map()
                 details = MappingRepository.load_boss_details()
@@ -599,7 +597,7 @@ class TestRegression(unittest.TestCase):
             headers_bad = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', 'vendorCode前缀码', '库存SKU']
             row_bad = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 'TEST', 's9']
             p_bad = build('boss_bad.xlsx', headers_bad, row_bad)
-            with mock.patch.object(config, 'PRICE_BOOK_XLSX', p_bad):
+            with mock.patch.object(config.current, 'price_book_xlsx', p_bad):
                 with self.assertRaises(HeaderError):
                     MappingRepository.load_price_book()
                 with self.assertRaises(HeaderError):
@@ -609,7 +607,7 @@ class TestRegression(unittest.TestCase):
 
     def test_legacy_payload_images_subject_id(self):
         from sellerops.domain.models import PublishItem as PublishItem
-        from sellerops.features.listings.card_payload import build_card_payload as build_card_payload
+        from sellerops.features.publishing.card_payload import build_card_payload as build_card_payload
 
         item = PublishItem(nm_id=248364237, price=99.0, vendor_code='BCS-CUSTOM-PAYLOAD-TEST', length=10, width=20, height=30, weight=0.5)
         card = {'imt_name': '测试商品', 'imt_id': 1, 'data': {'subject_id': 2290}}
@@ -624,7 +622,7 @@ class TestRegression(unittest.TestCase):
 
     def test_legacy_payload_missing_warehouse(self):
         from sellerops.domain.models import PublishItem as PublishItem
-        from sellerops.features.listings.card_payload import build_card_payload as build_card_payload
+        from sellerops.features.publishing.card_payload import build_card_payload as build_card_payload
         item = PublishItem(nm_id=248364237, price=99.0, vendor_code='BCS-TEST-VC',
                            length=10, width=20, height=30, weight=0.5)
         card = {'data': {'subject_id': 100}}

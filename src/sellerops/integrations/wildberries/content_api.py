@@ -23,6 +23,8 @@ class WBContentAPI(WBOpenAPI):
 
     def _content(self, method: str, path: str, *, body: Any = None,
                  read: bool = False) -> Any:
+        if self.auth_failed:
+            raise AuthenticationError("该店令牌鉴权失败，本次操作已停止")
         routes = {
             ('POST', '/content/v2/get/cards/trash'): (True, .61, 'content'),
             ('POST', '/content/v2/barcodes'): (False, .61, 'content'),
@@ -66,6 +68,7 @@ class WBContentAPI(WBOpenAPI):
                                    'WB Open API 提交响应未知，禁止自动重放') from None
             status = response.status_code
             if status in (401, 403):
+                self.auth_failed = True
                 raise AuthenticationError('WB Open API 令牌失效或缺少对应类别的写入权限')
             if status == 429:
                 raise RateLimitError('WB Open API 限流；请核对令牌类型和额度')

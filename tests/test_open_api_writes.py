@@ -12,11 +12,11 @@ import requests
 
 from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError
 from sellerops.core.files import atomic_dump_json
-from sellerops.features.listings import open_api_payloads as payloads
-from sellerops.features.listings import open_api_publish as publish
-from sellerops.features.listings import open_api_finish as finish
-from sellerops.features.listings import open_api_sync as sync
-from sellerops.features.listings import open_api_sources as sources
+from sellerops.features.publishing import open_api_payloads as payloads
+from sellerops.features.publishing import open_api_publish as publish
+from sellerops.features.publishing import open_api_finish as finish
+from sellerops.features.publishing import open_api_sync as sync
+from sellerops.features.publishing import open_api_sources as sources
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.integrations.wildberries.content_api import WBContentAPI
 from sellerops.integrations.wildberries.open_api import WBOpenAPI
@@ -174,7 +174,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         self.addCleanup(paths.configure, previous)
         self.folder = Path(temporary.name)
         paths.configure(self.folder)
@@ -183,9 +183,9 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.output = io.StringIO()
         stack.enter_context(redirect_stdout(self.output))
         stack.enter_context(redirect_stderr(self.output))
-        from sellerops.features.listings import open_api_common
+        from sellerops.features.publishing import open_api_common
         self.accesses = [OpenAPIShop(i, f'店{i}', f'fixture-secret-{i}') for i in (1, 2, 3)]
-        stack.enter_context(patch.object(open_api_common.bcs.client, 'fetch_open_api_shops', return_value=self.accesses))
+        stack.enter_context(patch.object(open_api_common.bcs, 'fetch_open_api_shops', return_value=self.accesses))
         self.events = []
         self.wrote = False
         self.invocation_wrote = False
@@ -247,17 +247,19 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         from sellerops.cli.main import main
         self.invocation_wrote = False
         self.asset_wrote = False
+        if args[:2] == ('listing', 'sync-cards') and '--shops' not in args:
+            args = (*args, '--all-shops')
         return main(['--data-dir', str(self.folder), *args])
 
     def creation(self, *extra):
-        return self.cli('publish-openapi', '--source-shop', '1', '--shops', '2', '--vc', VC,
+        return self.cli('listing', 'publish-openapi', '--source-shop', '1', '--shops', '2', '--vc', VC,
                         '--price', '59', '--stock', '0', *extra)
 
     def test_preview_reads_entire_plan_but_does_not_generate_barcode_or_write_state(self):
         self.assertEqual(self.creation(), 0)
         self.assertFalse(self.wrote)
         self.assertFalse(store.state_path().exists())
-        logs = list(Path(paths.LOG_DIR).glob('*.json'))
+        logs = list(Path(paths.current.log_dir).glob('*.json'))
         plan = json.loads(logs[0].read_text(encoding='utf8'))['items'][0]
         self.assertEqual(plan['stock'], 0)
         self.assertEqual(plan['warehouse']['id'], 42)
@@ -275,7 +277,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(store.load_state()['items'][store.item_key(2, VC)]['status'], 'finished')
         self.assertEqual(self.events[-2:], ['save_media-2', 'set_stocks-2'])
         self.wrote = False
-        self.assertEqual(self.cli('publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 0)
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 0)
         self.assertEqual(api.set_stocks.call_count, 1)
         self.assertFalse(self.wrote)
 
@@ -296,7 +298,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(store.load_state()['items'][store.item_key(2, VC)]['status'], 'accepted')
         source_reads = self.clients['fixture-secret-1'].cards.call_count
         api.cards.side_effect = self.reader('generated-now', self.generated[2])
-        self.assertEqual(self.cli('publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 0)
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 0)
         self.assertEqual(self.clients['fixture-secret-1'].cards.call_count, source_reads)
         self.assertEqual(api.barcodes.call_count, 1)
         self.assertEqual(api.create_cards.call_count, 1)
@@ -323,7 +325,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
                 return first_batch(batch)
             raise AuthenticationError('fixture-secret-2')
         api.create_cards.side_effect = create
-        self.assertEqual(self.cli('publish-openapi', '--source-shop', '1', '--shops', '2',
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--source-shop', '1', '--shops', '2',
                                   '--all', '--price', '59', '--apply'), 1)
         entries = list(store.load_state()['items'].values())
         self.assertEqual(sum(entry['status'] == 'accepted' for entry in entries), 100)
@@ -339,7 +341,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.clients['fixture-secret-1'].cards.side_effect = self.reader('source-two', [first, second])
         api = self.clients['fixture-secret-2']
         api.barcodes.side_effect = self.writer('three-barcodes', ['new-a', 'new-b', 'new-c'])
-        self.assertEqual(self.cli('publish-openapi', '--source-shop', '1', '--shops', '2', '--all',
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--source-shop', '1', '--shops', '2', '--all',
                                   '--price', '59', '--apply'), 0)
         api.barcodes.assert_called_once_with(3)
         batch = api.create_cards.call_args.args[0]
@@ -364,7 +366,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(self.creation('--apply'), 0)
         self.assertFalse(self.wrote)
         api.trash_cards.side_effect = self.reader('empty-trash', [])
-        atomic_dump_json(Path(paths.STATE_DIR) / '复制上架记录.json', {VC: {'2': 'already-submitted'}})
+        atomic_dump_json(Path(paths.current.state_dir) / '复制上架记录.json', {VC: {'2': 'already-submitted'}})
         self.assertEqual(self.creation('--apply'), 0)
         api.barcodes.assert_not_called()
         api.create_cards.assert_not_called()
@@ -377,13 +379,13 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(entry['stages']['media']['status'], 'accepted')
         self.assertEqual(entry['stages']['stock']['status'], 'unknown')
         self.wrote = False
-        self.assertEqual(self.cli('publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 1)
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 1)
         self.assertEqual(api.save_media.call_count, 1)
         self.assertEqual(api.set_stocks.call_count, 1)
 
     def test_missing_moscow_blocks_only_that_shop_and_other_target_submission_is_preserved(self):
         self.clients['fixture-secret-2'].warehouses.side_effect = self.reader('bad-warehouse', [{'id': 9, 'name': '成都仓库'}])
-        self.assertEqual(self.cli('publish-openapi', '--source-shop', '1', '--shops', '2,3', '--vc', VC,
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--source-shop', '1', '--shops', '2,3', '--vc', VC,
                                   '--price', '59', '--apply'), 1)
         self.clients['fixture-secret-2'].create_cards.assert_not_called()
         self.clients['fixture-secret-3'].create_cards.assert_called_once()
@@ -393,7 +395,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
                'selling': {'brand_name': 'Бренд'}, 'media': {'photo_count': 1},
                'options': [{'name': 'Цвет', 'value': 'красный'}]}
         with patch.object(sources, 'fetch_card_json', return_value=raw) as public:
-            self.assertEqual(self.cli('publish-openapi', '--nm', '999', '--vc', 'BCS-TEST-{nm}', '--shops', '2',
+            self.assertEqual(self.cli('listing', 'publish-openapi', '--nm', '999', '--vc', 'BCS-TEST-{nm}', '--shops', '2',
                                       '--price', '59', '--dims', '10*20*30/0.5', '--apply'), 0)
         public.assert_called_once_with(999)
         variant = self.clients['fixture-secret-2'].create_cards.call_args.args[0][0]['variants'][0]
@@ -405,7 +407,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         for sid in (2, 3):
             self.clients[f'fixture-secret-{sid}'].cards.side_effect = self.reader(
                 f'target-{sid}', [card(sid * 100, chrt=sid * 10, barcode=f'target-{sid}', title='Старый')])
-        self.assertEqual(self.cli('sync-cards-openapi', '--source-shop', '1', '--vc', VC, '--apply'), 0)
+        self.assertEqual(self.cli('listing', 'sync-cards', '--source-shop', '1', '--vc', VC, '--apply'), 0)
         self.clients['fixture-secret-1'].update_cards.assert_not_called()
         for sid in (2, 3):
             api = self.clients[f'fixture-secret-{sid}']
@@ -419,19 +421,19 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
     def test_sync_partial_read_failure_is_nonzero_while_healthy_shop_is_submitted(self):
         self.clients['fixture-secret-2'].cards.side_effect = RuntimeError('fixture-secret-2')
         self.clients['fixture-secret-3'].cards.side_effect = self.reader('target3', [card(303, chrt=33, title='Старый')])
-        self.assertEqual(self.cli('sync-cards-openapi', '--source-shop', '1', '--vc', VC, '--fields', 'title', '--apply'), 1)
+        self.assertEqual(self.cli('listing', 'sync-cards', '--source-shop', '1', '--vc', VC, '--fields', 'title', '--apply'), 1)
         self.clients['fixture-secret-3'].update_cards.assert_called_once()
         self.assertNotIn('fixture-secret', self.output.getvalue())
 
     def test_sync_preview_has_no_writes_and_media_failure_keeps_content_receipt(self):
         api = self.clients['fixture-secret-2']
         api.cards.side_effect = self.reader('target', [card(202, chrt=22, title='Старый')])
-        args = ('sync-cards-openapi', '--source-shop', '1', '--shops', '2', '--vc', VC)
+        args = ('listing', 'sync-cards', '--source-shop', '1', '--shops', '2', '--vc', VC)
         self.assertEqual(self.cli(*args), 0)
         self.assertFalse(self.wrote)
         api.save_media.side_effect = NetworkError('fixture-secret')
         self.assertEqual(self.cli(*args, '--apply'), 1)
-        logs = [json.loads(path.read_text(encoding='utf8')) for path in Path(paths.LOG_DIR).glob('*.json')]
+        logs = [json.loads(path.read_text(encoding='utf8')) for path in Path(paths.current.log_dir).glob('*.json')]
         row = next(doc['items'][0] for doc in logs if doc['apply'])
         self.assertEqual(row['status'], 'partial')
         self.assertTrue(row['cardReceipt']['accepted'])
@@ -440,10 +442,10 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
     def test_source_selection_typo_and_invalid_scope_do_not_expand_targets(self):
         api = self.clients['fixture-secret-2']
         for sid, vc in (('0', VC), ('1', 'not-found')):
-            self.assertEqual(self.cli('sync-cards-openapi', '--source-shop', sid, '--vc', vc, '--apply'), 1)
+            self.assertEqual(self.cli('listing', 'sync-cards', '--source-shop', sid, '--vc', vc, '--apply'), 1)
         self.assertFalse(self.wrote)
         api.update_cards.assert_not_called()
-        self.assertEqual(self.cli('publish-openapi', '--source-shop', '1', '--shops', '1',
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--source-shop', '1', '--shops', '1',
                                   '--vc', VC, '--price', '59', '--apply'), 1)
 
     def test_public_file_can_supply_required_characteristics_and_multiple_sizes(self):
@@ -458,7 +460,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         api = self.clients['fixture-secret-2']
         api.barcodes.side_effect = self.writer('two-barcodes', ['new-s', 'new-m'])
         with patch.object(sources, 'fetch_card_json', return_value=raw):
-            self.assertEqual(self.cli('publish-openapi', '--file', str(file), '--shops', '2', '--apply'), 0)
+            self.assertEqual(self.cli('listing', 'publish-openapi', '--file', str(file), '--shops', '2', '--apply'), 0)
         specs = api.create_cards.call_args.args[0][0]['variants'][0]['sizes']
         self.assertEqual([row['techSize'] for row in specs], ['S', 'M'])
         self.assertEqual([row['skus'] for row in specs], [['new-s'], ['new-m']])
@@ -469,18 +471,18 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(self.creation('--wait-timeout', '0', '--apply'), 1)
         self.wrote = False
         api.cards.side_effect = self.reader('wrong-barcodes', [card(202)])
-        self.assertEqual(self.cli('publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 1)
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--resume', '--shops', '2', '--vc', VC, '--apply'), 1)
         api.set_stocks.assert_not_called()
         api.save_media.assert_not_called()
         api.cards.side_effect = self.reader('empty-target', [])
-        self.assertEqual(self.cli('sync-cards-openapi', '--source-shop', '1', '--shops', '2', '--vc', VC, '--apply'), 0)
+        self.assertEqual(self.cli('listing', 'sync-cards', '--source-shop', '1', '--shops', '2', '--vc', VC, '--apply'), 0)
         api.update_cards.assert_not_called()
 
     def test_state_shop_identity_mismatch_is_rejected_before_any_submission(self):
         atomic_dump_json(store.state_path(), {'version': 1, 'items': {store.item_key(2, VC): {
             'shopId': 3, 'vc': VC, 'status': 'accepted', 'stages': {},
         }}})
-        self.assertEqual(self.cli('publish-openapi', '--resume', '--shops', '2,3', '--vc', VC, '--apply'), 1)
+        self.assertEqual(self.cli('listing', 'publish-openapi', '--resume', '--shops', '2,3', '--vc', VC, '--apply'), 1)
         self.assertFalse(self.wrote)
         for api in self.clients.values():
             api.cards.assert_not_called()

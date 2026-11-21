@@ -55,9 +55,9 @@ def run(args):
     with open(args.qa, encoding="utf-8") as f:
         cases = json.load(f)
 
-    os.makedirs(config.LOG_DIR, exist_ok=True)
+    os.makedirs(config.current.log_dir, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
-    out = os.path.join(config.LOG_DIR, f"ai_reply_test_{ts}.md")
+    out = os.path.join(config.current.log_dir, f"ai_reply_test_{ts}.md")
     lines = [
         "# AI 客服回复对照测试",
         "",

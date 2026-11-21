@@ -1,6 +1,6 @@
 # WB Open API 上架、内容更新与 VC 规范化
 
-`publish`、`create-cards`、`replicate`、`import-publish` 保持原 BCS 通道。新增命令须显式调用，不替代默认接口，也不在 BCS 或 WB 失败后自动换通道重放。全部默认预览，只有 `--apply` 才提交。
+`listing publish`、`listing create-cards`、`listing replicate`、`listing import` 保持原 BCS 通道。新增命令须显式调用，不替代默认接口，也不在 BCS 或 WB 失败后自动换通道重放。全部默认预览，只有 `--apply` 才提交。
 
 ## 配置与执行边界
 
@@ -15,8 +15,8 @@
 以下 ID 均为占位示例。`--source-shop` 与 `--shops` 都使用 BCS 店铺 ID；`--nm` 如用于源店筛选，必须是源店的 WB 商品码，不能从 VC 尾号猜测。
 
 ```powershell
-python run.py publish-openapi --source-shop 1001 --shops 1002,1003 --vc "BCS-TEST-123456789" --price 59 --stock 20
-python run.py publish-openapi --source-shop 1001 --shops 1002 --nm 123456789 --price 59 --dims "10*20*30/0.5"
+python run.py listing publish-openapi --source-shop 1001 --shops 1002,1003 --vc "BCS-TEST-123456789" --price 59 --stock 20
+python run.py listing publish-openapi --source-shop 1001 --shops 1002 --nm 123456789 --price 59 --dims "10*20*30/0.5"
 ```
 
 源店按 `--vc`、`--nm`、`--all` 三选一；完整 VC 原样保留。读取完整官方商品卡，包括标题、说明、品牌、包装、属性、规格和证书；目标卡不带源店 nmID/chrtID，也不复制源店条码或证书 ID。每个目标店生成新条码；每请求最多提交100组独立商品，保留完整规格，不把多个规格缩成第一条。
@@ -30,23 +30,23 @@ python run.py publish-openapi --source-shop 1001 --shops 1002 --nm 123456789 --p
 官方 Content 不能读取其他卖家的私有商品卡。这种来源从 WB 公开 CDN 的俄文 `card.json` 获取内容，再由目标店官方 Open API 建卡，不经过 BCS 商品接口。
 
 ```powershell
-python run.py publish-openapi --nm 123456789 --vc "BCS-TEST-123456789" --shops 1002 --price 59 --dims "10*20*30/0.5"
-python run.py publish-openapi --nm 123456789,123456790 --vc "BCS-TEST-{nm}" --shops 1002 --price 59 --dims "10*20*30/0.5"
-python run.py publish-openapi --file "examples/publish-openapi.example.json" --shops 1002
+python run.py listing publish-openapi --nm 123456789 --vc "BCS-TEST-123456789" --shops 1002 --price 59 --dims "10*20*30/0.5"
+python run.py listing publish-openapi --nm 123456789,123456790 --vc "BCS-TEST-{nm}" --shops 1002 --price 59 --dims "10*20*30/0.5"
+python run.py listing publish-openapi --file "examples/publish-openapi.example.json" --shops 1002
 ```
 
 公开详情按俄文属性名关联目标类目的官方 charcID；数值属性仅接受明确的数值及匹配单位，不猜测混合文本。无法获得必需属性时阻止提交，按错误中的属性名补齐文件。标题不会自动截断。公开详情不保证包含完整服装尺码表，默认只建无尺码规格 `techSize=0`；有尺码商品必须在输入文件的 `card.sizes` 中显式列出全部规格，不能把默认值当作原商品完整规格。
 
-JSON 文件是非空对象数组，每项为 `nmId`、`vendorCode`、`price`，可用 `card` 对象覆盖官方字段，例如 `title`、`description`、`dimensions`、`characteristics`、`sizes`、`documents`。`card` 仍是源模板，提交前会剥离源标识和条码。属性 ID 和证书须对应实际类目与商品；样例中的 ID、描述和金额只是语法示例。每项可指定整数 `price`，否则使用 CLI 的 `--price`。可将文件放在自己的 `data/` 或 `_scratch/`。
+JSON 文件是非空对象数组，每项为 `nmId`、`vendorCode`、`product price`，可用 `card` 对象覆盖官方字段，例如 `title`、`description`、`dimensions`、`characteristics`、`sizes`、`documents`。`card` 仍是源模板，提交前会剥离源标识和条码。属性 ID 和证书须对应实际类目与商品；样例中的 ID、描述和金额只是语法示例。每项可指定整数 `product price`，否则使用 CLI 的 `--price`。可将文件放在自己的 `data/` 或 `_scratch/`。
 
 ## 合并上架、有限等待与续办
 
-官方建卡是异步的，首次受理不返回新 nmID，服务同步可能需要30分钟。现在由同一个 `publish-openapi --apply` 完成“生成条码 → 建卡 → 有限等待完整商品/规格标识 → 上传图片 → 设置莫斯科库存”。默认预览不生成条码、不等待或写入。图片顺序、原计划库存和每阶段回执保存在 `data/state/WB_OpenAPI上架记录.json`。本通道创建时仅准备图片，不自动复制源视频。
+官方建卡是异步的，首次受理不返回新 nmID，服务同步可能需要30分钟。现在由同一个 `listing publish-openapi --apply` 完成“生成条码 → 建卡 → 有限等待完整商品/规格标识 → 上传图片 → 设置莫斯科库存”。默认预览不生成条码、不等待或写入。图片顺序、原计划库存和每阶段回执保存在 `data/state/WB_OpenAPI上架记录.json`。本通道创建时仅准备图片，不自动复制源视频。
 
 默认 `--wait-timeout 1800`、`--wait-interval 15`，单位秒；总等待范围0..7200，间隔范围1..60，`0` 表示只查询一轮。仍遵守平台限流；单次读取有独立 HTTP 超时，实际结束可能超过等待时限一个正在执行的读取。等待按时间和轮次双重限制，单次休眠不超过30秒。只按待办完整 VC 查询非回收站商品（包括无图片商品），不全量刷新本地商品快照。
 
 ```powershell
-python run.py publish-openapi --source-shop 1001 --shops 1002 --vc "BCS-TEST-123456789" --price 59 --stock 20 --wait-timeout 1800 --wait-interval 15 --apply
+python run.py listing publish-openapi --source-shop 1001 --shops 1002 --vc "BCS-TEST-123456789" --price 59 --stock 20 --wait-timeout 1800 --wait-interval 15 --apply
 ```
 
 取得本店 nmID 后还要等待完整 chrtID 和本次生成的全部规格条码。模糊搜索命中的其他 VC 不使用；未知条码、类目冲突或重复标识阻止提交。某些商品超时，其他就绪商品仍可完成后续提交，但整轮返回非零，不能把建卡受理算成完整上架成功。读取错误或401/403/429停止该店；其他店可继续。图片/库存接口若仍因平台服务延迟而拒绝，不盲目重试写入，保留实际阶段和错误。
@@ -54,13 +54,13 @@ python run.py publish-openapi --source-shop 1001 --shops 1002 --vc "BCS-TEST-123
 超时或中断后，按保存的原计划续办，不需要重新获取源商品详情：
 
 ```powershell
-python run.py publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789"
-python run.py publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789" --wait-timeout 1800 --apply
+python run.py listing publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789"
+python run.py listing publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789" --wait-timeout 1800 --apply
 ```
 
 `--resume` 仅使用 `--shops/--vc` 选择已受理记录，不接受新的来源、文件、价格、包装或库存参数；沿用原图片与库存计划。续办再次确认莫斯科仓名称和 `id` 与原记录一致，再查询本店完整标识并提交剩余阶段。图片和库存分别记录受理回执；已受理阶段不重复提交。图片成功后库存失败也会保留图片受理记录，并返回非零状态。重新执行原建卡命令，遇到本通道已受理记录也只续办，已完成记录跳过，不重复建卡。
 
-旧命令 `publish-openapi-finish` 已合并到 `publish-openapi --resume`；已有 version=1 阶段记录可直接使用，无需迁移或清空。
+旧命令 `publish-openapi-finish` 已合并到 `listing publish-openapi --resume`；已有 version=1 阶段记录可直接使用，无需迁移或清空。
 
 建卡或任一后续写入处于 `submitting/unknown` 时，禁止自动重放；需要维护者依据原回执或用户另行授权的诊断处理记录，不能通过清空状态重试。条码准备阶段失败但尚未提交建卡可按原范围重新执行。记录与共用上架去重文件的作用见 [数据契约](DATA.md#关键状态文件)。
 
@@ -69,9 +69,9 @@ python run.py publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789" --
 在源店改好商品后，读取该店最新官方卡片，将选择的内容覆盖到目标店相同完整 VC 的商品。目标店 nmID 和 chrtID 独立解析，绝不使用源店商品码或 VC 尾号替代目标标识。
 
 ```powershell
-python run.py sync-cards-openapi --source-shop 1001 --vc "BCS-TEST-123456789" --shops 1002,1003
-python run.py sync-cards-openapi --source-shop 1001 --nm 123456789 --fields title,description,dimensions --apply
-python run.py sync-cards-openapi --source-shop 1001 --all --shops 1002 --limit 10
+python run.py listing sync-cards --source-shop 1001 --vc "BCS-TEST-123456789" --shops 1002,1003
+python run.py listing sync-cards --source-shop 1001 --nm 123456789 --fields title,description,dimensions --apply --shops 1001
+python run.py listing sync-cards --source-shop 1001 --all --shops 1002 --limit 10
 ```
 
 `--source-shop` 填袁州1店对应的 BCS ID；不按店名模糊猜测。`--vc/--nm/--all` 三选一。省略 `--shops` 时目标是 BCS 中除源店外的全部店；显式目标不能包含源店。`--limit` 限制源商品数量。目标缺少同 VC 时跳过，不新建、不恢复回收站商品；类目不同、VC/标识重复或关键字段缺失则报失败。
@@ -93,13 +93,13 @@ python run.py sync-cards-openapi --source-shop 1001 --all --shops 1002 --limit 1
 
 ## 历史 VC 前缀规范化
 
-`normalize-vc-openapi` 将历史随机四位前缀改为商品价格表中对应商品的「vendorCode前缀码」。`--vc`、`--name`、`--all` 必须且只能选择一个；`--vc` 使用完整旧 VC（逗号分隔），`--name` 按已确认中文名包含匹配。省略 `--shops` 时目标为 BCS 中的全部店铺。
+`listing normalize-vc` 将历史随机四位前缀改为商品价格表中对应商品的「vendorCode前缀码」。`--vc`、`--name`、`--all` 必须且只能选择一个；`--vc` 使用完整旧 VC（逗号分隔），`--name` 按已确认中文名包含匹配。省略 `--shops` 时目标为 BCS 中的全部店铺。
 
 ```powershell
-python run.py normalize-vc-openapi --shops 1001,1002 --name "示例商品"
-python run.py normalize-vc-openapi --shops 1001 --vc "BCS-RAND-123456789"
-python run.py normalize-vc-openapi --all
-python run.py normalize-vc-openapi --shops 1001,1002 --name "示例商品" --apply
+python run.py listing normalize-vc --shops 1001,1002 --name "示例商品"
+python run.py listing normalize-vc --shops 1001 --vc "BCS-RAND-123456789"
+python run.py listing normalize-vc --all --shops 1001
+python run.py listing normalize-vc --shops 1001,1002 --name "示例商品" --apply
 ```
 
 默认只预览，`--apply` 才提交。仅需 Content 读写权限，使用 BCS 保存的各店 apiKey 和中国区主机；不要求后台 Cookie，不枚举或操作仓库。

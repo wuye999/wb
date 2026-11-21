@@ -49,8 +49,7 @@ class FBSWorkflowTests(unittest.TestCase):
         self.addCleanup(stack.close)
         tmp = stack.enter_context(TemporaryDirectory())
         self.root = Path(tmp)
-        stack.enter_context(patch.multiple(paths, DATA_DIR=tmp, STATE_DIR=str(self.root / 'state'),
-                                           LOG_DIR=str(self.root / 'logs')))
+        stack.enter_context(patch.object(paths, 'current', paths.DataPaths(self.root)))
         stack.enter_context(patch('sys.stdout', new_callable=StringIO))
         stack.enter_context(patch.object(fbs_group_ship, '_catalog', return_value=CATALOG))
         self.access = stack.enter_context(patch.object(fbs_group_ship, 'select_accesses',
@@ -180,7 +179,7 @@ class FBSContractTests(unittest.TestCase):
             record = {'name': name, 'supply_id': SUPPLY, 'shop_id': 9352, 'shop_name': SHOP.name,
                       'product_name': PRODUCT, 'order_ids': [1, 2]}
             qr, labels = pdf_paths(record)
-            self.assertEqual(qr.parent, Path(paths.DATA_DIR) / 'fbs_shipments' / day)
+            self.assertEqual(qr.parent, Path(paths.current.data_dir) / 'fbs_shipments' / day)
             self.assertEqual(labels.parent, qr.parent)
             other_qr, _ = pdf_paths(dict(record, supply_id='WB-GI-1234568'))
             self.assertNotEqual(qr.name, other_qr.name)

@@ -38,7 +38,7 @@ def list_chats(session, chat_type: int = BUYER_CHAT_TYPE, limit: int = 20,
 
 def fetch_history(session, chat_id: str, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
     """POST 会话消息历史。返回 {totalCount, events[]}，events 按时间倒序（[0] 最新）。"""
-    d = wb_api.request(session, "POST", HISTORY_URL,
+    d = wb_api.request(session, "POST", HISTORY_URL, read_only=True,
                        json={"chatID": chat_id, "limit": int(limit), "offset": int(offset)})
     return d if isinstance(d, dict) else {}
 

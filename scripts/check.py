@@ -28,7 +28,7 @@ def source_checks() -> list[str]:
         module = '.'.join(p.relative_to(SRC).with_suffix('').parts)
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if module.startswith(('sellerops.features.listings.', 'sellerops.features.pricing.')) and node.func.attr in {
+                if module.startswith(('sellerops.features.products.', 'sellerops.features.publishing.', 'sellerops.features.marketing.')) and node.func.attr in {
                     'post_write_merge', 'fetch_all', 'fetch_shop', 'sync_shop', 'sync_shops_parallel',
                 }:
                     errors.append(f'{module}: write workflows must not chain snapshot sync or merge ({node.func.attr})')
@@ -66,7 +66,7 @@ def source_checks() -> list[str]:
 
 def import_and_cli_checks() -> int:
     from sellerops.settings import credentials
-    from sellerops.cli.main import build_parser
+    from sellerops.cli.main import build_parser, leaf_commands
 
     def denied(*args, **kwargs):
         raise AssertionError('Offline checks forbid network, subprocesses and credential reads')
@@ -91,17 +91,17 @@ def import_and_cli_checks() -> int:
                     if not hasattr(target, alias.name):
                         importlib.import_module(node.module + '.' + alias.name)
         parser = build_parser()
-        subparsers = next(a for a in parser._actions if isinstance(a, __import__('argparse')._SubParsersAction))
-        for name, sub in subparsers.choices.items():
+        commands = list(leaf_commands(parser))
+        for name, sub in commands:
             with contextlib.redirect_stdout(io.StringIO()):
                 try:
-                    parser.parse_args([name, '--help'])
+                    parser.parse_args([*name.split(), '--help'])
                 except SystemExit as exc:
                     if exc.code:
                         raise
-            module, function, _, _ = sub.get_default('handler')
+            module, function = sub.get_default('handler')
             assert callable(getattr(importlib.import_module(module), function)), name
-        return len(subparsers.choices)
+        return len(commands)
 
 
 def main() -> int:

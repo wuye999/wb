@@ -40,12 +40,12 @@ class TestRegression(unittest.TestCase):
             ws.append(['vendorCode', '产品中文名', '实际售价'])
             ws.append(['BCS-AAAA-123', '测试商品', 10])
             wb.save(map_xlsx)
-            old_boss, old_map = (cfg.PRICE_BOOK_XLSX, cfg.MAPPING_XLSX)
-            cfg.PRICE_BOOK_XLSX, cfg.MAPPING_XLSX = (boss_xlsx, map_xlsx)
+            old_boss, old_map = (cfg.current.price_book_xlsx, cfg.current.mapping_xlsx)
+            cfg.current.price_book_xlsx, cfg.current.mapping_xlsx = (boss_xlsx, map_xlsx)
             try:
                 vc2cn, cn2sku = mabang.load_local_mapping()
             finally:
-                cfg.PRICE_BOOK_XLSX, cfg.MAPPING_XLSX = (old_boss, old_map)
+                cfg.current.price_book_xlsx, cfg.current.mapping_xlsx = (old_boss, old_map)
             self.assertEqual(vc2cn.get('BCS-AAAA-123'), '测试商品')
             self.assertEqual(cn2sku.get('测试商品'), 'TESTSKU-6161')
         finally:
@@ -232,7 +232,7 @@ class TestRegression(unittest.TestCase):
             if page == 1:
                 return ([{'batchNo': f'X{i}'} for i in range(200)], {'pageTotal': 201, 'pageCount': 2, 'pageCur': 1})
             return ([{'batchNo': 'ZZ', 'shopId': '主号7', 'status': 3}], {'pageTotal': 201, 'pageCount': 2, 'pageCur': 2})
-        with mock.patch.object(mabang, 'mb_client_get_forecast_list', side_effect=side):
+        with mock.patch.object(mabang, 'get_forecast_list', side_effect=side):
             res = mabang.find_batches(None, ['ZZ'], status=3, rows_per_page=200)
         self.assertTrue(res['all_found'], '翻页后应命中后段批次')
         self.assertEqual(res['pages_fetched'], 2)
@@ -254,26 +254,27 @@ class TestRegression(unittest.TestCase):
         sku_values = {'群发商品': GROUP_SHIPPING_MARKER, '普通商品': 'SKU-2'}
         args = SimpleNamespace(days=0, page_size=100, apply=True)
 
-        with patch.object(matching, 'mb_client_get_mabang_cred', return_value=cred), \
-                patch.object(matching, 'mb_client_fetch_pending_orders', return_value=[marked]), \
+        with patch.object(matching, 'get_mabang_cred', return_value=cred), \
+                patch.object(matching, 'fetch_pending_orders', return_value=[marked]), \
                 patch.object(matching, 'load_local_mapping', return_value=(names, sku_values)), \
                 patch.object(matching, 'write_csv') as report, \
-                patch.object(matching, 'mb_client_api_ready') as api_ready, \
-                patch.object(matching, 'mb_client_search_stock') as search:
-            self.assertEqual(matching.run(args), 0)
+                patch.object(matching, 'api_ready') as api_ready, \
+                patch.object(matching, 'search_stock') as search:
+            matched = matching.match_orders(days=args.days, page_size=args.page_size, apply=args.apply)
+            self.assertFalse(matched.stopped)
         api_ready.assert_not_called()
         search.assert_not_called()
-        self.assertEqual(args.group_shipping_order_ids, {'1'})
+        self.assertEqual(matched.group_ids, {'1'})
         self.assertEqual(report.call_args.args[0][0]['status'], matching.STATUS_GROUP_SHIPPING)
 
-        with patch.object(forecast_selection, 'mb_client_get_mabang_cred', return_value=cred), \
-                patch.object(forecast_selection, 'mb_client_fetch_pending_orders', return_value=[marked, normal]), \
+        with patch.object(forecast_selection, 'get_mabang_cred', return_value=cred), \
+                patch.object(forecast_selection, 'fetch_pending_orders', return_value=[marked, normal]), \
                 patch.object(forecast_selection, 'load_local_mapping',
                              side_effect=[(names, sku_values), (names, {**sku_values, '群发商品': 'SKU-1'})]), \
                 patch.object(wb, 'fetch_canceled_ids', return_value=set()):
             direct_args = SimpleNamespace(days=0, page_size=100)
             for forecast_args in (direct_args, args):
-                target, _ = forecast_selection.collect_forecast_orders(forecast_args)
+                target, _ = forecast_selection.collect_forecast_orders(forecast_args, group_shipping_ids=matched.group_ids if forecast_args is args else ())
                 self.assertEqual([r['order_id'] for r in target], [2])
 
     def test_mabang_stock_daily_ignores_historical_group_shipping_as_a_sku(self):
@@ -301,18 +302,18 @@ class TestRegression(unittest.TestCase):
         cases = [('SKU-LOCAL-1', set(), 'SKU-LOCAL-1'), (GROUP_SHIPPING_MARKER, set(), None),
                  ('SKU-LOCAL-1', {order['id']}, None)]
         with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.object(feishu_register, 'mabang_api_get_mabang_cred',
+                mock.patch.object(feishu_register, 'get_mabang_cred',
                                   return_value={'shop_map': {'9352': '袁州1(9352)'}}), \
-                mock.patch.object(feishu_register, 'mabang_api_fetch_pending_orders', return_value=[order]), \
+                mock.patch.object(feishu_register, 'fetch_pending_orders', return_value=[order]), \
                 mock.patch.object(feishu_register.config, 'shop_json_path',
                                   return_value=os.path.join(tmp, 'absent.json')), \
                 mock.patch('sellerops.integrations.wildberries.client.fetch_canceled_ids', return_value=set()):
             for sku, group_shipping_ids, expected in cases:
-                args.group_shipping_order_ids = group_shipping_ids
+
                 with self.subTest(sku=sku, group_shipping_ids=group_shipping_ids), \
                         mock.patch.object(feishu_register, 'mabang_load_local_mapping',
                                           return_value=({'BCS-AAAA-100000001': '测试品'}, {'测试品': sku})):
-                    records, _skip, notice, _cred = feishu_register.build_records(args)
+                    records, _skip, notice, _cred = feishu_register.build_records(args, group_shipping_ids=group_shipping_ids)
                     self.assertEqual(len(records), 1)
                     self.assertEqual(records[0]['库存SKU'], expected)
                     self.assertEqual(notice.get('发货群订单(库存SKU留空)', 0), int(expected is None))
@@ -324,7 +325,7 @@ class TestRegression(unittest.TestCase):
             同一 vendorCode 在各店 wb编号 不同，但统计须**跨店合并**到同一条（用户口径 2026-09-23）。
             """
         from datetime import datetime, timedelta
-        from sellerops.features.orders import feishu_vc_stats as st
+        from sellerops.features.reports import feishu_vc_stats as st
         row = st.parse_row({'日期': '2026-09-22T03:26:00.000+08:00', '订单编号': '419915682', '店铺': ['袁州1'], 'BCS编号': 'BCS-JPAV-163906301', '商品中文名': '毛球修剪器', '订单量': 3})
         self.assertEqual(row['日期'], '2026-09-22')
         self.assertEqual(row['vc'], 'BCS-JPAV-163906301')
@@ -394,7 +395,7 @@ class TestRegression(unittest.TestCase):
             ws.append(['', 'SZLK-1', '手足裂口霜', 80, '10*10*10/0.1', 40, 'WENR', 'szlk'])
             wb.save(boss)
             known = {'BCS-BBBB-2': {'cn': '归属池品', 'dp': 88}}
-            with mock.patch.object(config, 'PRICE_BOOK_XLSX', boss), mock.patch.object(MappingRepository, 'load_vc_known', return_value=known):
+            with mock.patch.object(config.current, 'price_book_xlsx', boss), mock.patch.object(MappingRepository, 'load_vc_known', return_value=known):
                 resolve = fr._cn_resolver({'BCS-AAAA-1': '映射表品'})
                 self.assertEqual(resolve('BCS-AAAA-1'), '映射表品')
                 self.assertEqual(resolve('BCS-BBBB-2'), '归属池品')

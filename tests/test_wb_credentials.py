@@ -42,9 +42,9 @@ class TestWBCredentials(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.addCleanup(paths.configure, paths.DATA_DIR)
+        self.addCleanup(paths.configure, paths.current.data_dir)
         paths.configure(directory.name)
-        self.path = Path(paths.CREDENTIALS_JSON)
+        self.path = Path(paths.current.credentials_json)
         self.token = jwt({'user': 'shared-account', 'session_id': 'new'})
         self.template = f'__zzatw-wb=new==; x-supplier-id-external= {FIRST} ; external-locale=ru'
         self.original = {
@@ -93,9 +93,9 @@ class TestWBCredentials(unittest.TestCase):
                     else response(200, {'error': False, 'data': {'questions': []}}))
 
         output = StringIO()
-        with (patch('sellerops.features.login._browser_session', return_value=session),
+        with (patch('sellerops.features.system.login._browser_session', return_value=session),
               patch.object(requests.Session, 'send', side_effect=send), redirect_stdout(output)):
-            self.assertEqual(main(['--data-dir', paths.DATA_DIR, 'login', 'wb', '--resume']), 0)
+            self.assertEqual(main(['--data-dir', paths.current.data_dir, 'login', 'wb', '--resume']), 0)
         self.assertEqual([request.method for request in calls], ['POST', 'GET', 'POST', 'GET'])
         saved = safe_load_json(self.path)
         for shop, supplier in zip(saved['wb']['shops'], [FIRST, SECOND]):
@@ -163,9 +163,6 @@ class TestWBCredentials(unittest.TestCase):
                 session.request.return_value = session.post.return_value = response(status)
                 with self.assertRaisesRegex(error, 'login wb'):
                     client.request_post(session, 'https://fixture.invalid', {})
-                with patch.object(client, 'make_session', return_value=session):
-                    result = client.WBClient({'shopId': 11}).upload_batch_discount([{}])
-                self.assertFalse(result.success)
-                self.assertIn('login wb', result.error_message)
-                session.post.assert_called_once()
-                session.request.assert_called_once()
+                with patch.object(client, 'make_session', return_value=session), self.assertRaises(error):
+                    client.WBClient({'shopId': 11}).upload_batch_discount([{}])
+                self.assertEqual(session.request.call_count, 1)

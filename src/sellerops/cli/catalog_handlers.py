@@ -4,6 +4,22 @@ from sellerops.features.catalog import mapping_sync as catalog_mapping_sync
 from sellerops.features.catalog import mismatch_check as catalog_mismatch_check
 from sellerops.features.catalog import products as catalog_products
 
+def run_shops(args):
+    from sellerops.integrations.bcs.client import client
+    shops = client.fetch_shop_list()
+    if args.name:
+        matched = [shop for shop in shops if shop["name"] == args.name]
+        if len(matched) != 1:
+            print("店名未唯一匹配，请核对以下店铺 ID")
+            for shop in matched or [s for s in shops if args.name in s["name"]]:
+                print(f"{shop['id']} | {shop['name']}")
+            return 1
+        shops = matched
+    for shop in shops:
+        print(f"{shop['id']} | {shop['name']}")
+    return 0
+
+
 def run_fetch(args):
     from sellerops.settings import paths as config
     parallel = getattr(args, 'parallel', 4)
@@ -40,7 +56,7 @@ def run_review(args=None):
 
 def run_merge(args=None):
     file_path = getattr(args, "file", None) if args else None
-    catalog_mapping_sync.run_merge(file_path)
+    catalog_mapping_sync.merge(file_path)
     return 0
 
 def run_mapping_rename(args):

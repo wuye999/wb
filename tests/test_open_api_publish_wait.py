@@ -6,9 +6,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from sellerops.core.errors import AuthenticationError
-from sellerops.features.listings import open_api_finish as finish
-from sellerops.features.listings.open_api_common import OperationLog
-from sellerops.features.listings.open_api_payloads import create_payload
+from sellerops.features.publishing import open_api_finish as finish
+from sellerops.features.publishing.open_api_common import OperationLog
+from sellerops.features.publishing.open_api_payloads import create_payload
 from sellerops.integrations.wildberries.content_api import WBContentAPI
 from sellerops.integrations.wildberries.open_api import WBOpenAPI
 from sellerops.persistence import open_api_publish as store
@@ -20,7 +20,7 @@ class TestMergedPublishWait(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         self.addCleanup(paths.configure, previous)
         paths.configure(temporary.name)
         self.stack = ExitStack()
@@ -166,11 +166,11 @@ class TestMergedPublishWait(unittest.TestCase):
 
     def test_invalid_wait_options_fail_before_accessing_credentials(self):
         from sellerops.cli.main import main
-        with patch('sellerops.features.listings.open_api_publish.select_accesses') as accesses:
+        with patch('sellerops.features.publishing.open_api_publish.select_accesses') as accesses:
             for option, value in (('--wait-timeout', '-1'), ('--wait-timeout', 'nan'),
                                   ('--wait-timeout', '7201'), ('--wait-interval', '0'),
                                   ('--wait-interval', 'inf')):
-                self.assertEqual(main(['publish-openapi', '--shops', '2', '--nm', '101', '--vc', VC,
+                self.assertEqual(main(['listing', 'publish-openapi', '--shops', '2', '--nm', '101', '--vc', VC,
                                        option, value]), 1)
             accesses.assert_not_called()
 

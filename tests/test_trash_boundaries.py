@@ -21,7 +21,7 @@ def response(rows, failed=()):
 
 class TestMoscowResolution(unittest.TestCase):
     def test_ambiguous_unavailable_and_invalid_moscow_are_not_cached(self):
-        from sellerops.features.listings import warehouse
+        from sellerops.features.products import warehouse
         cases = [
             [{'id': 100, 'name': '莫斯科一仓'}, {'id': 200, 'name': '莫斯科二仓'}],
             [{'id': 100, 'name': '莫斯科仓库', 'isProcessing': True}],
@@ -41,7 +41,7 @@ class TestMoscowResolution(unittest.TestCase):
                     self.assertEqual(read.call_count, 2)
 
     def test_confirmed_ids_are_cached_separately_for_each_shop(self):
-        from sellerops.features.listings import warehouse
+        from sellerops.features.products import warehouse
         warehouse.clear_cache()
         self.addCleanup(warehouse.clear_cache)
         with patch.object(warehouse, 'list_stores', side_effect=lambda sid: [{'id': sid * 100, 'name': '莫斯科仓库', 'warehouseId': 9}]) as read:
@@ -57,14 +57,14 @@ class TestLocalPlanning(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.data = Path(directory.name)
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         self.addCleanup(paths.configure, previous)
         paths.configure(self.data)
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(redirect_stdout(io.StringIO()))
-        from sellerops.features.listings import product_data
-        self.stack.enter_context(patch.object(product_data.bcs.client, 'fetch_open_api_shops', return_value=[]))
+        from sellerops.features.products import product_data
+        self.stack.enter_context(patch.object(product_data.bcs, 'fetch_open_api_shops', return_value=[]))
 
     def save(self, rows):
         from sellerops.persistence.snapshots import ProductSnapshotRepository
@@ -72,13 +72,13 @@ class TestLocalPlanning(unittest.TestCase):
 
     def run_cli(self, command, apply=False):
         from sellerops.cli.main import main
-        return main(['--data-dir', str(self.data), command, '--vc', 'BCS-TEST-101',
+        return main(['--data-dir', str(self.data), 'product', command, '--shops', '42', *(['--amount', '0'] if command == 'stock' else []), '--vc', 'BCS-TEST-101',
                      *(['--apply', '--yes'] if apply else [])])
 
     def test_local_default_builds_complete_plan_without_remote_product_or_stock_reads(self):
-        from sellerops.features.listings import warehouse, stocks, trash, plans
+        from sellerops.features.products import warehouse, stocks, trash, plans
         from sellerops.integrations.wildberries import stocks as stock_api
-        from sellerops.integrations.bcs import client as bcs
+        from sellerops.integrations.bcs.client import client as bcs
         self.save([{'vendorCode': 'BCS-TEST-101', 'nmId': 101,
                     'sizeList': [{'chrtId': 201, 'stockList': []}, {'chrtId': 202, 'stockList': []}]}])
         with patch.object(warehouse, 'resolve_warehouse', return_value=100), \
@@ -94,7 +94,7 @@ class TestLocalPlanning(unittest.TestCase):
             mock.assert_not_called()
 
     def test_missing_moscow_blocks_preview_and_apply_with_nonzero_exit(self):
-        from sellerops.features.listings import warehouse, stocks, trash
+        from sellerops.features.products import warehouse, stocks, trash
         self.save([{'vendorCode': 'BCS-TEST-101', 'nmId': 101, 'sizeList': [{'chrtId': 201}]}])
         with patch.object(warehouse, 'resolve_warehouse', return_value=None), \
                 patch.object(stocks.credentials, 'get', return_value=Mock(root_version='fixture')), \
@@ -106,7 +106,7 @@ class TestLocalPlanning(unittest.TestCase):
         move.assert_not_called()
 
     def test_empty_or_partly_missing_specs_block_whole_product(self):
-        from sellerops.features.listings import plans, warehouse
+        from sellerops.features.products import plans, warehouse
         for sizes in [[], [{'chrtId': 201}, {}], [{'chrtId': 201}, {'chrtId': 0}], [{'chrtId': True}]]:
             self.save([{'vendorCode': 'BCS-TEST-101', 'nmId': 101, 'sizeList': sizes}])
             with self.subTest(sizes=sizes), patch.object(warehouse, 'resolve_warehouse', return_value=100):
@@ -118,14 +118,14 @@ class TestLocalPlanning(unittest.TestCase):
                     self.assertEqual(len(result[0]['blocked_items']), 1)
 
     def test_missing_or_invalid_nm_id_cannot_be_moved(self):
-        from sellerops.features.listings import warehouse
+        from sellerops.features.products import warehouse
         for nm in [None, 0, True, 'invalid']:
             self.save([{'vendorCode': 'BCS-TEST-101', 'nmId': nm, 'sizeList': [{'chrtId': 201}]}])
             with self.subTest(nm=nm), patch.object(warehouse, 'resolve_warehouse', return_value=100):
                 self.assertEqual(self.run_cli('trash'), 1)
 
     def test_empty_shop_does_not_request_warehouse_data(self):
-        from sellerops.features.listings import plans, warehouse
+        from sellerops.features.products import plans, warehouse
         self.save([])
         with patch.object(warehouse, 'resolve_warehouse') as resolve:
             self.assertEqual(plans.plan_trash(['BCS-TEST-101'], [42], {}), [])
@@ -134,7 +134,7 @@ class TestLocalPlanning(unittest.TestCase):
 
     def test_cli_partial_plan_failure_still_executes_only_healthy_local_card(self):
         from sellerops.cli.main import main
-        from sellerops.features.listings import warehouse, stocks, trash
+        from sellerops.features.products import warehouse, stocks, trash
         from sellerops.integrations.wildberries import stocks as stock_api
         self.save([
             {'vendorCode': 'BCS-TEST-101', 'nmId': 101, 'sizeList': [{'chrtId': 201}]},
@@ -147,7 +147,7 @@ class TestLocalPlanning(unittest.TestCase):
                 patch.object(stocks, 'set_stock', side_effect=lambda shop, wh, rows, **kw: response(rows)) as clear, \
                 patch.object(trash, 'move_nms', return_value={'ok': 1, 'fail': 0, 'details': [{'nmID': 101, 'ok': True, 'msg': 'OK'}]}) as move, \
                 patch.object(stock_api, 'get_stocks') as read_stock:
-            code = main(['--data-dir', str(self.data), 'trash', '--vc', 'BCS-TEST-101,BCS-TEST-102', '--apply', '--yes'])
+            code = main(['--data-dir', str(self.data), 'product', 'trash', '--shops', '42', '--vc', 'BCS-TEST-101,BCS-TEST-102', '--apply', '--yes'])
         self.assertEqual(code, 1)
         self.assertEqual(clear.call_args.args[2], [{'chrtId': 201, 'amount': 0}])
         self.assertEqual(move.call_args.args[1], [101])
@@ -156,7 +156,7 @@ class TestLocalPlanning(unittest.TestCase):
 
 class TestTrashExecution(unittest.TestCase):
     def setUp(self):
-        from sellerops.features.listings import execution, stocks, trash
+        from sellerops.features.products import execution, stocks, trash
         self.execution, self.stocks, self.trash = execution, stocks, trash
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -164,13 +164,13 @@ class TestTrashExecution(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(redirect_stdout(io.StringIO()))
-        self.stack.enter_context(patch.object(execution, 'RESULT_CSV', str(self.csv)))
+        self.stack.enter_context(patch.object(execution.config.current, 'result_csv', str(self.csv)))
         self.stack.enter_context(patch.object(execution.time, 'sleep'))
         self.cred = Mock(root_version='fixture')
         self.cred.wb_shop.side_effect = lambda sid: {'shopId': sid}
         self.stack.enter_context(patch.object(execution.credentials, 'get', return_value=self.cred))
         self.move = self.stack.enter_context(patch.object(trash, 'move_nms', side_effect=self.move_response))
-        self.bcs = self.stack.enter_context(patch.object(execution, '_post', return_value=(True, 'OK')))
+        self.bcs = self.stack.enter_context(patch.object(execution.bcs, 'remove_to_trash', return_value={'code': 200}))
 
     def move_response(self, shop, ids, **kwargs):
         return {'ok': len(ids), 'fail': 0, 'details': [{'nmID': n, 'ok': True, 'msg': 'OK'} for n in ids]}

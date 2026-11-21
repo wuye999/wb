@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+from sellerops.domain.warehouses import moscow_warehouse
 import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
@@ -12,10 +13,10 @@ from openpyxl import load_workbook
 
 from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLimitError
 from sellerops.domain.product_reports import ProductReport, ReportCatalog
-from sellerops.features.catalog import product_report as workflow
-from sellerops.features.catalog import product_report_data as data
-from sellerops.features.catalog.product_report_analysis import analyze, return_metrics
-from sellerops.features.catalog.product_report_xlsx import write_report
+from sellerops.features.reports import product_report as workflow
+from sellerops.features.reports import product_report_data as data
+from sellerops.features.reports.product_report_analysis import analyze, return_metrics
+from sellerops.features.reports.product_report_xlsx import write_report
 from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop
 from sellerops.integrations.wildberries.open_api import WBOpenAPI, OpenAPIResponseError
 from sellerops.persistence.snapshots import ProductSnapshotRepository
@@ -139,6 +140,8 @@ class TestOpenAPIProtocol(unittest.TestCase):
         with self.assertRaises(ValueError):
             api._request('marketplace-api', 'PUT', '/api/v3/warehouses')
         for status, error in [(401, AuthenticationError), (403, AuthenticationError), (429, RateLimitError)]:
+            api = WBOpenAPI('fixture-secret', 'cn')
+            self.addCleanup(api.close)
             with patch.object(api.session, 'request', return_value=SimpleNamespace(status_code=status)), \
                     patch.object(api, '_last', {}):
                 with self.assertRaises(error) as raised:
@@ -216,14 +219,14 @@ class TestReportRules(unittest.TestCase):
         self.assertEqual(data.register_row(raw)['nm_id'], '')
 
     def test_only_unique_moscow_id_and_no_office_id(self):
-        selected = data.moscow_warehouse([{'name': '成都仓', 'id': 9},
-                                         {'name': '莫斯科仓库', 'id': 42, 'officeId': 999}], '莫斯科')
+        selected = moscow_warehouse([{'name': '成都仓', 'id': 9},
+                                         {'name': '莫斯科仓库', 'id': 42, 'officeId': 999}])
         self.assertEqual(selected['id'], 42)
         for rows in ([{'name': '成都仓', 'id': 9}],
                      [{'name': '莫斯科仓库', 'officeId': 999}],
                      [{'name': '莫斯科一', 'id': 1}, {'name': '莫斯科二', 'id': 2}]):
             with self.assertRaises(ValueError):
-                data.moscow_warehouse(rows, '莫斯科')
+                moscow_warehouse(rows)
 
     def test_feishu_markdown_links_preserve_original_and_extract_actual_url(self):
         for label in ('商品详情', data.product_url(101)):

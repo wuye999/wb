@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from sellerops.cli.main import main
 from sellerops.core.errors import AuthenticationError, StorageLockError, ValidationError
 from sellerops.core.files import FileLock
-from sellerops.features import login
+from sellerops.features.system import login
 from sellerops.integrations.bcs import auth as bcs
 from sellerops.integrations.bcs.session import login_session
 from sellerops.integrations.mabang import auth as mabang
@@ -35,9 +35,9 @@ def token(payload):
 class LoginTest(unittest.TestCase):
     def setUp(self):
         directory = self.enterContext(TemporaryDirectory())
-        self.addCleanup(paths.configure, paths.DATA_DIR)
+        self.addCleanup(paths.configure, paths.current.data_dir)
         paths.configure(directory)
-        self.path = Path(paths.CREDENTIALS_JSON)
+        self.path = Path(paths.current.credentials_json)
         self.platforms = {
             'bcs': {'login': {'username': 'fixture', 'password': 'fixture-password'}},
             'mabang': {'login': {'username': 'fixture', 'password': 'fixture-password'}},
@@ -46,7 +46,7 @@ class LoginTest(unittest.TestCase):
         self.output = self.enterContext(redirect_stdout(io.StringIO()))
 
     def execute(self, *args):
-        return main(['--data-dir', paths.DATA_DIR, 'login', *args])
+        return main(['--data-dir', paths.current.data_dir, 'login', *args])
 
     def test_password_success_does_not_open_browser(self):
         with patch.object(bcs, 'refresh_login') as direct, patch.object(login, '_browser_session') as window:
@@ -120,8 +120,8 @@ class LoginTest(unittest.TestCase):
 
     def test_project_browser_runtime_is_independent_of_selected_data_directory(self):
         self.assertEqual(paths.BROWSER_RUNTIME_DIR, paths.PROJECT_ROOT / '.runtime' / 'browsers')
-        self.assertEqual(browser.profile_dir('wb'), Path(paths.DATA_DIR) / 'browser_profiles' / 'wb')
-        self.assertEqual(browser.profile_dir('mabang'), Path(paths.DATA_DIR) / 'browser_profiles' / 'mabang')
+        self.assertEqual(browser.profile_dir('wb'), Path(paths.current.data_dir) / 'browser_profiles' / 'wb')
+        self.assertEqual(browser.profile_dir('mabang'), Path(paths.current.data_dir) / 'browser_profiles' / 'mabang')
 
     def test_profile_in_use_fails_before_opening_another_window(self):
         with (FileLock(browser.profile_dir('wb').with_suffix('.browser')),

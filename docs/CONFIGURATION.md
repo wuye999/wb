@@ -46,7 +46,7 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 更新项目后可直接使用已有的 `credentials.json` 和仍有效的会话。平台连接通过独立的 `login` 命令完成。业务命令认证失败时停止相应操作，已提交请求按原业务回执处理。
 
-`publish-openapi --apply` 在建卡受理后允许按待办完整 VC 有限查询本店 nmID/chrtID，核对生成条码后上传图片和莫斯科库存。默认等待上限1800秒、轮询间隔15秒；超时保留记录，用 `publish-openapi --resume` 续办。此轮询不写本地商品快照，不触发 BCS 同步，也不在图片/库存提交后验证结果。其余写入的提交后结束约定保持不变。
+`listing publish-openapi --apply` 在建卡受理后允许按待办完整 VC 有限查询本店 nmID/chrtID，核对生成条码后上传图片和莫斯科库存。默认等待上限1800秒、轮询间隔15秒；超时保留记录，用 `listing publish-openapi --resume` 续办。此轮询不写本地商品快照，不触发 BCS 同步，也不在图片/库存提交后验证结果。其余写入的提交后结束约定保持不变。
 
 ## 仓库范围：仅允许莫斯科
 
@@ -56,7 +56,6 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 - 每家店单独确认 ID；不能把某家店的莫斯科 ID 复制给其他店，也不能取列表第一条代替名称核对。仓库枚举只用于识别目标，不代表其他仓库获得操作授权。
 - 找不到莫斯科仓、名称与 ID 不匹配或无法核实时，中止该店操作，不回退到成都或其他俄罗斯地区仓，不临时更改默认仓库配置。
 - 临时脚本和底层调用也要先校验 ID，库存读取传入莫斯科 `store_id` / `warehouse_id`，写入前再次核对计划中的仓库 ID。马帮的 `mabang.warehouse_id` 属于马帮自己的标识体系，当前也须核实为莫斯科业务仓，不能套用 WB ID。
-- `warehouse-clear` 专门针对成都仓库，虽然代码和 CLI 中保留该命令，**当前操作流程不使用它**。
 
 这是现行操作约束，并非所有底层 API 都已经自动强制校验。当前业务仓库解析器只接受唯一可用的莫斯科仓，不回退其他地区；某些底层库存读取未传 store_id 时仍可返回多仓，调用方必须核对并限定莫斯科。开发要求和私有协议资料入口见 [开发指南](DEVELOPMENT.md#当前必须保留的运行约定)。
 
@@ -75,7 +74,7 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 在自己的 `data/credentials.json` 填写 `bcs.login` 后运行 `python run.py login bcs`。遇到滑块、设备验证或网关校验时，按提示在专用浏览器完成验证。程序使用默认 BCS 服务地址，在保存三项会话字段前核对账号归属。
 
-配置自动续期后，本机会话缺少 token 或 limit_key、收到 HTTP 401 或 BCS 业务码 401 时，会尝试密码登录。已发出的只读请求在续期成功后最多重试一次，已发出的业务写请求（含商品同步提交）保留原结果。权限拒绝与网关错误需要单独排查。缺少账号密码的旧配置仍可使用原会话字段。`shops` 查询的是 BCS 店铺列表，WB 卖家后台 Cookie 有独立的更新流程。
+配置自动续期后，本机会话缺少 token 或 limit_key、收到 HTTP 401 或 BCS 业务码 401 时，会尝试密码登录。已发出的只读请求在续期成功后最多重试一次，已发出的业务写请求（含商品同步提交）保留原结果。权限拒绝与网关错误需要单独排查。缺少账号密码的旧配置仍可使用原会话字段。`shop list` 查询的是 BCS 店铺列表，WB 卖家后台 Cookie 有独立的更新流程。
 
 店铺原始响应的 `apiKey` 是该店 **WB Open API** 令牌，不能填到 `bcs.token` 或 `wb.authorizev3`。现有 `fetch_shop_list()` 只返回 id/name；显式 `--source wb-openapi` 的商品快照、只读报告和 Open API 商品写入通过内部 `fetch_open_api_shops()` 分页读取对应店铺的官方令牌，不输出或保存密钥副本，也无需新增凭证段。
 
@@ -83,9 +82,9 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 显式 `--source wb-openapi` 使用中国区 `.cn` 官方主机。个人令牌可用于自有程序及本地软件，快照只需要 Content、Prices and Discounts、Marketplace 的读取权限；基础令牌的类别可用性与限额不同，不能只凭令牌字符串判断。401/403 时检查 BCS 对应店铺 apiKey 是否有效及权限是否齐全，更新后重新执行独立 fetch；不改用 Cookie、浏览器或旧缓存。429 会结束该店采集并保留旧快照，稍后再按原范围重试。默认的 BCS 快照来源走 BCS 同步与 BASE 缓存，不需要这些官方令牌。
 
-`product-report` 要求 BCS 已保存各店有效的官方令牌，并具有 Analytics、Feedbacks and Questions、Marketplace 类别权限。默认使用 `.ru` 官方主机，需使用中国区主机时显式传 `--wb-region cn`；不自动切换主机或改走后台 Cookie。常规限额以个人、服务或带密钥基础令牌为前提，低限额基础令牌可能触发429；限流或401/403时该阶段停止并记录未知，不启动浏览器。飞书仍使用已登录的 lark-cli。[报告说明](PRODUCT_REPORT.md)
+`report products` 要求 BCS 已保存各店有效的官方令牌，并具有 Analytics、Feedbacks and Questions、Marketplace 类别权限。默认使用 `.ru` 官方主机，需使用中国区主机时显式传 `--wb-region cn`；不自动切换主机或改走后台 Cookie。常规限额以个人、服务或带密钥基础令牌为前提，低限额基础令牌可能触发429；限流或401/403时该阶段停止并记录未知，不启动浏览器。飞书仍使用已登录的 lark-cli。[报告说明](PRODUCT_REPORT.md)
 
-`product-report --extra-bcs-stdin` 可临时引入其他BCS账号：由调用方或AI通过标准输入管道传入一个或多个完整JSON形式fetch抓包（UTF-8，传完关闭输入流），包含该账号匹配的Authorization、X-Limit-Key和Cookie。仅接受上述BCS固定域名，不执行抓包请求、不写入本机配置或文件。临时店铺只补充统计，`--shops` 只筛本机目标；下次运行需重新提供。具体输入、去重及报告范围见 [临时账号说明](PRODUCT_REPORT.md#临时引入其他bcs账号)。
+`report products --extra-bcs-stdin` 可临时引入其他BCS账号：由调用方或AI通过标准输入管道传入一个或多个完整JSON形式fetch抓包（UTF-8，传完关闭输入流），包含该账号匹配的Authorization、X-Limit-Key和Cookie。仅接受上述BCS固定域名，不执行抓包请求、不写入本机配置或文件。临时店铺只补充统计，`--shops` 只筛本机目标；下次运行需重新提供。具体输入、去重及报告范围见 [临时账号说明](PRODUCT_REPORT.md#临时引入其他bcs账号)。
 
 发货群命令使用 Marketplace 的新增订单、仓库、供货和码图接口，执行与续办导出用同一个 Python 安装 PDF 依赖，例如 `python -m pip install -e ".[fbs-pdf]"`。预览只需基础依赖。权限失效时在 BCS 更新对应店的官方令牌。见 [发货群供货与 PDF](USAGE.md#wb-发货群供货与-pdf)。
 
@@ -165,4 +164,4 @@ $env:SELLEROPS_LARK_CLI = "D:\Tools\lark-cli.cmd"
 | `max_tokens` | 输出上限；不同调用场景可能使用不同的缺省值，建议显式填写 |
 | `watch_interval` | 客服轮询间隔秒数，缺省 90；可由命令 `--interval` 覆盖 |
 
-不填端点或模型时代码使用内置缺省值；这不意味着已有 key 可跨服务使用。先用自己的问答样例运行 `ai-test` 检查输出质量，再单独授权自动发送。后台模式会把买家问题和商品信息发送给所配置 LLM 服务。
+不填端点或模型时代码使用内置缺省值；这不意味着已有 key 可跨服务使用。先用自己的问答样例运行 `support ai-test` 检查输出质量，再单独授权自动发送。后台模式会把买家问题和商品信息发送给所配置 LLM 服务。

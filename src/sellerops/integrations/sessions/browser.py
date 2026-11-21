@@ -20,7 +20,7 @@ INSTALL_HELP = '请先安装项目的 browser-login 依赖，再运行 login set
 
 
 def profile_dir(platform: str) -> Path:
-    return Path(paths.BROWSER_PROFILES_DIR) / platform
+    return Path(paths.current.browser_profiles_dir) / platform
 
 
 def is_site(url: str, host: str) -> bool:

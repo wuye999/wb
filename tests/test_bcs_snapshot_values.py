@@ -14,7 +14,7 @@ from sellerops.core.files import atomic_dump_json
 from sellerops.domain.snapshot_values import first_price, quantity, stock_values
 from sellerops.features.catalog import products, single_shop
 from sellerops.features.catalog.mapping_excel import stock_summary, row_for, build_xlsx
-from sellerops.features.listings import plans
+from sellerops.features.products import plans
 from sellerops.integrations.bcs.client import BCSClient
 from sellerops.settings import paths
 
@@ -106,7 +106,7 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         self.addCleanup(paths.configure, previous)
         self.data = Path(folder.name)
         paths.configure(self.data)
@@ -124,9 +124,9 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
 
     def test_bcs_fetch_warns_about_incomplete_data_and_export_preserves_real_zero(self):
         raw = [row([size(None)]), dict(row([size()]), vendorCode='REAL-ZERO', nmId=102)]
-        with patch.object(products.bcs.client, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}), \
+        with patch.object(products.bcs, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}), \
                 patch.object(products.bcs, 'sync_shop') as sync:
-            self.assertEqual(self.run_cli('fetch', '--source', 'bcs', '--shop-id', '1', '--no-sync'), 0)
+            self.assertEqual(self.run_cli('catalog', 'fetch', '--source', 'bcs', '--shop-id', '1', '--no-sync'), 0)
             sync.assert_not_called()
         doc = json.loads(Path(paths.shop_json_path(1)).read_text(encoding='utf8'))
         self.assertEqual(doc['rows'], raw)
@@ -151,8 +151,8 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
         atomic_dump_json(path, {'shopId': 1, 'rows': [row([size()])]})
         before = path.read_bytes()
         for response in ({'code': 200}, {'code': 200, 'rows': [], 'total': 1}):
-            with patch.object(products.bcs.client, 'get', return_value=response):
-                self.assertEqual(self.run_cli('fetch', '--source', 'bcs', '--shop-id', '1', '--no-sync'), 1)
+            with patch.object(products.bcs, 'get', return_value=response):
+                self.assertEqual(self.run_cli('catalog', 'fetch', '--source', 'bcs', '--shop-id', '1', '--no-sync'), 1)
             self.assertEqual(path.read_bytes(), before)
 
     def test_total_table_never_borrows_other_shop_stock_for_unknown_primary(self):
@@ -165,7 +165,7 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
             build_xlsx([], [{'cn': '商品', 'dp': 10, 'vendorCodes': [VC]}], bcs_rows,
                        shop_coverage=coverage, shops_meta=[{'id': 1, 'name': '主店'}, {'id': 2, 'name': '其他店'}],
                        main_sid=1, load_boss_fn=lambda: [])
-            book = load_workbook(paths.MAPPING_XLSX, read_only=True, data_only=True)
+            book = load_workbook(paths.current.mapping_xlsx, read_only=True, data_only=True)
             try:
                 rows = list(book['映射总表'].iter_rows(values_only=True))
                 headers = list(rows[0])
@@ -184,7 +184,7 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
         good = dict(row([size()]), vendorCode='REAL-ZERO')
         fraction = dict(row([size(price=.5)]), vendorCode='FRACTION')
         atomic_dump_json(paths.shop_json_path(1), {'shopId': 1, 'rows': [row([size(None)]), good, fraction]})
-        with patch.object(mapping, 'shop_id', return_value=1):
+        with patch.object(mapping, 'main_shop', return_value=1):
             union, shops = mapping.load_shops_union()
             main_rows = mapping.load_bcs()
         self.assertEqual([shop['id'] for shop in shops], [1])

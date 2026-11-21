@@ -21,7 +21,6 @@ sellerops WB 原生卖家后台 FBS「配送中」适配器 (wb_supply_client)
 from typing import Any, Dict, List
 
 from sellerops.integrations.wildberries import client as wb_api
-from sellerops.integrations.wildberries.warehouses import STORES_SHORT_URL
 
 BASE = ("https://marketplace.wildberries.ru/ns/marketplace-app/"
         "marketplace-remote-wh/api/v3/portal")
@@ -112,15 +111,3 @@ def fetch_orders_count(session) -> Dict[str, int]:
     d = wb_api.request(session, "GET", ORDERS_COUNT_URL)
     data = d.get("data") or {}
     return {k: int(data.get(k) or 0) for k in ("new", "assemble", "delivery", "canceled")}
-
-
-def fetch_stores_short(session, delivery_type: int = 1) -> Dict[int, Dict[str, Any]]:
-    """[已迁移] 仓库短列表请改用 `wb_warehouse_client.get_stores(shop)`。
-
-    保留本函数仅为向后兼容（全仓已无调用）：它与新客户端唯一区别是入参为 session 而非 shop，
-    无法复用同一实现，故此处直接按同端点透传，避免调用方 import 断裂。
-    """
-    d = wb_api.request(session, "GET", STORES_SHORT_URL,
-                       params={"deliveryType": delivery_type, "order": "asc"})
-    rows = d.get("data") or []
-    return {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id") is not None}

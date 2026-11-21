@@ -13,8 +13,8 @@ import requests
 
 from sellerops.core.files import atomic_dump_json
 from sellerops.domain.vc_normalization import NormalizationCatalog, RenameAttempt, allocate_codes, replacement_base
-from sellerops.features.listings import open_api_common, vc_normalization as feature
-from sellerops.features.listings import vc_normalization_payloads as payloads
+from sellerops.features.publishing import open_api_common, vc_normalization as feature
+from sellerops.features.publishing import vc_normalization_payloads as payloads
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.integrations.wildberries.content_api import WBContentAPI
 from sellerops.persistence import vc_normalization as store
@@ -179,7 +179,7 @@ class TestNormalizationCommand(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.addCleanup(paths.configure, paths.DATA_DIR)
+        self.addCleanup(paths.configure, paths.current.data_dir)
         self.folder = Path(temporary.name)
         paths.configure(self.folder)
         self.stack = ExitStack()
@@ -192,7 +192,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.write_books()
         self.shops = [OpenAPIShop(sid, f'店{sid}', f'fixture-secret-{sid}') for sid in (1, 2)]
         self.shop_fetch = self.stack.enter_context(patch.object(
-            open_api_common.bcs.client, 'fetch_open_api_shops', return_value=self.shops))
+            open_api_common.bcs, 'fetch_open_api_shops', return_value=self.shops))
         self.active = {1: [card(101)], 2: [card(202)]}
         self.trash = {1: [], 2: []}
         self.wrote = False
@@ -214,7 +214,7 @@ class TestNormalizationCommand(unittest.TestCase):
         ws.append(['vendorCode前缀码', '产品中文名'])
         for cn, prefix in self.price_rows:
             ws.append([prefix, cn])
-        wb.save(paths.PRICE_BOOK_XLSX)
+        wb.save(paths.current.price_book_xlsx)
         wb.close()
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -227,7 +227,7 @@ class TestNormalizationCommand(unittest.TestCase):
             ws.append(['vendorCode', '排除原因'])
             for vc in excluded:
                 ws.append([vc, '人工排除'])
-        wb.save(paths.MAPPING_XLSX)
+        wb.save(paths.current.mapping_xlsx)
         wb.close()
 
     def reader(self, sid, kind):
@@ -252,16 +252,16 @@ class TestNormalizationCommand(unittest.TestCase):
     def cli(self, *args):
         from sellerops.cli.main import main
         self.wrote = False
-        return main(['--data-dir', str(self.folder), 'normalize-vc-openapi', *args])
+        return main(['--data-dir', str(self.folder), 'listing', 'normalize-vc', *([] if '--shops' in args else ['--all-shops']), *args])
 
     def documents(self):
-        return [json.loads(path.read_text(encoding='utf8')) for path in Path(paths.LOG_DIR).glob(f'{store.COMMAND}_*.json')]
+        return [json.loads(path.read_text(encoding='utf8')) for path in Path(paths.current.log_dir).glob(f'{store.COMMAND}_*.json')]
 
     def records(self):
         return [row for doc in self.documents() for row in doc['items']]
 
     def test_preview_defaults_to_all_shops_and_leaves_inputs_and_state_unchanged(self):
-        atomic_dump_json(paths.VC_KNOWN_JSON, {OLD: {'cn': CN}})
+        atomic_dump_json(paths.current.vc_known_json, {OLD: {'cn': CN}})
         atomic_dump_json(self.folder / 'products' / 'sentinel.json', {'not': 'a snapshot to load'})
         before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file()}
         self.assertEqual(self.cli('--all'), 0)
@@ -290,14 +290,14 @@ class TestNormalizationCommand(unittest.TestCase):
             self.clients[sid].set_stocks.assert_not_called()
         self.assertTrue(all(row['status'] == 'accepted' for row in self.records()))
         self.assertTrue(all(row['cardReceipt']['taskId'] == 123 for row in self.records()))
-        logs = ''.join(p.read_text(encoding='utf8') for p in Path(paths.LOG_DIR).glob('*.json'))
+        logs = ''.join(p.read_text(encoding='utf8') for p in Path(paths.current.log_dir).glob('*.json'))
         self.assertNotIn('fixture-secret', self.output.getvalue() + logs)
         for path, content in before.items():
             self.assertEqual(path.read_bytes(), content)
-        self.assertFalse(Path(paths.STATE_DIR).exists())
+        self.assertFalse(Path(paths.current.state_dir).exists())
 
     def test_selected_shops_and_name_or_vc_limit_the_target_without_inference(self):
-        self.assertEqual(self.cli('--shops', '2', '--name', '示例', '--apply'), 0)
+        self.assertEqual(self.cli('--shops', '2', '--name-contains', '示例', '--apply'), 0)
         self.clients[1].cards.assert_not_called()
         self.clients[2].update_cards.assert_called_once()
         self.assertEqual(len(self.records()), 1)
@@ -309,10 +309,10 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual({r['status'] for r in self.records()}, {'skipped', 'accepted'})
 
     def test_missing_or_conflicting_ownership_blocks_but_manual_override_wins(self):
-        atomic_dump_json(paths.VC_KNOWN_JSON, {OLD: {'cn': '不同商品'}})
+        atomic_dump_json(paths.current.vc_known_json, {OLD: {'cn': '不同商品'}})
         self.assertEqual(self.cli('--all'), 1)
         self.assertTrue(all('分歧' in r['reason'] for r in self.records()))
-        atomic_dump_json(paths.VC_OVERRIDE_JSON, {OLD.lower(): {'cn': CN}})
+        atomic_dump_json(paths.current.vc_override_json, {OLD.lower(): {'cn': CN}})
         self.assertEqual(self.cli('--all'), 0)
         self.assertFalse(self.wrote)
 
@@ -454,7 +454,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertTrue(all(len(call.args[0]) <= 100 for call in self.clients[1].update_cards.call_args_list))
 
     def test_pending_shop_reuses_history_code_when_completed_shop_now_has_new_vc(self):
-        atomic_dump_json(Path(paths.LOG_DIR) / f'{store.COMMAND}_previous.json', {
+        atomic_dump_json(Path(paths.current.log_dir) / f'{store.COMMAND}_previous.json', {
             'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [
                 {'shopId': 1, 'nmID': 101, 'vc': OLD, 'newVC': NEW, 'status': 'accepted'}]})
         self.active[1] = [card(101, NEW)]
@@ -463,7 +463,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual(self.clients[2].update_cards.call_args.args[0][0]['vendorCode'], NEW)
 
     def test_historical_numbered_allocation_is_reused_by_pending_shops(self):
-        atomic_dump_json(Path(paths.LOG_DIR) / f'{store.COMMAND}_previous.json', {
+        atomic_dump_json(Path(paths.current.log_dir) / f'{store.COMMAND}_previous.json', {
             'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [
                 {'shopId': 1, 'nmID': 101, 'vc': OLD, 'newVC': NEW + '-3', 'status': 'accepted'}]})
         self.active[1] = [card(101, NEW + '-3')]
@@ -472,7 +472,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual(self.clients[2].update_cards.call_args.args[0][0]['vendorCode'], NEW + '-3')
 
     def test_history_target_taken_by_unrelated_card_is_not_reallocated(self):
-        atomic_dump_json(Path(paths.LOG_DIR) / f'{store.COMMAND}_previous.json', {
+        atomic_dump_json(Path(paths.current.log_dir) / f'{store.COMMAND}_previous.json', {
             'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [
                 {'shopId': 1, 'nmID': 101, 'vc': OLD, 'newVC': NEW, 'status': 'unknown'}]})
         self.trash[2] = [card(299, NEW)]
@@ -480,7 +480,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertFalse(self.wrote)
 
     def test_corrupt_inputs_and_history_fail_closed_without_silently_emptying_them(self):
-        for path in (Path(paths.VC_KNOWN_JSON), Path(paths.LOG_DIR) / f'{store.COMMAND}_corrupt.json'):
+        for path in (Path(paths.current.vc_known_json), Path(paths.current.log_dir) / f'{store.COMMAND}_corrupt.json'):
             with self.subTest(path=path.name):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('{broken', encoding='utf8')
@@ -490,7 +490,7 @@ class TestNormalizationCommand(unittest.TestCase):
                 path.unlink()
 
     def test_history_with_missing_ids_or_unknown_status_fails_closed(self):
-        path = Path(paths.LOG_DIR) / f'{store.COMMAND}_invalid.json'
+        path = Path(paths.current.log_dir) / f'{store.COMMAND}_invalid.json'
         for row in ({'status': 'accepted'}, {'status': 'accpted'}, {'status': 'submitting', 'shopId': True}):
             with self.subTest(row=row):
                 atomic_dump_json(path, {'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [row]})
@@ -506,10 +506,10 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertTrue(all('分歧' in row['reason'] for row in self.records()))
 
     def test_known_records_alone_can_supply_ownership_and_json_exclusion_wins(self):
-        Path(paths.MAPPING_XLSX).unlink()
-        atomic_dump_json(paths.VC_KNOWN_JSON, {OLD: {'cn': CN}})
+        Path(paths.current.mapping_xlsx).unlink()
+        atomic_dump_json(paths.current.vc_known_json, {OLD: {'cn': CN}})
         self.assertEqual(self.cli('--all'), 0)
-        atomic_dump_json(paths.VC_EXCLUDED_JSON, {OLD.lower(): {'reason': '人工排除'}})
+        atomic_dump_json(paths.current.vc_excluded_json, {OLD.lower(): {'reason': '人工排除'}})
         self.assertEqual(self.cli('--all', '--apply'), 0)
         self.assertFalse(self.wrote)
 
@@ -517,7 +517,7 @@ class TestNormalizationCommand(unittest.TestCase):
         wb = openpyxl.Workbook()
         wb.active.title = 'Sheet1'
         wb.active.append(['产品中文名'])
-        wb.save(paths.PRICE_BOOK_XLSX)
+        wb.save(paths.current.price_book_xlsx)
         wb.close()
         self.assertEqual(self.cli('--all', '--apply'), 1)
         self.shop_fetch.assert_not_called()
@@ -525,8 +525,10 @@ class TestNormalizationCommand(unittest.TestCase):
 
     def test_invalid_selectors_do_not_read_credentials_or_platform(self):
         self.assertEqual(self.cli('--vc', ',bad', '--apply'), 1)
-        self.assertEqual(self.cli('--shops', '1,01', '--all'), 1)
-        self.assertEqual(self.cli('--name', ' '), 1)
+        with self.assertRaises(SystemExit):
+            self.cli('--shops', '1,01', '--all')
+        with self.assertRaises(SystemExit):
+            self.cli('--name', ' ')
         self.shop_fetch.assert_not_called()
 
 

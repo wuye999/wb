@@ -3,16 +3,11 @@ from argparse import ArgumentParser, Namespace
 from importlib import import_module
 
 
-def bind(parser: ArgumentParser, module: str, function: str, *,
-         action: str | None = None, channel: str | None = None) -> None:
-    parser.set_defaults(handler=(module, function, action, channel))
+def bind(parser: ArgumentParser, module: str, function: str) -> None:
+    parser.set_defaults(handler=(module, function))
 
 
 def dispatch(args: Namespace) -> int:
-    module, function, action, channel = args.handler
-    handler = getattr(import_module(module), function)
-    if action:
-        result = handler(action, args, **({'channel': channel} if channel else {}))
-    else:
-        result = handler(args)
-    return result if isinstance(result, int) else 0
+    module, function = args.handler
+    result = getattr(import_module(module), function)(args)
+    return 0 if result is None else result

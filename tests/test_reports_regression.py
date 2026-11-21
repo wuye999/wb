@@ -22,9 +22,9 @@ class TestRegression(unittest.TestCase):
             反向 waste：合计 < 阈值 → 这些店所有「在投(status=9)」活动里的推广都建议关闭；
             nm 本地真源反查不到 vc → 「无法判定」（不推断）；暂停(11)/未识别状态 → 仅计数不逐条列。
             """
-        from sellerops.features.pricing import promo_gap as pg
-        from sellerops.features.pricing import promotion_rules as rules
-        from sellerops.features.pricing import promotion_types as promo_types
+        from sellerops.features.marketing import promo_gap as pg
+        from sellerops.features.marketing import promotion_rules as rules
+        from sellerops.features.marketing import promotion_types as promo_types
         self.assertEqual(pg.resolve_min(None), 4)
         self.assertEqual(pg.resolve_min(''), 4)
         self.assertEqual(pg.resolve_min('6'), 6)
@@ -107,7 +107,7 @@ class TestRegression(unittest.TestCase):
             `orders/delivery` 返回该清单下全部订单（含已取消），必须按 state.code 过滤。
             """
         from sellerops.integrations.wildberries import supplies as sup
-        from sellerops.features.orders import fbs_delivery as fd
+        from sellerops.features.reports import fbs_delivery as fd
         ps = fd.parse_supply({'supplyID': 'WB-GI-287405573', 'name': 'Заказ', 'createdAt': '2026-10-03T10:42:05Z', 'state': {'code': 'onway', 'title': '前往接待处途中'}, 'ordersCnt': 8, 'parcelsCnt': 1, 'boxesCnt': 1, 'warehouse': '莫斯科仓库', 'destinationWarehouse': {'name': 'Москва'}})
         self.assertEqual(ps['supply_id'], 'WB-GI-287405573')
         self.assertEqual(ps['created_day'], '2026-10-03')
@@ -187,8 +187,8 @@ class TestRegression(unittest.TestCase):
         from datetime import date, datetime
         from unittest import mock
         from sellerops.integrations.wildberries import order_feed as feed
-        from sellerops.features.orders import order_stats as ostats
-        from sellerops.features.orders import order_stats_xlsx as oxlsx
+        from sellerops.features.reports import order_stats as ostats
+        from sellerops.features.reports import order_stats_xlsx as oxlsx
         row = ostats.parse_row({'product': {'id': 1585363941, 'name': 'Шапка зимняя', 'subjectName': '保暖帽', 'vendorCode': 'BCS-ZZMX-1534011939', 'productRating': 10}, 'order': {'id': 'eBu.r060644b97e4c4173952bc732e9922ce3.0.0', 'created': '2026-10-21T01:27:34-07:00', 'updated': '2026-10-26T21:20:26-07:00', 'status': 'buyout', 'cancelType': 'receipt', 'price': {'seller': 49.19}, 'size': {'title': 'стандарт'}, 'warehouse': {'title': 'склад продавца'}, 'destination': {'title': 'Новосибирск'}}})
         self.assertEqual(row['created_day'], '2026-10-21')
         self.assertEqual(row['order_no'], 'eBu.r060644b97e4c4173952bc732e9922ce3')
@@ -231,7 +231,7 @@ class TestRegression(unittest.TestCase):
         self.assertEqual([x['rank'] for x in agg], [1, 2, 3])
         pending_only = [x for x in agg if x['cn'] == '全是未完结'][0]
         self.assertIsNone(pending_only['rate_done'])
-        from sellerops.features.orders import order_stats_vc as ovc
+        from sellerops.features.reports import order_stats_vc as ovc
         vc_rows = [{'vc': 'B', 'nm_id': '1001', 'cn': '感应灯', 'shop_label': '袁州1(9352)', 'kind': 'return'}, {'vc': 'B', 'nm_id': '2002', 'cn': '感应灯', 'shop_label': '袁州2(9353)', 'kind': 'done'}, {'vc': 'B', 'nm_id': '2002', 'cn': '感应灯', 'shop_label': '袁州2(9353)', 'kind': 'pending'}, {'vc': 'A', 'nm_id': '9', 'cn': '感应灯', 'shop_label': '袁州1(9352)', 'kind': 'done'}, {'vc': '', 'nm_id': '7', 'cn': '', 'shop_label': '袁州1(9352)', 'kind': 'done'}, {'vc': 'D', 'nm_id': '8', 'cn': '全是未完结', 'shop_label': '袁州1(9352)', 'kind': 'pending'}]
         agg_v = ovc.aggregate_by_vc(vc_rows, {'感应灯': 'gyd'})
         self.assertEqual(ovc.NO_VC, '(无供应商代码)')

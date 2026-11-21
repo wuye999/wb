@@ -1,52 +1,30 @@
-"""
-sellerops 商品价格表 ↔ 店铺商品映射表构建（原 build_mapping.py 的数据逻辑）
-
-数据职责：商品价格表解析、前缀映射、全部活跃店铺并集分类、8-Sheet 映射表生成。
-HTML 工作台渲染已抽到 workbench.py。
-"""
-
+"""构建商品归属工作台，导入旧格式核对结果。"""
+from collections import defaultdict
+from functools import lru_cache
 import math
 import os
 import re
-from collections import defaultdict
 
-
-from sellerops.integrations.bcs import client as bcs
 from sellerops.core import utils as common
-from sellerops.settings import paths as config
-from sellerops.features.catalog import keywords
-from sellerops.features.catalog import workbench
-from sellerops.domain.snapshot_values import first_price, valid_sizes
-from sellerops.persistence.snapshots import ProductSnapshotRepository
-# ---------------- 主店 / 常量（懒加载，避免 import 即联网） ----------------
-_shop_id_cache = None
-
-
-def shop_id():
-    global _shop_id_cache
-    if _shop_id_cache is None:
-        _shop_id_cache = config.MAIN_SHOP or bcs.get_main_shop()
-    return _shop_id_cache
-
-
-from sellerops.features.catalog.mapping_excel import build_xlsx
-
-
 from sellerops.core.files import safe_load_json
+from sellerops.domain.snapshot_values import first_price, valid_sizes
+from sellerops.features.catalog import keywords, workbench
+from sellerops.features.catalog.mapping_excel import build_xlsx, stock_summary
+from sellerops.integrations.bcs.client import client as bcs
+from sellerops.persistence.mapping_batch import mapping_batch
+from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.snapshots import ProductSnapshotRepository
+from sellerops.settings import paths as config
 
-from sellerops.persistence.mappings import load_price_book
-from sellerops.persistence.mappings import load_prefix_map
-from sellerops.persistence.mappings import load_vc_known
-from sellerops.persistence.mappings import save_vc_known
-from sellerops.persistence.mappings import load_vc_override
-from sellerops.persistence.mappings import save_vc_override
-from sellerops.persistence.mappings import load_vc_excluded
-from sellerops.persistence.mappings import save_vc_excluded
+
+@lru_cache(maxsize=1)
+def main_shop(data: config.DataPaths):
+    return config.MAIN_SHOP or bcs.get_main_shop()
 
 
 def apply_latest_dp(result_list):
     """用商品价格表最新实际售价覆盖核对结果的 doublePrice（dict 键沿用 doublePrice）"""
-    boss = load_price_book()
+    boss = MappingRepository.load_price_book()
     dp_by_sku = {b["sku"]: b["dp"] for b in boss}
     n = 0
     for item in result_list:
@@ -58,67 +36,35 @@ def apply_latest_dp(result_list):
     return result_list, n
 
 
-def init_global_vc_pool():
-    """冷启动初始化：若 vc_known.json 不存在，从现有「价格映射表.xlsx」提取 5600+ 映射关系，
-    持久化到 data/state/vc_known.json 与 vc_excluded.json，确保历史资产零丢失。"""
-    os.makedirs(config.STATE_DIR, exist_ok=True)
-    if os.path.exists(config.VC_KNOWN_JSON):
-        return
-    state, excluded = load_mapping_state()
-    known = {}
-    for vc, st in state.items():
-        known[vc] = {
-            "cn": st.get("cn") or "",
-            "dp": st.get("dp"),
-            "L": st.get("L"),
-            "W": st.get("W"),
-            "H": st.get("H"),
-            "weight": st.get("weight"),
-            "sku": st.get("sku") or "",
-            "source": "历史映射表迁移",
-        }
-    save_vc_known(known)
-    print(f"[全局归属池] 冷启动初始化：已从现有映射表迁移 {len(known)} 个商品归属到 {config.VC_KNOWN_JSON}")
-
-    if excluded and not os.path.exists(config.VC_EXCLUDED_JSON):
-        save_vc_excluded(excluded)
-        print(f"[全局排除清单] 已迁移 {len(excluded)} 个排除记录到 {config.VC_EXCLUDED_JSON}")
-
-
 def load_vc_registry():
-    """加载全局 VC 归属池与纠偏记录。返回 (known, overrides, excluded)。
-    优先级：overrides（人工改名纠偏） > known（已知归属） > excluded（排除清单）。"""
-    init_global_vc_pool()
-    return load_vc_known(), load_vc_override(), load_vc_excluded()
-
-
-def save_vc_registry(known=None, overrides=None, excluded=None):
-    """保存全局 VC 归属、纠偏或排除记录"""
-    os.makedirs(config.STATE_DIR, exist_ok=True)
-    if known is not None:
-        save_vc_known(known)
-    if overrides is not None:
-        save_vc_override(overrides)
-    if excluded is not None:
-        save_vc_excluded(excluded)
-
-
-from sellerops.features.catalog.mapping_excel import stock_summary
-
-
-def load_mapping_state():
-    """读现有映射表 xlsx → 增量状态（归属关系 + 已排除清单）。
-    由 storage.mapping_repo.MappingRepository 托管。"""
-    from sellerops.persistence.mappings import MappingRepository
-    return MappingRepository.load_mapping_state()
+    """在内存中补全旧映射表的历史归属。由映射写命令统一保存。"""
+    known = MappingRepository.load_vc_known()
+    excluded = MappingRepository.load_vc_excluded()
+    overrides = MappingRepository.load_vc_override()
+    if not all(isinstance(values, dict) for values in (known, overrides, excluded)):
+        raise ValueError("商品归属、纠偏或排除文件格式错误")
+    if not os.path.exists(config.current.vc_known_json):
+        state, historical_exclusions = MappingRepository.load_mapping_state()
+        for vc, row in state.items():
+            known[vc] = {key: row.get(key) for key in ("cn", "dp", "L", "W", "H", "weight", "sku")}
+            known[vc].update(cn=row.get("cn") or "", sku=row.get("sku") or "", source="历史映射表迁移")
+        if not os.path.exists(config.current.vc_excluded_json):
+            excluded.update(historical_exclusions)
+    return known, overrides, excluded
 
 
 def load_bcs():
     """主店 JSON 在架商品，返回完整字段（附加 vc/wbnm/price/img 便捷字段）"""
-    d = safe_load_json(config.shop_json_path(shop_id()), default={})
-    rows = [r for r in d.get("rows", []) if not r.get("trashedAt")]
+    document = ProductSnapshotRepository.load_snapshot_document(main_shop(config.current))
+    rows = document["rows"] if document is not None else []
+    return priced_rows(rows)
+
+
+def priced_rows(rows: list[dict]) -> list[dict]:
     out = []
     for r in rows:
+        if r.get("trashedAt"):
+            continue
         price = first_price(r)
         if price is None:
             continue
@@ -149,12 +95,12 @@ def load_shops_union():
       union: {vc: {'vc','title','price','img','per_shop':{sid:{'price','stock'}},'shops':[sid]}}
       过滤 trashedAt / 无价格（含空商品三缺）；同 vc 跨店合并，代表价取主店优先否则最小 sid 店。"""
     union = {}
-    meta = safe_load_json(config.STATUS_JSON, default={})
+    meta = safe_load_json(config.current.status_json, default={})
     shops_meta = meta.get("shops", []) or []
     if not shops_meta:  # 状态文件缺失 → 扫描目录推断店铺
         for sid in ProductSnapshotRepository.shop_ids_from_disk():
             shops_meta.append({"id": sid, "name": f"shop{sid}"})
-    sid_main = shop_id()
+    sid_main = main_shop(config.current)
     for s in shops_meta:
         sid = s["id"]
         p = config.shop_json_path(sid)
@@ -215,7 +161,7 @@ def classify_union(union, boss, prefix_map, known):
 
 def known_vcs_from_mapping():
     """映射表已知 vc = 映射总表归属 + 已排除清单"""
-    state, excluded = load_mapping_state()
+    state, excluded = MappingRepository.load_mapping_state()
     return set(state) | set(excluded)
 
 
@@ -306,7 +252,7 @@ def auto_match(result_list, bcs):
 # ---------------- 入口逻辑（供 cli 调用） ----------------
 def run_mapping(main_shop_only=False):
     """生成核对工作台。main_shop_only=True 仅主店候选；否则全部活跃店铺并集一页两区。"""
-    boss = load_price_book()
+    boss = MappingRepository.load_price_book()
 
     if main_shop_only:
         bcs_data = load_bcs()
@@ -314,14 +260,14 @@ def run_mapping(main_shop_only=False):
         n_conf, n_single, n_todo = workbench.render_html(conflict_groups, single_groups, todo)
         print(f"商品价格表商品 {len(boss)} 个 → 冲突组 {n_conf} 个({sum(len(g['bosses']) for g in conflict_groups)} 商品)"
               f" · 普通 {n_single} 个 · 待核查 {n_todo} 个: {[b['cn'] for b in todo]}")
-        print(f"HTML 工作台已生成：{config.OUT_MAPPING_HTML}（main_shop_only：仅主店）")
+        print(f"HTML 工作台已生成：{config.current.out_mapping_html}（main_shop_only：仅主店）")
         return
 
     union, shops_meta = load_shops_union()
     if not union:
-        raise RuntimeError("未找到任何店铺数据，请先运行 sellerops fetch")
+        raise RuntimeError("未找到任何店铺数据，请先运行 sellerops catalog fetch")
     known = known_vcs_from_mapping()
-    prefix_map = load_prefix_map()
+    prefix_map = MappingRepository.load_prefix_map()
     cand_vcs, auto_items, normal_items, skipped = classify_union(union, boss, prefix_map, known)
     cand_items = [union[vc] for vc in cand_vcs]
     conflict_groups, single_groups, todo = build_groups(boss, cand_items)
@@ -338,28 +284,40 @@ def run_mapping(main_shop_only=False):
           f" · 前缀自动 {len(auto_items)}")
     print(f"  恒等式 |union|-|known|==cand+normal+auto：{n_union}-{skipped}={n_sum} {ident}")
     print(f"  商品价格表商品 {len(boss)} → 冲突组 {n_conf} · 普通 {n_single} · 待核查 {n_todo} · 下半区卡片 {n_normal}")
-    print(f"HTML 统一工作台已生成：{config.OUT_MAPPING_HTML}（导出 vc 中心格式 → sellerops merge 统一审核.json）")
+    print(f"HTML 统一工作台已生成：{config.current.out_mapping_html}（导出 vc 中心格式 → sellerops catalog merge 统一审核.json）")
 
 
 def import_mapping(import_file, auto=False):
     """导入核对结果 JSON → 生成映射表 xlsx（旧格式，单店初建）。"""
-    result = safe_load_json(import_file, default=[])
-    if isinstance(result, dict) and "rows" in result:
-        result = result["rows"]
-    bcs_data = load_bcs()
-    result, n_dp = apply_latest_dp(result)
-    if n_dp:
-        print(f"[实际售价同步] 覆盖 {n_dp} 个商品为商品价格表最新值")
-    if auto:
-        auto_map = auto_match(result, bcs_data)
-        n_auto = 0
-        for item in result:
-            if not item.get("vendorCodes") and item["idx"] in auto_map:
-                item["vendorCodes"] = auto_map[item["idx"]]
-                item["auto"] = True
-                n_auto += 1
-        print(f"[自动预匹配] 补充 {n_auto} 个商品（仅参考，非正式映射）")
-    n_boss, n_pick, n_unmap, n_multi = build_xlsx(result, [], bcs_data)
-    print(f"映射表已生成：{config.MAPPING_XLSX}")
+    with mapping_batch("import-mapping", input_file=import_file, auto=auto) as batch:
+        if batch is None:
+            return
+        result = batch.input_data
+        if isinstance(result, dict) and "rows" in result:
+            result = result["rows"]
+        if not isinstance(result, list):
+            raise ValueError("核对文件应包含旧版工作台导出的商品列表")
+        for row in result:
+            if not isinstance(row, dict) or "action" in row and "vendorCodes" not in row:
+                raise ValueError("旧格式核对结果应由旧版工作台导出；多店审核结果请使用 catalog merge")
+            if row.get("vendorCodes") is not None and not isinstance(row["vendorCodes"], list):
+                raise ValueError("旧格式核对记录的 vendorCodes 应为列表")
+        if not os.path.isfile(config.current.price_book_xlsx):
+            raise FileNotFoundError(config.current.price_book_xlsx)
+        bcs_data = load_bcs()
+        result, n_dp = apply_latest_dp(result)
+        if n_dp:
+            print(f"[实际售价同步] 覆盖 {n_dp} 个商品为商品价格表最新值")
+        if auto:
+            auto_map = auto_match(result, bcs_data)
+            n_auto = 0
+            for item in result:
+                if not item.get("vendorCodes") and item["idx"] in auto_map:
+                    item["vendorCodes"] = auto_map[item["idx"]]
+                    item["auto"] = True
+                    n_auto += 1
+            print(f"[自动预匹配] 补充 {n_auto} 个商品（仅参考，非正式映射）")
+        n_boss, n_pick, n_unmap, n_multi = build_xlsx(result, [], bcs_data, out_path=batch.stage(config.current.mapping_xlsx))
+    print(f"映射表已生成：{config.current.mapping_xlsx}")
     print(f"  商品价格表商品 {n_boss} 个 · 勾选 vendorCode {n_pick} 个"
           f" · 未映射在架 {n_unmap} 个 · 多重映射冲突 {n_multi} 个")

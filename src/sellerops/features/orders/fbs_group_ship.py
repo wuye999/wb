@@ -12,8 +12,8 @@ from openpyxl import load_workbook
 from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError, RateLimitError
 from sellerops.core.files import FileLock, atomic_dump_json
 from sellerops.core.utils import ensure_utf8_stdout
-from sellerops.features.catalog.snapshot_open_api import resolve_moscow
-from sellerops.features.listings.open_api_common import safe_reason, select_accesses
+from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.features.publishing.open_api_common import safe_reason, select_accesses
 from sellerops.features.orders.fbs_pdfs import check_pair, export_pair, require_pdf_tools
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.integrations.wildberries.fbs_api import BATCH_SIZE, FBSRequestError, WBFBSAPI
@@ -56,11 +56,11 @@ def _catalog() -> tuple[dict[str, str], dict[str, set[str]]]:
         if vc in mapping and cn:
             mapping[vc] = cn
     sku_values = defaultdict(set)
-    workbook = load_workbook(paths.PRICE_BOOK_XLSX, read_only=True, data_only=True)
+    workbook = load_workbook(paths.current.price_book_xlsx, read_only=True, data_only=True)
     try:
         sheet = workbook[workbook.sheetnames[0]]
         required = ('cn', 'stock_sku')
-        columns = price_book_columns(sheet, paths.PRICE_BOOK_XLSX, required=required)
+        columns = price_book_columns(sheet, paths.current.price_book_xlsx, required=required)
         headers = read_headers(sheet)
         if any(headers.count(BOSS_COLUMNS[key]) != 1 for key in required):
             raise ValueError('价格表商品中文名或库存 SKU 表头重复')
@@ -211,7 +211,7 @@ def _process_shop(shop: OpenAPIShop, args, catalog: tuple | None, supplies: list
                   names: set[str], save: Callable[[], None], results: list[dict]) -> None:
     api = WBFBSAPI(shop.api_key)
     try:
-        warehouse = resolve_moscow(api.warehouses())
+        warehouse = moscow_warehouse(api.warehouses())
         print(f"{shop.name}({shop.id})｜{warehouse['name']} ID {warehouse['id']}", flush=True)
         if args.resume:
             pending = [r for r in supplies if r['shop_id'] == shop.id
@@ -312,7 +312,7 @@ def run(args) -> int:
         if row.get('reason'):
             print(f"  [{row['stage']}] {row.get('name') or row.get('product_name') or row['shop_id']}｜{row['reason']}")
     stamp = datetime.now(SINGAPORE).strftime('%Y%m%d_%H%M%S')
-    report = Path(paths.LOG_DIR) / f'WB_FBS发货群_{stamp}_{uuid4().hex[:8]}.json'
+    report = Path(paths.current.log_dir) / f'WB_FBS发货群_{stamp}_{uuid4().hex[:8]}.json'
     atomic_dump_json(report, {'apply': args.apply, 'resume': args.resume, 'results': results},
                      use_lock=False)
     print(f"完成 {sum(r['stage'] == 'complete' for r in results)} 组，"

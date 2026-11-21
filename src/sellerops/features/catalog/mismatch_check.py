@@ -6,7 +6,7 @@ sellerops 货不对板筛查工作台（人工看图筛选「上架商品图片�
 - 列表按需加载中尺寸图，失败时尝试高清图和原链接；点击图片查看大图；
 - 点击标题即可勾选「货不对板」（勾选状态本地保存，刷新不丢）；
 - 顶部可多选筛选中文名（单/多/全部）+ 搜索；
-- 导出勾选的 vendorCode（JSON / 复制逗号分隔），用 sellerops trash --vc ... 下架。
+- 导出勾选的 vendorCode（JSON / 复制逗号分隔），用 sellerops product trash --shops &lt;目标店ID&gt; --vc ... 下架。
 """
 import datetime
 import json
@@ -167,7 +167,7 @@ function nextProductImage(img){
 <div class="wrap">
 <div class="hint">
   <b>快速筛查货不对板</b>：逐个商品看图片与俄文标题是否与中文名一致；<b>点击标题（或左侧复选框）= 勾选货不对板</b>（勾选状态本地保存，刷新不丢）。
-  顶部「中文名筛选」可多选只看某几个中文名（Ctrl/Cmd 点选，不选=全部）。核对完点「导出勾选 vc」或「复制 vc」，用 <code>sellerops trash --vc &lt;vc列表&gt; --apply --yes</code> 清空库存并移至回收站。
+  顶部「中文名筛选」可多选只看某几个中文名（Ctrl/Cmd 点选，不选=全部）。核对完点「导出勾选 vc」或「复制 vc」，用 <code>sellerops product trash --shops &lt;目标店ID&gt; --vc &lt;vc列表&gt; --apply --yes</code> 清空库存并移至回收站。
   （点击图片可看高清大图）
 </div>
 GROUPS_PLACEHOLDER
@@ -286,7 +286,7 @@ function copyVcs(){
   const vcs = pickedRows().map(r => r.vc);
   if (!vcs.length){ alert('未勾选任何商品'); return; }
   const text = vcs.join(',');
-  const done = () => alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 sellerops trash --vc）');
+  const done = () => alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 sellerops product trash --shops &lt;目标店ID&gt; --vc）');
   const fail = () => alert('复制失败：请用「导出勾选 vc (JSON)」下载后再手动复制');
   if (navigator.clipboard && window.isSecureContext){
     navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done, fail));
@@ -329,8 +329,8 @@ applyFilter();
         [{"vc": r["vc"], "cn": r["cn"], "title": r["title"] or "", "shops": str(r.get("shops") or "")} for r in rows],
         ensure_ascii=False))
     html = html.replace("TOTAL", str(len(rows))).replace("GROUPS_N", str(len(groups)))
-    os.makedirs(os.path.dirname(config.OUT_MISMATCH_HTML), exist_ok=True)
-    with open(config.OUT_MISMATCH_HTML, "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(config.current.out_mismatch_html), exist_ok=True)
+    with open(config.current.out_mismatch_html, "w", encoding="utf-8") as f:
         f.write(html)
     return len(rows), len(groups)
 
@@ -399,10 +399,10 @@ def _resolve_window(begin, end, days):
 
 
 def run(cn=None, begin="", end="", days=0):
-    print(f"读取映射表 {config.MAPPING_XLSX} ...")
+    print(f"读取映射表 {config.current.mapping_xlsx} ...")
     rows = load_mapping_rows()
     if not rows:
-        raise RuntimeError("映射表为空，请先 sellerops merge")
+        raise RuntimeError("映射表为空，请先 sellerops catalog merge")
     if begin or end or days:
         win = _resolve_window(begin, end, days)
         kept, dropped = [], 0
@@ -426,7 +426,7 @@ def run(cn=None, begin="", end="", days=0):
         else:
             rows = hit
     total, groups = render_html(rows)
-    print(f"\n已生成: {config.OUT_MISMATCH_HTML}")
+    print(f"\n已生成: {config.current.out_mismatch_html}")
     print(f"  共 {total} 条 · {groups} 个中文名商品")
     print("  打开 HTML 逐个看图核对：点击标题/复选框勾选货不对板，顶部可多选筛选中文名。")
-    print("  勾选后点「导出勾选 vc」或「复制 vc」，用 sellerops trash --vc <vc列表> --apply --yes 清空库存并移回收站。")
+    print("  勾选后点「导出勾选 vc」或「复制 vc」，用 sellerops product trash --shops &lt;目标店ID&gt; --vc <vc列表> --apply --yes 清空库存并移回收站。")

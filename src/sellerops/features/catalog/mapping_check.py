@@ -5,6 +5,7 @@ sellerops 映射表核查工作台（带图，人工核对匹配是否有误）�
   ① 前缀不符  ② 价格偏差  ③ 跨店不一致
 顶部可「只看可疑」「搜索过滤」「导出可疑清单 JSON」。
 """
+from sellerops.persistence.mappings import MappingRepository
 import json
 import os
 import re
@@ -29,7 +30,7 @@ PRICE_DEV_TOL = 5  # 价格偏差阈值（元）
 
 def load_mapping_rows():
     """读映射总表 Sheet 全部行 → [{cn, vc, dp, price, discount, club, stock, title, img, ...}]"""
-    wb = openpyxl.load_workbook(config.MAPPING_XLSX, data_only=True)
+    wb = openpyxl.load_workbook(config.current.mapping_xlsx, data_only=True)
     rows = []
     if "映射总表" in wb.sheetnames:
         ws = wb["映射总表"]
@@ -39,13 +40,13 @@ def load_mapping_rows():
         if not all(k in idx for k in need):
             wb.close()
             raise RuntimeError(f"映射总表缺少必需列（{COL_CN}/{COL_VC}），请先 merge 重建映射表")
-        price_col = f"店铺{mapping.shop_id()}价格(CNY)"
+        price_col = f"店铺{mapping.main_shop(mapping.config.current)}价格(CNY)"
         if price_col not in idx:
             print(f"⚠ [警告] 映射总表缺少价格列「{price_col}」（主店可能已变化），价格偏差检测将失效，请重新 fetch + merge")
         i_dp = find_col(headers, COL_ACTUAL_PRICE)
         if i_dp is None:
-            warn_missing("价格映射表·映射总表", config.MAPPING_XLSX, headers, COL_ACTUAL_PRICE,
-                         hint="dp 为空，价格偏差检测将失效；请运行 sellerops merge 重建")
+            warn_missing("价格映射表·映射总表", config.current.mapping_xlsx, headers, COL_ACTUAL_PRICE,
+                         hint="dp 为空，价格偏差检测将失效；请运行 sellerops catalog merge 重建")
         for r in ws.iter_rows(min_row=2, values_only=True):
             vc = r[idx[COL_VC]]
             if not vc:
@@ -100,7 +101,7 @@ def _vc_prefix(vc):
 def analyze(rows, union_prices, boss_prefix=None):
     """为每行计算可疑标记 → (rows, issues)"""
     issues = []
-    prefix_map = mapping.load_prefix_map()
+    prefix_map = MappingRepository.load_prefix_map()
     for r in rows:
         flags = []
         pre = _vc_prefix(r["vc"])
@@ -238,7 +239,7 @@ input[type=search]{padding:6px 10px;border:1px solid #ccc;border-radius:6px;min-
 </div>
 <div class="wrap">
 <div class="hint">
-  <b>快速筛查货不对板</b>：逐个商品看图片与俄文标题是否与中文名一致，<b>勾选左侧复选框 = 标记货不对板</b>（勾选状态自动保存在浏览器，刷新不丢）。核对完点「导出勾选 vc (JSON)」下载文件，或用「复制 vc」复制逗号分隔列表（可直接用于 <code>sellerops trash --vc ...</code>）。自动标记：
+  <b>快速筛查货不对板</b>：逐个商品看图片与俄文标题是否与中文名一致，<b>勾选左侧复选框 = 标记货不对板</b>（勾选状态自动保存在浏览器，刷新不丢）。核对完点「导出勾选 vc (JSON)」下载文件，或用「复制 vc」复制逗号分隔列表（可直接用于 <code>sellerops product trash --shops &lt;目标店ID&gt; --vc ...</code>）。自动标记：
   <span class="f f1">前缀命中他品（可能配错）</span>
   <span class="f f2">价格偏差 ≥ [[TOL]] 元</span>
   <span class="f f3">跨店价格不一致</span>
@@ -345,7 +346,7 @@ function copyVcs(){
   const vcs = pickedRows().map(r => r.vc);
   if (!vcs.length){ alert('未勾选任何商品'); return; }
   const text = vcs.join(',');
-  const done = () => alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 sellerops trash --vc）');
+  const done = () => alert('已复制 ' + vcs.length + ' 个 vc（逗号分隔，可直接用于 sellerops product trash --shops &lt;目标店ID&gt; --vc）');
   const fail = () => alert('复制失败：请用「导出勾选 vc (JSON)」下载后再手动复制');
   if (navigator.clipboard && window.isSecureContext){
     navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done, fail));
@@ -387,7 +388,7 @@ applyFilter();
         [{"vc": r["vc"], "cn": r["cn"], "title": r["title"] or "", "shops": str(r.get("shops") or "")} for r in rows],
         ensure_ascii=False))
     html = html.replace("TOTAL", str(len(rows))).replace("GROUPS_N", str(len(groups))).replace("SUSPECT_N", str(n_suspect))
-    workbench_write(config.OUT_MAPPING_CHECK_HTML, html)
+    workbench_write(config.current.out_mapping_check_html, html)
     return len(rows), len(groups), n_suspect, dict(by_type)
 
 
@@ -400,10 +401,10 @@ def workbench_write(path, html):
 def run(tol=PRICE_DEV_TOL):
     global PRICE_DEV_TOL
     PRICE_DEV_TOL = tol
-    print(f"读取映射表 {config.MAPPING_XLSX} ...")
+    print(f"读取映射表 {config.current.mapping_xlsx} ...")
     rows = load_mapping_rows()
     if not rows:
-        raise RuntimeError("映射表为空，请先 sellerops merge")
+        raise RuntimeError("映射表为空，请先 sellerops catalog merge")
     print(f"  映射条目: {len(rows)}")
     union_prices = load_union_prices()
     sid_n = len({sid for m in union_prices.values() for sid in m})
@@ -411,7 +412,7 @@ def run(tol=PRICE_DEV_TOL):
     print("  分析可疑项 ...")
     rows, issues = analyze(rows, union_prices, None)
     total, groups, suspect, by_type = render_html(rows, issues)
-    print(f"\n已生成: {config.OUT_MAPPING_CHECK_HTML}")
+    print(f"\n已生成: {config.current.out_mapping_check_html}")
     print(f"  共 {total} 条 · {groups} 个商品价格表商品 · 可疑 {suspect} 条")
     for t, n in by_type.items():
         print(f"    {t}: {n}")

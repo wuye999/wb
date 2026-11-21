@@ -3,7 +3,7 @@
 背景（2026-10-20）：价格列从「双倍售价」改名「实际售价」，且**只认新名**——
 读取一律按表头名定位，不再依赖固定列位（`row[3]` / `cell(r,4)` / `idx.get(名, 2)`）。
 缺列时的策略由调用方决定：
-- 可重建的表（映射总表 / 单店表）→ `warn_missing()` 告警降级，避免阻断 `sellerops merge` 自愈；
+- 可重建的表（映射总表 / 单店表）→ `warn_missing()` 告警降级，避免阻断 `sellerops catalog merge` 自愈；
 - 自家必需的表（商品价格表）与外部不可重建的表（他人映射表）→ `require_col()` 抛 HeaderError。
 """
 import re
@@ -66,7 +66,7 @@ def require_col(headers, name, table, path=None):
     hint = ""
     if name == COL_ACTUAL_PRICE and LEGACY_ACTUAL_PRICE in headers:
         hint = (f"；检测到旧列名「{LEGACY_ACTUAL_PRICE}」，已废弃——"
-                f"请把该列改名为「{COL_ACTUAL_PRICE}」（映射表可运行 sellerops merge 重建）")
+                f"请把该列改名为「{COL_ACTUAL_PRICE}」（映射表可运行 sellerops catalog merge 重建）")
     raise HeaderError(
         f"[表头错误] {where} 缺少必需列「{name}」{hint}；实际表头：{_headers_repr(headers)}")
 

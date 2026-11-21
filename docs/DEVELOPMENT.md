@@ -10,17 +10,17 @@
 
 根目录 `api/` 保存维护者的接口说明与原始抓包，可能含敏感信息，整体由 Git 忽略；本地入口为 `api/API.md`。公开仓库及离线检查不依赖该目录存在。凭证与运行约束见 [配置](CONFIGURATION.md)，已支持功能见 [操作流程](USAGE.md)。不得为了修复文档链接而把私有 API 目录加入提交。
 
-`product-report` 已有独立的 WB Open API 只读客户端，使用订单动态、评价及归档评价、卖家仓库目录；BCS 提供对应店铺的官方令牌，飞书提供出单来源。[完整口径与限制](PRODUCT_REPORT.md)。现有默认商品写入通道及后台会话管理没有因此迁移到 Open API。
+`report products` 已有独立的 WB Open API 只读客户端，使用订单动态、评价及归档评价、卖家仓库目录；BCS 提供对应店铺的官方令牌，飞书提供出单来源。[完整口径与限制](PRODUCT_REPORT.md)。现有默认商品写入通道及后台会话管理没有因此迁移到 Open API。
 
 临时报告账号由 `integrations.bcs.capture.parse_sessions()` 从标准输入文本解析为不显示秘密的 `BCSSession`，通过 `BCSClient(session)` 注入独立认证，默认客户端仍延迟读取本机配置。`product_report.collect(extra_bcs_accounts=...)` 合并统计来源，`ProductReport.target_shop_ids` 单独限定本机链接缺口目标（直接构造旧实体时None沿用全部店铺）；`unavailable_accounts` 保留店铺列表读取失败的账号标签，防止健康店铺的汇总误标整轮完整。报告实体不保存认证；额外店铺不加载本地快照或使用本机提交记录。离线边界见 [临时账号测试](../tests/test_product_report_accounts.py)。
 
-显式的备用官方上架与跨店内容更新见 [Open API 商品写入](OPEN_API_LISTINGS.md)。[content_api](../src/sellerops/integrations/wildberries/content_api.py) 独立声明新增读写端点，保持只读 `WBOpenAPI` 白名单不变；[open_api_payloads](../src/sellerops/features/listings/open_api_payloads.py) 负责完整覆盖更新与标识保留，[open_api_sources](../src/sellerops/features/listings/open_api_sources.py) 负责公开商品的类目属性映射，[open_api_publish](../src/sellerops/features/listings/open_api_publish.py) 编排完整上架，[open_api_finish](../src/sellerops/features/listings/open_api_finish.py) 负责有限标识轮询、后续提交与续办，[open_api_sync](../src/sellerops/features/listings/open_api_sync.py) 编排跨店更新。阶段状态在 [持久化模块](../src/sellerops/persistence/open_api_publish.py) 中按数据目录隔离，以 FileLock 覆盖整轮事务。写请求不重试，条码、建卡与媒体/库存分别记录，预览不生成条码或等待；离线边界覆盖见 [test_open_api_writes](../tests/test_open_api_writes.py) 与 [有限等待测试](../tests/test_open_api_publish_wait.py)。
+显式的备用官方上架与跨店内容更新见 [Open API 商品写入](OPEN_API_LISTINGS.md)。[content_api](../src/sellerops/integrations/wildberries/content_api.py) 独立声明新增读写端点，保持只读 `WBOpenAPI` 白名单不变；[open_api_payloads](../src/sellerops/features/publishing/open_api_payloads.py) 负责完整覆盖更新与标识保留，[open_api_sources](../src/sellerops/features/publishing/open_api_sources.py) 负责公开商品的类目属性映射，[open_api_publish](../src/sellerops/features/publishing/open_api_publish.py) 编排完整上架，[open_api_finish](../src/sellerops/features/publishing/open_api_finish.py) 负责有限标识轮询、后续提交与续办，[open_api_sync](../src/sellerops/features/publishing/open_api_sync.py) 编排跨店更新。阶段状态在 [持久化模块](../src/sellerops/persistence/open_api_publish.py) 中按数据目录隔离，以 FileLock 覆盖整轮事务。写请求不重试，条码、建卡与媒体/库存分别记录，预览不生成条码或等待；离线边界覆盖见 [test_open_api_writes](../tests/test_open_api_writes.py) 与 [有限等待测试](../tests/test_open_api_publish_wait.py)。
 
-`normalize-vc-openapi` 的编排在 [vc_normalization](../src/sellerops/features/listings/vc_normalization.py)，[纯规则](../src/sellerops/domain/vc_normalization.py) 处理明确归属和跨店一致的避重分配，只替换四位前缀并保留原尾部，冲突时追加正整数序号，[专用载荷](../src/sellerops/features/listings/vc_normalization_payloads.py) 保留现值并按实际 ASCII JSON 字节分批。[只读输入与历史](../src/sellerops/persistence/vc_normalization.py) 按表头加载所需字段，拒绝歧义、吞错和随机前缀兜底；日志目录的 FileLock 覆盖全轮，提交前保存 submitting，历史记录固定新码并阻止同店同卡重放。读取不完整整轮零提交，写后不查询；不建立别名或修改现有归属/快照/状态。边界见 [离线改码测试](../tests/test_vc_normalization.py)。
+`listing normalize-vc` 的编排在 [vc_normalization](../src/sellerops/features/publishing/vc_normalization.py)，[纯规则](../src/sellerops/domain/vc_normalization.py) 处理明确归属和跨店一致的避重分配，只替换四位前缀并保留原尾部，冲突时追加正整数序号，[专用载荷](../src/sellerops/features/publishing/vc_normalization_payloads.py) 保留现值并按实际 ASCII JSON 字节分批。[只读输入与历史](../src/sellerops/persistence/vc_normalization.py) 按表头加载所需字段，拒绝歧义、吞错和随机前缀兜底；日志目录的 FileLock 覆盖全轮，提交前保存 submitting，历史记录固定新码并阻止同店同卡重放。读取不完整整轮零提交，写后不查询；不建立别名或修改现有归属/快照/状态。边界见 [离线改码测试](../tests/test_vc_normalization.py)。
 
 ## 当前必须保留的运行约定
 
-报告默认筛选由 [product_report_screening](../src/sellerops/features/catalog/product_report_screening.py) 纯计算：最长数字段合并风险，完整VC去重输出，当前本店快照判断缺口并区分未知/回收站/已有提交。名称输入由 [report_catalog](../src/sellerops/persistence/report_catalog.py) 按表头仅读取价格表商品名、当前映射VC及中文名，不依赖价格公式、图片或库存。`--details` 才展开原证据；[离线筛选测试](../tests/test_product_report_screening.py) 覆盖边界、加权、跨店标识与缺口。
+报告默认筛选由 [product_report_screening](../src/sellerops/features/reports/product_report_screening.py) 纯计算：最长数字段合并风险，完整VC去重输出，当前本店快照判断缺口并区分未知/回收站/已有提交。名称输入由 [report_catalog](../src/sellerops/persistence/report_catalog.py) 按表头仅读取价格表商品名、当前映射VC及中文名，不依赖价格公式、图片或库存。`--details` 才展开原证据；[离线筛选测试](../tests/test_product_report_screening.py) 覆盖边界、加权、跨店标识与缺口。
 
 - 所有仓库操作默认且仅使用该店铺的莫斯科仓库 ID，包括读取、修改库存、清零、下架前清库存、回收站归零、上架和临时脚本。全店/全部商品不扩大仓库范围；不能回退到成都或其他俄语地区仓。名称和 ID 无法确认时中止该店操作。
 - WB 仓库列表的 `id` 才是库存使用的仓库标识，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对；马帮仓库 ID 属于另一套体系，也须核实为莫斯科业务仓。
@@ -29,48 +29,31 @@
 
 ### 已有实现与约束的差异
 
-[仓库解析器](../src/sellerops/features/listings/warehouse.py) 只接受唯一、可用且名称匹配莫斯科的仓库，不回退其他地区仓。[库存与下架计划](../src/sellerops/features/listings/plans.py) 优先使用本地快照，CLI通过 [定向字段解析器](../src/sellerops/features/listings/product_data.py) 在提交前补齐已有商品缺失的必要标识；仍缺少已确认仓库或完整规格的商品写入 `blocked_items`，预览和执行均返回非零状态，同店其他完整商品可以继续。[下架前清库存](../src/sellerops/features/listings/trash_execution.py) 按商品核对全部规格的受理回执，任一规格失败、缺失、重复或回执不一致时，阻止该商品移回收站；失败商品按商品卡计数，不按失败规格重复累加。
+[仓库解析器](../src/sellerops/features/products/warehouse.py) 只接受唯一、可用且名称匹配莫斯科的仓库，不回退其他地区仓。[库存与下架计划](../src/sellerops/features/products/plans.py) 优先使用本地快照，CLI通过 [定向字段解析器](../src/sellerops/features/products/product_data.py) 在提交前补齐已有商品缺失的必要标识；仍缺少已确认仓库或完整规格的商品写入 `blocked_items`，预览和执行均返回非零状态，同店其他完整商品可以继续。[下架前清库存](../src/sellerops/features/products/trash_execution.py) 按商品核对全部规格的受理回执，任一规格失败、缺失、重复或回执不一致时，阻止该商品移回收站；失败商品按商品卡计数，不按失败规格重复累加。
 
-底层显式实时库存读取不传 store_id 时仍可读取多仓；`stock --resolve live` 已限定确认的莫斯科仓，仅补充当前库存，写入规格仍来自完整计划，不能因库存缺行减少目标。`warehouse-clear` 专门操作成都仓，当前不使用。调用方仍须核对仓库范围，不能把底层函数的存在当作其他仓库的操作授权。默认本地快照流程不调用全量远端商品或库存查询。
+库存查询必须传入本店已确认的仓库 ID。仓库选择使用 domain.warehouses；回收站按商品 ID 提交，逐卡记录回执。
 
 [WB 客户端](../src/sellerops/integrations/wildberries/client.py) 遇到 401/403 立即抛出认证异常。`login wb` 从专用浏览器恢复账号和店铺列表。[归属与会话保存](../src/sellerops/integrations/wildberries/session_update.py) 校验店铺绑定，通过 [WB 会话接口](../src/sellerops/integrations/wildberries/auth.py) 逐店签发并用单页提问查询鉴权。全部通过后持文件锁重读 `credentials.json`，核对 WB 配置是否变更，再原子保存。其他平台并发更新随重读结果保留。离线测试使用合成会话与 HTTP 替身。
 
-[统一登录用例](../src/sellerops/features/login.py) 编排密码登录、资料加锁、人工操作和 WB 店铺绑定。[共享浏览器模块](../src/sellerops/integrations/sessions/browser.py) 管理项目内的固定 Chromium，并打开所选数据目录的平台资料。[BCS](../src/sellerops/integrations/bcs/browser_session.py)、[马帮](../src/sellerops/integrations/mabang/browser_session.py) 和 [WB](../src/sellerops/integrations/wildberries/browser_session.py) 的浏览器适配器在各自的集成目录读取官网会话。BCS 的密码登录、浏览器和临时报告共用 [会话表示](../src/sellerops/integrations/bcs/session.py)。固定版本和构建号变更时，同时更新可选依赖和配置说明，并验收现有登录资料的兼容性。
+[统一登录用例](../src/sellerops/features/system/login.py) 编排密码登录、资料加锁、人工操作和 WB 店铺绑定。[共享浏览器模块](../src/sellerops/integrations/sessions/browser.py) 管理项目内的固定 Chromium，并打开所选数据目录的平台资料。[BCS](../src/sellerops/integrations/bcs/browser_session.py)、[马帮](../src/sellerops/integrations/mabang/browser_session.py) 和 [WB](../src/sellerops/integrations/wildberries/browser_session.py) 的浏览器适配器在各自的集成目录读取官网会话。BCS 的密码登录、浏览器和临时报告共用 [会话表示](../src/sellerops/integrations/bcs/session.py)。固定版本和构建号变更时，同时更新可选依赖和配置说明，并验收现有登录资料的兼容性。
 
 ## 项目入口
 
 本项目是 src 布局的 Python 包，源码在 `src/sellerops`。源码运行入口为 [run.py](../run.py)，包入口为 [__main__.py](../src/sellerops/__main__.py)。只有入口和开发脚本负责把 src 放入导入路径，业务模块不自行修改 sys.path。
 
-## 调用链与依赖
+## 目录与调用路径
 
-```text
-run.py / python -m sellerops
-  → cli.main：选定 data 目录、构建参数、解析、处理退出码
-  → cli.<组>.register：参数与处理器在一处 bind
-  → cli.binding.dispatch：按需 import 具体处理器
-  → features：业务计划、编排、结果输出
-      → integrations：平台协议、会话、HTTP / CLI
-      → persistence：本地价格表、映射、快照与索引
-      → domain / core / settings
-```
+命令在 cli 里按组注册，argparse 解析请求。一次库存修改从 cli/product.py 进入 features/products/stocks.py，先按本次店铺读取商品归属和快照，再生成全部规格的莫斯科仓计划，最后按平台通道提交和记录回执。
 
-integrations 不依赖 features、cli、persistence；persistence 不依赖 features、cli、integrations；domain 为纯模型和编码规则。边界由 [离线检查](../scripts/check.py) 检查。跨功能可直接复用明确的公开函数，不要求再包一层单例门面。
-
-`cli.main` 在注册带文件路径默认值的参数之前选定数据目录。`--help` 不导入业务处理器、不读取凭证或联网。凭证访问器在首次 get 时加载，更新会话后可 reload；直接库调用应在导入会缓存路径的业务模块之前先配置数据根目录。
-
-## 去哪里修改功能
-
-| 领域 | 入口与职责 |
+| 目录 | 职责 |
 | --- | --- |
-| CLI | [分发](../src/sellerops/cli/binding.py)、[各命令组](../src/sellerops/cli/main.py)；完整处理器位置见 [CLI 表格](CLI.md) |
-| 登录 | [用例编排](../src/sellerops/features/login.py)、[浏览器运行](../src/sellerops/integrations/sessions/browser.py)，鉴权和凭证更新在各平台的集成目录 |
-| catalog | [mapping](../src/sellerops/features/catalog/mapping.py) 归属/工作台，[mapping_sync](../src/sellerops/features/catalog/mapping_sync.py) 审核合并，[single_shop](../src/sellerops/features/catalog/single_shop.py) 单店表 |
-| listings | [plans](../src/sellerops/features/listings/plans.py) 计划，[execution](../src/sellerops/features/listings/execution.py) 执行，[prices](../src/sellerops/features/listings/prices.py)/[stocks](../src/sellerops/features/listings/stocks.py) WB 用例，[bulk_publish](../src/sellerops/features/listings/bulk_publish.py)/[card_publish](../src/sellerops/features/listings/card_publish.py) 两种发布协议 |
-| pricing | [discounts](../src/sellerops/features/pricing/discounts.py) 折扣，[promo_gap](../src/sellerops/features/pricing/promo_gap.py) 数据采集编排，[promotion_rules](../src/sellerops/features/pricing/promotion_rules.py) 纯计算，[promotion_report](../src/sellerops/features/pricing/promotion_report.py) 输出 |
-| orders | [matching](../src/sellerops/features/orders/matching.py) SKU 匹配，[forecast_selection](../src/sellerops/features/orders/forecast_selection.py) 候选，[forecast_polling](../src/sellerops/features/orders/forecast_polling.py) 轮询，[forecast](../src/sellerops/features/orders/forecast.py) 预报交运，[mabang_process](../src/sellerops/features/orders/mabang_process.py) 全流程 |
-| 飞书用例 | [feishu_register](../src/sellerops/features/orders/feishu_register.py) 登记，[mabang_stock](../src/sellerops/features/orders/mabang_stock.py) 重建库存表，[mabang_stock_daily](../src/sellerops/features/orders/mabang_stock_daily.py) 日期列与总量；通信在 [tables](../src/sellerops/integrations/feishu/tables.py) |
-| support | [questions](../src/sellerops/features/support/questions.py) 手动回复，[questions_watch](../src/sellerops/features/support/questions_watch.py)/[chat_watch](../src/sellerops/features/support/chat_watch.py) 监听，[product_context](../src/sellerops/features/support/product_context.py) 商品上下文 |
-| 自动化 | [daily](../src/sellerops/automation/daily.py) 流程与子进程，[schedule](../src/sellerops/automation/schedule.py) Windows 任务 XML 与注册 |
+| features/catalog、products、publishing | 快照与归属，商品修改，上架与续办 |
+| features/orders、reports、marketing、support、system | 订单履约，报表，营销，客服，登录和任务 |
+| integrations | WB 后台、官方令牌、BCS、马帮、飞书和 AI 各自的协议与认证 |
+| persistence、domain | 用户文件读写，共用的纯业务规则 |
+| settings、core | 每轮 DataPaths、凭证访问、文件锁与原子写入 |
+
+从具体命令定位源码请看 [自动生成的命令参考](CLI.md)。帮助离线可用。切换数据目录重新生成 DataPaths，业务代码使用本轮路径。马帮匹配返回 MatchResult，组合流程显式传递失败订单和发货群订单。
 
 ## 常用复用能力
 
@@ -80,7 +63,7 @@ integrations 不依赖 features、cli、persistence；persistence 不依赖 feat
 | 店铺快照 | `ProductSnapshotRepository.shop_ids_from_disk()`、`load_shop_rows(shop_id)` | 本地读取，索引缓存区分文件路径和版本 |
 | 编码前缀/源商品码 | `domain.vendor_codes.extract_vc_prefix()`、`core.utils.extract_wb_nm()` | 纯解析 |
 | 价格公式与表头 | `persistence.price_book`、`persistence.headers` | 读取/解析，按表头定位 |
-| 目标仓库 | `features.listings.warehouse.resolve_warehouse(shop_id)` | 读取 WB，成功结果有进程内缓存 |
+| 目标仓库 | `features.products.warehouse.resolve_warehouse(shop_id)` | 读取 WB，成功结果有进程内缓存 |
 | WB 两阶段写入 | `integrations.wildberries.client.WBClient` | 远端操作，不在导入时调用 |
 | 飞书完整分页 | `integrations.feishu.tables.list_records()` | 调用 lark-cli，不能以单页代替去重全表 |
 | 原子状态写入 | `core.files.atomic_dump_json()`、`FileLock` | 本地写入；读改写需持锁覆盖整个事务 |
@@ -91,7 +74,7 @@ integrations 不依赖 features、cli、persistence；persistence 不依赖 feat
 
 **商品主数据**：用户价格表 → 本地快照/归属池 → mapping/review 人工判断 → merge/纠偏更新本地映射。远端快照只在独立 fetch 中更新。
 
-`fetch` 默认走 BCS 快照：`features.catalog.products.fetch_all` 先通过 `sync_shops_parallel` 同步 WB → BCS，再逐店 `bcs.fetch_shop_products(filter=BASE)` 读取缓存并原子保存，`--no-sync` 跳过同步直接读取上次结果。显式 `--source wb-openapi` 时改用 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存；`features.catalog.snapshot_open_api` 负责唯一莫斯科仓确认及旧快照字段转换，`products` 负责原子保存、统计和多店失败汇总。令牌仅在内存中使用，不写入快照或状态。新增接口继续沿用只读端点白名单，禁止将库存 POST 读取改成 PUT/DELETE，也不在失败后自动换区域、Cookie 或缓存。
+`catalog fetch` 默认走 BCS 快照：`features.catalog.products.fetch_all` 先通过 `sync_shops_parallel` 同步 WB → BCS，再逐店 `bcs.fetch_shop_products(filter=BASE)` 读取缓存并原子保存，`--no-sync` 跳过同步直接读取上次结果。显式 `--source wb-openapi` 时改用 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存；`features.catalog.snapshot_open_api` 负责唯一莫斯科仓确认及旧快照字段转换，`products` 负责原子保存、统计和多店失败汇总。令牌仅在内存中使用，不写入快照或状态。新增接口继续沿用只读端点白名单，禁止将库存 POST 读取改成 PUT/DELETE，也不在失败后自动换区域、Cookie 或缓存。
 
 显式 Open API 来源的全店采集使用有界线程池，默认4店并发，`--parallel` 可调整（1为串行）。BCS店铺密钥只在主线程读取一次，任务内各自创建并关闭 `WBOpenAPI` 会话，不共享限流计时或仓库 ID；店内分页、批次和重试规则不变。主线程按完成结果原子保存各店快照、输出进度并汇总状态，状态列表仍按原店铺顺序保存。单店失败及本地保存失败不取消其他店铺，最终返回非零；不把并发扩展到默认 BCS 流程。并发边界、跨店隔离及失败保护使用屏障同步的离线替身验证，不依赖真实接口或耗时对比。
 
@@ -103,9 +86,9 @@ BCS 重复商品由 [domain.bcs_products](../src/sellerops/domain/bcs_products.p
 
 `ProductDataResolver` 只在必要字段不足时惰性读取BCS密钥，使用本店独立 `WBOpenAPI(region='cn')` 会话：完整VC定向商品卡查询最多20页，精确匹配唯一非回收站卡，核对已知nmId，完整验证所需规格；价格/折扣仅在对应动作需要时按本店nmId读取。库存动作不依赖旧库存，尺寸动作不依赖旧尺寸，WB只改折扣不传价格。补齐结果及密钥仅驻留一轮内存；认证、限流及网络失败按店停止补齐，其他完整项仍可继续。计划函数保留可选resolver供CLI注入，直接库调用默认只使用本地数据。
 
-`load_state` 为本次操作补充快照中可确认中文归属的新VC，尊重既有纠偏与排除，不持久化归属变更。快照索引拒绝错店元信息和重复VC，错误店记录为阻止项；不将损坏文件视为空店。改价、尺寸的必要字段失败与库存/下架一样保留结构化 `blocked_items`，计入非零退出；[跳过报告](../src/sellerops/features/listings/skip_report.py) 将全部跳过明细写入CSV，不能只保留终端前30条。补齐及提交前后边界见 [离线测试](../tests/test_product_operation_data.py)。
+`load_state` 为本次操作补充快照中可确认中文归属的新VC，尊重既有纠偏与排除，不持久化归属变更。快照索引拒绝错店元信息和重复VC，错误店记录为阻止项；不将损坏文件视为空店。改价、尺寸的必要字段失败与库存/下架一样保留结构化 `blocked_items`，计入非零退出；[跳过报告](../src/sellerops/features/products/skip_report.py) 将全部跳过明细写入CSV，不能只保留终端前30条。补齐及提交前后边界见 [离线测试](../tests/test_product_operation_data.py)。
 
-`publish-openapi` 在建卡受理后允许插入有限的待办 VC 标识轮询，取得本店 nmID/chrtID 并核对本次生成条码后才提交图片和莫斯科库存。默认总等待1800秒、轮次间隔15秒，按完整 VC 使用 `cards(vendor_code=...)` 搜索并在本地精确匹配；分页、时间、轮数均有边界。超时返回非零并保留受理状态，可用同命令 `--resume` 续办；所有标识读取结束后才提交就绪项的媒体/库存，此后不回读。其他写命令不增加此例外。
+`listing publish-openapi` 在建卡受理后允许插入有限的待办 VC 标识轮询，取得本店 nmID/chrtID 并核对本次生成条码后才提交图片和莫斯科库存。默认总等待1800秒、轮次间隔15秒，按完整 VC 使用 `cards(vendor_code=...)` 搜索并在本地精确匹配；分页、时间、轮数均有边界。超时返回非零并保留受理状态，可用同命令 `--resume` 续办；所有标识读取结束后才提交就绪项的媒体/库存，此后不回读。其他写命令不增加此例外。
 
 **履约**：本地 VC→中文名→库存 SKU → 马帮匹配 → 预报与上传 → 有限轮询成功/失败/历史状态 → 成功部分交运 → 配置飞书时登记。失败与未完成的批次不绕过等待直接交运。
 
@@ -123,7 +106,7 @@ BCS [认证模块](../src/sellerops/integrations/bcs/auth.py) 处理密码登录
 ## 结构与依赖
 
 - `src/sellerops/cli/`：参数定义、命令绑定、退出码。每个命令的参数与处理器放在同一注册函数里；帮助信息不得读取凭证、联网或写文件。
-- `features/`：catalog 商品映射、listings 上架与库存、pricing 折扣促销、orders 履约、support 客服。按实际职责拆分，禁止仅为保留历史名字增加转发类、单例或模块。
+- `features/`：catalog 商品资料、products 商品变更、publishing 上架、marketing 营销、orders 履约、reports 报告、support 客服、system 登录与定时任务。按实际职责拆分，禁止仅为保留历史名字增加转发类、单例或模块。
 - `integrations/`：Wildberries、BCS、马帮、飞书 CLI、AI 的通信与会话实现。可依赖 settings、core、domain；不得依赖 features、cli、persistence。
 - `persistence/`：本地表格、快照、索引读写；不得依赖 features、cli、integrations。
 - `domain/`：纯模型与规则；`core/`：通用 I/O、异常和基础工具；`settings/`：路径与凭证。底层不得导入业务层。
@@ -145,7 +128,7 @@ BCS [认证模块](../src/sellerops/integrations/bcs/auth.py) 处理密码登录
 
 - 远端业务写入、定时任务注册默认预览，显式 `--apply` 才执行；不可逆删除要求 `--yes`。本地报表生成可直接执行。
 - WB 修改异步生效，无法通过即时查询判断最终结果；BCS 修改也异步，且需先同步再查询，耗时较长。因此不进行写后验证：写命令提交并记录接口结果后结束，不附加查询验证、同步、拉取或映射表合并。写命令不提供 `--verify`、`--no-verify` 或串联写后同步的 `--sync` 开关。
-- 更新快照和映射表使用独立 `fetch` / `merge` 命令，只有用户另行明确要求时才运行，AI 不得顺手补跑。离线开发测试可以正常执行，与真实平台写后验证无关。
+- 更新快照和映射表使用独立 `catalog fetch` / `catalog merge` 命令，只有用户另行明确要求时才运行，AI 不得顺手补跑。离线开发测试可以正常执行，与真实平台写后验证无关。
 - WB 提交过程必需的两阶段确认、明确要求的价格审核，以及马帮履约必需的预报状态轮询仍属于业务步骤；保留其超时、分页和限流边界。不得把业务确认误删为写后验证。
 - WB Open API 上架的有限新标识轮询也是必要业务步骤，仅适用于已受理且无未知写入状态的待办完整 VC；不得用它刷新快照、查询最终图片/库存结果，或自动重放建卡和未知提交。断点续办保留原图片/库存计划，不把新的来源、价格或库存参数混入 `--resume`。
 - 不把 HTTP 成功视为最终生效；保留平台任务 ID、失败项目和部分失败信息。写请求是否重试由幂等性决定，不能盲目重放。
@@ -174,7 +157,7 @@ def register(sub):
     bind(parser, "sellerops.features.catalog.inventory_summary", "run")
 ```
 
-复用已有仓储与模型，不另读一套固定列号的 Excel。稳定数据对象放 domain；原始接口 JSON 不必全转 dataclass。需要数据路径时，在导入会缓存路径的业务模块前调用 settings.paths.configure；不要通过改变当前工作目录定位数据。
+复用已有仓储与模型，不另读一套固定列号的 Excel。稳定数据对象放 domain；原始接口 JSON 不必全转 dataclass。命令入口按 --data-dir、SELLEROPS_DATA_DIR、根目录 data 的顺序构造 DataPaths。文件操作使用本次运行的路径；仓库缓存按该对象和店铺隔离。
 
 ## 测试、文档与发布
 

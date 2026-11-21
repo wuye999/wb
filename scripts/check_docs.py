@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from sellerops.cli.main import build_parser
+from sellerops.cli.main import build_parser, leaf_commands
 
 REQUIRED = (
     'CONFIGURATION.md', 'DATA.md', 'USAGE.md', 'AI_GUIDE.md',
@@ -47,7 +47,7 @@ def run() -> int:
     documents = [ROOT / 'README.md', ROOT / 'AGENTS.md', ROOT / 'data/README.md',
                  ROOT / '_scratch/README.md', *sorted((ROOT / 'docs').rglob('*.md'))]
     parser = build_parser()
-    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    commands = dict(leaf_commands(parser))
     links = examples = 0
     for document in documents:
         text = document.read_text(encoding='utf8')
@@ -101,7 +101,7 @@ def run() -> int:
     actual = (ROOT / 'docs/CLI.md').read_text(encoding='utf8')
     if actual != generator.render():
         errors.append('CLI.md is out of date; run python scripts/generate_cli_docs.py')
-    for name in sub.choices:
+    for name in commands:
         if f'\n## {name}\n' not in actual:
             errors.append('CLI.md missing command: ' + name)
 
@@ -169,7 +169,7 @@ def run() -> int:
         print('\n'.join(errors))
         return 1
     print(f'Documentation: {len(documents)} files, {links} local links, {examples} CLI examples, '
-          f'{len(sub.choices)} command references: OK')
+          f'{len(commands)} command references: OK')
     print(f'Source documentation: {source_examples} concrete command/import examples: OK')
     print('Examples were parsed only; no business handlers, credentials or platform APIs were used.')
     return 0

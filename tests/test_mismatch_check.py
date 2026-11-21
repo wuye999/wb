@@ -44,9 +44,9 @@ class MismatchCheckImagesTest(unittest.TestCase):
             sheet.append(["示例手机", "VC-external", 10, 10, external, 100123])
             book.save(workbook_path)
             book.close()
-            with patch.object(paths, "MAPPING_XLSX", str(workbook_path)), \
-                    patch.object(paths, "OUT_MISMATCH_HTML", str(html_path)), \
-                    patch.object(mapping, "shop_id", return_value=1):
+            with patch.object(paths.current, 'mapping_xlsx', str(workbook_path)), \
+                    patch.object(paths.current, 'out_mismatch_html', str(html_path)), \
+                    patch.object(mapping, "main_shop", return_value=1):
                 mismatch_check.run(cn="示例手机")
             page = html_path.read_text(encoding="utf-8")
 

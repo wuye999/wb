@@ -90,6 +90,8 @@ class ProductSnapshotRepository:
         for item in products:
             if not isinstance(item, dict):
                 continue
+            if item.get("shopId") is not None and str(item["shopId"]) != str(shop_id):
+                raise ValueError("商品行声明的店铺与快照不符")
             if item.get("trashedAt"):
                 continue
             vc = item.get("vendorCode") or item.get("goodsCode") or ""
@@ -107,18 +109,10 @@ class ProductSnapshotRepository:
         """扫描磁盘上所有店铺商品快照文件获取店铺 ID 列表"""
         from pathlib import Path
         ids = []
-        for p in sorted(Path(config.PRODUCTS_DIR).glob('shop*_products_all.json')):
+        for p in sorted(Path(config.current.products_dir).glob('shop*_products_all.json')):
             try:
                 sid = int(os.path.basename(p).replace("shop", "").replace("_products_all.json", ""))
                 ids.append(sid)
             except ValueError:
                 continue
         return ids
-
-
-# 模块级便捷访问导出
-ProductRepository = ProductSnapshotRepository
-load_shop_products = ProductSnapshotRepository.load_shop_products
-save_shop_products = ProductSnapshotRepository.save_shop_products
-load_shop_rows = ProductSnapshotRepository.load_shop_rows
-shop_ids_from_disk = ProductSnapshotRepository.shop_ids_from_disk

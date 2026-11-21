@@ -76,7 +76,7 @@ class TestExecutionContracts(unittest.TestCase):
     def test_manual_reply_requires_apply(self):
         from sellerops.cli.main import build_parser
         from sellerops.features.support import questions
-        args = build_parser().parse_args(['questions', '--reply', '你好', '--question-id', 'q1', '--no-detail'])
+        args = build_parser().parse_args(['support', 'questions', '--reply', '你好', '--question-id', 'q1', '--no-detail'])
         with patch.object(questions.wb_api, 'make_session'), \
                 patch.object(questions, 'fetch_questions', return_value=[{'id': 'q1'}]), \
                 patch.object(questions, 'reply') as send, contextlib.redirect_stdout(io.StringIO()):
@@ -101,12 +101,12 @@ class TestExecutionContracts(unittest.TestCase):
 
     def test_discount_partial_failure_returns_nonzero(self):
         from sellerops.cli.main import build_parser
-        from sellerops.features.pricing import discounts
+        from sellerops.features.products import discounts
         from types import SimpleNamespace
         fixture = SimpleNamespace(shops=[{'shopId': 1}])
         with patch.object(discounts.credentials, 'get', return_value=fixture), \
                 patch.object(discounts.Discounts, 'execute_plan', return_value={'total_failed': 1}):
-            self.assertEqual(discounts.run_cli(build_parser().parse_args(['discount', '--apply'])), 1)
+            self.assertEqual(discounts.run_cli(build_parser().parse_args(['product', 'discount', '--all-products', '--all-shops', '--threshold', '50', '--apply'])), 1)
 
     def test_ambiguous_bcs_write_is_not_retried(self):
         from sellerops.integrations.bcs.client import BCSClient
@@ -124,12 +124,12 @@ class TestExecutionContracts(unittest.TestCase):
         from sellerops.cli.binding import dispatch
         parser = build_parser()
         with patch('subprocess.run', side_effect=AssertionError('must preview')), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(dispatch(parser.parse_args(['daily', 'morning'])), 0)
-            self.assertEqual(dispatch(parser.parse_args(['schedule'])), 0)
-            self.assertEqual(dispatch(parser.parse_args(['schedule', '--remove'])), 0)
+            self.assertEqual(dispatch(parser.parse_args(['task', 'run', 'morning', '--all-shops'])), 0)
+            self.assertEqual(dispatch(parser.parse_args(['task', 'schedule'])), 0)
+            self.assertEqual(dispatch(parser.parse_args(['task', 'schedule', '--remove'])), 0)
 
     def test_daily_write_flag_propagates_and_shop_scope_is_kept(self):
-        from sellerops.automation.daily import build_steps
+        from sellerops.features.system.daily import build_steps
         for argv in build_steps('morning', apply=True, shops='1,2'):
             self.assertIn('--apply', argv)
             self.assertEqual(argv[-2:], ['--shops', '1,2'])
@@ -137,7 +137,7 @@ class TestExecutionContracts(unittest.TestCase):
             self.assertNotIn('--apply', argv)
 
     def test_task_definition_preserves_interpreter_data_and_working_directory(self):
-        from sellerops.automation.schedule import task_xml
+        from sellerops.features.system.schedule import task_xml
         from xml.etree import ElementTree as ET
         task = ET.fromstring(task_xml('09:00', 'morning'))
         ns = {'s': 'http://schemas.microsoft.com/windows/2004/02/mit/task'}
@@ -149,12 +149,12 @@ class TestExecutionContracts(unittest.TestCase):
 
     def test_paths_can_be_selected_without_creating_data(self):
         from sellerops.settings import paths
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         with tempfile.TemporaryDirectory() as directory:
             selected = Path(directory) / 'unused'
             try:
                 paths.configure(selected)
-                self.assertEqual(Path(paths.CREDENTIALS_JSON), selected / 'credentials.json')
+                self.assertEqual(Path(paths.current.credentials_json), selected / 'credentials.json')
                 self.assertFalse(paths.is_shop_archived(42))
                 self.assertFalse(selected.exists())
                 self.assertEqual(Path(paths.shop_mapping_xlsx(42, '../bad/name')).parent, selected / 'shops')
@@ -163,7 +163,7 @@ class TestExecutionContracts(unittest.TestCase):
 
     def test_credentials_cache_follows_selected_directory(self):
         from sellerops.settings import paths, credentials
-        previous = paths.DATA_DIR
+        previous = paths.current.data_dir
         with tempfile.TemporaryDirectory() as directory:
             p = Path(directory)
             (p / 'credentials.json').write_text(json.dumps({'bcs': {'token': 'fixture'}}), encoding='utf8')

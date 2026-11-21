@@ -24,19 +24,19 @@ STOCKS_V3_URL = ("https://marketplace.wildberries.ru/ns/marketplace-app/"
 MAX_CHUNK = 1000
 
 
-def get_stocks(session, store_id: Optional[int] = None, search: str = "",
+def get_stocks(session, store_id: int, search: str = "",
                max_pages: int = 200, verbose: bool = False) -> List[Dict[str, Any]]:
     """分页拉取库存条目 → list[dict]（含 article/chrtId/nmId/storeId/amount/name）。
 
     游标分页：data.next 非空则继续；超过 max_pages 强制终止防死循环。
-    store_id 传 None 时不带 stores 参数（账号级）；search 传 vendorCode 精确匹配（HAR3 实证）。
+    必须指定本店已确认的莫斯科仓；search 可按完整 vendorCode 查询。
     """
+    if type(store_id) is not int or store_id <= 0:
+        raise ValueError("必须提供已确认的本店莫斯科仓库 id")
     items: List[Dict[str, Any]] = []
     nxt, page, seen = "", 0, None
     while True:
-        params: Dict[str, Any] = {"order": "asc"}
-        if store_id is not None:
-            params["stores"] = store_id
+        params: Dict[str, Any] = {"order": "asc", "stores": store_id}
         if search:
             params["search"] = search
         if nxt:
@@ -71,6 +71,8 @@ def post_stocks(session, warehouse_id: int, chrt_items: List[Dict[str, int]],
     Returns:
         原始响应包裹 {"error": bool, "errorText": str, "data": ...}，由 service 层判 ok。
     """
+    if type(warehouse_id) is not int or warehouse_id <= 0:
+        raise ValueError("必须提供已确认的本店莫斯科仓库 id")
     body = {"data": [{"chrtId": int(it["chrtId"]), "amount": int(it["amount"])}
                      for it in chrt_items]}
     return wb_api.request_post(session, f"{STOCKS_V3_URL}/{int(warehouse_id)}",

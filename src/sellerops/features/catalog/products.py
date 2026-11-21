@@ -10,8 +10,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from sellerops.integrations.bcs import client as bcs
+from sellerops.integrations.bcs.client import OpenAPIShop, client as bcs
 from sellerops.settings import paths as config
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.core.files import atomic_dump_json
 from sellerops.core.files import safe_load_json
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
@@ -29,17 +30,8 @@ def is_empty_product(r):
     return not has_price and stock_values(r) is None and not (r.get('title') or '').strip()
 
 
-def shop_ids_from_disk():
-    """扫描 data/products/ 下 shop*_products_all.json → [店id]（离线，与 fetch 状态一致）
-
-    [薄转发] 唯一实现已下沉到 storage.product_repo.ProductSnapshotRepository。
-    """
-    from sellerops.persistence.snapshots import ProductSnapshotRepository
-    return ProductSnapshotRepository.shop_ids_from_disk()
-
-
 def fetch_shop(shop_id: int, out_file: str, no_sync: bool = False,
-               source: str = 'bcs', *, access: bcs.OpenAPIShop | None = None) -> tuple[list[dict], int]:
+               source: str = 'bcs', *, access: OpenAPIShop | None = None) -> tuple[list[dict], int]:
     """完整拉取并原子保存单店快照；默认走 BCS 快照，Open API 失败不回退 BCS。"""
     if type(shop_id) is not int or shop_id <= 0:
         raise ValueError('店铺 ID 必须为正整数')
@@ -50,7 +42,7 @@ def fetch_shop(shop_id: int, out_file: str, no_sync: bool = False,
         if no_sync:
             print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
         if access is None:
-            matches = [shop for shop in bcs.client.fetch_open_api_shops() if shop.id == shop_id]
+            matches = [shop for shop in bcs.fetch_open_api_shops() if shop.id == shop_id]
             if len(matches) != 1:
                 raise RuntimeError('BCS 未返回唯一目标店铺，无法读取该店 apiKey')
             access = matches[0]
@@ -132,7 +124,7 @@ def _safe_error(error: Exception) -> str:
     return f'快照采集失败（{type(error).__name__}）'
 
 
-def _fetch_open_api_shops(accesses: list[bcs.OpenAPIShop], parallel: int) -> tuple[list[dict], list[dict]]:
+def _fetch_open_api_shops(accesses: list[OpenAPIShop], parallel: int) -> tuple[list[dict], list[dict]]:
     """有界并发采集；主线程逐店保存快照并汇总，不共享会话或令牌。"""
     fetched, errors = [], []
     if not accesses:
@@ -167,7 +159,7 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
         raise ValueError('未知快照数据来源')
     if type(parallel) is not int or parallel < 1:
         raise ValueError('并发店铺数必须为正整数')
-    accesses = bcs.client.fetch_open_api_shops() if source == 'wb-openapi' else []
+    accesses = bcs.fetch_open_api_shops() if source == 'wb-openapi' else []
     shops = ([{'id': shop.id, 'name': shop.name} for shop in accesses]
              if source == 'wb-openapi' else bcs.fetch_shop_list())
     print(f"共 {len(shops)} 个店铺: {[(s['id'], s['name']) for s in shops]}")
@@ -197,30 +189,29 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
                 status['errors'].append({'id': s['id'], 'name': s['name'], 'error': reason})
             if i < len(shops) - 1:
                 time.sleep(1)
-    os.makedirs(config.STATE_DIR, exist_ok=True)
-    atomic_dump_json(config.STATUS_JSON, status, indent=2, use_lock=True)
-    print(f"\n状态已保存：{config.STATUS_JSON}")
+    os.makedirs(config.current.state_dir, exist_ok=True)
+    atomic_dump_json(config.current.status_json, status, indent=2, use_lock=True)
+    print(f"\n状态已保存：{config.current.status_json}")
     if status["errors"]:
         raise RuntimeError(f"{len(status['errors'])} 个店铺拉取失败，失败店铺保留原快照；"
-                           f"请处理后重新拉取，再执行 merge。详情：{config.STATUS_JSON}")
+                           f"请处理后重新拉取，再执行 merge。详情：{config.current.status_json}")
+
+
+def snapshot_shops() -> list[dict]:
+    """店铺清单优先取同步状态，旧数据可从快照文件名推导。"""
+    meta = safe_load_json(config.current.status_json, default={})
+    return meta.get("shops") or [{"id": sid} for sid in ProductSnapshotRepository.shop_ids_from_disk()]
 
 
 def load_all_shops():
-    """读全部店铺 JSON（存在即加载），返回 {shop_id: rows} 与店铺元信息。
-    无任何店铺数据时抛 RuntimeError 提示先 fetch。"""
+    """读取本地在架商品和店铺清单。"""
     shops_data = {}
-    shops_meta = []
-    meta = safe_load_json(config.STATUS_JSON, default={})
-    shops_meta = meta.get("shops", []) or []
-
-    if not shops_meta:  # 状态文件缺失 → 扫描磁盘推断
-        for sid in shop_ids_from_disk():
-            shops_meta.append({"id": sid, "name": f"shop{sid}"})
+    shops_meta = [{"name": f"shop{shop['id']}", **shop} for shop in snapshot_shops()]
     for s in shops_meta:
         p = config.shop_json_path(s["id"])
         if os.path.exists(p):
             d = safe_load_json(p, default={})
             shops_data[s["id"]] = [r for r in d.get("rows", []) if not r.get("trashedAt")]
     if not shops_data:
-        raise RuntimeError("未找到店铺 JSON，请先运行 fetch（sellerops fetch）")
+        raise RuntimeError("未找到店铺 JSON，请先运行 fetch（sellerops catalog fetch）")
     return shops_data, shops_meta

@@ -6,7 +6,6 @@ import os
 import re
 from typing import Dict, List, Any, Tuple, Callable
 from sellerops.settings import paths as config
-from sellerops.core.files import atomic_dump_json
 from sellerops.core.files import safe_load_json
 from sellerops.persistence.price_book import CachedDpReader
 from sellerops.persistence.price_book import floor_price
@@ -35,34 +34,18 @@ class MappingRepository:
     @staticmethod
     def load_vc_known() -> Dict[str, Any]:
         """加载全局已知 VC 归属池 (vc_known.json)"""
-        return safe_load_json(config.VC_KNOWN_JSON, default={})
-
-    @staticmethod
-    def save_vc_known(data: Dict[str, Any]):
-        """原子保存全局已知 VC 归属池"""
-        atomic_dump_json(config.VC_KNOWN_JSON, data, indent=2, use_lock=True)
+        return safe_load_json(config.current.vc_known_json, default={})
 
     @staticmethod
     def load_vc_override() -> Dict[str, Any]:
         """加载全局 VC 纠偏改名清单 (vc_override.json)"""
-        return safe_load_json(config.VC_OVERRIDE_JSON, default={})
-
-    @staticmethod
-    def save_vc_override(data: Dict[str, Any]):
-        """原子保存全局 VC 纠偏改名清单"""
-        atomic_dump_json(config.VC_OVERRIDE_JSON, data, indent=2, use_lock=True)
+        return safe_load_json(config.current.vc_override_json, default={})
 
     @staticmethod
     def load_vc_excluded() -> Dict[str, Any]:
 
         """加载全局排除清单 (vc_excluded.json)"""
-        return safe_load_json(config.VC_EXCLUDED_JSON, default={})
-
-    @staticmethod
-    def save_vc_excluded(data: Dict[str, Any]):
-        """原子保存全局排除清单"""
-        atomic_dump_json(config.VC_EXCLUDED_JSON, data, indent=2, use_lock=True)
-
+        return safe_load_json(config.current.vc_excluded_json, default={})
 
     @staticmethod
     def _resolve_dp(formula, ws, row_idx=None):
@@ -74,7 +57,7 @@ class MappingRepository:
         return resolve_formula(formula, ws)
 
     @classmethod
-    def load_price_book(cls) -> List[Dict[str, Any]]:
+    def load_price_book(cls, *, require_price=True) -> List[Dict[str, Any]]:
         """商品价格表 → [{idx, sku, cn, dp, minimum_price, img, floor, prefix, stock_sku}]
 
         列全部**按表头名定位**（不依赖列位，用户可随意插列/挪列）：
@@ -83,17 +66,18 @@ class MappingRepository:
         公式不可解析时回退 Excel 缓存值，仍取不到则 dp/floor=None 并打印 [警告]（不再静默空价）。
         缺「实际售价」列 → HeaderError（fail-fast，避免改价/上架全部跳过）。
         `floor` = math.floor(实际售价)，即店铺整数价口径。"""
-        if not os.path.exists(config.PRICE_BOOK_XLSX):
+        if not os.path.exists(config.current.price_book_xlsx):
             return []
         import openpyxl
-        wb = openpyxl.load_workbook(config.PRICE_BOOK_XLSX, data_only=False)
+        wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=False)
         try:
             ws = wb["Sheet1"]
-            cols = price_book_columns(ws, config.PRICE_BOOK_XLSX)
+            required = ("sku", "cn", "dp") if require_price else ("cn",)
+            cols = price_book_columns(ws, config.current.price_book_xlsx, required=required)
             i_img, i_sku, i_cn = cols["img"], cols["sku"], cols["cn"]
             i_dp, i_prefix, i_stock = cols["dp"], cols["prefix"], cols["stock_sku"]
-            cache = CachedDpReader(config.PRICE_BOOK_XLSX, col=i_dp + 1)
-            minimum_cache = CachedDpReader(config.PRICE_BOOK_XLSX, col=(cols["price"] or 0) + 1)
+            cache = CachedDpReader(config.current.price_book_xlsx, col=(i_dp or 0) + 1)
+            minimum_cache = CachedDpReader(config.current.price_book_xlsx, col=(cols["price"] or 0) + 1)
             items: List[Dict[str, Any]] = []
             by_cache: List[Tuple] = []
             missing: List[Tuple] = []
@@ -139,21 +123,21 @@ class MappingRepository:
                 minimum_cache.close()
         finally:
             wb.close()
-        warn_unresolved(config.PRICE_BOOK_XLSX, by_cache, missing)
+        warn_unresolved(config.current.price_book_xlsx, by_cache, missing)
         return items
 
     @staticmethod
-    def load_prefix_map() -> Dict[str, Any]:
+    def load_prefix_map(*, strict: bool = False) -> Dict[str, Any]:
         """从商品价格表加载 4 位前缀码映射（列按表头名定位）。"""
 
-        if not os.path.exists(config.PRICE_BOOK_XLSX):
+        if not os.path.exists(config.current.price_book_xlsx):
             return {}
         wb = None
         try:
             import openpyxl
-            wb = openpyxl.load_workbook(config.PRICE_BOOK_XLSX, data_only=True)
+            wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=True)
             ws = wb["Sheet1"]
-            cols = price_book_columns(ws, config.PRICE_BOOK_XLSX)
+            cols = price_book_columns(ws, config.current.price_book_xlsx)
             i_sku, i_cn, i_dp, i_prefix = cols["sku"], cols["cn"], cols["dp"], cols["prefix"]
             pmap = {}
             for row in ws.iter_rows(min_row=2):
@@ -172,6 +156,8 @@ class MappingRepository:
         except HeaderError:
             raise                       # 表头错误必须冒泡，不能被下面的宽 except 吞掉
         except Exception:
+            if strict:
+                raise
             return {}
         finally:
             if wb is not None:
@@ -187,14 +173,14 @@ class MappingRepository:
                 "by_cn": {cn: {"sku", "cn", "dp", "dim", "price", "prefix", "stock_sku"}}
             }
         """
-        if not os.path.exists(config.PRICE_BOOK_XLSX):
+        if not os.path.exists(config.current.price_book_xlsx):
             return {"by_prefix": {}, "by_cn": {}}
         wb = None
         try:
             import openpyxl
-            wb = openpyxl.load_workbook(config.PRICE_BOOK_XLSX, data_only=True)
+            wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=True)
             ws = wb["Sheet1"]
-            cols = price_book_columns(ws, config.PRICE_BOOK_XLSX)
+            cols = price_book_columns(ws, config.current.price_book_xlsx)
             i_sku, i_cn, i_dp = cols["sku"], cols["cn"], cols["dp"]
             i_dim, i_price = cols["dim"], cols["price"]
             i_prefix, i_stock = cols["prefix"], cols["stock_sku"]
@@ -235,7 +221,7 @@ class MappingRepository:
 
 
     @classmethod
-    def build_vc_resolver(cls) -> Tuple[Callable[[str, str], str], Dict[str, str]]:
+    def build_vc_resolver(cls, prefix_map=None) -> Tuple[Callable[[str, str], str], Dict[str, str]]:
         """构建毫秒级商品中文名反查解析器。
 
         解析优先级:
@@ -260,7 +246,8 @@ class MappingRepository:
                 vc_cn[vc.upper()] = info["cn"]
 
         # 3. 前缀映射兜底
-        prefix_map = cls.load_prefix_map()
+        if prefix_map is None:
+            prefix_map = cls.load_prefix_map()
         prefix_re = re.compile(config.VC_PREFIX_RE)
 
         def resolve_cn(vc: str, default_title: str = "") -> str:
@@ -284,15 +271,17 @@ class MappingRepository:
         返回 (state, excluded)：state={vc:{cn,dp,shop_price,discount,nmId,...}}；excluded={vc:原因}。
         映射表不存在 → 空。自动应用 vc_override.json 纠偏记录（优先级最高）。"""
         state, excluded = {}, {}
-        if not os.path.exists(config.MAPPING_XLSX):
+        if not os.path.exists(config.current.mapping_xlsx):
             return state, excluded
         import sys
         import time
         retries = 3
+        overrides = cls.load_vc_override()
         for attempt in range(retries):
+            wb = None
             try:
                 import openpyxl
-                wb = openpyxl.load_workbook(config.MAPPING_XLSX, data_only=True)
+                wb = openpyxl.load_workbook(config.current.mapping_xlsx, data_only=True)
                 if "映射总表" in wb.sheetnames:
                     ws = wb["映射总表"]
                     headers = [str(c.value or "").strip() for c in ws[1]]
@@ -302,9 +291,9 @@ class MappingRepository:
                         # merge→calc_new_vcs→load_known_vcs 会经过这里，硬失败会阻塞自愈）
                         i_dp = find_col(headers, COL_ACTUAL_PRICE)
                         if i_dp is None:
-                            warn_missing("价格映射表·映射总表", config.MAPPING_XLSX, headers,
+                            warn_missing("价格映射表·映射总表", config.current.mapping_xlsx, headers,
                                          COL_ACTUAL_PRICE,
-                                         hint="dp 全部为空；请运行 sellerops merge 重建映射表")
+                                         hint="dp 全部为空；请运行 sellerops catalog merge 重建映射表")
                         i_sp = find_col_re(headers, COL_SHOP_CNY_RE)
                         i_disc = find_col(headers, "折扣%")
                         i_nm = find_col(headers, COL_NM)
@@ -315,6 +304,8 @@ class MappingRepository:
                         for r in ws.iter_rows(min_row=2, values_only=True):
                             vc = r[i_vc]
                             if vc:
+                                if vc in state and state[vc]["cn"] != (r[i_cn] or "") and not overrides.get(vc, {}).get("cn"):
+                                    raise ValueError(f"完整 VC {vc} 有冲突归属：{state[vc]['cn']} / {r[i_cn]}")
                                 state[vc] = {
                                     "cn": r[i_cn] or "",
                                     "dp": r[i_dp] if i_dp is not None else None,
@@ -333,31 +324,19 @@ class MappingRepository:
                             excluded[r[0]] = r[1] or "非货盘商品（人工排除）"
                 wb.close()
                 break
+            except ValueError:
+                raise
             except (PermissionError, OSError) as e:
                 if attempt == retries - 1:
-                    print(f"[警告] 读取映射表 {config.MAPPING_XLSX} 失败（文件可能被占用）: {e}", file=sys.stderr)
+                    raise ValueError(f"无法完整读取映射表 {config.current.mapping_xlsx}") from e
                 time.sleep(0.1 * (attempt + 1))
-            except Exception as e:
-                print(f"[警告] 读取映射表 {config.MAPPING_XLSX} 发生异常: {e}", file=sys.stderr)
-                break
+            finally:
+                if wb is not None:
+                    wb.close()
 
         # 自动应用全局纠偏更正（高优先级）
-        overrides = cls.load_vc_override()
         for vc, ov in overrides.items():
             if vc in state and isinstance(ov, dict) and ov.get("cn"):
                 state[vc]["cn"] = ov["cn"]
 
         return state, excluded
-
-
-# 模块级便捷访问导出
-load_price_book = MappingRepository.load_price_book
-load_prefix_map = MappingRepository.load_prefix_map
-load_vc_known = MappingRepository.load_vc_known
-save_vc_known = MappingRepository.save_vc_known
-load_vc_override = MappingRepository.load_vc_override
-save_vc_override = MappingRepository.save_vc_override
-load_vc_excluded = MappingRepository.load_vc_excluded
-save_vc_excluded = MappingRepository.save_vc_excluded
-load_mapping_state = MappingRepository.load_mapping_state
-build_vc_resolver = MappingRepository.build_vc_resolver

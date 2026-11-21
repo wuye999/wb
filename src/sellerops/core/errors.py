@@ -56,14 +56,6 @@ class NetworkError(SellerOpsError):
     pass
 
 
-class BusinessValidationError(ValidationError):
-    """业务逻辑校验不通过"""
-    pass
-
-
 class DataConsistencyError(SellerOpsError):
     """数据一致性冲突或损坏"""
     pass
-
-
-# 别名兼容

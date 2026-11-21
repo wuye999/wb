@@ -39,11 +39,6 @@ CSV_FIELDS = [
 ]
 
 
-# 本地反查真源（nmId → 供应商代码 / 中文名）已下沉到 storage.nm_resolver，
-# 保留 _LocalResolver 旧名以兼容本模块既有引用（行为与迁移前一致）。
-_LocalResolver = NmResolver
-
-
 def _extract_products(detail: Optional[Dict[str, Any]]) -> List[ComplaintProduct]:
     """从投诉详情提取关联商品（遍历全部 brands[].products[]）"""
     if not detail:
@@ -140,7 +135,7 @@ def run(args: Any) -> int:
     failures = 0
     for shop, sid in pairs:
         name = shop["shopName"]
-        resolver = _LocalResolver(sid, with_cn=with_cn)
+        resolver = NmResolver(sid, with_cn=with_cn)
         stats: Dict[str, Any] = {}
         try:
             session = wb_api.make_session(shop, cred.root_version)
@@ -238,9 +233,9 @@ def run(args: Any) -> int:
         print(",".join(sorted(all_vcs)))
 
     if rows:
-        os.makedirs(config.LOG_DIR, exist_ok=True)
+        os.makedirs(config.current.log_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(config.LOG_DIR, f"投诉单_{ts}.csv")
+        path = os.path.join(config.current.log_dir, f"投诉单_{ts}.csv")
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             w.writeheader()

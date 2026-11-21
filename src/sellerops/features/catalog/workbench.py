@@ -240,7 +240,7 @@ refresh();
     html = html.replace("CONFLICT_PLACEHOLDER", "\n".join(conflict_html) if conflict_html else '<div class="hint">无</div>')
     html = html.replace("SINGLE_PLACEHOLDER", "\n".join(single_html) if single_html else '<div class="hint">无</div>')
     html = html.replace("DATA_JSON", json.dumps(data_json, ensure_ascii=False))
-    _write(config.OUT_MAPPING_HTML, html)
+    _write(config.current.out_mapping_html, html)
     return len(conflict_groups), len(single_groups), len(todo)
 
 
@@ -313,7 +313,7 @@ button.ghost{background:#fff;color:#3498db}
   <b>本工作台一次覆盖 [[SHOPSN]] 店全部在架商品（按 vendorCode 去重），核对一次、合并一次即可。</b><br>
   上半区（一~三）：每个商品价格表商品勾选<b>实际对应的店铺候选</b>（看图片/俄文名/价格，可多选=同款多变体）；待核查可手工填 vendorCode。<br>
   下半区（四）：[[SHOPSN]] 店在架但<b>价格未匹配到任何商品价格表商品</b>的 vendorCode——请为每个选择归属商品价格表商品（补录）或 🚫 非货盘（排除）。<br>
-  核对完点「导出核对结果 JSON」→ 内容保存为 <b>统一审核.json</b> 发我 → <code>python -m sellerops merge 统一审核.json</code> 即完成。
+  核对完点「导出核对结果 JSON」→ 内容保存为 <b>统一审核.json</b> 发我 → <code>python -m sellerops catalog merge 统一审核.json</code> 即完成。
 </div>
 <h3>一、待核查（价格带无候选，可手工填 vendorCode）</h3>
 TODO_PLACEHOLDER
@@ -407,7 +407,7 @@ refresh();
                   [{"idx": b["idx"], "sku": b["sku"], "cn": b["cn"], "dp": b["dp"]} for b in todo],
     }
     html = html.replace("DATA_JSON", json.dumps(data_json, ensure_ascii=False))
-    _write(config.OUT_MAPPING_HTML, html)
+    _write(config.current.out_mapping_html, html)
     return len(conflict_groups), len(single_groups), len(todo), len(normal_items)
 
 

@@ -15,7 +15,7 @@ from sellerops.integrations.mabang.session import (
 
 
 def auth_lock() -> FileLock:
-    return FileLock(Path(paths.STATE_DIR) / 'mabang_auth', timeout=240)
+    return FileLock(Path(paths.current.state_dir) / 'mabang_auth', timeout=240)
 
 
 def copy_auth(target: dict, source: dict) -> None:
@@ -27,7 +27,7 @@ def copy_auth(target: dict, source: dict) -> None:
 
 
 def reload_auth(target: dict) -> None:
-    data = safe_load_json(paths.CREDENTIALS_JSON, default={}).get('mabang') or {}
+    data = safe_load_json(paths.current.credentials_json, default={}).get('mabang') or {}
     old_user = (target.get('login') or {}).get('username')
     new_user = (data.get('login') or {}).get('username')
     if old_user and new_user and old_user != new_user:
@@ -46,8 +46,8 @@ def snapshot(candidate: dict, session: requests.Session) -> dict:
 
 
 def commit_auth(target: dict, candidate: dict, *, expected: str | None = None) -> bool:
-    with FileLock(paths.CREDENTIALS_JSON):
-        data = safe_load_json(paths.CREDENTIALS_JSON, default={})
+    with FileLock(paths.current.credentials_json):
+        data = safe_load_json(paths.current.credentials_json, default={})
         current = data.setdefault('mabang', {})
         old_user = (current.get('login') or {}).get('username')
         new_user = (candidate.get('login') or {}).get('username')
@@ -57,7 +57,7 @@ def commit_auth(target: dict, candidate: dict, *, expected: str | None = None) -
             copy_auth(target, current)
             return False
         copy_auth(current, candidate)
-        atomic_dump_json(paths.CREDENTIALS_JSON, data, use_lock=False)
+        atomic_dump_json(paths.current.credentials_json, data, use_lock=False)
         copy_auth(target, current)
     credentials.reload()
     return True
