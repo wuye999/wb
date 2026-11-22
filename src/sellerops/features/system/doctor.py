@@ -21,7 +21,7 @@ def check_book(path: Path) -> dict:
     from openpyxl import load_workbook
     from sellerops.persistence.price_book import BOSS_COLUMNS
 
-    required = [BOSS_COLUMNS[k] for k in ('sku', 'cn', 'dp')]
+    required = [BOSS_COLUMNS[k] for k in ('cn', 'dp')]
     if not path.is_file():
         return {'status': 'missing', 'missing_headers': required}
     workbook = load_workbook(path, read_only=True, data_only=True)

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
+from sellerops.core.json_values import json_value
 from sellerops.settings import paths
 
 
@@ -22,7 +23,8 @@ CREATE TABLE IF NOT EXISTS products (
     stock_sku TEXT,
     book_mtime_ns INTEGER NOT NULL,
     book_size INTEGER NOT NULL,
-    refreshed_at TEXT NOT NULL
+    refreshed_at TEXT NOT NULL,
+    name_unique INTEGER
 );
 CREATE TABLE IF NOT EXISTS vc_map (
     vc TEXT PRIMARY KEY NOT NULL,
@@ -82,7 +84,7 @@ def now() -> str:
 
 
 def dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), default=str)
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), default=json_value)
 
 
 def legacy_exists() -> bool:
@@ -161,7 +163,7 @@ def vc_entries(connection: sqlite3.Connection | None = None) -> dict[str, dict]:
 
 
 def resolve_vc(vc: str, entries: dict[str, dict] | None = None) -> dict:
-    """按完整 VC 返回归属及当前商品资料；未知或主表已移除的商品待确认。"""
+    """按完整 VC 返回归属；sku 列关联主表商品键（卖家 SKU 或唯一中文名）。"""
     if entries is None:
         with connect() as connection:
             row = connection.execute(_VC_QUERY + ' WHERE m.vc = ?', (vc,)).fetchone()

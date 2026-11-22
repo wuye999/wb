@@ -122,9 +122,10 @@ def _write_owners(connection: Connection, products: list[dict], sheet: dict, exc
     by_name = defaultdict(list)
     by_sku = {}
     for row in products:
-        if row['sku'] and row['cn']:
+        if row['cn']:
             by_name[row['cn']].append(row)
-            by_sku[row['sku']] = row
+            if row['sku']:
+                by_sku[row['sku']] = row
     fixed, pending = [], []
     filled_sku = 0
     for vc in sorted(set(known) | set(overrides) | set(excluded) | set(sheet) | set(restrictions)):
@@ -145,7 +146,7 @@ def _write_owners(connection: Connection, products: list[dict], sheet: dict, exc
         if len(names) == 1:
             cn = next(iter(names))
             candidates = by_name[cn]
-            if len(candidates) == 1:
+            if len(candidates) == 1 and candidates[0]['sku']:
                 product = candidates[0]
             elif (not override_name and prior_sku in by_sku
                   and (not candidates or by_sku[prior_sku]['cn'] == cn)):
@@ -153,7 +154,7 @@ def _write_owners(connection: Connection, products: list[dict], sheet: dict, exc
         elif not names and prior_sku in by_sku:
             product = by_sku[prior_sku]
         if product is None:
-            reason = '旧归属中文名冲突' if len(names) > 1 else '找不到唯一卖家 SKU' if names else '原本未归属'
+            reason = '旧归属中文名冲突' if len(names) > 1 else '找不到唯一商品归属' if names else '原本未归属'
             pending.append({'vc': vc, 'oldSku': prior_sku, 'names': sorted(names), 'reason': reason})
             db.set_vc(connection, vc, 'pending', note='；'.join(filter(None, (reason, block_note))), **flags)
             continue
@@ -254,7 +255,7 @@ def migrate() -> dict:
             "SELECT count(*) FROM vc_map WHERE status = 'mapped' AND source = 'prefix'").fetchone()[0]
         result['listingRestrictions'] = connection.execute(
             "SELECT count(*) FROM vc_map WHERE block_listing IS NOT NULL").fetchone()[0]
-        result['productsWithoutSku'] = sum(not row['sku'] for row in products)
+        result['productsWithoutSku'] = sum(not row['seller_sku'] for row in products)
         return result
 
 

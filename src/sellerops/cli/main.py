@@ -10,6 +10,7 @@ from threading import Lock
 from sellerops.cli import catalog, listing, login, map as vc_map, marketing, ops, order, product, report, shop, support, task
 from sellerops.cli.binding import bind, dispatch
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError, ValidationError
+from sellerops.core.json_values import json_value
 from sellerops.core.utils import ensure_utf8_stdout
 from sellerops.settings import paths
 
@@ -77,13 +78,20 @@ def execute(args):
 _command_lock = Lock()
 
 
-def parse_command(argv: list[str]):
-    # Select paths before registering arguments whose defaults are data-file paths.
+def extract_data_dir(argv: list[str]) -> tuple[str | None, list[str]]:
+    """Extract the global data directory wherever it appears before a literal --."""
     location_parser = CommandParser(add_help=False)
     location_parser.add_argument('--data-dir')
-    location, _ = location_parser.parse_known_args(argv)
-    paths.configure(location.data_dir)
-    args = build_parser().parse_args(argv)
+    location, remaining = location_parser.parse_known_args(argv)
+    return location.data_dir, remaining
+
+
+def parse_command(argv: list[str]):
+    # Select paths before registering arguments whose defaults are data-file paths.
+    data_dir, remaining = extract_data_dir(argv)
+    paths.configure(data_dir)
+    args = build_parser().parse_args(remaining)
+    args.data_dir = data_dir
     args.output, args.summary, args.next_action, args.plan_id = {}, '', '', None
     return args
 
@@ -92,7 +100,7 @@ def print_reply(code: int, *, summary: str, plan_id=None, data=None, next_action
     reply = {'ok': code == 0, 'summary': summary, 'plan_id': plan_id,
              'data': data if data is not None else {}, 'next_action': next_action}
     try:
-        output = json.dumps(reply, ensure_ascii=False, allow_nan=False)
+        output = json.dumps(reply, ensure_ascii=False, allow_nan=False, default=json_value)
     except (TypeError, ValueError):
         code = 1
         reply.update(ok=False, summary='结果含无法输出的字段', data={},

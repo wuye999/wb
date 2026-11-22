@@ -17,6 +17,7 @@ import operator
 import os
 import re
 import sys
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from sellerops.persistence.headers import COL_ACTUAL_PRICE
@@ -53,7 +54,7 @@ BOSS_COLUMNS = {
 GROUP_SHIPPING_MARKER = "在发货群发货"
 
 
-def price_book_columns(ws, path: str, required=("sku", "cn", "dp")):
+def price_book_columns(ws, path: str, required=("cn", "dp")):
     """解析商品价格表表头 → {逻辑字段: 列索引}；required 缺列抛 HeaderError。
 
     列位可任意调整（用户会插列/挪列），一律按表头名定位。
@@ -203,7 +204,7 @@ def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, 
     wb = openpyxl.load_workbook(path, data_only=False)
     try:
         ws = wb["Sheet1"]
-        required = ("sku", "cn", "dp") if require_price else ("cn",)
+        required = ("cn", "dp") if require_price else ("cn",)
         cols = price_book_columns(ws, path, required=required)
         i_img, i_sku, i_cn = cols["img"], cols["sku"], cols["cn"]
         i_dp, i_prefix, i_stock = cols["dp"], cols["prefix"], cols["stock_sku"]
@@ -261,4 +262,11 @@ def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, 
     finally:
         wb.close()
     warn_unresolved(path, by_cache, missing)
+    names = Counter(row['cn'] for row in items if row['cn'])
+    seller_skus = {row['sku'] for row in items if row['sku']}
+    for row in items:
+        row['seller_sku'] = row['sku']
+        row['name_unique'] = names[row['cn']] == 1
+        if not row['sku'] and row['name_unique'] and row['cn'] not in seller_skus:
+            row['sku'] = row['cn']
     return items

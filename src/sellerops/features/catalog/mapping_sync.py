@@ -166,9 +166,9 @@ def _apply_review(rows: list[dict], *, reason: str = '', rename: bool = False) -
             name = str(row.get('bossCn') or row.get('cn') or '').strip()
             matches = [product for product in products_by_sku.values()
                        if (sku and product['sku'] == sku and (not name or product['cn'] == name))
-                       or (not sku and name and product['cn'] == name)]
+                       or (not sku and name and product['cn'] == name and product['name_unique'])]
             if len(matches) != 1:
-                raise ValueError(f'{vc} 在商品价格表中找不到唯一卖家 SKU')
+                raise ValueError(f'{vc} 在商品价格表中找不到唯一商品，请核对卖家 SKU 或产品中文名')
             update = ('mapped', matches[0]['sku'], row.get('reason') or reason)
         else:
             raise ValueError(f'{vc} 的审核动作无效')

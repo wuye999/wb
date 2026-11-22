@@ -72,7 +72,7 @@ def update_mappings(rows: list[dict]) -> list[str]:
     MappingRepository.load_price_book(require_price=False, fresh=True)
     with db.connect(write=True) as connection:
         entries = db.vc_entries(connection)
-        products = list(connection.execute('SELECT sku, cn, prefix FROM products'))
+        products = list(connection.execute('SELECT sku, cn, prefix, name_unique FROM products'))
         shops = {row[0] for row in connection.execute('SELECT shop_id FROM shops')}
         seen = set()
         for row in rows:
@@ -86,11 +86,13 @@ def update_mappings(rows: list[dict]) -> list[str]:
             note = str(row.get('note') or '')
             action = row.get('action')
             if action in ('map', 'rebind'):
-                value = str(row.get('sku') or row.get('cn') or '').strip()
-                sku_matches = [p for p in products if p['sku'] == value]
-                matches = sku_matches or [p for p in products if p['cn'] == value]
+                sku = str(row.get('sku') or '').strip()
+                name = str(row.get('cn') or '').strip()
+                matches = [p for p in products if p['sku'] == sku and (not name or p['cn'] == name)]
+                if not matches and not (sku and name):
+                    matches = [p for p in products if p['cn'] == (name or sku) and p['name_unique']]
                 if len(matches) != 1:
-                    raise ValueError(f'{vc} 找不到唯一卖家 SKU，请按 SKU 确认')
+                    raise ValueError(f'{vc} 找不到唯一商品，请按卖家 SKU 或唯一的产品中文名确认')
                 source = row.get('source', 'manual')
                 if source not in ('manual', 'ai', 'prefix'):
                     raise ValueError(f'{vc} 确认来源无效')

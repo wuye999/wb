@@ -71,6 +71,24 @@ class TestStep2(unittest.TestCase):
         self.assertEqual(reply['data']['online'], {'bcs': 'authentication_failed'})
         online.assert_called_once_with()
 
+    def test_price_preview_keeps_skip_csv_and_plan_in_json(self):
+        write_book([('', '唯一中文名', 38, 'AAAA', '')])
+        snapshot(1, [row(A, 101, 1001)])
+        snapshot(2, [])
+        rc, _, _ = self.confirm({'vc': A, 'action': 'map', 'cn': '唯一中文名'})
+        self.assertEqual(rc, 0)
+        rc, reply, err = self.cli('ops', 'price', '--shops', '1,2', '--name', '唯一中文名', '--price', '55')
+        self.assertEqual(rc, 0, (reply, err))
+        self.assertTrue(reply['ok'])
+        self.assertEqual(reply['plan_id'], 'P001')
+        self.assertEqual(reply['data']['scope'][0]['items'][0]['cn'], '唯一中文名')
+        skip_csv = reply['data']['scope'][0]['skip_report']
+        self.assertTrue(Path(skip_csv).is_file())
+        self.assertEqual(reply['data']['result']['artifacts']['skips_csv'], skip_csv)
+        with db.connect() as connection:
+            plan = connection.execute('SELECT payload_json FROM plans WHERE plan_id=?', (reply['plan_id'],)).fetchone()
+        self.assertEqual(json.loads(plan['payload_json'])['scope'], reply['data']['scope'])
+
     def test_sync_alias_reports_missing_and_archive_restore_preserves_rows(self):
         self.populate()
         before = document(2)

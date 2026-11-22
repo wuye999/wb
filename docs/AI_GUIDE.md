@@ -34,7 +34,7 @@ python run.py apply --plan P018 --json
 
 `sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，`missing_shops` 提示运营核对。经确认才运行 `shop archive`，需要恢复时运行 `shop restore`。
 
-`map candidates` 的前缀、价格和同源结果供确认。按明确完整 VC 串联候选与目标卖家 SKU，使用 `map batch-set`，或者使用 `map export-pending` 及 `map import-excel` 完成同样的确认。原归属 HTML 工作台在新人实测通过前可继续使用。
+`map candidates` 的前缀、价格和同源结果供确认。按完整 VC 和卖家 SKU 或唯一产品中文名确认归属，使用 `map batch-set`，或者使用 `map export-pending` 及 `map import-excel` 完成同样的确认。原归属 HTML 工作台在新人实测通过前可继续使用。
 
 商品写入先预览固定计划单。展示店铺、商品、规格、目标值与受阻明细，运营确认后提交单号。提交中和结果未知的单号停止重发；已受理上架需要补图片或库存时，用 `ops publish-openapi --resume` 确认原记录并生成续办单。其他业务命令按各自流程执行。
 
@@ -59,7 +59,7 @@ python run.py apply --plan P018 --json
 | 只设折扣 | `product discount --target D` | 折扣 |
 | 设置库存 | `product stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
 
-上表中的命令均需指定店铺范围与商品范围。完整中文名选中归属明确的全部同名链接。点名 SKU 时用 `--sku`，无法确认唯一 SKU 的链接列入阻止。库存必须显式给数量，归零用 `--amount 0`。改价、改库存、设折扣默认走 WB。回收站清理需要归零时先通过 BCS 提交本店莫斯科仓规格，再通过 WB 删除已确认的卡。默认 BCS 上架将初始库存随建卡或推送提交。
+上表中的命令均需指定店铺范围与商品范围。完整中文名选中归属明确的全部同名链接。点名 SKU 时用 `--sku`，无法确认归属的链接列入阻止。库存必须显式给数量，归零用 `--amount 0`。改价、改库存、设折扣默认走 WB。回收站清理需要归零时先通过 BCS 提交本店莫斯科仓规格，再通过 WB 删除已确认的卡。默认 BCS 上架将初始库存随建卡或推送提交。
 
 只设指定商品折扣用 `--target`。有 `--threshold` 或 `--below` 时，以每次提交或预览之前取得的本店当前折扣判断。全店折扣分页未完成的店铺不得提交。计划任务支持 `--shops`，内置每日折扣走 WB 并传 `--target 50`。
 
@@ -69,7 +69,7 @@ python run.py apply --plan P018 --json
 
 已配置自动续期的马帮命令可在预览或执行时更新本地会话。遇到验证码或短信验证时停止，提示用户发起 `login mabang`，在官网完成验证并关窗。可用 `--resume` 续办，或在关窗恢复失败时用 `--keep-open`。不读取或输出账号密码，不把认证失败当成无订单、模板缺失或普通逐单失败。已发出的业务写请求不因续期重放。见 [马帮配置](CONFIGURATION.md#马帮mabang)。
 
-普通上架先确认卖家 SKU，再展示完整 VC 和编码来源。手工指定完整 VC 时保留原码，批量接口无法透传时用 `ops create-cards`。无唯一登记前缀时请运营指定前缀，或明确同意使用 `--random-prefix`，再生成计划单。
+普通上架先确认卖家 SKU 或唯一产品中文名，再展示完整 VC 和编码来源。手工指定完整 VC 时保留原码，批量接口无法透传时用 `ops create-cards`。无唯一登记前缀时请运营指定前缀，或明确同意使用 `--random-prefix`，再生成计划单。
 
 复制上架使用 `listing replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分；默认库存999，显式0不替换。默认商品清单与查重读取本地快照和提交记录，缺快照不当作空店；快照滞后时结合已受理的下架/上架回执处理范围。回收站已有卡不会自动恢复，需先区分恢复与新建；不把 BCS 缓存命中直接视为实时状态。整批详情和目标莫斯科仓必须在首个写请求前准备好。
 

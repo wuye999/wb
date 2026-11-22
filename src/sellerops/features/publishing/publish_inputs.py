@@ -79,7 +79,7 @@ def load_publish_catalog() -> Dict[str, Dict[str, Any]]:
     wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=True)
     try:
         ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.active
-        cols = price_book_columns(ws, config.current.price_book_xlsx, required=("cn", "sku", "dp"))
+        cols = price_book_columns(ws, config.current.price_book_xlsx)
         i_cn, i_sku, i_dp = cols["cn"], cols["sku"], cols["dp"]
         i_dim, i_prefix = cols["dim"], cols["prefix"]
         boss, duplicates = {}, set()

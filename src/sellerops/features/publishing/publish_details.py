@@ -112,9 +112,10 @@ def resolve_publish_details(
     if len(confirmed) > 1:
         return None, '指定的卖家 SKU 与已有归属冲突，请先核对源商品与目标 VC'
     sku = next(iter(confirmed), None)
-    matches = [row for row in price_book if (row['sku'] == sku if sku else row['cn'] == item.cn.strip())]
+    matches = [row for row in price_book if (row['sku'] == sku if sku else
+               row['cn'] == item.cn.strip() and row.get('name_unique', True))]
     if len(matches) != 1:
-        return None, '无法确认唯一卖家 SKU，请核对《商品价格表.xlsx》并通过 --sku 指定'
+        return None, '无法确认唯一商品，请提供 --sku 或使用唯一中文名 --cn'
     product = matches[0]
     sku, cn = product['sku'], product['cn']
 
@@ -138,7 +139,7 @@ def resolve_publish_details(
                 generated[key] = random_prefix()
             prefix, vc_source = generated[key], 'random'
         else:
-            return None, f'卖家 SKU {sku} 没有唯一登记前缀，请指定 --prefix 或明确选择 --random-prefix'
+            return None, f'商品 {cn} 没有唯一登记前缀，请指定 --prefix 或明确选择 --random-prefix'
     prefix = f'BCS-{prefix}'
     vc = vc or f'{prefix}-{item.extra.get("source_tail") or nm_id}'
     if (mapping_state.get(vc) or {}).get('sku') not in (None, sku):

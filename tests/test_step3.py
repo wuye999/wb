@@ -5,6 +5,8 @@ import json
 import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import PropertyMock, patch
 
@@ -261,6 +263,28 @@ class Step3Tests(unittest.TestCase):
                     self.assertTrue(any('--json' in action.option_strings for action in parser._actions))
                     self.assertIn('usage:', self.cli(*name.split(), '--help')[1]['data']['help'])
         self.assertEqual(families, FAMILIES)
+
+    def test_data_directory_is_global_even_after_subcommands(self):
+        for args in (['--data-dir', str(self.data), 'doctor'],
+                     ['doctor', '--data-dir', str(self.data)],
+                     ['map', '--data-dir', str(self.data), 'candidates'],
+                     ['shop', 'list', f'--data-dir={self.data}']):
+            with self.subTest(args=args), redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+                self.assertEqual(main([*args, '--json']), 0)
+                self.assertTrue(json.loads(out.getvalue())['ok'])
+                self.assertEqual(Path(paths.current.data_dir), self.data)
+
+    def test_json_represents_dates_sets_decimal_and_paths_without_losing_fields(self):
+        def fixture(args):
+            args.output = {'folder': self.data, 'when': datetime(2026, 11, 23, 1, tzinfo=timezone.utc),
+                           'ids': {7, 3}, 'price': Decimal('12.3400')}
+            return 0
+
+        with patch.object(doctor, 'run', side_effect=fixture):
+            code, reply, _ = self.cli('doctor')
+        self.assertEqual(code, 0)
+        self.assertEqual(reply['data'], {'folder': str(self.data), 'when': '2026-11-23T01:00:00+00:00',
+                                         'ids': [3, 7], 'price': '12.3400'})
 
     def test_json_failure_paths_include_partial_sync_and_missing_plan(self):
         with patch.object(products.bcs, 'fetch_shop_list', return_value=[{'id': 1, 'name': '店1'}, {'id': 2, 'name': '店2'}]), \

@@ -7,24 +7,31 @@ from sellerops.persistence.price_book import floor_price, read_price_book
 from sellerops.settings import paths
 
 
+def _has_name_uniqueness(connection) -> bool:
+    return any(row['name'] == 'name_unique' for row in connection.execute('PRAGMA table_info(products)'))
+
+
 def save_products(connection, rows: list[dict], stat) -> None:
     stamp = db.now()
     products = [row for row in rows if row['sku'] and row['cn']]
     if len({row['sku'] for row in products}) != len(products):
         raise ValueError('商品价格表存在重复卖家 SKU，请核对后再运行')
+    if not _has_name_uniqueness(connection):
+        connection.execute('ALTER TABLE products ADD COLUMN name_unique INTEGER')
     connection.execute('DELETE FROM products')
-    connection.executemany('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+    connection.executemany('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
         (r['sku'], r['cn'], r['dp'], r['minimum_price'], r['img'],
          None if r['dimensions'] is None else str(r['dimensions']), r['prefix'], r['stock_sku'],
-         stat.st_mtime_ns, stat.st_size, stamp) for r in products
+         stat.st_mtime_ns, stat.st_size, stamp, r['name_unique']) for r in products
     ])
 
 
 def _cached_products(connection) -> list[dict]:
+    uniqueness = 'name_unique' if _has_name_uniqueness(connection) else 'COUNT(*) OVER (PARTITION BY cn) = 1'
     return [{**dict(row), 'floor': floor_price(row['dp']), 'idx': index}
-            for index, row in enumerate(connection.execute("""
+            for index, row in enumerate(connection.execute(f"""
                 SELECT sku, cn, actual_price AS dp, minimum_price, image_url AS img,
-                       dimensions, prefix, stock_sku FROM products ORDER BY rowid
+                       dimensions, prefix, stock_sku, {uniqueness} AS name_unique FROM products ORDER BY rowid
             """), start=1)]
 
 
@@ -39,7 +46,8 @@ class MappingRepository:
             with db.connect() as connection:
                 cached = connection.execute(
                     'SELECT book_mtime_ns, book_size FROM products LIMIT 1').fetchone()
-                if cached is not None and tuple(cached) == (stat.st_mtime_ns, stat.st_size):
+                if (cached is not None and tuple(cached) == (stat.st_mtime_ns, stat.st_size)
+                        and _has_name_uniqueness(connection)):
                     # 即使 mtime 未变，提交前也检查用户是否能读取当前工作簿。
                     if fresh:
                         with book.open('rb'):

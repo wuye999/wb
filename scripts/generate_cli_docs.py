@@ -11,7 +11,7 @@ from sellerops.cli.main import build_parser, leaf_commands
 def render() -> str:
     """按参数元数据生成参考，输出与终端宽度、argparse 换行版本无关。"""
     lines = ["# 命令参考", "", "由实际命令定义生成。使用方法见 [操作流程](USAGE.md)。",
-             "全局参数 `--data-dir` 放在命令组之前。业务提交使用 `--apply`。", ""]
+             "全局参数 `--data-dir` 可放在子命令前或后。商品计划单用 `apply --plan` 提交。", ""]
     parser = build_parser()
     for name, command in leaf_commands(parser):
         module, function = command.get_default("handler")

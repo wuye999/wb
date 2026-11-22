@@ -78,5 +78,6 @@ def resolve_filters(args, state: dict, boss: list) -> tuple[list[str], str]:
 
     vcs = [vc for vc, row in state.items() if row.get('status') != 'excluded'
            and (extract_vc_prefix(vc) == prefix.upper() if prefix else matches(row))]
-    labels = [f"{row['cn']}({row['sku']})" for row in boss if matches(row)]
+    labels = [row['cn'] if row['cn'] == row['sku'] else f"{row['cn']}({row['sku']})"
+              for row in boss if matches(row)]
     return sorted(vcs), ' / '.join(labels) or f'商品筛选 {sku or name or contains or prefix}'

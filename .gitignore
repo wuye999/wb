@@ -27,7 +27,7 @@ browser_profiles/
 .workbuddy/
 .trae/
 
-# 防止凭证、环境变量和抓包误放到数据目录之外
+# 防止凭证、数据库、环境变量和抓包误放到数据目录之外
 .env
 .env.*
 !.env.example
@@ -35,6 +35,8 @@ browser_profiles/
 !.env.template
 credentials.json
 credentials_*.json
+sellerops.db
+sellerops.db-*
 *.har
 *.har.gz
 *.pem

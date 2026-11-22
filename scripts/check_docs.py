@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from sellerops.cli.main import build_parser, leaf_commands
+from sellerops.cli.main import build_parser, extract_data_dir, leaf_commands
 
 REQUIRED = (
     'CONFIGURATION.md', 'DATA.md', 'USAGE.md', 'AI_GUIDE.md',
@@ -87,7 +87,8 @@ def run() -> int:
                     argv = shlex.split(command.group(1) or '', comments=True)
                     with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                         try:
-                            parser.parse_args(argv)
+                            _, arguments = extract_data_dir(argv)
+                            parser.parse_args(arguments)
                         except SystemExit as exc:
                             if exc.code != 0:
                                 raise ValueError('arguments were rejected')
