@@ -42,3 +42,4 @@ credentials_*.json
 
 # 根目录迁移期间的私有暂存区
 /.root-migration-*/
+/exports/

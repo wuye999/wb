@@ -9,6 +9,7 @@ from sellerops.features.publishing.publish_details import resolve_publish_detail
 from sellerops.features.publishing.publish_inputs import parse_cn_stock, stock_for
 from sellerops.features.publishing.publish_records import load_records
 from sellerops.features.publishing.publish_report import print_publish_preview
+from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.settings import paths as config
 
@@ -67,6 +68,7 @@ def build_replication_items(
     price_multiplier: float = 1.0,
     stock: int = 999,
     records: Optional[Dict[str, Any]] = None,
+    restrictions: Optional[dict] = None,
 ) -> Tuple[List[PublishItem], List[Dict[str, str]]]:
     """零网络生成复制候选；源店和目标店独立，缺快照时明确失败。"""
     sources = set(source_shops if source_shops is not None else shops_data)
@@ -84,6 +86,7 @@ def build_replication_items(
     for vc in sorted(coverage):
         missing = sorted(targets - all_coverage.get(vc, set()))
         missing = [sid for sid in missing if str(sid) not in ((records or {}).get(vc) or {})]
+        missing = [sid for sid in missing if not db.listing_blocked(vc, sid, restrictions or {})]
         if not missing:
             continue
         row_map = source_rows[vc]
@@ -93,14 +96,16 @@ def build_replication_items(
         else:
             src_sid, row = pick_source(vc, source_rows, config.MAIN_SHOP)
         mapped = mapping_state.get(vc) or {}
-        nm = str(mapped.get("nmId") or "").strip()
+        nm = str((row or {}).get("nmId") or "").strip()
         try:
             if row is None:
                 raise ValueError("源店无价格")
             if not nm.isdigit() or int(nm) <= 0:
-                raise ValueError("映射表缺有效WB商品码，不从VC尾段猜测")
+                raise ValueError("\u6e90\u5e97\u5feb\u7167\u7f3a\u6709\u6548 WB \u5546\u54c1\u7801")
             cn = mapped.get("cn") or ""
-            price = replication_price(row, cn, price_book, price_source, price_multiplier)
+            sku = mapped.get('sku')
+            price_rows = [product for product in price_book if product.get('sku') == sku] if sku else price_book
+            price = replication_price(row, cn, price_rows, price_source, price_multiplier)
             items.append(PublishItem(
                 nm_id=int(nm), vendor_code=vc, price=price, cn=cn, stock=stock,
                 target_shops=missing, title=row.get("title") or "",
@@ -115,7 +120,8 @@ def build_replication_items(
 def run(args: Any) -> int:
     shops_data, _ = catalog_products.load_all_shops()
     state, _ = MappingRepository.load_mapping_state()
-    book = MappingRepository.load_price_book()
+    book = MappingRepository.load_price_book(
+        fresh=getattr(args, 'apply', False) and getattr(args, 'price_source', '') == 'minimum')
     parse_ids = lambda raw: [int(s.strip()) for s in raw.split(",") if s.strip()] if raw else None
     items, blocked = build_replication_items(
         shops_data, state, book,
@@ -123,7 +129,7 @@ def run(args: Any) -> int:
         target_shops=parse_ids(getattr(args, "shops", "")),
         price_source=getattr(args, "price_source", "snapshot"),
         price_multiplier=getattr(args, "price_multiplier", 1.0),
-        stock=getattr(args, "stock", 999), records=load_records(),
+        stock=getattr(args, "stock", 999), records=load_records(), restrictions=db.vc_entries(),
     )
     wanted = {s.strip() for s in (getattr(args, "vc", "") or "").split(",") if s.strip()}
     prefix = (getattr(args, "prefix", "") or "").upper()

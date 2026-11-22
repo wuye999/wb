@@ -11,10 +11,11 @@ from sellerops.features.products.prices import submit_wb_prices
 from sellerops.features.products.product_data import ProductDataResolver
 from sellerops.features.products.results import ProductResult
 from sellerops.integrations.wildberries.client import WBClient
+from sellerops.persistence import db
 from sellerops.settings import credentials, paths as config
 
 
-def _storewide_plan(sid: int, client: WBClient, args, resolve_cn) -> dict:
+def _storewide_plan(sid: int, client: WBClient, args, resolve_cn, entries: dict) -> dict:
     target, limit = args.target, args.limit
     threshold = args.threshold if args.threshold is not None else -1
     below = getattr(args, "below", -1)
@@ -36,7 +37,9 @@ def _storewide_plan(sid: int, client: WBClient, args, resolve_cn) -> dict:
         item = {"nmID": row["nmID"], "vc": vc, "cn": resolve_cn(vc, ""),
                 "old_discount": row["discount"], "discount": target,
                 "currencyIsoCode": row.get("isoCode4217") or "CNY"}
-        if row["discount"] == target:
+        if db.resolve_vc(vc, entries)['status'] == 'excluded':
+            plan['skipped_items'].append({**item, 'reason': '\u8be5\u5546\u54c1\u5df2\u6807\u8bb0\u4e3a\u975e\u8d27\u76d8'})
+        elif row["discount"] == target:
             plan["skipped_items"].append({**item, "reason": "平台当前折扣已等于目标"})
         else:
             plan["items"].append(item)
@@ -82,6 +85,7 @@ def _run(args, result: ProductResult) -> None:
         print(f"商品范围：{desc}，目标折扣 {args.target}%")
     else:
         resolve_cn, _ = MappingRepository.build_vc_resolver()
+        entries = db.vc_entries()
     plans, shop_config = [], {}
     with ProductDataResolver() as resolver:
         for sid in shops:
@@ -95,7 +99,7 @@ def _run(args, result: ProductResult) -> None:
                     plan = targeted_discount_plan(sid, vcs, shop_rows[sid], state, args, resolver)
                 else:
                     client = WBClient(shop, cred.root_version)
-                    plan = _storewide_plan(sid, client, args, resolve_cn)
+                    plan = _storewide_plan(sid, client, args, resolve_cn, entries)
             except Exception as error:
                 reason = str(error) if isinstance(error, AuthenticationError) else f"本店折扣范围读取不完整：{error}"
                 plan = {"shopId": sid, "items": [], "blocked_items": [], "skipped_items": [], "range_error": reason}

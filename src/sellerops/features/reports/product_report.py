@@ -273,7 +273,7 @@ def collect(*, shops: str = '', order_days: int = 30, feedback_days: int = 0,
         except Exception as exc:
             _failure(report, '本地提交记录', '无法读取提交记录，未提交状态不能确认', exc)
     try:
-        resolve_cn, _ = MappingRepository.build_vc_resolver()
+        resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True)
     except Exception as exc:
         resolve_cn = lambda vc, fallback='': fallback
         _failure(report, '中文名映射', '本地中文名映射不可用', exc)

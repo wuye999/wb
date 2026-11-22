@@ -1,4 +1,6 @@
 """BCS 缺规格、缺库存和异常响应不产生假零值或空店快照；完全离线。"""
+
+from catalog_fixture import document, map_vcs, snapshot, write_book
 from contextlib import ExitStack, redirect_stdout, redirect_stderr
 import io
 import json
@@ -126,14 +128,16 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
                 patch.object(products.bcs, 'sync_shop') as sync:
             self.assertEqual(self.run_cli('catalog', 'fetch', '--source', 'bcs', '--shop-id', '1', '--no-sync'), 0)
             sync.assert_not_called()
-        doc = json.loads(Path(paths.shop_json_path(1)).read_text(encoding='utf8'))
+        doc = document(1)
         self.assertEqual(doc['rows'], raw)
         self.assertEqual(doc['warnings'], {'missingSpecProducts': 1, 'missingStockProducts': 1,
                                           'missingPriceProducts': 1})
         self.assertIn('规格不完整的商品=1', self.output.getvalue())
-        single_shop.build_single_shop_xlsx(1, '店1', rows=doc['rows'],
-            registry=({VC: {'cn': '未知规格'}, 'REAL-ZERO': {'cn': '真实零'}}, {}, {}), boss=[], prefix_map={})
-        book = load_workbook(paths.shop_mapping_xlsx(1, '店1'), read_only=True, data_only=True)
+        write_book([('S1', '\u672a\u77e5\u89c4\u683c', 10, '', ''), ('S2', '\u771f\u5b9e\u96f6', 10, '', '')])
+        map_vcs({VC: 'S1', 'REAL-ZERO': 'S2'})
+        report = self.data / 'report.xlsx'
+        single_shop.build_single_shop_xlsx(1, report)
+        book = load_workbook(report, read_only=True, data_only=True)
         try:
             data = list(book['在架映射明细'].iter_rows(values_only=True))
             headers = list(data[0])
@@ -145,13 +149,12 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
             book.close()
 
     def test_invalid_bcs_response_cannot_clear_existing_snapshot(self):
-        path = Path(paths.shop_json_path(1))
-        atomic_dump_json(path, {'shopId': 1, 'rows': [row([size()])]})
-        before = path.read_bytes()
+        snapshot(1, [row([size()])])
+        before = document(1)
         for response in ({'code': 200}, {'code': 200, 'rows': [], 'total': 1}):
             with patch.object(products.bcs, 'get', return_value=response):
                 self.assertEqual(self.run_cli('catalog', 'fetch', '--source', 'bcs', '--shop-id', '1', '--no-sync'), 1)
-            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(document(1), before)
 
     def test_total_table_never_borrows_other_shop_stock_for_unknown_primary(self):
         for raw_primary in (row([dict(size(price=12), stockList=[])]), row([size(None)])):
@@ -162,8 +165,8 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
                              2: {'stock': 0, 'price': 20, 'nmId': 202}}}
             build_xlsx([], [{'cn': '商品', 'dp': 10, 'vendorCodes': [VC]}], bcs_rows,
                        shop_coverage=coverage, shops_meta=[{'id': 1, 'name': '主店'}, {'id': 2, 'name': '其他店'}],
-                       main_sid=1, load_boss_fn=lambda: [])
-            book = load_workbook(paths.current.mapping_xlsx, read_only=True, data_only=True)
+                       main_sid=1, load_boss_fn=lambda: [], out_path=self.data / 'report.xlsx')
+            book = load_workbook(self.data / 'report.xlsx', read_only=True, data_only=True)
             try:
                 rows = list(book['映射总表'].iter_rows(values_only=True))
                 headers = list(rows[0])
@@ -179,9 +182,9 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
 
     def test_price_union_handles_absent_status_and_excludes_spec_placeholder_zero(self):
         from sellerops.features.catalog import mapping, mapping_check
-        good = dict(row([size()]), vendorCode='REAL-ZERO')
-        fraction = dict(row([size(price=.5)]), vendorCode='FRACTION')
-        atomic_dump_json(paths.shop_json_path(1), {'shopId': 1, 'rows': [row([size(None)]), good, fraction]})
+        good = dict(row([size()]), vendorCode='REAL-ZERO', nmId=102)
+        fraction = dict(row([size(price=.5)]), vendorCode='FRACTION', nmId=103)
+        snapshot(1, [row([size(None)]), good, fraction])
         with patch.object(mapping, 'main_shop', return_value=1):
             union, shops = mapping.load_shops_union()
             main_rows = mapping.load_bcs()

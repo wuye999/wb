@@ -18,7 +18,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--main-shop-only", action="store_true", help="只使用主店候选商品")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_mapping')
 
-    p = sub.add_parser('import-mapping', help="导入核对结果 → 生成映射表（旧格式）")
+    p = sub.add_parser('import-mapping', help="导入核对结果 → 保存归属（旧格式）")
     p.add_argument("file", help="核对结果 JSON")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_mapping_import')
 
@@ -36,18 +36,18 @@ def register(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser('review', help="多店铺待审核工作台")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_review')
 
-    p = sub.add_parser('merge', help="增量合并审核 → 映射表（file 可选）")
+    p = sub.add_parser('merge', help="保存审核确认的归属（file 可选）")
     p.add_argument("file", nargs="?", default=None, help="本次审核结果 JSON（可选）")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_merge')
 
-    p = sub.add_parser('rename', help="纠偏/修改商品中文名（自动级联更新全部店铺单表与聚合总表）")
+    p = sub.add_parser('rename', help="纠偏/修改商品中文名（按卖家 SKU 重绑）")
     p.add_argument("--vc", default="", help="要改名的 vendorCode")
     p.add_argument("--cn", default="", help="新产品中文名")
     p.add_argument("--reason", default="人工纠偏", help="改名原因说明")
     p.add_argument("--file", default="", help="批量改名 JSON 文件路径（含 [{'vc': ..., 'cn': ...}]）")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_mapping_rename')
 
-    p = sub.add_parser('shop-mappings', help="刷新/生成各店铺独立映射表（data/shops/shop_*.xlsx）")
+    p = sub.add_parser('shop-mappings', help="刷新/生成各店铺独立映射表（exports/shop_*.xlsx）")
     p.add_argument("--shop-id", type=int, default=None, help="指定店铺ID（默认全部活跃店铺）")
-    p.add_argument("--force", action="store_true", help="强制全量重新构建")
+    p.add_argument("--force", action="store_true", help="兼容旧参数；导出总是读取当前库")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_shops_mapping')

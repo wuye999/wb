@@ -24,7 +24,9 @@ from sellerops.settings import paths as config
 from sellerops.settings import credentials
 from sellerops.integrations.wildberries import advertising as ads_api
 from sellerops.integrations.wildberries import client as wb_api
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.persistence.product_index import MISS_LABEL
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.persistence.product_index import NmResolver
 
 SHOP_SLEEP = 0.5           # 店间间隔（串行）
@@ -102,7 +104,7 @@ def shop_adverted(shop: Dict[str, Any], root_version: str = "",
     name = shop.get("shopName") or f"shop_{sid}"
     resolver = NmResolver(sid, with_cn=with_cn)
     session = wb_api.make_session(shop, root_version)
-    no_snapshot = not os.path.exists(config.shop_json_path(sid))
+    no_snapshot = not ProductSnapshotRepository.exists(sid)
 
     campaigns, total = ads_api.fetch_adverts(
         session, shop, statuses=statuses, page_size=page_size,
@@ -159,7 +161,7 @@ def process_shop(shop: Dict[str, Any], root_version: str, opt: Dict[str, Any],
     rows: List[Dict[str, Any]] = agg["rows"]
 
     if adv["no_snapshot"]:
-        print(f"  [警告] 本店无 BCS 快照（{config.shop_json_path(sid)} 不存在）→ "
+        print(f"  [警告] 本店无 BCS 快照（SQLite）→ "
               f"供应商代码/中文名仅靠映射总表兜底；需最新请先跑 python -m sellerops catalog fetch")
 
     agg["campaigns"] += adv["campaign_count"]

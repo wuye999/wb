@@ -136,20 +136,17 @@ class TestProductScreening(unittest.TestCase):
 
 
 class TestReportCatalog(unittest.TestCase):
-    def test_only_name_and_vc_headers_are_needed_and_inputs_are_not_changed(self):
+    def test_reads_name_and_vc_with_missing_optional_price_and_never_reads_export(self):
+        from catalog_fixture import map_vcs, write_book
+        self.addCleanup(paths.configure, paths.current.data_dir)
         with tempfile.TemporaryDirectory() as directory:
-            price, mapping = Path(directory) / 'price.xlsx', Path(directory) / 'mapping.xlsx'
-            for target, sheet, values in [(price, 'Sheet1', [['无关列', '产品中文名'], [0, '新商品']]),
-                                          (mapping, '映射总表', [['vendorCode', '产品中文名'], [OTHER, '新商品']])]:
-                wb = Workbook()
-                wb.active.title = sheet
-                for row in values:
-                    wb.active.append(row)
-                wb.save(target)
-                wb.close()
-            before = price.read_bytes(), mapping.read_bytes()
-            with patch.object(paths.current, 'price_book_xlsx', str(price)), patch.object(paths.current, 'mapping_xlsx', str(mapping)):
-                result = load_report_catalog()
-            self.assertEqual(result.price_names, {'新商品'})
-            self.assertEqual(result.mapped_names, {OTHER: '新商品'})
-            self.assertEqual(before, (price.read_bytes(), mapping.read_bytes()))
+            paths.configure(directory)
+            write_book([('S1', '\u65b0\u5546\u54c1')], ('\u5356\u5bb6SKU', '\u4ea7\u54c1\u4e2d\u6587\u540d'))
+            map_vcs({OTHER: 'S1'})
+            price = Path(paths.current.price_book_xlsx)
+            before = price.read_bytes()
+            Path(paths.current.mapping_xlsx).write_bytes(b'not a workbook')
+            result = load_report_catalog()
+            self.assertEqual(result.price_names, {'\u65b0\u5546\u54c1'})
+            self.assertEqual(result.mapped_names, {OTHER: '\u65b0\u5546\u54c1'})
+            self.assertEqual(price.read_bytes(), before)

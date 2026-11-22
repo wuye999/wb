@@ -9,12 +9,13 @@ from typing import Any, Dict, List, Optional
 from sellerops.core import utils as common
 from sellerops.domain.models import PublishItem
 from sellerops.integrations.bcs.client import client as bcs
+from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.features.products.warehouse import resolve_warehouse
 from sellerops.features.publishing.publish_inputs import (
     DEFAULT_STOCK, load_publish_file, parse_cn_stock, parse_dims_str, stock_for,
 )
-from sellerops.features.publishing.publish_records import load_records, save_records, record_publish_success
+from sellerops.features.publishing.publish_records import load_records, publish_keys, submit_once
 from sellerops.features.publishing.publish_details import resolve_publish_details
 from sellerops.features.publishing.publish_report import create_publish_csv, print_publish_preview
 from sellerops.features.publishing.product_details import fetch_card_json, price_book_packages
@@ -56,6 +57,7 @@ def execute_publish(
         warehouses = {sid: wh for sid in sorted(target_ids)
                       if (wh := resolve_warehouse(sid)) is not None}
     records = load_records()
+    restrictions = db.vc_entries()
     existing = {}
     if check_exists:
         for sid in sorted(target_ids):
@@ -77,8 +79,9 @@ def execute_publish(
         final_targets = []
         for sid in targets:
             pair = (it.vendor_code, sid)
-            submitted = str(sid) in (records.get(it.vendor_code) or {})
-            if pair in seen or (check_exists and (submitted or it.vendor_code in existing[sid])):
+            submitted = any(str(sid) in records.get(key, {}) for key in publish_keys(it))
+            if (pair in seen or submitted or db.listing_blocked(it.vendor_code, sid, restrictions)
+                    or (check_exists and it.vendor_code in existing[sid])):
                 continue
             final_targets.append(sid)
             seen.add(pair)
@@ -123,7 +126,8 @@ def execute_publish(
             accepted = False
             response = None
             try:
-                response = bcs.post(f"{bcs.base_url}/system/wbCollection/wb/new", payload)
+                response = submit_once([it], targets,
+                                       lambda: bcs.post(f"{bcs.base_url}/system/wbCollection/wb/new", payload))
                 accepted = response.get("code") == 200
                 msg = "" if accepted else (response.get("msg") or f"code={response.get('code')}")
             except Exception as exc:
@@ -132,9 +136,6 @@ def execute_publish(
             result["ok" if accepted else "fail"] += 1
             result["details"].append({"vc": it.vendor_code, "targets": targets,
                                       "ok": accepted, "msg": msg, "response": response})
-            if accepted:
-                record_publish_success(records, it, targets)
-                save_records(records)
             stock = stock_for(it.cn, overrides, default=it.stock)
             if row_formatter:
                 row = row_formatter({"time": now, "item": it, "targets_str": target_str,
@@ -299,7 +300,8 @@ def run(args: Any) -> int:
     resolved_items: List[PublishItem] = []
     resolution_failures = 0
     for it in shelve_items:
-        resolved, err = resolve_publish_details(it, mapping_state, pmap, boss_pkg, card_cache)
+        resolved, err = resolve_publish_details(it, mapping_state, pmap, boss_pkg, card_cache,
+                                                fresh_price=getattr(args, 'apply', False))
         if err or not resolved:
             resolution_failures += 1
             print(f"[跳过] 商品 {it.nm_id}: {err}")

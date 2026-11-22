@@ -24,8 +24,9 @@ SHOP = OpenAPIShop(9352, '袁州1', 'synthetic')
 SECOND = OpenAPIShop(9353, '袁州2', 'synthetic')
 SUPPLY = 'WB-GI-1234567'
 PRODUCT = '黑丝假发'
-CATALOG = ({'BCS-HSJF-A': PRODUCT, 'BCS-HSJF-B': PRODUCT, 'BCS-OTHER-A': '其他商品'},
-           {PRODUCT: {GROUP_SHIPPING_MARKER}, '其他商品': {'SKU123'}})
+CATALOG = ({'BCS-HSJF-A': PRODUCT, 'BCS-HSJF-B': PRODUCT, 'BCS-OTHER-A': '\u5176\u4ed6\u5546\u54c1'},
+           {'BCS-HSJF-A': GROUP_SHIPPING_MARKER, 'BCS-HSJF-B': GROUP_SHIPPING_MARKER,
+            'BCS-OTHER-A': 'other-stock'})
 
 
 def order(order_id, **changes):
@@ -155,7 +156,7 @@ class FBSWorkflowTests(unittest.TestCase):
     def test_mabang_routes_the_marker_out_of_sku_matching(self):
         item = {'shop': '袁州1', 'kind': '1', 'vc': 'BCS-HSJF-A', 'matched_sku': ''}
         with patch.object(matching, 'parse_order', return_value=item):
-            row = matching.classify([{}], CATALOG[0], {PRODUCT: GROUP_SHIPPING_MARKER},
+            row = matching.classify([{}], CATALOG[0], {'BCS-HSJF-A': GROUP_SHIPPING_MARKER},
                                     {'袁州1': '袁州1(9352)'})[0]
         self.assertEqual((row['status'], row['expected_sku']), ('GROUP_SHIPPING', ''))
 

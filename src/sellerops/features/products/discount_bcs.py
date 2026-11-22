@@ -9,13 +9,15 @@ from sellerops.features.products.execution import submit_bcs_prices
 from sellerops.features.products.plans import report_plan_skips
 from sellerops.features.products.results import ProductResult
 from sellerops.integrations.bcs.client import client as bcs
+from sellerops.persistence import db
 from sellerops.settings import paths as config
 
 SHOP_SLEEP = 0.6
 FILTER_DEF = "BASE"
 
 
-def collect(shop_id: int, threshold: int, limit: int, target: int) -> dict:
+def collect(shop_id: int, threshold: int, limit: int, target: int, *, entries: dict | None = None) -> dict:
+    entries = entries if entries is not None else db.vc_entries()
     rows = bcs.fetch_shop_products(shop_id, FILTER_DEF)
     plan = {"shopId": shop_id, "items": [], "blocked_items": [], "skipped_items": []}
     for row in rows:
@@ -25,6 +27,9 @@ def collect(shop_id: int, threshold: int, limit: int, target: int) -> dict:
         vc = row.get("vendorCode")
         item = {"nmID": nm_id, "vc": vc or "", "title": row.get("title"),
                 "old_discount": discount, "discount": target}
+        if vc and db.resolve_vc(vc, entries)['status'] == 'excluded':
+            plan['skipped_items'].append({**item, 'reason': '\u8be5\u5546\u54c1\u5df2\u6807\u8bb0\u4e3a\u975e\u8d27\u76d8'})
+            continue
         if discount is not None and (discount <= threshold or discount == target):
             plan["skipped_items"].append({**item, "reason": "折扣不满足阈值或已等于目标"})
             continue
@@ -76,12 +81,13 @@ def _run(args, result: ProductResult) -> None:
         result.shops = list(shops)
     if not result.shops:
         raise ValueError("BCS 未返回可处理的店铺")
+    entries = db.vc_entries()
     plans = []
     for sid in result.shops:
         try:
             if sid not in shops:
                 raise ValueError("BCS 店铺列表中无此店")
-            plan = collect(sid, args.threshold, args.limit, args.target)
+            plan = collect(sid, args.threshold, args.limit, args.target, entries=entries)
         except Exception as error:
             reason = str(error) if isinstance(error, ValueError) else f"本店折扣数据读取失败（{type(error).__name__}）"
             plan = {"shopId": sid, "items": [], "blocked_items": [], "skipped_items": [], "range_error": reason}

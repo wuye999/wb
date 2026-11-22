@@ -5,16 +5,13 @@ sellerops 店铺商品拉取与快照管理（原 fetch_products.py + sync_shops
 显式 source=wb-openapi 时改为用 BCS 保存的 apiKey 直接读取 WB Open API。
 """
 
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from sellerops.integrations.bcs.client import OpenAPIShop, client as bcs
-from sellerops.settings import paths as config
-from sellerops.persistence.snapshots import ProductSnapshotRepository
-from sellerops.core.files import atomic_dump_json
-from sellerops.core.files import safe_load_json
+from sellerops.persistence import db
+from sellerops.persistence.snapshots import ProductSnapshotRepository, save_shop, save_snapshot
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
 from sellerops.integrations.wildberries.open_api import OpenAPIResponseError
 from sellerops.features.catalog import snapshot_open_api
@@ -30,8 +27,8 @@ def is_empty_product(r):
     return not has_price and stock_values(r) is None and not (r.get('title') or '').strip()
 
 
-def fetch_shop(shop_id: int, out_file: str, no_sync: bool = False,
-               source: str = 'bcs', *, access: OpenAPIShop | None = None) -> tuple[list[dict], int]:
+def fetch_shop(shop_id: int, no_sync: bool = False,
+               source: str = 'bcs', *, access: OpenAPIShop | None = None, name: str = '') -> tuple[list[dict], int]:
     """完整拉取并原子保存单店快照；默认走 BCS 快照，Open API 失败不回退 BCS。"""
     if type(shop_id) is not int or shop_id <= 0:
         raise ValueError('店铺 ID 必须为正整数')
@@ -62,7 +59,7 @@ def fetch_shop(shop_id: int, out_file: str, no_sync: bool = False,
             'missingStockProducts': sum(stock_values(row) is None for row in rows),
             'missingPriceProducts': sum(first_price(row) is None for row in rows),
         }
-    return _save_snapshot(shop_id, out_file, rows, source, method, metadata)
+    return _save_snapshot(shop_id, rows, source, method, metadata, access.name if access else name)
 
 
 def _fetch_bcs(shop_id: int, no_sync: bool) -> list[dict]:
@@ -82,8 +79,8 @@ def _fetch_bcs(shop_id: int, no_sync: bool) -> list[dict]:
     return rows
 
 
-def _save_snapshot(shop_id: int, out_file: str, rows: list[dict], source: str,
-                   method: str, metadata: dict) -> tuple[list[dict], int]:
+def _save_snapshot(shop_id: int, rows: list[dict], source: str,
+                   method: str, metadata: dict, name: str = '') -> tuple[list[dict], int]:
     total = len(rows)
     result = {
         "shopId": shop_id,
@@ -97,9 +94,9 @@ def _save_snapshot(shop_id: int, out_file: str, rows: list[dict], source: str,
         "rows": rows,
         **metadata,
     }
-    os.makedirs(os.path.dirname(out_file), exist_ok=True)
-    atomic_dump_json(out_file, result, indent=2, use_lock=True)
-    print(f"[店铺{shop_id}] 已保存：{out_file}（{os.path.getsize(out_file) / 1024 / 1024:.2f} MB）")
+    with db.connect(write=True) as connection:
+        total = save_snapshot(connection, shop_id, result, name=name)
+    print(f'[店铺{shop_id}] 已保存快照：{total} 条')
     vcs = len({r.get("vendorCode") for r in rows})
     n_alive = sum(1 for r in rows if not r.get("trashedAt"))
     print(f"[店铺{shop_id}] 统计：商品条数={len(rows)}，唯一 vendorCode={vcs}，在架(trashedAt空)={n_alive}")
@@ -137,8 +134,7 @@ def _fetch_open_api_shops(accesses: list[OpenAPIShop], parallel: int) -> tuple[l
             shop = pending.pop(future)
             try:
                 rows, metadata = future.result()
-                _, total = _save_snapshot(shop.id, config.shop_json_path(shop.id), rows,
-                                          'wb-openapi', _OPEN_API_METHOD, metadata)
+                _, total = _save_snapshot(shop.id, rows, 'wb-openapi', _OPEN_API_METHOD, metadata, shop.name)
                 fetched.append({'id': shop.id, 'total': total})
             except Exception as error:
                 reason = _safe_error(error)
@@ -163,6 +159,10 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
     shops = ([{'id': shop.id, 'name': shop.name} for shop in accesses]
              if source == 'wb-openapi' else bcs.fetch_shop_list())
     print(f"共 {len(shops)} 个店铺: {[(s['id'], s['name']) for s in shops]}")
+    with db.connect(write=True) as connection:
+        for shop in shops:
+            save_shop(connection, shop['id'], shop['name'])
+
     status = {"fetchedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
               "shops": shops, "errors": [], "source": source, "fetched": []}
 
@@ -178,10 +178,9 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
         status['fetched'], status['errors'] = _fetch_open_api_shops(accesses, parallel)
     else:
         for i, s in enumerate(shops):
-            out = config.shop_json_path(s["id"])
             print(f"\n>>> 拉取店铺 {s['id']} ({s['name']})")
             try:
-                _, total = fetch_shop(s['id'], out, no_sync=True, source=source)
+                _, total = fetch_shop(s['id'], no_sync=True, source=source, name=s['name'])
                 status['fetched'].append({'id': s['id'], 'total': total})
             except Exception as error:
                 reason = str(error)
@@ -189,29 +188,30 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
                 status['errors'].append({'id': s['id'], 'name': s['name'], 'error': reason})
             if i < len(shops) - 1:
                 time.sleep(1)
-    os.makedirs(config.current.state_dir, exist_ok=True)
-    atomic_dump_json(config.current.status_json, status, indent=2, use_lock=True)
-    print(f"\n状态已保存：{config.current.status_json}")
-    if status["errors"]:
-        raise RuntimeError(f"{len(status['errors'])} 个店铺拉取失败，失败店铺保留原快照；"
-                           f"请处理后重新拉取，再执行 merge。详情：{config.current.status_json}")
+
+    with db.connect(write=True) as connection:
+        for error in status['errors']:
+            connection.execute('UPDATE shops SET last_sync_error = ? WHERE shop_id = ?',
+                               (error['error'], str(error['id'])))
+    if status['errors']:
+        raise RuntimeError(f"{len(status['errors'])} 个店铺拉取失败，失败店铺保留原快照")
 
 
 def snapshot_shops() -> list[dict]:
-    """店铺清单优先取同步状态，旧数据可从快照文件名推导。"""
-    meta = safe_load_json(config.current.status_json, default={})
-    return meta.get("shops") or [{"id": sid} for sid in ProductSnapshotRepository.shop_ids_from_disk()]
+    """列出本地在营店铺，包括尚未取得成功快照的店。"""
+    with db.connect() as connection:
+        return [{'id': int(row['shop_id']), 'name': row['shop_name']}
+                for row in connection.execute("SELECT * FROM shops WHERE status = 'active' ORDER BY rowid")]
 
 
 def load_all_shops():
-    """读取本地在架商品和店铺清单。"""
+    """读取本地在架商品和店铺清单；缺少快照与空店分开。"""
+    shops_meta = snapshot_shops()
     shops_data = {}
-    shops_meta = [{"name": f"shop{shop['id']}", **shop} for shop in snapshot_shops()]
-    for s in shops_meta:
-        p = config.shop_json_path(s["id"])
-        if os.path.exists(p):
-            d = safe_load_json(p, default={})
-            shops_data[s["id"]] = [r for r in d.get("rows", []) if not r.get("trashedAt")]
+    for shop in shops_meta:
+        document = ProductSnapshotRepository.load_snapshot_document(shop['id'])
+        if document is not None:
+            shops_data[shop['id']] = [r for r in document['rows'] if not r.get('trashedAt')]
     if not shops_data:
-        raise RuntimeError("未找到店铺 JSON，请先运行 fetch（sellerops catalog fetch）")
+        raise RuntimeError('未找到店铺快照，请先迁移旧数据或运行 sellerops catalog fetch')
     return shops_data, shops_meta

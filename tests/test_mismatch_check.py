@@ -1,3 +1,5 @@
+
+from catalog_fixture import map_vcs, snapshot, write_book
 import json
 from html.parser import HTMLParser
 from pathlib import Path
@@ -31,23 +33,18 @@ class MismatchCheckImagesTest(unittest.TestCase):
         basket = "https://basket-01.wbbasket.ru/vol1/part100/100123/images"
         external = "https://example.invalid/main.webp?a=1&b='two'"
         with TemporaryDirectory() as temp:
-            workbook_path = Path(temp) / "mapping.xlsx"
             html_path = Path(temp) / "mismatch.html"
-            book = Workbook()
-            sheet = book.active
-            sheet.title = "映射总表"
-            headers = [COL_CN, COL_VC, COL_ACTUAL_PRICE, "店铺1价格(CNY)", COL_IMG, COL_NM]
-            sheet.append(headers)
-            sheet.append(["示例手机", "VC-tm", 10, 10, f"{basket}/tm/1.webp", 300123])
-            sheet.append(["示例手机", "VC-nm", 10, 10, None, 100123])
-            sheet.append(["示例手机", "VC-empty", 10, 10, None, None])
-            sheet.append(["示例手机", "VC-external", 10, 10, external, 100123])
-            book.save(workbook_path)
-            book.close()
-            with patch.object(paths.current, 'mapping_xlsx', str(workbook_path)), \
-                    patch.object(paths.current, 'out_mismatch_html', str(html_path)), \
-                    patch.object(mapping, "main_shop", return_value=1):
-                mismatch_check.run(cn="示例手机")
+            self.addCleanup(paths.configure, paths.current.data_dir)
+            paths.configure(temp)
+            write_book([('fixture', '\u793a\u4f8b\u624b\u673a', 10, '', '')])
+            snapshot(1, [dict(vendorCode=vc, repImg=img, nmId=nm) for vc, img, nm in [
+                ('VC-tm', f'{basket}/tm/1.webp', 300123),
+                ('VC-nm', None, 100123), ('VC-empty', None, None), ('VC-external', external, 100124),
+            ]])
+            map_vcs({vc: 'fixture' for vc in ('VC-tm', 'VC-nm', 'VC-empty', 'VC-external')})
+            with patch.object(paths.current, 'out_mismatch_html', str(html_path)), \
+                    patch.object(mapping, 'main_shop', return_value=1):
+                mismatch_check.run(cn='\u793a\u4f8b\u624b\u673a')
             page = html_path.read_text(encoding="utf-8")
 
         parser = ProductImages()

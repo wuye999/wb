@@ -1,124 +1,144 @@
-"""
-sellerops 商品快照仓储 (ProductSnapshotRepository)
-统一管理各店铺本地商品快照文件 (shop{id}_products_all.json) 的安全原子读写与 VC 索引。
-"""
-import os
-from typing import Dict, List, Optional, Any
-from sellerops.settings import paths as config
-from sellerops.core.files import atomic_dump_json
-from sellerops.core.files import safe_load_json
+"""按店保存完整商品行，并保留旧快照的行和封装契约。"""
+import json
+import sqlite3
+from typing import Any
+
+from sellerops.domain.bcs_products import deduplicate_bcs_products
+from sellerops.domain.snapshot_values import first_price, positive_id, stock_at, valid_sizes
+from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.persistence import db
 
 
 class ShopRows(dict[str, dict]):
-    """在架商品索引，保留同一快照内无法作为操作目标的原行。"""
+    """在架商品索引，另保留不能作为操作目标的原行。"""
 
     def __init__(self) -> None:
         super().__init__()
         self.other_cards: list[dict] = []
 
 
+def validate_document(shop_id: int, document: Any) -> dict:
+    if isinstance(document, list):
+        document = {'rows': document}
+    if not isinstance(document, dict) or not isinstance(document.get('rows'), list):
+        raise ValueError('商品快照缺少 rows 数组')
+    if document.get('shopId') is not None and str(document['shopId']) != str(shop_id):
+        raise ValueError('商品快照的 shopId 与目标店铺不一致')
+    for key in ('total', 'fetchedCount'):
+        if document.get(key) is not None and document[key] != len(document['rows']):
+            raise ValueError('商品快照数量不完整或元信息不一致')
+    rows = deduplicate_bcs_products(document['rows'], shop_id)
+    return {**document, 'shopId': shop_id, 'total': len(rows), 'fetchedCount': len(rows), 'rows': rows}
+
+
+def save_shop(connection: sqlite3.Connection, shop_id: int, name: str = '',
+              status: str = 'active') -> None:
+    connection.execute("""
+        INSERT INTO shops (shop_id, shop_name, status) VALUES (?, ?, ?)
+        ON CONFLICT(shop_id) DO UPDATE SET shop_name = CASE WHEN ? = '' THEN shops.shop_name
+            ELSE excluded.shop_name END
+    """, (str(shop_id), name or f'shop{shop_id}', status, name))
+
+
+def save_snapshot(connection: sqlite3.Connection, shop_id: int, document: dict,
+                  *, name: str = '') -> int:
+    document = validate_document(shop_id, document)
+    rows = document.pop('rows')
+    save_shop(connection, shop_id, name)
+    source = document.get('source')
+    timestamp = document.get('fetchedAt')
+    warehouse = document.get('warehouse')
+    warehouse_id = None
+    if source == 'wb-openapi' and isinstance(warehouse, dict):
+        try:
+            warehouse_id = moscow_warehouse([warehouse])['id']
+        except ValueError:
+            pass
+    items = []
+    for row in rows:
+        vc = row.get('vendorCode') or row.get('goodsCode')
+        vc = vc.strip() if isinstance(vc, str) and vc.strip() else None
+        nm = positive_id(row.get('nmId') or row.get('nmID'))
+        sizes = valid_sizes(row)
+        stocks = [stock_at(size, warehouse_id) for size in sizes] if sizes and warehouse_id else []
+        stock = sum(stocks) if stocks and None not in stocks else None
+        items.append((str(shop_id), vc, nm, warehouse_id, first_price(row), row.get('discount'),
+                      stock, db.dumps(row.get('sizeList')), row.get('title'), row.get('repImg'),
+                      int(bool(row.get('trashedAt'))), timestamp, db.dumps(row)))
+    connection.execute('DELETE FROM shop_items WHERE shop_id = ?', (str(shop_id),))
+    connection.executemany('INSERT INTO shop_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', items)
+    connection.execute("""
+        UPDATE shops SET last_source = ?, last_synced_at = ?, last_sync_error = NULL, snapshot_json = ?
+         WHERE shop_id = ?
+    """, (source, timestamp, db.dumps(document), str(shop_id)))
+    connection.executemany("""
+        INSERT OR IGNORE INTO vc_map (vc, source_code, status, updated_at)
+        VALUES (?, ?, 'pending', ?)
+    """, ((vc, db.source_code(vc), timestamp or db.now()) for _, vc, *_ in items if vc))
+    return len(rows)
+
+
 class ProductSnapshotRepository:
-    """商品快照仓储类"""
-
-    _cache: dict[tuple[str, int, int], ShopRows] = {}
-
-    @staticmethod
-    def get_path(shop_id: Any) -> str:
-        """获取某店铺商品快照绝对路径"""
-        return config.shop_json_path(shop_id)
-
     @classmethod
     def exists(cls, shop_id: Any) -> bool:
-        """快照是否存在"""
-        return os.path.exists(cls.get_path(shop_id))
+        with db.connect() as connection:
+            return connection.execute("""
+                SELECT 1 FROM shops WHERE shop_id = ? AND snapshot_json IS NOT NULL AND status = 'active'
+            """, (str(shop_id),)).fetchone() is not None
 
     @classmethod
-    def load_snapshot_document(cls, shop_id: Any) -> Optional[Dict[str, Any]]:
-        """读取行和采集元信息；不存在返回 None，损坏或错店不作为空店。"""
-        path = cls.get_path(shop_id)
-        if not os.path.isfile(path):
-            return None
-        data = safe_load_json(path)
-        if isinstance(data, list):
-            data = {'rows': data}
-        if not isinstance(data, dict) or not isinstance(data.get('rows'), list):
-            raise ValueError('商品快照缺少 rows 数组')
-        if any(not isinstance(row, dict) for row in data['rows']):
-            raise ValueError('商品快照包含无效商品行')
-        if data.get('shopId') is not None and str(data['shopId']) != str(shop_id):
-            raise ValueError('商品快照的 shopId 与目标店铺不一致')
-        for key in ('total', 'fetchedCount'):
-            if data.get(key) is not None and data[key] != len(data['rows']):
-                raise ValueError('商品快照数量不完整或元信息不一致')
-        return data
+    def load_snapshot_document(cls, shop_id: Any) -> dict | None:
+        with db.connect() as connection:
+            shop = connection.execute("""
+                SELECT snapshot_json FROM shops WHERE shop_id = ? AND status = 'active'
+            """, (str(shop_id),)).fetchone()
+            if shop is None or shop['snapshot_json'] is None:
+                return None
+            rows = connection.execute(
+                'SELECT row_json FROM shop_items WHERE shop_id = ? ORDER BY rowid',
+                (str(shop_id),)).fetchall()
+            document = {**json.loads(shop['snapshot_json']), 'rows': [json.loads(row[0]) for row in rows]}
+            return validate_document(int(shop_id), document)
 
     @classmethod
-    def load_shop_products(cls, shop_id: Any) -> List[Dict[str, Any]]:
-        """安全加载某店铺全量商品快照列表。若不存在返回空列表。"""
-        path = cls.get_path(shop_id)
-        data = safe_load_json(path, default={})
-        if isinstance(data, dict):
-            return data.get("rows", [])
-        elif isinstance(data, list):
-            return data
-        return []
+    def load_shop_products(cls, shop_id: Any) -> list[dict]:
+        return (cls.load_snapshot_document(shop_id) or {}).get('rows', [])
 
     @classmethod
-    def save_shop_products(cls, shop_id: Any, products: List[Dict[str, Any]], use_lock: bool = True):
-        """原子安全保存店铺全量商品快照。"""
-        path = cls.get_path(shop_id)
-        # 兼容现有格式包装
-        payload = {
-            "shopId": int(shop_id),
-            "total": len(products),
-            "rows": products,
-        }
-        atomic_dump_json(path, payload, indent=2, use_lock=use_lock)
-        cls._cache = {key: value for key, value in cls._cache.items() if key[0] != path}
+    def save_shop_products(cls, shop_id: Any, products: list[dict], use_lock: bool = True) -> None:
+        with db.connect(write=True) as connection:
+            save_snapshot(connection, int(shop_id), {'rows': products})
 
     @classmethod
     def load_shop_rows(cls, shop_id: Any) -> ShopRows | None:
-        """按 vendorCode 构建在架商品索引字典（完全兼容原 ops.load_shop_rows 输出契约）。
-
-        过滤已进回收站商品 (not r.get("trashedAt"))。
-        若文件不存在返回 None。
-        """
-        path = cls.get_path(shop_id)
-        try:
-            stat = os.stat(path)
-        except FileNotFoundError:
-            return None
-        cache_key = (path, stat.st_mtime_ns, stat.st_size)
-        if cache_key in cls._cache:
-            return cls._cache[cache_key]
-
         document = cls.load_snapshot_document(shop_id)
-        products = document['rows'] if document is not None else []
+        if document is None:
+            return None
         rows = ShopRows()
-        for item in products:
-            if item.get("shopId") is not None and str(item["shopId"]) != str(shop_id):
-                raise ValueError("商品行声明的店铺与快照不符")
-            vc = item.get("vendorCode") or item.get("goodsCode") or ""
-            if item.get("trashedAt") or not vc:
+        for item in document['rows']:
+            vc = item.get('vendorCode') or item.get('goodsCode')
+            if item.get('trashedAt') or not isinstance(vc, str) or not vc.strip():
                 rows.other_cards.append(item)
-                continue
-            if not isinstance(vc, str) or not vc.strip() or vc.strip() in rows:
-                raise ValueError('商品快照包含无效或重复vendorCode，无法唯一定位商品')
-            rows[vc.strip()] = item
-
-        cls._cache = {key: value for key, value in cls._cache.items() if key[0] != path}
-        cls._cache[cache_key] = rows
+            else:
+                rows[vc.strip()] = item
         return rows
 
     @classmethod
-    def shop_ids_from_disk(cls) -> List[int]:
-        """扫描磁盘上所有店铺商品快照文件获取店铺 ID 列表"""
-        from pathlib import Path
-        ids = []
-        for p in sorted(Path(config.current.products_dir).glob('shop*_products_all.json')):
-            try:
-                sid = int(os.path.basename(p).replace("shop", "").replace("_products_all.json", ""))
-                ids.append(sid)
-            except ValueError:
-                continue
-        return ids
+    def find_source(cls, nm_id: int, shop_id: int | None = None) -> dict | None:
+        # Without an explicit source, a card is usable only if exactly one local row matches.
+        query = '''SELECT i.row_json FROM shop_items i JOIN shops s USING (shop_id)
+                    WHERE i.nm_id = ? AND i.is_trashed = 0 AND s.status = 'active' '''
+        parameters = (nm_id,)
+        if shop_id is not None:
+            query += 'AND i.shop_id = ?'
+            parameters += (str(shop_id),)
+        with db.connect() as connection:
+            rows = connection.execute(query + ' LIMIT 2', parameters).fetchall()
+        return json.loads(rows[0][0]) if len(rows) == 1 else None
+
+    @classmethod
+    def shop_ids_from_disk(cls) -> list[int]:
+        with db.connect() as connection:
+            return sorted(int(row[0]) for row in connection.execute("""
+                SELECT shop_id FROM shops WHERE status = 'active' AND snapshot_json IS NOT NULL
+            """))

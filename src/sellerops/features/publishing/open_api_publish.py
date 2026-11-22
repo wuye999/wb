@@ -18,6 +18,7 @@ from sellerops.features.publishing.open_api_finish import (
     PublishContinuation, can_continue, resume, validate_wait, wait_and_finish,
 )
 from sellerops.integrations.wildberries.content_api import WBContentAPI
+from sellerops.persistence import db
 from sellerops.persistence import open_api_publish as store
 
 
@@ -41,6 +42,7 @@ def run(args: Any) -> int:
     with store.operation_lock(), ExitStack() as stack:
         state = store.load_state()
         shared_records = store.load_shared_records()
+        restrictions = db.vc_entries()
         sources = []
         if source is not None:
             source_api = stack.enter_context(closing(WBContentAPI(source.api_key)))
@@ -93,6 +95,9 @@ def run(args: Any) -> int:
                     else:
                         status = 'skipped' if previous.get('status') == 'finished' else 'blocked'
                         log.add(shop.id, vc, status, reason='已有官方上架阶段记录；未确认状态不重新提交')
+                    continue
+                if db.listing_blocked(vc, shop.id, restrictions):
+                    log.add(shop.id, vc, 'skipped', reason='已禁止在此店上架')
                     continue
                 if vc in existing or vc in trash or store.legacy_submitted(shop.id, vc, shared_records):
                     log.add(shop.id, vc, 'skipped', reason='已有同 VC 商品/回收站卡/BCS 提交记录')

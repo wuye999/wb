@@ -1,4 +1,6 @@
 """BCS 重复行只保留完整原行；冲突不覆盖快照或单店表，全部离线。"""
+
+from catalog_fixture import document as snapshot_document, map_vcs, snapshot, write_book
 from contextlib import ExitStack, redirect_stdout, redirect_stderr
 from copy import deepcopy
 import io
@@ -132,10 +134,13 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
         book.active.append(['SKU1', '商品', 10, 'TEST'])
         book.save(paths.current.price_book_xlsx)
         book.close()
-        atomic_dump_json(paths.current.status_json, {'shops': [{'id': 1, 'name': '店1'}]})
-        self.assertEqual(self.run_cli('catalog', 'merge'), 0)
+        map_vcs({VC: 'SKU1'})
+        single_shop.build_single_shop_xlsx(1, self.data / 'single.xlsx')
         self.assert_single_values(1)
-        book = load_workbook(paths.current.mapping_xlsx, read_only=True, data_only=True)
+        export = self.data.parent / f'{self.data.name}-report.xlsx'
+        self.addCleanup(export.unlink, missing_ok=True)
+        self.assertEqual(self.run_cli('report', 'mapping', '--out', str(export)), 0)
+        book = load_workbook(export, read_only=True, data_only=True)
         try:
             values = list(book['映射总表'].iter_rows(values_only=True))
             self.assertEqual(len(values), 2)
@@ -144,7 +149,7 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
             book.close()
 
     def assert_single_values(self, expected_count):
-        book = load_workbook(paths.shop_mapping_xlsx(1, '店1'), read_only=True, data_only=True)
+        book = load_workbook(self.data / 'single.xlsx', read_only=True, data_only=True)
         try:
             values = list(book['在架映射明细'].iter_rows(values_only=True))
             self.assertEqual(len(values) - 1, expected_count)
@@ -155,27 +160,23 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
             book.close()
 
     def test_conflicting_fetch_preserves_existing_snapshot(self):
-        path = Path(paths.shop_json_path(1))
-        atomic_dump_json(path, {'shopId': 1, 'total': 1, 'rows': [complete_row()]})
-        before = path.read_bytes()
+        snapshot(1, [complete_row()])
+        before = snapshot_document(1)
         raw = [complete_row(), complete_row(discount=50)]
         with patch.object(products.bcs, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}):
             self.assertEqual(self.run_cli('catalog', 'fetch', '--shop-id', '1', '--no-sync'), 1)
-        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(snapshot_document(1), before)
 
     def test_old_snapshot_single_table_is_unique_and_conflict_cannot_overwrite(self):
-        raw = [incomplete_row(), complete_row()]
-        options = {'registry': ({VC: {'cn': '商品'}}, {}, {}), 'boss': [], 'prefix_map': {}}
-        self.assertEqual(single_shop.build_single_shop_xlsx(1, '店1', rows=raw, **options), (1, 0))
+        write_book([('SKU1', '\u5546\u54c1', 10, 'TEST', '')])
+        snapshot(1, [incomplete_row(), complete_row()])
+        map_vcs({VC: 'SKU1'})
+        output = self.data / 'single.xlsx'
+        self.assertEqual(single_shop.build_single_shop_xlsx(1, output), (1, 0))
         self.assert_single_values(1)
-        path = Path(paths.shop_mapping_xlsx(1, '店1'))
-        before = path.read_bytes()
         with self.assertRaises(ValueError):
-            single_shop.build_single_shop_xlsx(1, '店1',
-                rows=[complete_row(), complete_row(discount=50)], **options)
-        self.assertEqual(path.read_bytes(), before)
-        self.assertEqual(single_shop.build_single_shop_xlsx(1, 'unmapped', rows=raw,
-            registry=({}, {}, {}), boss=[], prefix_map={}), (0, 1))
+            snapshot(1, [complete_row(), complete_row(discount=50)])
+        self.assertEqual(snapshot_document(1)['rows'], [complete_row()])
 
     def test_direct_bcs_discount_also_collects_each_product_once(self):
         raw = [complete_row(), complete_row(id=20)]

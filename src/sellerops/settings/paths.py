@@ -17,6 +17,8 @@ class DataPaths:
 
     def __init__(self, root: Path):
         self.data_dir = str(root)
+        self.database = str(root / 'sellerops.db')
+        self.exports_dir = root.parent / 'exports'
         self.products_dir = str(root / 'products')
         self.state_dir = str(root / 'state')
         self.workbench_dir = str(root / 'workbench')

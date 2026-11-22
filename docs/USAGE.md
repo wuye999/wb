@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 不联网的帮助/任务预览 | 任意 `--help`、daily/schedule 不加 --apply | 显示定义，不执行平台业务任务 |
 | 平台查询与报表 | shops、product-report、orders、dims-check、promo-goods、promo-gap、feishu-vc-stats、fbs-delivery、order-stats、chats、appeals、ratings | 读取对应平台，通常生成本地输出；orders 默认先同步订单 |
-| 本地工作台与映射 | mapping、review、mapping-check、mismatch-check、merge、mapping-import、mapping-rename、shop-mappings | 写本地 HTML、表格或状态，没有通用 --apply 保护；部分主店模式可能枚举 BCS 店铺 |
+| 本地工作台与映射 | catalog 下的工作台、审核导入和纠偏，report mapping | 使用本地库，按需生成 HTML 或 Excel |
 | 数据更新 | fetch | 默认走 BCS 快照（先同步再读 BASE 缓存）；显式 --source wb-openapi 才从 WB 官方接口完整采集商品、价格及莫斯科仓库存 |
 | 业务写入 | 改价、库存、上架、清理、折扣、促销、订单处理、飞书写入、客服发送 | 默认预览，--apply 提交；范围和确认机制逐命令核对 |
 | 会话/AI | login、ai-test、客服监听 | 可能回写凭证/状态或调用 LLM；细节见下文 |
@@ -40,13 +40,13 @@ python run.py catalog check-mismatch --cn "示例商品" --days 7
 
 ```powershell
 python run.py catalog merge "_scratch/review.json"
-python run.py catalog shop-mappings --shop-id 1001
+python run.py report mapping --shop-id 1001
 python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品名"
 ```
 
 这些命令直接更新本地映射或状态。旧单店格式核对结果使用 `catalog import-mapping 文件.json`，不要用它替代多店 review→merge 流程。`catalog merge` 不从平台重新拉取商品，也不表示远端状态已经更新。
 
-刷新单店表、合并或改名时，程序先检查目标店铺的快照。已确认的空店会生成空表；如果快照缺失、损坏或属于其他店铺，终端会指出对应文件，本次准备的映射不会覆盖原表。指定 `--shop-id` 时只检查该店。
+审核导入和纠偏直接写入本地库。导出单店表时，已确认的空店可以生成空表；缺快照会提示无法导出该店。
 
 如果提示 Excel 占用，关闭提示中的工作簿，重新运行刚才的命令。程序会自动续完已准备的本地文件，即使原审核文件已移走也能完成。请等终端显示保存完成后再打开表格。若改为运行新的映射写命令，程序会先续完上一批，再处理新请求。
 
@@ -77,7 +77,7 @@ python run.py catalog merge
 python run.py catalog fetch --source wb-openapi --parallel 6
 ```
 
-先确认 fetch 成功退出，再运行 merge。任一店铺拉取失败时，成功店铺已更新，失败店铺保留原快照；失败名单写入 `data/state/多店铺同步状态.json`，命令以非零状态退出。处理错误并重新成功拉取前，不继续合并，以免混用新旧快照。
+拉取成功的店铺更新库中快照，失败的店铺保留原快照并记录失败原因，命令返回非零。
 
 显式 Open API 来源的快照包含无图片、零库存商品，创建时间和尺寸重量来自商品卡，规格价格按 ID 对应。缺失价格为 null、缺失图片为空、未返回的库存规格保持空 stockList，并输出缺失统计；空库存记录不代表已确认库存为零。无法确认该店唯一可用莫斯科仓、分页不完整或关键标识无效时，不覆盖该店快照。所有商品写入仍提交并记录后结束，不把 fetch 当即时写后验证。
 
@@ -85,7 +85,7 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 
 无规格、无效或重复规格 ID 的商品仍保留完整原行并输出缺失告警，本地映射不显示附带的占位零价格/库存。任一规格库存缺失、无效或重复时，商品库存显示为空；库存操作预览中的未知值也不标成0。总表不会用其他店的库存补本店空值。接口明确返回的有效零值仍保留。BCS 响应缺少 rows、总数与返回条数不一致或混入其他店铺数据时，拉取失败并保留该店原快照，不能按空店继续合并。
 
-`catalog merge` 会依据有效快照刷新各店本地映射，再合并总表。有效的空快照也会将该店单店表重建为空，移除旧商品覆盖；历史归属池不因此删除。缺失或损坏的快照不当作空店铺处理，会报错中止。这里的单店表刷新仅修改本地文件，不触发 BCS 同步。
+`catalog merge 文件.json` 只保存审核确认的归属。没有审核文件时，查看 Excel 使用 `report mapping`。
 
 ## 改价与库存
 
@@ -114,7 +114,7 @@ python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 -
 
 `product price --keep-price --discount D` 仍可只设折扣。单独给 `--keep-price` 或单独给 `--discount` 会报参数错误。`--price`、`--keep-price`、`--from-price-book` 互斥。BCS 俱乐部折扣也需明确价格意图，参数为 `--channel bcs --club-discount D`。
 
-`product stock` 默认使用本地映射及快照中可确认归属的商品筛选供应商代码，并从本地商品快照解析规格 ID（`--resolve snapshot`）。库存归零直接将目标规格设为 0，不需要先联网读取当前库存，即使本地库存未知或已为 0 也照常提交。缺少必要标识时按下表定向补齐；仍无法确认仓库或完整规格的商品会被阻止，预览和执行均以非零状态报告。仓库 ID 仍需逐店确认，更新商品快照使用独立的 fetch/merge 流程。
+`product stock` 默认使用本地映射及快照中可确认归属的商品筛选供应商代码，并从本地商品快照解析规格 ID（`--resolve snapshot`）。库存归零直接将目标规格设为 0，不需要先联网读取当前库存，即使本地库存未知或已为 0 也照常提交。缺少必要标识时按下表定向补齐；仍无法确认仓库或完整规格的商品会被阻止，预览和执行均以非零状态报告。仓库 ID 仍需逐店确认，更新商品快照使用独立的 `catalog fetch`。
 
 各类操作只依赖真正需要的字段：
 
@@ -130,7 +130,7 @@ python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 -
 
 定向补齐使用 BCS 保存的该店官方 apiKey 和中国区接口，只查询本地已有但必要字段不完整的商品；按完整 VC 精确匹配，核对已有 nmId，不从其他店借用标识。完整本地数据不额外查询商品；不自动全量扫描平台、不刷新本地快照、不触发 BCS 同步或映射合并，也不更换写入通道。该店官方鉴权失败会阻止整店提交。限流或网络读取失败时停止该店后续补齐，已具备必要字段的商品可继续。显式 BCS 保价写入（含独立折扣命令）要求每个规格价格可确认、全部相同，且商品级价格可精确到分提交。遇到异价、缺价或超精度时阻止该商品。
 
-按商品名筛选会纳入快照中新出现、且通过既有归属/纠偏/价格表前缀能确认中文名的 VC，尊重排除记录；这些补充只进入本次内存视图，不修改映射表。本地完全无记录的商品、缺失或损坏的店铺快照、无法唯一确认的标识及缺少目标价/尺寸等情况都会报告。跳过汇总的完整明细保存在 `data/logs/商品操作跳过_*.csv`，包含操作、店铺、完整 VC 和原因，超过终端显示上限的明细也不省略；提交阶段仍保留原有操作日志。内容覆盖、复制和上架等操作仍须满足各自接口的完整字段要求，不能用空值覆盖未取得的数据。
+按名称或 SKU 筛选使用库中已确认的归属；新快照中待确认的完整 VC 可以先在工作台核对。批量操作完整的跳过明细保存在 `data/logs/商品操作跳过_*.csv`。
 
 改价与设库存默认走 WB；`--channel bcs` 是另选的 BCS 通道。WB 网页会话失效时先用 `login wb` 恢复，不要让 AI 自动换通道提交同一批可能已被接受的操作。`product stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店莫斯科仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
 
@@ -148,7 +148,7 @@ python run.py listing import "_scratch/foreign.xlsx" --shops 1001 --limit 1
 
 这些示例均为预览，需要真实提交时另外加 `--apply`。发布默认库存是 999。需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。默认 BCS 上架把初始库存随建卡或推送请求提交。
 
-`listing publish` 使用批量发布协议，平台按前缀生成 VC，不保证透传任意完整自定义 VC；需要完整 VC 建卡语义时使用 `listing create-cards`。`listing replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码读取映射表，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
+`listing publish` 使用批量发布协议，平台按前缀生成 VC，不保证透传任意完整自定义 VC；需要完整 VC 建卡语义时使用 `listing create-cards`。`listing replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码取自选中的源店快照，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
 
 BCS 建卡已停用商品详情代理。`listing create-cards` 和 `listing replicate` 默认用 `card.json` 合成详情，生成一条尺码为 `0` 的规格。`listing create-cards --file` 的 JSON 商品项仍可通过 `extra.wb_detail.sizes` 提供规格，建卡只取第一条并写入目标 VC 和价格。`listing replicate` 使用合成规格，源商品的非零尺码及其他规格不会带入新卡。
 

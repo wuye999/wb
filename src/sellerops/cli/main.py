@@ -4,7 +4,7 @@ import sys
 from threading import Lock
 
 from sellerops.cli import catalog, listing, login, marketing, order, product, report, shop, support, task
-from sellerops.cli.binding import dispatch
+from sellerops.cli.binding import bind, dispatch
 from sellerops.core.utils import ensure_utf8_stdout
 from sellerops.settings import paths
 
@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
         group = sub.add_parser(commands.__name__.split(".")[-1], help=description)
         commands.register(group.add_subparsers(dest="action", required=True))
     login.register(sub)
+    migration = sub.add_parser('migrate-legacy', help='离线迁移旧商品资料、快照和提交记录')
+    bind(migration, 'sellerops.persistence.migrate_legacy', 'run')
     return parser
 
 

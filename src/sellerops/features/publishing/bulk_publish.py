@@ -27,6 +27,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from sellerops.domain.models import PublishItem
 from sellerops.integrations.bcs.client import client as bcs
+from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 
 
@@ -35,8 +36,7 @@ from sellerops.core import utils as common
 from sellerops.features.publishing.publish_inputs import DEFAULT_STOCK
 
 from sellerops.features.publishing.publish_records import load_records
-from sellerops.features.publishing.publish_records import save_records
-from sellerops.features.publishing.publish_records import record_publish_success
+from sellerops.features.publishing.publish_records import publish_keys, submit_once
 from sellerops.features.publishing.publish_records import vc_exists_in_shop
 from sellerops.features.publishing.publish_inputs import parse_dims_str
 from sellerops.features.publishing.publish_inputs import parse_cn_stock
@@ -93,6 +93,7 @@ def execute_publish(
             warehouses[sid] = wh
 
     records = load_records()
+    restrictions = db.vc_entries()
 
     # 2. 查重过滤与店铺候选拆分
     valid_items: List[Dict[str, Any]] = []
@@ -106,6 +107,12 @@ def execute_publish(
             fail_count += 1
             continue
 
+        actual_vc = f'{it.prefix}-{it.nm_id}'
+        keys = publish_keys(it) | {actual_vc}
+        target_sids = [sid for sid in target_sids
+                       if not any(str(sid) in records.get(key, {}) for key in keys)
+                       and not db.listing_blocked(it.vendor_code or actual_vc, sid, restrictions)
+                       and not db.listing_blocked(actual_vc, sid, restrictions)]
         if check_exists:
             final_targets = []
             for sid in target_sids:
@@ -222,16 +229,15 @@ def execute_publish(
             print(f"\n[批次 {curr_chunk}/{total_chunks}] 推送 {len(chunk)} 个商品 → 店[{target_str}]（库存={stock_qty}）...")
             now = datetime.now().strftime("%H:%M:%S")
             try:
-                resp = bcs.batch_push_products(shop_configs, sku_prices, mode=1, carry_brand=1)
+                resp = submit_once([it['item'] for it in chunk], list(target_tuple),
+                                   lambda: bcs.batch_push_products(shop_configs, sku_prices, mode=1, carry_brand=1),
+                                   actual_vcs=tuple(f"{it['prefix']}-{it['sku']}" for it in chunk))
                 if resp.get("code") == 200:
                     task_id = (resp.get("data") or {}).get("taskId") or "已提交"
                     print(f"  ✓ 批次提交成功 (taskId={task_id})")
                     for it in chunk:
                         ok_count += 1
-                        raw_item = it["item"]
                         write_log(now, it, "成功", f"taskId={task_id}")
-                        record_publish_success(records, raw_item, list(target_tuple))
-                    save_records(records)
                 else:
                     msg = resp.get("msg") or f"code={resp.get('code')}"
                     print(f"  ✗ 批次提交失败: {msg}")
@@ -411,7 +417,8 @@ def run(args: Any) -> int:
     resolved_items: List[PublishItem] = []
     resolution_failures = 0
     for it in shelve_items:
-        resolved, err = resolve_publish_details(it, mapping_state, pmap, boss_pkg, card_cache)
+        resolved, err = resolve_publish_details(it, mapping_state, pmap, boss_pkg, card_cache,
+                                                fresh_price=getattr(args, 'apply', False))
         if err or not resolved:
             resolution_failures += 1
             print(f"[跳过] 商品 {it.nm_id}: {err}")

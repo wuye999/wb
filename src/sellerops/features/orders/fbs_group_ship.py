@@ -7,23 +7,20 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
-from openpyxl import load_workbook
 
 from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError, RateLimitError
 from sellerops.core.files import FileLock, atomic_dump_json
 from sellerops.core.utils import ensure_utf8_stdout
 from sellerops.domain.warehouses import moscow_warehouse
 from sellerops.features.publishing.open_api_common import safe_reason, select_accesses
+from sellerops.features.orders.matching import load_local_mapping as _catalog
 from sellerops.features.orders.fbs_pdfs import check_pair, export_pair, require_pdf_tools
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.integrations.wildberries.fbs_api import BATCH_SIZE, FBSRequestError, WBFBSAPI
 from sellerops.persistence.fbs_shipments import (
     SINGAPORE, journal_path, load_journal, pdf_paths, save_journal, supply_names,
 )
-from sellerops.persistence.headers import read_headers
-from sellerops.persistence.mappings import MappingRepository
-from sellerops.persistence.price_book import BOSS_COLUMNS, GROUP_SHIPPING_MARKER, price_book_columns
-from sellerops.persistence.report_catalog import load_mapped_names
+from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
 from sellerops.settings import paths
 
 
@@ -37,41 +34,10 @@ _VALID_META = {
 class OrderGroup:
     product_name: str
     orders: list[dict]
-    price_conflict: bool
 
     @property
     def ids(self) -> list[int]:
         return [row['id'] for row in self.orders]
-
-
-def _catalog() -> tuple[dict[str, str], dict[str, set[str]]]:
-    mapping = load_mapped_names()
-    overrides = MappingRepository.load_vc_override()
-    if not isinstance(overrides, dict):
-        raise ValueError('VC 纠偏记录格式无效')
-    for vc, override in overrides.items():
-        if not isinstance(override, dict):
-            raise ValueError('VC 纠偏记录格式无效')
-        cn = str(override.get('cn') or '').strip()
-        if vc in mapping and cn:
-            mapping[vc] = cn
-    sku_values = defaultdict(set)
-    workbook = load_workbook(paths.current.price_book_xlsx, read_only=True, data_only=True)
-    try:
-        sheet = workbook[workbook.sheetnames[0]]
-        required = ('cn', 'stock_sku')
-        columns = price_book_columns(sheet, paths.current.price_book_xlsx, required=required)
-        headers = read_headers(sheet)
-        if any(headers.count(BOSS_COLUMNS[key]) != 1 for key in required):
-            raise ValueError('价格表商品中文名或库存 SKU 表头重复')
-        for row in sheet.iter_rows(min_row=2, values_only=True):
-            cn = str(row[columns['cn']] or '').strip()
-            sku = str(row[columns['stock_sku']] or '').strip()
-            if cn and sku:
-                sku_values[cn].add(sku)
-    finally:
-        workbook.close()
-    return mapping, dict(sku_values)
 
 
 def _groups(orders: list[dict], warehouse_id: int, catalog: tuple,
@@ -89,7 +55,7 @@ def _groups(orders: list[dict], warehouse_id: int, catalog: tuple,
                 blocked.append({'order_ids': [row['id']], 'vendor_code': article,
                                 'reason': '莫斯科仓订单无法按完整 VC 确认中文名'})
             continue
-        if GROUP_SHIPPING_MARKER not in sku_values.get(cn, ()) or (selected_name and cn != selected_name):
+        if sku_values.get(article.strip()) != GROUP_SHIPPING_MARKER or (selected_name and cn != selected_name):
             continue
         if type(warehouse) is not int or warehouse != warehouse_id:
             blocked.append({'product_name': cn, 'order_ids': [row['id']],
@@ -97,7 +63,7 @@ def _groups(orders: list[dict], warehouse_id: int, catalog: tuple,
         else:
             groups[cn].append(row)
     return [
-        OrderGroup(cn, sorted(rows, key=lambda row: row['id']), len(sku_values[cn]) != 1)
+        OrderGroup(cn, sorted(rows, key=lambda row: row['id']))
         for cn, rows in sorted(groups.items())
     ], blocked
 
@@ -108,8 +74,6 @@ def _batches(ids: list[int]):
 
 
 def _check_group(api: WBFBSAPI, group: OrderGroup) -> bool:
-    if group.price_conflict:
-        raise ValueError('价格表同名商品同时有发货群标记和其他库存 SKU')
     profiles, metadata = set(), {}
     for row in group.orders:
         cargo, cross = row.get('cargoType'), row.get('crossBorderType')

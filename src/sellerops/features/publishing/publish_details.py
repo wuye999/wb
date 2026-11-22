@@ -10,11 +10,13 @@ from sellerops.domain.models import PublishItem
 
 
 from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 
 
 from sellerops.features.publishing.product_details import fetch_card_json
 from sellerops.features.publishing.product_details import parse_package_info
 from sellerops.domain.vendor_codes import extract_vc_prefix
+from sellerops.domain.snapshot_values import first_price
 from sellerops.features.publishing.product_details import resolve_vendor_prefix
 from sellerops.features.publishing.product_details import resolve_replicate_package
 from sellerops.integrations.wildberries.client import basket_base
@@ -76,6 +78,7 @@ def resolve_publish_details(
     pmap: Optional[Dict[str, Any]] = None,
     boss_pkg: Optional[Dict[str, Any]] = None,
     card_cache: Optional[Dict[int, Any]] = None,
+    *, fresh_price: bool = False,
 ) -> Tuple[Optional[PublishItem], Optional[str]]:
     """
     智能补全上架商品缺失字段：
@@ -97,21 +100,16 @@ def resolve_publish_details(
     pmap = pmap if pmap is not None else {}
 
     # 构建快速 nmId -> 映射表行索引
-    nm_str = str(nm_id)
-    matched_map_row = None
-    for vc_k, row in mapping_state.items():
-        row_nm = str(row.get("nmId") or "").strip()
-        if row_nm == nm_str or vc_k == nm_str or vc_k.endswith(f"-{nm_str}"):
-            matched_map_row = row
-            break
+    vc = (item.vendor_code or '').strip()
+    source_card = ProductSnapshotRepository.find_source(nm_id, item.extra.get('src_sid'))
+    source_vc = (source_card or {}).get('vendorCode') or ''
+    matched_map_row = mapping_state.get(vc) or mapping_state.get(source_vc)
 
-    # 1. 中文名补全
     cn = item.cn.strip()
     if not cn and matched_map_row:
         cn = matched_map_row.get("cn") or ""
 
     # 2. 完整 VC 与前缀码决策
-    vc = (item.vendor_code or "").strip()
     prefix = (item.prefix or "").strip()
 
     if vc:
@@ -134,22 +132,14 @@ def resolve_publish_details(
     # 3. 价格决策
     price = item.price
     if price is None or price <= 0:
-        if matched_map_row:
-            sp = matched_map_row.get("shop_price")
-            dp = matched_map_row.get("dp")
-            if sp not in (None, "") and float(sp) > 0:
-                price = float(sp)
-            elif dp not in (None, "") and float(dp) > 0:
-                price = math.floor(float(dp))
-        if (price is None or price <= 0) and cn:
-            try:
-                boss_items = MappingRepository.load_price_book()
-                for b_it in boss_items:
-                    if b_it.get("cn") == cn and b_it.get("dp") is not None:
-                        price = math.floor(float(b_it["dp"]))
-                        break
-            except Exception:
-                pass
+        price = first_price(source_card) if source_card is not None else None
+        if not price and cn:
+            book = MappingRepository.load_price_book(fresh=fresh_price)
+            sku = (matched_map_row or {}).get('sku')
+            prices = {row['floor'] for row in book
+                      if (row['sku'] == sku if sku else row['cn'] == cn)}
+            if len(prices) == 1:
+                price = next(iter(prices))
     if price is None or price <= 0:
         return None, f"商品 {nm_id} 价格缺失且无法从映射表自动匹配，请通过 --price 指定"
 
@@ -170,7 +160,7 @@ def resolve_publish_details(
 
     if not valid_dims:
         # 尝试查映射表 / 价格表 / card.json
-        dims, err = resolve_replicate_package(vc, cn, nm_id, mapping_state, card_cache)
+        dims, err = resolve_replicate_package(vc, cn, nm_id, {vc: matched_map_row or {}}, card_cache)
         if err or not dims:
             # 尝试直接抓 card.json
             if card_info is None:

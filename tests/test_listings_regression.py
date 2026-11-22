@@ -391,108 +391,30 @@ class TestRegression(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_merge_dp_header_new_unit(self):
-        """merge 读映射总表：价格列按「实际售价」表头定位（挪到非 C 列也能读到）。"""
-        import io as _io
-        import os
-        import shutil
-        import tempfile
-        import openpyxl
-        from unittest import mock
-        from sellerops.settings import paths as config
-        from sellerops.persistence import headers as xlsx_headers
-        from sellerops.persistence.mappings import MappingRepository
-        xlsx_headers.reset_warnings()
-        tmp = tempfile.mkdtemp()
-        try:
-            path = os.path.join(tmp, 'mapping.xlsx')
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = '映射总表'
-            ws.append(['产品中文名', 'vendorCode', '店铺9352价格(CNY)', '折扣%', '实际售价'])
-            ws.append(['测试品', 'BCS-AAAA-1', 100, 10, 88.9])
-            wb.save(path)
-            with mock.patch.object(config.current, 'mapping_xlsx', path), mock.patch.object(MappingRepository, 'load_vc_override', return_value={}):
-                state, _ex = MappingRepository.load_mapping_state()
-            self.assertEqual(state['BCS-AAAA-1']['dp'], 88.9)
-            self.assertEqual(state['BCS-AAAA-1']['shop_price'], 100)
-            self.assertEqual(state['BCS-AAAA-1']['cn'], '测试品')
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+    def test_migration_reads_ownership_from_old_total_but_prices_from_main_book(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from openpyxl import Workbook
+        from catalog_fixture import write_book
+        from sellerops.persistence import db, migrate_legacy
+        from sellerops.settings import paths
 
-    def test_merge_dp_header_legacy_warn_unit(self):
-        """merge 读映射总表：只有旧列名「双倍售价」时不崩、dp=None，并给出可见警告。"""
-        import contextlib
-        import io as _io
-        import os
-        import shutil
-        import tempfile
-        import openpyxl
-        from unittest import mock
-        from sellerops.settings import paths as config
-        from sellerops.persistence import headers as xlsx_headers
-        from sellerops.persistence.mappings import MappingRepository
-        xlsx_headers.reset_warnings()
-        tmp = tempfile.mkdtemp()
-        try:
-            path = os.path.join(tmp, 'mapping_old.xlsx')
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = '映射总表'
-            ws.append(['产品中文名', 'vendorCode', '双倍售价', '店铺9352价格(CNY)'])
-            ws.append(['测试品', 'BCS-AAAA-2', 88.9, 100])
-            wb.save(path)
-            err = _io.StringIO()
-            with mock.patch.object(config.current, 'mapping_xlsx', path), mock.patch.object(MappingRepository, 'load_vc_override', return_value={}), contextlib.redirect_stderr(err):
-                state, _ex = MappingRepository.load_mapping_state()
-            self.assertIsNone(state['BCS-AAAA-2']['dp'])
-            self.assertEqual(state['BCS-AAAA-2']['shop_price'], 100)
-            msg = err.getvalue()
-            self.assertIn('实际售价', msg)
-            self.assertIn('双倍售价', msg)
-            self.assertIn('merge', msg)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        self.addCleanup(paths.configure, paths.current.data_dir)
+        with TemporaryDirectory() as tmp:
+            paths.configure(tmp)
+            write_book([('SK1', 'fixture', 22, 'AAAA', '')])
+            book = Workbook()
+            book.active.title = '\u6620\u5c04\u603b\u8868'
+            book.active.append(['vendorCode', '\u4ea7\u54c1\u4e2d\u6587\u540d', '\u53cc\u500d\u552e\u4ef7'])
+            book.active.append(['BCS-AAAA-1', 'fixture', 88.9])
+            book.save(paths.current.mapping_xlsx)
+            book.close()
+            migrate_legacy.migrate()
+            Path(paths.current.mapping_xlsx).unlink()
+            result = db.resolve_vc('BCS-AAAA-1')
+            self.assertEqual((result['sku'], result['dp'], result['source']), ('SK1', 22, 'prefix'))
 
-    def test_merge_single_shop_dp_header_unit(self):
-        """merge 读单店表：价格列按「实际售价」表头定位；旧列名 → dp=None + 警告。"""
-        import contextlib
-        import io as _io
-        import os
-        import shutil
-        import tempfile
-        import openpyxl
-        from unittest import mock
-        from sellerops.settings import paths as config
-        from sellerops.persistence import headers as xlsx_headers
-        from sellerops.features.catalog import single_shop as mapping_excel
-        tmp = tempfile.mkdtemp()
-        try:
 
-            def build(name, dp_header):
-                p = os.path.join(tmp, name)
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = '在架映射明细'
-                ws.append(['产品中文名', 'vendorCode', '本店售价(CNY)', dp_header, '本店库存'])
-                ws.append(['测试品', 'BCS-BBBB-1', 120, 88.9, 5])
-                wb.save(p)
-                return p
-            p_new = build('new.xlsx', '实际售价')
-            xlsx_headers.reset_warnings()
-            with mock.patch.object(config, 'shop_mapping_xlsx', lambda sid, name=None: p_new):
-                rows, _unmapped = mapping_excel.load_single_shop_rows(9352)
-            self.assertEqual(rows['BCS-BBBB-1']['dp'], 88.9)
-            self.assertEqual(rows['BCS-BBBB-1']['price'], 120)
-            p_old = build('old.xlsx', '双倍售价')
-            xlsx_headers.reset_warnings()
-            err = _io.StringIO()
-            with mock.patch.object(config, 'shop_mapping_xlsx', lambda sid, name=None: p_old), contextlib.redirect_stderr(err):
-                rows_old, _u = mapping_excel.load_single_shop_rows(9352)
-            self.assertIsNone(rows_old['BCS-BBBB-1']['dp'])
-            self.assertIn('实际售价', err.getvalue())
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_importshelve_foreign_legacy_dp_raise_unit(self):
         """import-shelve 读他人表：旧列名「双倍售价」→ 直接报错；新名挪位仍可读。"""
@@ -556,26 +478,24 @@ class TestRegression(unittest.TestCase):
             row = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 88.9, 'TEST', 's9']
             p_ok = build('boss_ok.xlsx', headers, row)
             xlsx_headers.reset_warnings()
-            with mock.patch.object(config.current, 'price_book_xlsx', p_ok):
+            with mock.patch.object(config.current, 'price_book_xlsx', p_ok), \
+                    mock.patch.object(config.current, 'database', os.path.join(tmp, 'fixture.db')):
                 boss = MappingRepository.load_price_book()
                 pmap = MappingRepository.load_prefix_map()
-                details = MappingRepository.load_boss_details()
                 shelve_dict = shelve_common.load_publish_catalog()
             self.assertEqual(boss[0]['dp'], 88.9)
             self.assertEqual(boss[0]['floor'], 88)
             self.assertEqual(boss[0]['stock_sku'], 's9')
             self.assertEqual(pmap['TEST']['dp'], 88.9)
-            self.assertEqual(details['by_cn']['测试品']['dp'], 88.9)
-            self.assertEqual(details['by_cn']['测试品']['price'], 40)
             self.assertEqual(shelve_dict['测试品']['dp'], 88.9)
             headers_bad = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', 'vendorCode前缀码', '库存SKU']
             row_bad = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 'TEST', 's9']
             p_bad = build('boss_bad.xlsx', headers_bad, row_bad)
-            with mock.patch.object(config.current, 'price_book_xlsx', p_bad):
+            with mock.patch.object(config.current, 'price_book_xlsx', p_bad), \
+                    mock.patch.object(config.current, 'database', os.path.join(tmp, 'fixture.db')):
                 with self.assertRaises(HeaderError):
                     MappingRepository.load_price_book()
-                with self.assertRaises(HeaderError):
-                    MappingRepository.load_prefix_map()
+                self.assertEqual(MappingRepository.load_prefix_map()['TEST']['cn'], '\u6d4b\u8bd5\u54c1')
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

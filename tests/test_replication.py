@@ -21,6 +21,14 @@ def item(vc='BCS-TEST-1', targets=None):
 
 
 class TestReplication(TestCase):
+    def setUp(self):
+        from sellerops.settings import paths
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(paths.configure, paths.current.data_dir)
+        paths.configure(folder.name)
+
     def test_source_union_deduplicates_full_vc_without_using_target_as_source(self):
         row = {'vendorCode':'BCS-TEST-1','nmId':999,'sizeList':[{'price':1}]}
         shops = {1:[row],2:[{**row,'nmId':888}],42:[],43:[{'vendorCode':'target-only'}]}
@@ -31,8 +39,43 @@ class TestReplication(TestCase):
         self.assertEqual(blocked,[])
         self.assertEqual(len(plans),1)
         self.assertEqual((plans[0].vendor_code, plans[0].nm_id, plans[0].price, plans[0].stock),
-                         ('BCS-TEST-1',777,415.25,999))
+                         ('BCS-TEST-1',999,415.25,999))
         self.assertEqual(plans[0].target_shops,[42,43])
+
+    def test_ordinary_publish_resolves_source_price_and_current_main_book_identity(self):
+        from catalog_fixture import snapshot, map_vcs, write_book
+        from sellerops.persistence.mappings import MappingRepository
+
+        vc = 'BCS-TEST-1'
+        write_book([('S1', 'fixture title', 60, 'TEST', '')])
+        snapshot(41, [{'vendorCode': vc, 'nmId': 777,
+                       'sizeList': [{'chrtId': 987, 'price': 52}]}])
+        map_vcs({vc: 'S1'})
+        candidate = item()
+        candidate.price, candidate.cn = None, ''
+        state, _ = MappingRepository.load_mapping_state()
+        resolved, error = publish_details.resolve_publish_details(candidate, state)
+        self.assertIsNone(error)
+        self.assertEqual((resolved.price, resolved.cn, resolved.nm_id), (52, 'fixture title', 777))
+
+    def test_bcs_marks_submitting_before_send_and_open_api_respects_unknown(self):
+        from sellerops.features.publishing import publish_records
+        from sellerops.persistence import db, open_api_publish
+
+        candidate = item()
+        def fail():
+            self.assertEqual({row['status'] for row in db.plans('publish', 'legacy-publish:')},
+                             {'submitting'})
+            raise TimeoutError('fixture')
+
+        send = Mock(side_effect=fail)
+        with self.assertRaises(TimeoutError):
+            publish_records.submit_once([candidate], [42], send)
+        self.assertTrue(open_api_publish.legacy_submitted(42, candidate.vendor_code))
+        self.assertEqual({row['status'] for row in db.plans('publish', 'legacy-publish:')}, {'unknown'})
+        with self.assertRaises(ValueError):
+            publish_records.submit_once([candidate], [42], send)
+        send.assert_called_once()
 
     def test_missing_snapshot_fails_and_snapshot_trash_is_not_a_source(self):
         with self.assertRaisesRegex(ValueError,'缺少本地快照'):
@@ -98,6 +141,7 @@ class TestReplication(TestCase):
     def test_all_reads_finish_before_first_write_and_only_target_warehouse_is_read(self):
         events = []
         one, two = item(), item('BCS-TEST-2')
+        two.nm_id = 778
         one.extra = {}
         two.extra = {'wb_detail': {'subjectId': 1, 'sizes': [
             {'origName': 42, 'name': 'M', 'price': '10.00', 'vendorCode': 'SOURCE-VC'},
@@ -119,7 +163,6 @@ class TestReplication(TestCase):
                 patch.object(card_publish,'resolve_warehouse',return_value=100) as wh, \
                 patch.object(card_publish.bcs,'fetch_shop_list',side_effect=AssertionError('unrelated shop read')), \
                 patch.object(card_publish,'load_records',return_value={}), \
-                patch.object(card_publish,'save_records'), \
                 patch.object(card_publish, 'bcs', base_url='https://fixture.invalid') as client:
             client.post.side_effect = submit
             result = card_publish.execute_publish([one,two],apply=True,interval=0,writer=Mock(),check_exists=False)
@@ -148,7 +191,6 @@ class TestReplication(TestCase):
     def test_repeated_vc_target_in_input_is_only_submitted_once(self):
         with contextlib.redirect_stdout(io.StringIO()), \
                 patch.object(card_publish,'load_records',return_value={}), \
-                patch.object(card_publish,'save_records'), \
                 patch.object(card_publish.bcs,'post',return_value={'code':200}) as post:
             result = card_publish.execute_publish([item(),item()],apply=True,writer=Mock(),
                                                  interval=0,check_exists=False,warehouses={42:100})

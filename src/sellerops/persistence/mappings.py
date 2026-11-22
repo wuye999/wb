@@ -1,350 +1,107 @@
-"""
-sellerops 映射与品名归属仓储 (MappingRepository)
-统一管理全局 VC 归属池、纠偏改名、前缀映射及排除清单的安全持久化与内存缓存。
-"""
-import os
-import re
-from typing import Dict, List, Any, Tuple, Callable
-from sellerops.settings import paths as config
-from sellerops.core.files import safe_load_json
-from sellerops.persistence.price_book import CachedDpReader
-from sellerops.persistence.price_book import floor_price
-from sellerops.persistence.price_book import resolve_formula
-from sellerops.persistence.price_book import to_number
-from sellerops.persistence.price_book import warn_unresolved
-from sellerops.persistence.price_book import price_book_columns
-from sellerops.persistence.headers import COL_ACTUAL_PRICE
-from sellerops.persistence.headers import COL_CN
-from sellerops.persistence.headers import COL_H
-from sellerops.persistence.headers import COL_L
-from sellerops.persistence.headers import COL_NM
-from sellerops.persistence.headers import COL_SHOP_CNY_RE
-from sellerops.persistence.headers import COL_VC
-from sellerops.persistence.headers import COL_W
-from sellerops.persistence.headers import COL_WT
-from sellerops.persistence.headers import HeaderError
-from sellerops.persistence.headers import find_col
-from sellerops.persistence.headers import find_col_re
-from sellerops.persistence.headers import warn_missing
+"""商品价格表和归属查询；工作簿仅作为商品资料的只读输入。"""
+from pathlib import Path
+from typing import Callable
+
+from sellerops.persistence import db
+from sellerops.persistence.price_book import floor_price, read_price_book
+from sellerops.settings import paths
+
+
+def save_products(connection, rows: list[dict], stat) -> None:
+    stamp = db.now()
+    products = [row for row in rows if row['sku'] and row['cn']]
+    if len({row['sku'] for row in products}) != len(products):
+        raise ValueError('商品价格表存在重复卖家 SKU，请核对后再运行')
+    connection.execute('DELETE FROM products')
+    connection.executemany('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+        (r['sku'], r['cn'], r['dp'], r['minimum_price'], r['img'],
+         None if r['dimensions'] is None else str(r['dimensions']), r['prefix'], r['stock_sku'],
+         stat.st_mtime_ns, stat.st_size, stamp) for r in products
+    ])
+
+
+def _cached_products(connection) -> list[dict]:
+    return [{**dict(row), 'floor': floor_price(row['dp']), 'idx': index}
+            for index, row in enumerate(connection.execute("""
+                SELECT sku, cn, actual_price AS dp, minimum_price, image_url AS img,
+                       dimensions, prefix, stock_sku FROM products ORDER BY rowid
+            """), start=1)]
 
 
 class MappingRepository:
-    """映射数据仓储"""
+    """复用现有按商品、前缀和中文名查询的入口。"""
 
     @staticmethod
-    def load_vc_known() -> Dict[str, Any]:
-        """加载全局已知 VC 归属池 (vc_known.json)"""
-        return safe_load_json(config.current.vc_known_json, default={})
-
-    @staticmethod
-    def load_vc_override() -> Dict[str, Any]:
-        """加载全局 VC 纠偏改名清单 (vc_override.json)"""
-        return safe_load_json(config.current.vc_override_json, default={})
-
-    @staticmethod
-    def load_vc_excluded() -> Dict[str, Any]:
-
-        """加载全局排除清单 (vc_excluded.json)"""
-        return safe_load_json(config.current.vc_excluded_json, default={})
-
-    @staticmethod
-    def _resolve_dp(formula, ws, row_idx=None):
-        """解析 D 列「实际售价」公式（`=F57*2` / `=F57` / `=$F$57*2` / `=ROUND(F57*1.3,2)`）。
-
-        无法解析返回 None，由 `load_price_book()` 再回退 Excel 缓存值（data_only）。
-        实现见 `storage/boss_price.py`（受限求值，不执行任意函数）。
-        """
-        return resolve_formula(formula, ws)
+    def load_price_book(*, require_price: bool = True, fresh: bool = False) -> list[dict]:
+        book = Path(paths.current.price_book_xlsx)
+        try:
+            stat = book.stat()
+            with db.connect() as connection:
+                cached = connection.execute(
+                    'SELECT book_mtime_ns, book_size FROM products LIMIT 1').fetchone()
+                if cached is not None and tuple(cached) == (stat.st_mtime_ns, stat.st_size):
+                    # 即使 mtime 未变，提交前也检查用户是否能读取当前工作簿。
+                    if fresh:
+                        with book.open('rb'):
+                            pass
+                    return _cached_products(connection)
+            rows = read_price_book(str(book), require_price=require_price)
+            with db.connect(write=True) as connection:
+                current = book.stat()
+                if (current.st_mtime_ns, current.st_size) != (stat.st_mtime_ns, stat.st_size):
+                    raise ValueError('商品价格表在读取期间被修改，请保存后重试')
+                save_products(connection, rows, stat)
+                return _cached_products(connection)
+        except (FileNotFoundError, PermissionError) as error:
+            with db.connect() as connection:
+                rows = _cached_products(connection)
+                stamp = connection.execute('SELECT max(refreshed_at) FROM products').fetchone()[0]
+            if fresh:
+                raise ValueError('请保存并关闭《商品价格表.xlsx》，确认文件存在后重试') from error
+            if rows:
+                print(f'[提示] 当前无法读取商品价格表，使用 {stamp} 的缓存')
+            return rows
 
     @classmethod
-    def load_price_book(cls, *, require_price=True) -> List[Dict[str, Any]]:
-        """商品价格表 → [{idx, sku, cn, dp, minimum_price, img, floor, prefix, stock_sku}]
-
-        列全部**按表头名定位**（不依赖列位，用户可随意插列/挪列）：
-        产品图片 / 卖家SKU / 产品中文名 / 实际售价 / 尺寸 / 最低售价 / vendorCode前缀码 / 库存SKU。
-        「实际售价」可写数值或公式（`=F2*2` / `=F2` / `=$F$2*2` / `=ROUND(F2*1.3,2)`）；
-        公式不可解析时回退 Excel 缓存值，仍取不到则 dp/floor=None 并打印 [警告]（不再静默空价）。
-        缺「实际售价」列 → HeaderError（fail-fast，避免改价/上架全部跳过）。
-        `floor` = math.floor(实际售价)，即店铺整数价口径。"""
-        if not os.path.exists(config.current.price_book_xlsx):
-            return []
-        import openpyxl
-        wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=False)
-        try:
-            ws = wb["Sheet1"]
-            required = ("sku", "cn", "dp") if require_price else ("cn",)
-            cols = price_book_columns(ws, config.current.price_book_xlsx, required=required)
-            i_img, i_sku, i_cn = cols["img"], cols["sku"], cols["cn"]
-            i_dp, i_prefix, i_stock = cols["dp"], cols["prefix"], cols["stock_sku"]
-            cache = CachedDpReader(config.current.price_book_xlsx, col=(i_dp or 0) + 1)
-            minimum_cache = CachedDpReader(config.current.price_book_xlsx, col=(cols["price"] or 0) + 1)
-            dimension_cache = CachedDpReader(config.current.price_book_xlsx, col=(cols["dim"] or 0) + 1)
-            items: List[Dict[str, Any]] = []
-            by_cache: List[Tuple] = []
-            missing: List[Tuple] = []
-
-            def val(row, i):
-                return row[i].value if i is not None and len(row) > i else None
-
-            try:
-                for row in ws.iter_rows(min_row=2):
-                    sku = str(val(row, i_sku) or "").strip()
-                    cn = str(val(row, i_cn) or "").strip()
-                    if not sku and not cn:
-                        continue
-                    raw = val(row, i_dp)
-                    dp = to_number(raw)
-                    if dp is None and isinstance(raw, str) and raw.strip().startswith("="):
-                        dp = cls._resolve_dp(raw, ws, row[0].row)
-                        if dp is None:
-                            dp = to_number(cache.get(row[0].row))
-                            (by_cache if dp is not None else missing).append(
-                                (row[0].row, sku, raw))
-                    elif dp is None and raw not in (None, ""):
-                        missing.append((row[0].row, sku, raw))
-                    minimum_raw = val(row, cols["price"])
-                    minimum = resolve_formula(minimum_raw, ws)
-                    if minimum is None and isinstance(minimum_raw, str) and minimum_raw.startswith("="):
-                        minimum = to_number(minimum_cache.get(row[0].row))
-                        print(f"[警告] 最低售价行{row[0].row}公式无法求值，"
-                              + ("使用 Excel 缓存值" if minimum is not None else "且无可用缓存值"))
-                    dimensions = val(row, cols["dim"])
-                    if isinstance(dimensions, str) and dimensions.startswith("="):
-                        dimensions = dimension_cache.get(row[0].row)
-                    items.append({
-                        "idx": len(items) + 1,
-                        "sku": sku,
-                        "cn": cn,
-                        "dp": dp,
-                        "minimum_price": minimum,
-                        "img": str(val(row, i_img) or "").strip(),
-                        "floor": floor_price(dp),
-                        "prefix": str(val(row, i_prefix) or "").strip().upper(),
-                        "stock_sku": str(val(row, i_stock) or "").strip(),
-                        "dimensions": dimensions,
-                    })
-            finally:
-                cache.close()
-                minimum_cache.close()
-                dimension_cache.close()
-        finally:
-            wb.close()
-        warn_unresolved(config.current.price_book_xlsx, by_cache, missing)
-        return items
-
-    @staticmethod
-    def load_prefix_map(*, strict: bool = False) -> Dict[str, Any]:
-        """从商品价格表加载 4 位前缀码映射（列按表头名定位）。"""
-
-        if not os.path.exists(config.current.price_book_xlsx):
-            return {}
-        wb = None
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=True)
-            ws = wb["Sheet1"]
-            cols = price_book_columns(ws, config.current.price_book_xlsx)
-            i_sku, i_cn, i_dp, i_prefix = cols["sku"], cols["cn"], cols["dp"], cols["prefix"]
-            pmap = {}
-            for row in ws.iter_rows(min_row=2):
-                get = lambda i: row[i].value if i is not None and len(row) > i else None
-                sku = str(get(i_sku) or "").strip()
-                cn = str(get(i_cn) or "").strip()
-                if not sku and not cn:
-                    continue
-                prefix = str(get(i_prefix) or "").strip().upper()
-                if not prefix:
-                    continue
-                dp = get(i_dp)
-                if prefix not in pmap:
-                    pmap[prefix] = {"sku": sku, "cn": cn, "dp": dp}
-            return pmap
-        except HeaderError:
-            raise                       # 表头错误必须冒泡，不能被下面的宽 except 吞掉
-        except Exception:
-            if strict:
-                raise
-            return {}
-        finally:
-            if wb is not None:
-                wb.close()
+    def load_prefix_map(cls, *, strict: bool = False) -> dict[str, dict]:
+        rows = cls.load_price_book(require_price=False)
+        result = {}
+        for row in rows:
+            prefix = row['prefix']
+            if len(prefix) == 4 and prefix.isascii() and prefix.isalpha():
+                if strict and prefix in result:
+                    raise ValueError(f'商品价格表前缀重复：{prefix}')
+                result[prefix] = row
+        return result
 
     @classmethod
-    def load_boss_details(cls) -> Dict[str, Dict[str, Any]]:
-        """从商品价格表加载完整商品详情索引（按 4 位前缀码与中文名双向索引）。
+    def build_vc_resolver(cls, *, label_unmapped: bool = False) -> tuple[Callable[[str, str], str], dict]:
+        cls.load_price_book(require_price=False)
+        entries = db.vc_entries()
+        names = {vc: row['cn'] for vc, row in entries.items()
+                 if row['status'] == 'mapped' and row['cn']}
 
-        返回:
-            {
-                "by_prefix": {prefix: {"sku", "cn", "dp", "dim", "price", "prefix", "stock_sku"}},
-                "by_cn": {cn: {"sku", "cn", "dp", "dim", "price", "prefix", "stock_sku"}}
-            }
-        """
-        if not os.path.exists(config.current.price_book_xlsx):
-            return {"by_prefix": {}, "by_cn": {}}
-        wb = None
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=True)
-            ws = wb["Sheet1"]
-            cols = price_book_columns(ws, config.current.price_book_xlsx)
-            i_sku, i_cn, i_dp = cols["sku"], cols["cn"], cols["dp"]
-            i_dim, i_price = cols["dim"], cols["price"]
-            i_prefix, i_stock = cols["prefix"], cols["stock_sku"]
-            by_prefix = {}
-            by_cn = {}
-            for row in ws.iter_rows(min_row=2):
-                get = lambda i: row[i].value if i is not None and len(row) > i else None
-                sku = str(get(i_sku) or "").strip()
-                cn = str(get(i_cn) or "").strip()
-                if not sku and not cn:
-                    continue
-                dp = get(i_dp)
-                dim = str(get(i_dim) or "").strip()
-                price = get(i_price)
-                prefix = str(get(i_prefix) or "").strip().upper()
-                stock_sku = str(get(i_stock) or "").strip()
-                item = {
-                    "sku": sku,
-                    "cn": cn,
-                    "dp": dp,               # 实际售价（价格表「实际售价」列，用户维护；店铺价 = floor）
-                    "dim": dim,             # 尺寸
-                    "price": price,         # 最低售价
-                    "prefix": prefix,       # vendorCode前缀码
-                    "stock_sku": stock_sku,
-                }
-                if prefix and prefix not in by_prefix:
-                    by_prefix[prefix] = item
-                if cn and cn not in by_cn:
-                    by_cn[cn] = item
-            return {"by_prefix": by_prefix, "by_cn": by_cn}
-        except HeaderError:
-            raise                       # 表头错误必须冒泡
-        except Exception:
-            return {"by_prefix": {}, "by_cn": {}}
-        finally:
-            if wb is not None:
-                wb.close()
-
-
-    @classmethod
-    def build_vc_resolver(cls, prefix_map=None) -> Tuple[Callable[[str, str], str], Dict[str, str]]:
-        """构建毫秒级商品中文名反查解析器。
-
-        解析优先级:
-        1. vc_override.json (最高优先级纠偏)
-        2. vc_known.json (历史已知映射)
-        3. 4位前缀码映射 (prefix_map 兜底)
-
-        返回: (resolve_cn 函数, 全局已加载的 vc_cn 字典)
-        """
-        vc_cn: Dict[str, str] = {}
-
-        # 1. vc_known.json
-        known = cls.load_vc_known()
-        for vc, info in known.items():
-            if isinstance(info, dict) and info.get("cn"):
-                vc_cn[vc.upper()] = info["cn"]
-
-        # 2. vc_override.json
-        override = cls.load_vc_override()
-        for vc, info in override.items():
-            if isinstance(info, dict) and info.get("cn"):
-                vc_cn[vc.upper()] = info["cn"]
-
-        # 3. 前缀映射兜底
-        if prefix_map is None:
-            prefix_map = cls.load_prefix_map()
-        prefix_re = re.compile(config.VC_PREFIX_RE)
-
-        def resolve_cn(vc: str, default_title: str = "") -> str:
+        def resolve_cn(vc: str, default_title: str = '') -> str:
             if not vc:
                 return default_title
-            v_upper = vc.strip().upper()
-            if v_upper in vc_cn:
-                return vc_cn[v_upper]
-            m = prefix_re.match(v_upper)
-            if m:
-                pref = m.group(1).upper()
-                if pref in prefix_map and prefix_map[pref].get("cn"):
-                    return prefix_map[pref]["cn"]
+            row = db.resolve_vc(vc, entries)
+            if row['status'] == 'mapped':
+                return row['cn']
+            if label_unmapped:
+                return '非货盘' if row['status'] == 'excluded' else '待认领'
             return default_title
 
-        return resolve_cn, vc_cn
+        return resolve_cn, names
 
     @classmethod
-    def load_mapping_state(cls) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        """读现有映射表 xlsx → 增量状态（归属关系 + 已排除清单）。
-        返回 (state, excluded)：state={vc:{cn,dp,shop_price,discount,nmId,...}}；excluded={vc:原因}。
-        映射表不存在 → 空。自动应用 vc_override.json 纠偏记录（优先级最高）。"""
+    def load_mapping_state(cls) -> tuple[dict, dict]:
+        cls.load_price_book(require_price=False)
+        entries = db.vc_entries()
         state, excluded = {}, {}
-        if not os.path.exists(config.current.mapping_xlsx):
-            return state, excluded
-        import sys
-        import time
-        retries = 3
-        overrides = cls.load_vc_override()
-        for attempt in range(retries):
-            wb = None
-            try:
-                import openpyxl
-                wb = openpyxl.load_workbook(config.current.mapping_xlsx, data_only=True)
-                if "映射总表" in wb.sheetnames:
-                    ws = wb["映射总表"]
-                    headers = [str(c.value or "").strip() for c in ws[1]]
-                    if COL_VC in headers:
-                        i_cn, i_vc = headers.index(COL_CN), headers.index(COL_VC)
-                        # 价格列只认新名「实际售价」；旧表缺列时告警降级（不能 raise：
-                        # merge→calc_new_vcs→load_known_vcs 会经过这里，硬失败会阻塞自愈）
-                        i_dp = find_col(headers, COL_ACTUAL_PRICE)
-                        if i_dp is None:
-                            warn_missing("价格映射表·映射总表", config.current.mapping_xlsx, headers,
-                                         COL_ACTUAL_PRICE,
-                                         hint="dp 全部为空；请运行 sellerops catalog merge 重建映射表")
-                        i_sp = find_col_re(headers, COL_SHOP_CNY_RE)
-                        i_disc = find_col(headers, "折扣%")
-                        i_nm = find_col(headers, COL_NM)
-                        i_l = find_col(headers, COL_L)
-                        i_w = find_col(headers, COL_W)
-                        i_h = find_col(headers, COL_H)
-                        i_wt = find_col(headers, COL_WT)
-                        for r in ws.iter_rows(min_row=2, values_only=True):
-                            vc = r[i_vc]
-                            if vc:
-                                if vc in state and state[vc]["cn"] != (r[i_cn] or "") and not overrides.get(vc, {}).get("cn"):
-                                    raise ValueError(f"完整 VC {vc} 有冲突归属：{state[vc]['cn']} / {r[i_cn]}")
-                                state[vc] = {
-                                    "cn": r[i_cn] or "",
-                                    "dp": r[i_dp] if i_dp is not None else None,
-                                    "shop_price": r[i_sp] if i_sp is not None else None,
-                                    "discount": r[i_disc] if i_disc is not None else None,
-                                    "nmId": (r[i_nm] if i_nm is not None else None),
-                                    "L": (r[i_l] if i_l is not None else None),
-                                    "W": (r[i_w] if i_w is not None else None),
-                                    "H": (r[i_h] if i_h is not None else None),
-                                    "weight": (r[i_wt] if i_wt is not None else None),
-                                }
-                if "已排除清单" in wb.sheetnames:
-                    ws2 = wb["已排除清单"]
-                    for r in ws2.iter_rows(min_row=2, values_only=True):
-                        if r[0]:
-                            excluded[r[0]] = r[1] or "非货盘商品（人工排除）"
-                wb.close()
-                break
-            except ValueError:
-                raise
-            except (PermissionError, OSError) as e:
-                if attempt == retries - 1:
-                    raise ValueError(f"无法完整读取映射表 {config.current.mapping_xlsx}") from e
-                time.sleep(0.1 * (attempt + 1))
-            finally:
-                if wb is not None:
-                    wb.close()
-
-        # 自动应用全局纠偏更正（高优先级）
-        for vc, ov in overrides.items():
-            if vc in state and isinstance(ov, dict) and ov.get("cn"):
-                if state[vc]["cn"] != ov["cn"]:
-                    state[vc]["dp_cn"] = state[vc]["cn"]
-                state[vc]["cn"] = ov["cn"]
-
+        for vc in entries:
+            row = db.resolve_vc(vc, entries)
+            if row['status'] == 'mapped':
+                state[vc] = row
+            elif row['status'] == 'excluded':
+                excluded[vc] = row['note'] or '非货盘'
         return state, excluded

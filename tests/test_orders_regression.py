@@ -14,42 +14,20 @@ class TestRegression(unittest.TestCase):
                     "stats": stats or {}}
 
     def test_mabang_mapping_header_based(self):
-        """马帮本地映射按**表头名**定位：把列顺序彻底打乱后仍能取到正确 中文名/库存SKU（离线）。
-
-            背景：旧实现硬编码 `r[1]/r[0]`（映射总表）与 `r[2]/r[7]`（商品价格表），
-            用户插列/挪列后会静默读错——轻则全部判 NO_SKU，重则把订单替换成错误 SKU。
-            """
-        import os
-        import shutil
         import tempfile
-        from openpyxl import Workbook
-        from sellerops.settings import paths as cfg
-        from sellerops.features.orders import matching as mabang
-        tmp = tempfile.mkdtemp(prefix='wb_hdr_')
-        boss_xlsx = os.path.join(tmp, 'boss.xlsx')
-        map_xlsx = os.path.join(tmp, 'map.xlsx')
-        try:
-            wb = Workbook()
-            ws = wb.active
-            ws.append(['产品图片', '库存SKU', '卖家SKU', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '产品中文名'])
-            ws.append(['img', 'TESTSKU-6161', 'S-1', '=F2*2', '1*1*1/0.1', '10', 'AAAA', '测试商品'])
-            wb.save(boss_xlsx)
-            wb = Workbook()
-            ws = wb.active
-            ws.title = '映射总表'
-            ws.append(['vendorCode', '产品中文名', '实际售价'])
-            ws.append(['BCS-AAAA-123', '测试商品', 10])
-            wb.save(map_xlsx)
-            old_boss, old_map = (cfg.current.price_book_xlsx, cfg.current.mapping_xlsx)
-            cfg.current.price_book_xlsx, cfg.current.mapping_xlsx = (boss_xlsx, map_xlsx)
-            try:
-                vc2cn, cn2sku = mabang.load_local_mapping()
-            finally:
-                cfg.current.price_book_xlsx, cfg.current.mapping_xlsx = (old_boss, old_map)
-            self.assertEqual(vc2cn.get('BCS-AAAA-123'), '测试商品')
-            self.assertEqual(cn2sku.get('测试商品'), 'TESTSKU-6161')
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        from catalog_fixture import map_vcs, write_book
+        from sellerops.settings import paths
+        from sellerops.features.orders import matching
+
+        self.addCleanup(paths.configure, paths.current.data_dir)
+        with tempfile.TemporaryDirectory() as tmp:
+            paths.configure(tmp)
+            write_book([('TESTSKU-6161', 'S-1', '=D2*2', 10, '\u6d4b\u8bd5\u5546\u54c1')],
+                       ('\u5e93\u5b58SKU', '\u5356\u5bb6SKU', '\u5b9e\u9645\u552e\u4ef7', '\u6700\u4f4e\u552e\u4ef7', '\u4ea7\u54c1\u4e2d\u6587\u540d'))
+            map_vcs({'BCS-AAAA-123': 'S-1'})
+            names, stock = matching.load_local_mapping()
+            self.assertEqual(names, {'BCS-AAAA-123': '\u6d4b\u8bd5\u5546\u54c1'})
+            self.assertEqual(stock, {'BCS-AAAA-123': 'TESTSKU-6161'})
 
     def test_mabang_process_upload_wait_unit(self):
         """离线单测：正向判据 —— 命中 status=3「预报成功」即完成 + 店铺映射提取。
@@ -251,7 +229,7 @@ class TestRegression(unittest.TestCase):
         normal = dict(marked, id=2, platformOrderId='102',
                       order_ellipsis_other_title='商品编号*数量:BCS-BBBB-2*1')
         names = {'BCS-AAAA-1': '群发商品', 'BCS-BBBB-2': '普通商品'}
-        sku_values = {'群发商品': GROUP_SHIPPING_MARKER, '普通商品': 'SKU-2'}
+        sku_values = {'BCS-AAAA-1': GROUP_SHIPPING_MARKER, 'BCS-BBBB-2': 'SKU-2'}
         args = SimpleNamespace(days=0, page_size=100, apply=True)
 
         with patch.object(matching, 'get_mabang_cred', return_value=cred), \
@@ -270,7 +248,7 @@ class TestRegression(unittest.TestCase):
         with patch.object(forecast_selection, 'get_mabang_cred', return_value=cred), \
                 patch.object(forecast_selection, 'fetch_pending_orders', return_value=[marked, normal]), \
                 patch.object(forecast_selection, 'load_local_mapping',
-                             side_effect=[(names, sku_values), (names, {**sku_values, '群发商品': 'SKU-1'})]), \
+                             side_effect=[(names, sku_values), (names, {**sku_values, 'BCS-AAAA-1': 'SKU-1'})]), \
                 patch.object(wb, 'fetch_canceled_ids', return_value=set()):
             direct_args = SimpleNamespace(days=0, page_size=100)
             for forecast_args in (direct_args, args):
@@ -305,14 +283,13 @@ class TestRegression(unittest.TestCase):
                 mock.patch.object(feishu_register, 'get_mabang_cred',
                                   return_value={'shop_map': {'9352': '袁州1(9352)'}}), \
                 mock.patch.object(feishu_register, 'fetch_pending_orders', return_value=[order]), \
-                mock.patch.object(feishu_register.config, 'shop_json_path',
-                                  return_value=os.path.join(tmp, 'absent.json')), \
+                mock.patch.object(feishu_register.ProductSnapshotRepository, 'load_snapshot_document', return_value=None), \
                 mock.patch('sellerops.integrations.wildberries.client.fetch_canceled_ids', return_value=set()):
             for sku, group_shipping_ids, expected in cases:
 
                 with self.subTest(sku=sku, group_shipping_ids=group_shipping_ids), \
                         mock.patch.object(feishu_register, 'mabang_load_local_mapping',
-                                          return_value=({'BCS-AAAA-100000001': '测试品'}, {'测试品': sku})):
+                                          return_value=({'BCS-AAAA-100000001': '测试品'}, {'BCS-AAAA-100000001': sku})):
                     records, _skip, notice, _cred = feishu_register.build_records(args, group_shipping_ids=group_shipping_ids)
                     self.assertEqual(len(records), 1)
                     self.assertEqual(records[0]['库存SKU'], expected)
@@ -371,37 +348,10 @@ class TestRegression(unittest.TestCase):
             self.assertEqual(st.resolve_shop_labels(['9353', '璧山1']), {'袁州2', '璧山1'})
             self.assertEqual(st.resolve_shop_labels(''), set())
 
-    def test_feishu_register_cn_fallback_unit(self):
-        """feishu-register 填「商品中文名」三级回退：映射总表 → vc_known → 四位前缀码（离线）。
-
-            2026-10-20：商品下架后 vc 从映射总表消失，登记中文名变空（74 单黑丝假发）。
-            登记侧改为三级回退，仅为填名；马帮匹配/预报仍要求 vc 在映射表（在架）。
-            """
-        import os
-        import shutil
-        import tempfile
-        import openpyxl
-        from unittest import mock
-        from sellerops.settings import paths as config
-        from sellerops.features.orders import feishu_register as fr
-        from sellerops.persistence.mappings import MappingRepository
-        tmp = tempfile.mkdtemp()
-        try:
-            boss = os.path.join(tmp, 'boss.xlsx')
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = 'Sheet1'
-            ws.append(['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '库存SKU'])
-            ws.append(['', 'SZLK-1', '手足裂口霜', 80, '10*10*10/0.1', 40, 'WENR', 'szlk'])
-            wb.save(boss)
-            known = {'BCS-BBBB-2': {'cn': '归属池品', 'dp': 88}}
-            with mock.patch.object(config.current, 'price_book_xlsx', boss), mock.patch.object(MappingRepository, 'load_vc_known', return_value=known):
-                resolve = fr._cn_resolver({'BCS-AAAA-1': '映射表品'})
-                self.assertEqual(resolve('BCS-AAAA-1'), '映射表品')
-                self.assertEqual(resolve('BCS-BBBB-2'), '归属池品')
-                self.assertEqual(resolve('BCS-WENR-999'), '手足裂口霜')
-                self.assertIsNone(resolve('BCS-ZZZZ-123456'))
-                self.assertIsNone(resolve(''))
-                self.assertIsNone(resolve(None))
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+    def test_feishu_register_chinese_name_requires_confirmed_vc(self):
+        from sellerops.features.orders import feishu_register
+        resolve = feishu_register._cn_resolver({'BCS-AAAA-1': '\u6d4b\u8bd5\u54c1'})
+        self.assertEqual(resolve('BCS-AAAA-1'), '\u6d4b\u8bd5\u54c1')
+        self.assertIsNone(resolve('BCS-AAAA-2'))
+        self.assertIsNone(resolve(''))
+        self.assertIsNone(resolve(None))

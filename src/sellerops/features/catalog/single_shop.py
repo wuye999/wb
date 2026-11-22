@@ -1,14 +1,11 @@
 """single shop。"""
-import glob
 import os
-import re
 
 import openpyxl
-from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.domain.snapshot_values import first_price
+from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository
-from sellerops.settings import paths as config
 from sellerops.persistence.headers import COL_ACTUAL_PRICE
 from sellerops.persistence.headers import COL_CN
 from sellerops.persistence.headers import COL_H
@@ -19,8 +16,6 @@ from sellerops.persistence.headers import COL_TITLE
 from sellerops.persistence.headers import COL_VC
 from sellerops.persistence.headers import COL_W
 from sellerops.persistence.headers import COL_WT
-from sellerops.persistence.headers import find_col
-from sellerops.persistence.headers import warn_missing
 from sellerops.features.catalog.mapping_excel import stock_summary
 
 SINGLE_SHOP_HEADERS = [
@@ -38,36 +33,20 @@ SINGLE_UNMAPPED_HEADERS = [
 
 SINGLE_UNMAPPED_WIDTHS = [24, 32, 12, 8, 10, 14, 14, 18]
 
-def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=None, prefix_map=None, out_path=None):
+def build_single_shop_xlsx(sid: int, out_path):
     """构建单店铺映射表（包含该店真实在架商品、实际售价、实际库存、实际nmId等）。
     包含 2 个 Sheet：
       1. 在架映射明细（已归属中文名的商品）
       2. 未映射在架商品（在架但未匹配到中文名的商品）
     """
-    if rows is None:
-        document = ProductSnapshotRepository.load_snapshot_document(sid)
-        if document is None:
-            raise ValueError(f"店铺 {sid} 缺少商品快照：{config.shop_json_path(sid)}")
-        rows = document["rows"]
-
-    unique_rows = [r for r in deduplicate_bcs_products(rows, sid) if not r.get("trashedAt")]
-
-    if registry is None:
-        known = MappingRepository.load_vc_known()
-        overrides = MappingRepository.load_vc_override()
-        excluded = MappingRepository.load_vc_excluded()
-    else:
-        known, overrides, excluded = registry
-
-    if boss is None:
-        boss = MappingRepository.load_price_book()
-    boss_by_cn = {b["cn"]: b for b in boss if b.get("cn")}
-
-    if prefix_map is None:
-        prefix_map = MappingRepository.load_prefix_map()
-
-    out_file = out_path or config.shop_mapping_xlsx(sid, shop_name)
-    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    document = ProductSnapshotRepository.load_snapshot_document(sid)
+    if document is None:
+        raise ValueError(f'店铺 {sid} 缺少快照')
+    MappingRepository.load_price_book(require_price=False)
+    entries = db.vc_entries()
+    unique_rows = [row for row in document['rows'] if not row.get('trashedAt')]
+    out_file = out_path
+    os.makedirs(os.path.dirname(out_file) or '.', exist_ok=True)
 
     wb = openpyxl.Workbook()
     ws1 = wb.active
@@ -96,37 +75,11 @@ def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=N
         create_at = r.get("createAt")
         update_at = r.get("updateAt")
 
-        cn = ""
-        dp = None
-        match_type = ""
-
-        # 匹配归属优先级：overrides > known > prefix_map
-        if vc in overrides:
-            cn = overrides[vc].get("cn") or ""
-            dp = overrides[vc].get("dp")
-            match_type = "人工纠偏"
-        elif vc in known:
-            cn = known[vc].get("cn") or ""
-            dp = known[vc].get("dp")
-            match_type = "已归属"
-            if L is None and known[vc].get("L"):
-                L, W, H, weight = known[vc].get("L"), known[vc].get("W"), known[vc].get("H"), known[vc].get("weight")
-        else:
-            m = re.match(config.VC_PREFIX_RE, vc or "")
-            if m:
-                pfx = m.group(1)
-                boss_row = prefix_map.get(pfx)
-                if boss_row:
-                    cn = boss_row.get("cn") or ""
-                    dp = boss_row.get("dp")
-                    match_type = "前缀自动"
-                    known[vc] = {"cn": cn, "dp": dp, "sku": boss_row.get("sku", ""), "source": "前缀自动"}
-
-        # 用 boss 最新售价覆盖实际售价
-        if cn in boss_by_cn:
-            b = boss_by_cn[cn]
-            if b.get("dp") is not None:
-                dp = b["dp"]
+        item = db.resolve_vc(vc, entries)
+        if item['status'] == 'excluded':
+            continue
+        cn, dp = item.get('cn'), item.get('dp')
+        match_type = item.get('source') or ''
 
         if cn:
             ws1.append([
@@ -160,71 +113,3 @@ def build_single_shop_xlsx(sid, shop_name=None, rows=None, registry=None, boss=N
     wb.close()
 
     return n_mapped, n_unmapped
-
-def load_single_shop_rows(sid, shop_name=None, *, path=None):
-    """读取某店铺独立映射表 Excel，返回 {vc: row_dict} 与 [unmapped_vc]"""
-    p = path or config.shop_mapping_xlsx(sid, shop_name)
-    if not os.path.exists(p):
-        return {}, []
-    wb = openpyxl.load_workbook(p, data_only=True)
-    mapped = {}
-    if "在架映射明细" in wb.sheetnames:
-        ws = wb["在架映射明细"]
-        headers = [str(c.value or "").strip() for c in ws[1]]
-        icol = {h: i for i, h in enumerate(headers)}      # 一律按列名定位，无位置兜底
-        if find_col(headers, COL_VC) is None:
-            warn_missing("单店表·在架映射明细", p, headers, COL_VC,
-                         hint="无法按 vendorCode 建键，本店明细按空处理（请运行 sellerops catalog shop-mappings 重建）")
-        if find_col(headers, COL_ACTUAL_PRICE) is None:
-            warn_missing("单店表·在架映射明细", p, headers, COL_ACTUAL_PRICE,
-                         hint="dp 将为空；merge 会用商品价格表按中文名回填，请运行 sellerops catalog merge 重建")
-
-        def cell(r, name):
-            i = icol.get(name)
-            return r[i] if i is not None and i < len(r) else None
-
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            vc = cell(r, COL_VC)
-            if not vc:
-                continue
-            mapped[str(vc)] = {
-                "cn": cell(r, COL_CN) or "",
-                "vc": str(vc),
-                "dp": cell(r, COL_ACTUAL_PRICE),
-                "price": cell(r, "本店售价(CNY)"),
-                "discount": cell(r, "折扣%"),
-                "club": cell(r, "club折扣%"),
-                "stock": cell(r, "本店库存"),
-                "nmId": cell(r, "本店nmId"),
-                "title": cell(r, COL_TITLE) or "",
-                "img": cell(r, COL_IMG) or "",
-                "L": cell(r, COL_L),
-                "W": cell(r, COL_W),
-                "H": cell(r, COL_H),
-                "weight": cell(r, COL_WT),
-                "createAt": cell(r, "创建时间"),
-                "updateAt": cell(r, "更新时间"),
-                "match_type": cell(r, "匹配类型") or "",
-            }
-    unmapped = []
-    if "未映射在架商品" in wb.sheetnames:
-        ws2 = wb["未映射在架商品"]
-        for r in ws2.iter_rows(min_row=2, values_only=True):
-            if r[0]:
-                unmapped.append(str(r[0]))
-    wb.close()
-    return mapped, unmapped
-
-def list_active_shop_mappings():
-    """扫描 data/shops/ 下所有活跃店铺映射表（排除 _archive/ 目录与临时文件）。
-    返回 [{'id': sid, 'name': name, 'path': filepath}, ...]"""
-    files = sorted(glob.glob(os.path.join(config.current.shops_dir, "shop_*.xlsx")))
-    active = []
-    for f in files:
-        base = os.path.basename(f)
-        m = re.match(r"^shop_(\d+)(?:_(.+))?\.xlsx$", base)
-        if m:
-            sid = int(m.group(1))
-            name = m.group(2) or f"shop{sid}"
-            active.append({"id": sid, "name": name, "path": f})
-    return active

@@ -195,7 +195,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     else:
         excl_items = [(vc, "非货盘商品（人工排除）") for vc in sorted(excluded_vcs)]
     for vc, reason in excl_items:
-        ws_ex.append([vc, reason, "不在商品价格表货盘，确认排除；此清单为增量 merge 的排除状态来源"])
+        ws_ex.append([vc, reason, "不在商品价格表货盘，确认排除；此清单由本地库导出"])
     if not excl_items:
         ws_ex.append(["", "", "无已排除商品"])
     for i, w in enumerate([28, 30, 45], 1):
@@ -266,7 +266,9 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     for i, w in enumerate([28, 26, 14, 10, 14, 50], 1):
         ws7.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
-    wb.save(out_path or config.current.mapping_xlsx)
+    if out_path is None:
+        raise ValueError('\u8bf7\u6307\u5b9a\u5bfc\u51fa\u8def\u5f84')
+    wb.save(out_path)
     wb.close()
     n_unmapped = sum(1 for c in bcs if c["vc"] not in picked)
     return len(result_list), len(picked), n_unmapped, len(multi)

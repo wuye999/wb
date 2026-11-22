@@ -1,49 +1,30 @@
-"""
-sellerops nmId → 供应商代码 / 中文名 本地反查（storage 层公共件）
+"""按店从本地快照反查 nmId 和完整 VC。"""
+from typing import Any
 
-真源优先级（**只用本地真源，不联网核实**）：
-  ① 本店在架快照 `{vendorCode: row}` 的 nmId 字段（最准，含该店真实在架商品）
-  ② 映射总表 state 的 nmId 字段（跨店兜底：vc 为跨店唯一键，商品可能在别的店在架）
-两处都没有 → 调用方以 MISS_LABEL（「本地真源未收录」）标注。
-"""
-from typing import Any, Dict
-
-from sellerops.core import utils as common
+from sellerops.domain.snapshot_values import positive_id
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository
 
-MISS_LABEL = "本地真源未收录"   # nmId 在本店快照与映射表中均查不到（不联网核实）
+
+MISS_LABEL = '本地真源未收录'
 
 
 class NmResolver:
-    """按店本地反查 nmId → 供应商代码 / 中文名（一次读快照 + 映射池，失败降级并打警告）"""
-
     def __init__(self, shop_id: Any, with_cn: bool = True):
-        self.nm2vc: Dict[int, str] = {}
-        self.nm2src: Dict[int, str] = {}
-        self._cn = (lambda vc: "")
+        self.nm2vc: dict[int, str] = {}
+        self._cn = lambda vc: ''
         try:
-            resolve_cn, _ = MappingRepository.build_vc_resolver()
-            for vc, item in (ProductSnapshotRepository.load_shop_rows(shop_id) or {}).items():
-                nm_id = common.to_int(item.get("nmId") or item.get("nmID"))
+            rows = ProductSnapshotRepository.load_shop_rows(shop_id) or {}
+            for vc, item in rows.items():
+                nm_id = positive_id(item.get('nmId') or item.get('nmID'))
                 if nm_id:
                     self.nm2vc[nm_id] = vc
-                    self.nm2src[nm_id] = "店快照"
-            state, _ = MappingRepository.load_mapping_state()
-            for vc, info in state.items():
-                nm_id = common.to_int((info or {}).get("nmId"))
-                if nm_id and nm_id not in self.nm2vc:
-                    self.nm2vc[nm_id] = vc
-                    self.nm2src[nm_id] = "映射表"
             if with_cn:
-                self._cn = lambda vc: resolve_cn(vc, "")
-        except Exception as e:
-            # 铁律 9：降级必须打 [警告]，不静默吞异常
-            print(f"  [警告] 本地反查真源加载失败（{type(e).__name__}: {e}）；"
-                  f"供应商代码/中文名将全部标注「{MISS_LABEL}」")
+                resolve_cn, _ = MappingRepository.build_vc_resolver()
+                self._cn = resolve_cn
+        except Exception as error:
+            print(f'  [警告] 本店商品资料读取失败（{type(error).__name__}）：{error}')
 
-    def resolve(self, nm_id: Any) -> Dict[str, str]:
-        """nm_id → {'vc': 供应商代码, 'cn': 中文名, 'src': 解析来源}"""
-        key = common.to_int(nm_id)
-        vc = self.nm2vc.get(key, "")
-        return {"vc": vc, "cn": self._cn(vc) if vc else "", "src": self.nm2src.get(key, "")}
+    def resolve(self, nm_id: Any) -> dict[str, str]:
+        vc = self.nm2vc.get(positive_id(nm_id), '')
+        return {'vc': vc, 'cn': self._cn(vc) if vc else '', 'src': '店快照' if vc else ''}

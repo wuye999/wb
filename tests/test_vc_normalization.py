@@ -1,4 +1,7 @@
 """历史 VC 改码的合成离线回归；不加载生产数据或连接平台。"""
+
+from catalog_fixture import write_book
+from sellerops.persistence import db
 import copy
 from contextlib import ExitStack, redirect_stdout, redirect_stderr
 import io
@@ -208,27 +211,25 @@ class TestNormalizationCommand(unittest.TestCase):
             feature, 'WBContentAPI', side_effect=lambda key: self.clients[int(key.rsplit('-', 1)[1])]))
 
     def write_books(self, excluded=()):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = 'Sheet1'
-        ws.append(['vendorCode前缀码', '产品中文名'])
-        for cn, prefix in self.price_rows:
-            ws.append([prefix, cn])
-        wb.save(paths.current.price_book_xlsx)
-        wb.close()
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = '映射总表'
-        ws.append(['vendorCode', '产品中文名'])
-        for row in self.mapping_rows:
-            ws.append(row)
-        if excluded:
-            ws = wb.create_sheet('已排除清单')
-            ws.append(['vendorCode', '排除原因'])
+        products = [('SKU'+str(i), cn, None, prefix, '') for i, (cn, prefix) in enumerate(self.price_rows)]
+        write_book(products)
+        from sellerops.persistence.mappings import MappingRepository
+        MappingRepository.load_price_book(require_price=False)
+        by_name = {row[1]: row[0] for row in products}
+        entries = {}
+        for vc, cn in self.mapping_rows:
+            entries.setdefault(vc, set()).add(cn)
+        with db.connect(write=True) as connection:
+            connection.execute('DELETE FROM vc_map')
+            for vc, names in entries.items():
+                sku = by_name.get(next(iter(names))) if len(names) == 1 else None
+                db.set_vc(connection, vc, 'mapped' if sku else 'pending', sku=sku, source='manual')
             for vc in excluded:
-                ws.append([vc, '人工排除'])
-        wb.save(paths.current.mapping_xlsx)
-        wb.close()
+                db.set_vc(connection, vc, 'excluded', source='manual')
+
+    def write_history(self, document):
+        with db.connect(write=True) as connection:
+            store.write_log(connection, 'previous', document, historical=True)
 
     def reader(self, sid, kind):
         def read(*args, **kwargs):
@@ -255,15 +256,14 @@ class TestNormalizationCommand(unittest.TestCase):
         return main(['--data-dir', str(self.folder), 'listing', 'normalize-vc', *([] if '--shops' in args else ['--all-shops']), *args])
 
     def documents(self):
-        return [json.loads(path.read_text(encoding='utf8')) for path in Path(paths.current.log_dir).glob(f'{store.COMMAND}_*.json')]
+        return [json.loads(row['payload_json']) for row in db.plans('normalize_vc', 'normalize:')]
 
     def records(self):
         return [row for doc in self.documents() for row in doc['items']]
 
     def test_preview_defaults_to_all_shops_and_leaves_inputs_and_state_unchanged(self):
-        atomic_dump_json(paths.current.vc_known_json, {OLD: {'cn': CN}})
         atomic_dump_json(self.folder / 'products' / 'sentinel.json', {'not': 'a snapshot to load'})
-        before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file()}
+        before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file() and p != Path(paths.current.database)}
         self.assertEqual(self.cli('--all'), 0)
         self.assertFalse(self.wrote)
         self.assertEqual(self.events, [('active', 1), ('trash', 1), ('active', 2), ('trash', 2)])
@@ -271,7 +271,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual([(r['shopId'], r['newVC'], r['status']) for r in rows], [(1, NEW, 'planned'), (2, NEW, 'planned')])
         for p, content in before.items():
             self.assertEqual(p.read_bytes(), content)
-        self.assertEqual({p for p in self.folder.rglob('*') if p.is_file() and 'logs' not in p.parts}, set(before))
+        self.assertEqual({p for p in self.folder.rglob('*') if p.is_file() and 'logs' not in p.parts and p != Path(paths.current.database)}, set(before))
         for api in self.clients.values():
             api.update_cards.assert_not_called()
             api.warehouses.assert_not_called()
@@ -279,7 +279,7 @@ class TestNormalizationCommand(unittest.TestCase):
             api.stocks.assert_not_called()
 
     def test_apply_reads_all_shops_first_and_preserves_each_shops_identifiers(self):
-        before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file()}
+        before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file() and p != Path(paths.current.database)}
         self.assertEqual(self.cli('--all', '--apply'), 0)
         self.assertEqual(self.events[:4], [('active', 1), ('trash', 1), ('active', 2), ('trash', 2)])
         for sid, nm in ((1, 101), (2, 202)):
@@ -290,7 +290,7 @@ class TestNormalizationCommand(unittest.TestCase):
             self.clients[sid].set_stocks.assert_not_called()
         self.assertTrue(all(row['status'] == 'accepted' for row in self.records()))
         self.assertTrue(all(row['cardReceipt']['taskId'] == 123 for row in self.records()))
-        logs = ''.join(p.read_text(encoding='utf8') for p in Path(paths.current.log_dir).glob('*.json'))
+        logs = json.dumps(self.documents())
         self.assertNotIn('fixture-secret', self.output.getvalue() + logs)
         for path, content in before.items():
             self.assertEqual(path.read_bytes(), content)
@@ -309,10 +309,12 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual({r['status'] for r in self.records()}, {'skipped', 'accepted'})
 
     def test_missing_or_conflicting_ownership_blocks_but_manual_override_wins(self):
-        atomic_dump_json(paths.current.vc_known_json, {OLD: {'cn': '不同商品'}})
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, OLD, 'pending')
         self.assertEqual(self.cli('--all'), 1)
-        self.assertTrue(all('分歧' in r['reason'] for r in self.records()))
-        atomic_dump_json(paths.current.vc_override_json, {OLD.lower(): {'cn': CN}})
+        self.assertTrue(all('\u7f3a\u5c11\u660e\u786e' in r['reason'] for r in self.records()))
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, OLD, 'mapped', sku='SKU0', source='manual')
         self.assertEqual(self.cli('--all'), 0)
         self.assertFalse(self.wrote)
 
@@ -415,12 +417,12 @@ class TestNormalizationCommand(unittest.TestCase):
         self.clients[2].update_cards.assert_called_once()
 
     def test_receipt_save_failure_leaves_submitting_guard_and_stops_all_remaining_writes(self):
-        original_save = open_api_common.OperationLog.save
+        original_save = feature.NormalizationLog.save
         def save(log):
             if any(row['status'] == 'accepted' for row in log.document['items']):
                 raise OSError('fixture save failure')
             return original_save(log)
-        with patch.object(open_api_common.OperationLog, 'save', save):
+        with patch.object(feature.NormalizationLog, 'save', save):
             self.assertEqual(self.cli('--all', '--apply'), 1)
         self.assertTrue(any(row['status'] == 'submitting' for row in self.records()))
         self.clients[2].update_cards.assert_not_called()
@@ -454,7 +456,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertTrue(all(len(call.args[0]) <= 100 for call in self.clients[1].update_cards.call_args_list))
 
     def test_pending_shop_reuses_history_code_when_completed_shop_now_has_new_vc(self):
-        atomic_dump_json(Path(paths.current.log_dir) / f'{store.COMMAND}_previous.json', {
+        self.write_history({
             'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [
                 {'shopId': 1, 'nmID': 101, 'vc': OLD, 'newVC': NEW, 'status': 'accepted'}]})
         self.active[1] = [card(101, NEW)]
@@ -463,7 +465,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual(self.clients[2].update_cards.call_args.args[0][0]['vendorCode'], NEW)
 
     def test_historical_numbered_allocation_is_reused_by_pending_shops(self):
-        atomic_dump_json(Path(paths.current.log_dir) / f'{store.COMMAND}_previous.json', {
+        self.write_history({
             'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [
                 {'shopId': 1, 'nmID': 101, 'vc': OLD, 'newVC': NEW + '-3', 'status': 'accepted'}]})
         self.active[1] = [card(101, NEW + '-3')]
@@ -472,7 +474,7 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual(self.clients[2].update_cards.call_args.args[0][0]['vendorCode'], NEW + '-3')
 
     def test_history_target_taken_by_unrelated_card_is_not_reallocated(self):
-        atomic_dump_json(Path(paths.current.log_dir) / f'{store.COMMAND}_previous.json', {
+        self.write_history({
             'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [
                 {'shopId': 1, 'nmID': 101, 'vc': OLD, 'newVC': NEW, 'status': 'unknown'}]})
         self.trash[2] = [card(299, NEW)]
@@ -480,36 +482,35 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertFalse(self.wrote)
 
     def test_corrupt_inputs_and_history_fail_closed_without_silently_emptying_them(self):
-        for path in (Path(paths.current.vc_known_json), Path(paths.current.log_dir) / f'{store.COMMAND}_corrupt.json'):
-            with self.subTest(path=path.name):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text('{broken', encoding='utf8')
-                self.assertEqual(self.cli('--all', '--apply'), 1)
-                self.assertFalse(self.wrote)
-                self.assertEqual(path.read_text(encoding='utf8'), '{broken')
-                path.unlink()
+        with db.connect(write=True) as connection:
+            db.save_plan(connection, 'normalize:damaged', 'normalize_vc', 'unknown', 'damaged', {})
+            connection.execute("UPDATE plans SET payload_json = '{broken' WHERE plan_id='normalize:damaged'")
+        self.assertEqual(self.cli('--all', '--apply'), 1)
+        self.assertFalse(self.wrote)
+        with db.connect() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT payload_json FROM plans WHERE plan_id='normalize:damaged'").fetchone()[0], '{broken')
 
     def test_history_with_missing_ids_or_unknown_status_fails_closed(self):
-        path = Path(paths.current.log_dir) / f'{store.COMMAND}_invalid.json'
         for row in ({'status': 'accepted'}, {'status': 'accpted'}, {'status': 'submitting', 'shopId': True}):
             with self.subTest(row=row):
-                atomic_dump_json(path, {'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [row]})
+                with db.connect(write=True) as connection:
+                    db.save_plan(connection, 'normalize:invalid', 'normalize_vc', 'unknown', 'invalid',
+                                 {'version': 1, 'command': store.COMMAND, 'apply': True, 'items': [row]})
                 self.assertEqual(self.cli('--all', '--apply'), 1)
                 self.assertFalse(self.wrote)
-                path.unlink()
 
     def test_duplicate_mapping_ownership_is_not_silently_resolved_by_last_row(self):
         self.mapping_rows.append((OLD, '另一个商品'))
         self.write_books()
         self.assertEqual(self.cli('--all', '--apply'), 1)
         self.assertFalse(self.wrote)
-        self.assertTrue(all('分歧' in row['reason'] for row in self.records()))
+        self.assertTrue(all('缺少明确' in row['reason'] for row in self.records()))
 
-    def test_known_records_alone_can_supply_ownership_and_json_exclusion_wins(self):
-        Path(paths.current.mapping_xlsx).unlink()
-        atomic_dump_json(paths.current.vc_known_json, {OLD: {'cn': CN}})
+    def test_known_records_alone_can_supply_ownership_and_exclusion_wins(self):
         self.assertEqual(self.cli('--all'), 0)
-        atomic_dump_json(paths.current.vc_excluded_json, {OLD.lower(): {'reason': '人工排除'}})
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, OLD, 'excluded', source='manual')
         self.assertEqual(self.cli('--all', '--apply'), 0)
         self.assertFalse(self.wrote)
 

@@ -11,6 +11,7 @@ import string
 from sellerops.settings import paths as config
 
 
+from sellerops.features.publishing.publish_inputs import parse_dims_str
 from sellerops.integrations.wildberries.client import fetch_card_json
 
 
@@ -150,7 +151,9 @@ def resolve_replicate_package(vc, cn, nm_id, map_state, card_cache=None):
 
     # 2. 商品价格表兜底
     if not (_valid(length) and _valid(width) and _valid(height) and _valid(weight)):
-        bp = price_book_packages(config.current).get(cn or "")
+        bp = parse_dims_str(row.get('dimensions')) if row.get('dimensions') else None
+        if bp is None and not row.get('sku'):
+            bp = price_book_packages(config.current).get(cn or "")
         if bp:
             bl, bw, bh, bwgt = bp
             if not _valid(length):

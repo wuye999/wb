@@ -14,9 +14,9 @@
 
 临时报告账号由 `integrations.bcs.capture.parse_sessions()` 从标准输入文本解析为不显示秘密的 `BCSSession`，通过 `BCSClient(session)` 注入独立认证，默认客户端仍延迟读取本机配置。`product_report.collect(extra_bcs_accounts=...)` 合并统计来源，`ProductReport.target_shop_ids` 单独限定本机链接缺口目标（直接构造旧实体时None沿用全部店铺）；`unavailable_accounts` 保留店铺列表读取失败的账号标签，防止健康店铺的汇总误标整轮完整。报告实体不保存认证；额外店铺不加载本地快照或使用本机提交记录。离线边界见 [临时账号测试](../tests/test_product_report_accounts.py)。
 
-显式的备用官方上架与跨店内容更新见 [Open API 商品写入](OPEN_API_LISTINGS.md)。[content_api](../src/sellerops/integrations/wildberries/content_api.py) 独立声明新增读写端点，保持只读 `WBOpenAPI` 白名单不变；[open_api_payloads](../src/sellerops/features/publishing/open_api_payloads.py) 负责完整覆盖更新与标识保留，[open_api_sources](../src/sellerops/features/publishing/open_api_sources.py) 负责公开商品的类目属性映射，[open_api_publish](../src/sellerops/features/publishing/open_api_publish.py) 编排完整上架，[open_api_finish](../src/sellerops/features/publishing/open_api_finish.py) 负责有限标识轮询、后续提交与续办，[open_api_sync](../src/sellerops/features/publishing/open_api_sync.py) 编排跨店更新。阶段状态在 [持久化模块](../src/sellerops/persistence/open_api_publish.py) 中按数据目录隔离，以 FileLock 覆盖整轮事务。写请求不重试，条码、建卡与媒体/库存分别记录，预览不生成条码或等待；离线边界覆盖见 [test_open_api_writes](../tests/test_open_api_writes.py) 与 [有限等待测试](../tests/test_open_api_publish_wait.py)。
+显式的备用官方上架与跨店内容更新见 [Open API 商品写入](OPEN_API_LISTINGS.md)。[content_api](../src/sellerops/integrations/wildberries/content_api.py) 独立声明新增读写端点，保持只读 `WBOpenAPI` 白名单不变；[open_api_payloads](../src/sellerops/features/publishing/open_api_payloads.py) 负责完整覆盖更新与标识保留，[open_api_sources](../src/sellerops/features/publishing/open_api_sources.py) 负责公开商品的类目属性映射，[open_api_publish](../src/sellerops/features/publishing/open_api_publish.py) 编排完整上架，[open_api_finish](../src/sellerops/features/publishing/open_api_finish.py) 负责有限标识轮询、后续提交与续办，[open_api_sync](../src/sellerops/features/publishing/open_api_sync.py) 编排跨店更新。阶段状态由 [持久化模块](../src/sellerops/persistence/open_api_publish.py) 保存到本地库，以现有进程锁串行化上架请求。写请求不重试，条码、建卡与媒体/库存分别记录，预览不生成条码或等待；离线边界覆盖见 [test_open_api_writes](../tests/test_open_api_writes.py) 与 [有限等待测试](../tests/test_open_api_publish_wait.py)。
 
-`listing normalize-vc` 的编排在 [vc_normalization](../src/sellerops/features/publishing/vc_normalization.py)，[纯规则](../src/sellerops/domain/vc_normalization.py) 处理明确归属和跨店一致的避重分配，只替换四位前缀并保留原尾部，冲突时追加正整数序号，[专用载荷](../src/sellerops/features/publishing/vc_normalization_payloads.py) 保留现值并按实际 ASCII JSON 字节分批。[只读输入与历史](../src/sellerops/persistence/vc_normalization.py) 按表头加载所需字段，拒绝歧义、吞错和随机前缀兜底；日志目录的 FileLock 覆盖全轮，提交前保存 submitting，历史记录固定新码并阻止同店同卡重放。读取不完整整轮零提交，写后不查询；不建立别名或修改现有归属/快照/状态。边界见 [离线改码测试](../tests/test_vc_normalization.py)。
+`listing normalize-vc` 的编排在 [vc_normalization](../src/sellerops/features/publishing/vc_normalization.py)，[纯规则](../src/sellerops/domain/vc_normalization.py) 处理明确归属和跨店一致的避重分配，只替换四位前缀并保留原尾部，冲突时追加正整数序号，[专用载荷](../src/sellerops/features/publishing/vc_normalization_payloads.py) 保留现值并按实际 ASCII JSON 字节分批。[只读输入与历史](../src/sellerops/persistence/vc_normalization.py) 按表头加载所需字段，拒绝歧义、吞错和随机前缀兜底；同一数据目录的 FileLock 覆盖全轮，提交前保存 submitting 到 SQLite，历史记录固定新码并阻止同店同卡重放。读取不完整整轮零提交，写后不查询；不建立别名或修改现有归属/快照/状态。边界见 [离线改码测试](../tests/test_vc_normalization.py)。
 
 ## 当前必须保留的运行约定
 
@@ -72,7 +72,7 @@
 
 ## 三条主要数据流
 
-**商品主数据**：用户价格表 → 本地快照/归属池 → mapping/review 人工判断 → merge/纠偏更新本地映射。远端快照只在独立 fetch 中更新。
+**商品主数据**由只读价格表、SQLite 中的归属与店铺快照组成。归属统一通过 `db.resolve_vc()` 查询，审核导入和纠偏只写库，报表按需导出。
 
 `catalog fetch` 默认走 BCS 快照：`features.catalog.products.fetch_all` 先通过 `sync_shops_parallel` 同步 WB → BCS，再逐店 `bcs.fetch_shop_products(filter=BASE)` 读取缓存并原子保存，`--no-sync` 跳过同步直接读取上次结果。显式 `--source wb-openapi` 时改用 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存；`features.catalog.snapshot_open_api` 负责唯一莫斯科仓确认及旧快照字段转换，`products` 负责原子保存、统计和多店失败汇总。令牌仅在内存中使用，不写入快照或状态。新增接口继续沿用只读端点白名单，禁止将库存 POST 读取改成 PUT/DELETE，也不在失败后自动换区域、Cookie 或缓存。
 
@@ -132,7 +132,7 @@ BCS [认证模块](../src/sellerops/integrations/bcs/auth.py) 处理密码登录
 
 - 远端业务写入、定时任务注册默认预览，显式 `--apply` 才执行；不可逆删除要求 `--yes`。本地报表生成可直接执行。
 - WB 修改异步生效，无法通过即时查询判断最终结果；BCS 修改也异步，且需先同步再查询，耗时较长。因此不进行写后验证：写命令提交并记录接口结果后结束，不附加查询验证、同步、拉取或映射表合并。写命令不提供 `--verify`、`--no-verify` 或串联写后同步的 `--sync` 开关。
-- 更新快照和映射表使用独立 `catalog fetch` / `catalog merge` 命令，只有用户另行明确要求时才运行，AI 不得顺手补跑。离线开发测试可以正常执行，与真实平台写后验证无关。
+- 更新快照运行独立的 `catalog fetch`，本地归属审核运行 `catalog merge`，报表使用 `report mapping`。快照更新仍需用户另行明确要求。
 - WB 提交过程必需的两阶段确认、明确要求的价格审核，以及马帮履约必需的预报状态轮询仍属于业务步骤；保留其超时、分页和限流边界。不得把业务确认误删为写后验证。
 - WB Open API 上架的有限新标识轮询也是必要业务步骤，仅适用于已受理且无未知写入状态的待办完整 VC；不得用它刷新快照、查询最终图片/库存结果，或自动重放建卡和未知提交。断点续办保留原图片/库存计划，不把新的来源、价格或库存参数混入 `--resume`。
 - 不把 HTTP 成功视为最终生效；保留平台任务 ID、失败项目和部分失败信息。写请求是否重试由幂等性决定，不能盲目重放。

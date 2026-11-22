@@ -68,7 +68,11 @@ def run(args) -> int:
 
 def _run(args, result: ProductResult) -> None:
     shops = result.shops = selected_shops(args)
-    state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False))
+    state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False),
+                                       fresh=(result.apply and getattr(args, 'price', None) is None
+                                              and not getattr(args, 'keep_price', False)
+                                              and (getattr(args, 'from_price_book', False)
+                                                   or getattr(args, 'discount', None) is None)))
     vcs, desc = resolve_filters(args, state, book)
     print(f"目标：{desc}，通道 WB 后台")
     with ProductDataResolver() as resolver:

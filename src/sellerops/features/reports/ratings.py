@@ -25,6 +25,7 @@ from sellerops.integrations.wildberries import client as wb_api
 from sellerops.integrations.wildberries import feedback as fbc
 from sellerops.domain.models import ProductRatingItem
 from sellerops.domain.vendor_codes import extract_vc_prefix
+from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.product_index import NmResolver
 
@@ -52,58 +53,17 @@ REPORT_HEADERS = [
 ]
 
 
-def _match_price_table(
-    vc: str,
-    nm_id: int,
-    shop_id: int,
-    boss_details: Dict[str, Dict[str, Any]],
-    resolve_cn: Any,
-    nm_resolver: Optional[NmResolver] = None,
-) -> Dict[str, Any]:
-    """级联匹配商品价格表数据。
-
-    优先级：
-    1. vendorCode 4位前缀码 -> boss_details["by_prefix"]
-    2. resolve_cn(vc) (结合 vc_override + vc_known) -> boss_details["by_cn"]
-    3. 本地快照 nmResolver 反查 vc -> 再匹配
-    """
-    by_prefix = boss_details.get("by_prefix") or {}
-    by_cn = boss_details.get("by_cn") or {}
-
-    pref = extract_vc_prefix(vc)
-    if pref and pref in by_prefix:
-        return by_prefix[pref]
-
-    cn = resolve_cn(vc, "") if resolve_cn else ""
-    if cn and cn in by_cn:
-        return by_cn[cn]
-
-    # 包含匹配 (模糊降级)
-    if cn:
-        for k, v in by_cn.items():
-            if cn == k or cn in k or k in cn:
-                return v
-
-    if nm_resolver:
-        res = nm_resolver.resolve(nm_id)
-        resolved_vc = res.get("vc", "")
-        resolved_cn = res.get("cn", "")
-        if resolved_vc:
-            r_pref = extract_vc_prefix(resolved_vc)
-            if r_pref and r_pref in by_prefix:
-                return by_prefix[r_pref]
-        if resolved_cn and resolved_cn in by_cn:
-            return by_cn[resolved_cn]
-
-
-    return {
-        "sku": "",
-        "cn": cn or "",
-        "dp": None,
-        "dim": "",
-        "price": None,
-        "prefix": pref or "",
-    }
+def _match_price_table(vc: str, nm_id: int, entries: dict, nm_resolver: Optional[NmResolver] = None) -> dict:
+    """Use confirmed ownership and only use a shop-local reverse lookup for an absent VC."""
+    if not vc and nm_resolver:
+        vc = nm_resolver.resolve(nm_id)['vc']
+    if not vc:
+        return {}
+    row = db.resolve_vc(vc, entries)
+    if row['status'] == 'mapped':
+        return {**row, 'dim': row['dimensions']}
+    return {'cn': '\u975e\u8d27\u76d8' if row['status'] == 'excluded' else '\u5f85\u8ba4\u9886',
+            'prefix': extract_vc_prefix(vc) or ''}
 
 
 def _item_matches_filter(item: ProductRatingItem, args: Any) -> bool:
@@ -294,8 +254,8 @@ def run(args: Any) -> int:
     print(f"统计周期: {start_d} 至 {end_d} (近 {days} 天)")
 
     # 预载入价格表与名称解析器
-    boss_details = MappingRepository.load_boss_details()
-    resolve_cn, _ = MappingRepository.build_vc_resolver()
+    MappingRepository.load_price_book(require_price=False)
+    entries = db.vc_entries()
 
     # 智能排序优化：若筛选 1 星，则按 oneStar desc 排序拉取；若看评价数，按 feedbackCount desc
     order_field = "feedbackRating"
@@ -358,14 +318,7 @@ def run(args: Any) -> int:
                 is_shadowed = bool(raw.get("isShadowed", False))
 
                 # 匹配价格表
-                p_info = _match_price_table(
-                    vc=vc,
-                    nm_id=nm_id,
-                    shop_id=sid,
-                    boss_details=boss_details,
-                    resolve_cn=resolve_cn,
-                    nm_resolver=nm_resolver,
-                )
+                p_info = _match_price_table(vc, nm_id, entries, nm_resolver)
 
                 item = ProductRatingItem(
                     shop_id=sid,

@@ -1,4 +1,6 @@
 """商品操作字段最小依赖、定向补齐与完整跳过报告；只用合成数据。"""
+
+from catalog_fixture import document, corrupt_snapshot, map_vcs, write_book
 from sellerops.features.catalog import selection
 from contextlib import ExitStack, redirect_stdout
 import csv
@@ -51,7 +53,7 @@ class TestProductOperationData(unittest.TestCase):
     def save(self, sid, **values):
         row = dict(shopId=sid, vendorCode=VC, nmId=100 + sid, sizeList=[], **values)
         Snapshots.save_shop_products(sid, [row])
-        return Path(paths.shop_json_path(sid)).read_bytes()
+        return document(sid)
 
     def test_sufficient_ids_do_not_require_current_stock_price_images_or_dimensions(self):
         row = {'nmId': 101, 'sizeList': [{'chrtId': 201}, {'chrtId': 202}], 'dimensionsLength': None}
@@ -75,7 +77,7 @@ class TestProductOperationData(unittest.TestCase):
         self.assertTrue(all(it['cur_amt'] is None for p in stock for it in p['items']))
         self.keys.assert_called_once_with()
         for sid in (1, 2):
-            self.assertEqual(Path(paths.shop_json_path(sid)).read_bytes(), before[sid])
+            self.assertEqual(document(sid), before[sid])
             api = self.clients[f'secret-{sid}']
             api.cards.assert_called_once_with(vendor_code=VC, max_pages=20)
             api.prices.assert_not_called()
@@ -194,20 +196,18 @@ class TestProductOperationData(unittest.TestCase):
         api.stocks.assert_not_called()
         api.prices.assert_called_once_with([101])
 
-    def test_new_snapshot_vcs_are_selected_by_name_without_writing_mapping_or_overrides(self):
-        from sellerops.persistence.mappings import MappingRepository
+    def test_new_snapshot_vcs_with_prefix_remain_pending_until_confirmed(self):
+        from sellerops.persistence import db
+
         self.save(1)
-        atomic_dump_json(paths.current.vc_excluded_json, {})
-        previous = Path(paths.current.vc_excluded_json).read_bytes()
-        boss = [{'cn': '黑丝假发', 'sku': 'HSJF', 'prefix': 'HSJF', 'dp': 100, 'floor': 100}]
-        with patch.object(MappingRepository, 'load_mapping_state', return_value=({}, {})), \
-                patch.object(MappingRepository, 'load_price_book', return_value=boss), \
-                patch.object(MappingRepository, 'build_vc_resolver', return_value=(lambda *args: '黑丝假发', {})):
-            from types import SimpleNamespace
-            vcs, _ = selection.resolve_filters(SimpleNamespace(name='黑丝假发'), selection.load_state([1])[0], boss)
-            self.assertEqual(vcs, [VC])
-        self.assertFalse(Path(paths.current.mapping_xlsx).exists())
-        self.assertEqual(Path(paths.current.vc_excluded_json).read_bytes(), previous)
+        write_book([('HSJF', 'fixture', 100, 'HSJF', '')])
+        selector = SimpleNamespace(name='fixture')
+        state, _, book = selection.load_state([1])
+        self.assertEqual(selection.resolve_filters(selector, state, book)[0], [])
+        self.assertEqual(db.resolve_vc(VC)['status'], 'pending')
+        map_vcs({VC: 'HSJF'})
+        state, _, book = selection.load_state([1])
+        self.assertEqual(selection.resolve_filters(selector, state, book)[0], [VC])
 
     def test_stock_cli_finishes_all_preparation_before_writing_and_never_refreshes_snapshots(self):
         from sellerops.cli.main import main
@@ -238,13 +238,17 @@ class TestProductOperationData(unittest.TestCase):
         fetch.assert_not_called()
         merge.assert_not_called()
         for sid in (1, 2):
-            self.assertEqual(Path(paths.shop_json_path(sid)).read_bytes(), before[sid])
+            self.assertEqual(document(sid), before[sid])
 
     def test_snapshot_duplicate_vc_or_foreign_shop_is_not_silently_used(self):
         for doc in ({'shopId': 2, 'rows': [{'vendorCode': VC, 'nmId': 101}]},
                     {'shopId': 1, 'rows': [{'vendorCode': VC, 'nmId': 101}, {'vendorCode': VC, 'nmId': 999}]}):
             with self.subTest(doc=doc):
-                atomic_dump_json(paths.shop_json_path(1), doc)
+                self.save(1)
+                from sellerops.persistence.snapshots import validate_document
+                with self.assertRaises(ValueError):
+                    validate_document(1, doc)
+                corrupt_snapshot(1, snapshot_json=json.dumps({'shopId': 2}))
                 self.assertIsNone(plans.load_shop_rows(1))
                 result = plans.plan_stock([VC], [1], {}, 0)
                 self.assertEqual(len(result[0]['blocked_items']), 1)
@@ -332,7 +336,8 @@ class TestProductOperationData(unittest.TestCase):
         from sellerops.cli.main import main
         from sellerops.features.products import discounts
 
-        atomic_dump_json(paths.shop_json_path(1), {'shopId': 999, 'rows': [{'vendorCode': VC}]})
+        self.save(1)
+        corrupt_snapshot(1, snapshot_json='{"shopId": 999}')
         self.save(2)
         client = Mock()
         client.upload_batch_discount.return_value = Mock(success=True, task_id=123)

@@ -1,4 +1,6 @@
 """合成夹具验证官方商品写入；不读取真实凭证、不连接平台。"""
+
+from sellerops.persistence import db
 import copy
 from contextlib import ExitStack, redirect_stdout, redirect_stderr
 import io
@@ -258,7 +260,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
     def test_preview_reads_entire_plan_but_does_not_generate_barcode_or_write_state(self):
         self.assertEqual(self.creation(), 0)
         self.assertFalse(self.wrote)
-        self.assertFalse(store.state_path().exists())
+        self.assertEqual(store.load_state()['items'], {})
         logs = list(Path(paths.current.log_dir).glob('*.json'))
         plan = json.loads(logs[0].read_text(encoding='utf8'))['items'][0]
         self.assertEqual(plan['stock'], 0)
@@ -289,7 +291,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.wrote = False
         self.assertEqual(self.creation('--apply'), 1)
         self.assertEqual(api.create_cards.call_count, 1)
-        self.assertNotIn('fixture-secret', self.output.getvalue() + store.state_path().read_text(encoding='utf8'))
+        self.assertNotIn('fixture-secret', self.output.getvalue() + str(store.load_state()))
 
     def test_timeout_can_resume_from_original_record_without_source_reads_or_recreating(self):
         api = self.clients['fixture-secret-2']
@@ -366,7 +368,8 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(self.creation('--apply'), 0)
         self.assertFalse(self.wrote)
         api.trash_cards.side_effect = self.reader('empty-trash', [])
-        atomic_dump_json(Path(paths.current.state_dir) / '复制上架记录.json', {VC: {'2': 'already-submitted'}})
+        with db.connect(write=True) as connection:
+            store.write_shared(connection, {VC: {'2': 'already-submitted'}})
         self.assertEqual(self.creation('--apply'), 0)
         api.barcodes.assert_not_called()
         api.create_cards.assert_not_called()
@@ -479,9 +482,11 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         api.update_cards.assert_not_called()
 
     def test_state_shop_identity_mismatch_is_rejected_before_any_submission(self):
-        atomic_dump_json(store.state_path(), {'version': 1, 'items': {store.item_key(2, VC): {
-            'shopId': 3, 'vc': VC, 'status': 'accepted', 'stages': {},
-        }}})
+        key = store.item_key(2, VC)
+        with db.connect(write=True) as connection:
+            db.save_plan(connection, 'openapi:' + key, 'publish', 'partial', key, {
+                'shopId': 3, 'vc': VC, 'status': 'accepted', 'stages': {},
+            })
         self.assertEqual(self.cli('listing', 'publish-openapi', '--resume', '--shops', '2,3', '--vc', VC, '--apply'), 1)
         self.assertFalse(self.wrote)
         for api in self.clients.values():

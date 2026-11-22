@@ -1,4 +1,6 @@
 """通过正式命令和脱敏平台回执检查商品选择、提交边界与数据隔离。"""
+
+from catalog_fixture import map_vcs, corrupt_snapshot
 import csv
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from io import StringIO
@@ -111,6 +113,24 @@ class ProductBoundaries(unittest.TestCase):
             plan = collect(7, -1, 0, 35)
             self.assertEqual([row["nmID"] for row in plan["items"]], [1, 3])
 
+    def test_storewide_discounts_skip_excluded_vcs_in_both_channels(self):
+        from sellerops.features.products import discount_bcs, discounts
+
+        entries = {'VC-1': {'status': 'excluded'}}
+        args = SimpleNamespace(target=30, limit=0, threshold=-1, below=-1)
+        wb_client = Mock()
+        wb_client.fetch_discount_goods_desc.return_value = [
+            {'nmID': 1, 'vendorCode': 'VC-1', 'discount': 40},
+            {'nmID': 2, 'vendorCode': 'VC-2', 'discount': 40}]
+        wb_plan = discounts._storewide_plan(7, wb_client, args, lambda vc, default: default, entries)
+        rows = [dict(row, nmId=row['nmID'], sizeList=[{'price': 20}])
+                for row in wb_client.fetch_discount_goods_desc.return_value]
+        with patch.object(discount_bcs.bcs, 'fetch_shop_products', return_value=rows):
+            bcs_plan = discount_bcs.collect(7, -1, 0, 30, entries=entries)
+        for plan in (wb_plan, bcs_plan):
+            self.assertEqual([row['vc'] for row in plan['items']], ['VC-2'])
+            self.assertEqual([row['vc'] for row in plan['skipped_items']], ['VC-1'])
+
     def test_write_timeout_is_not_replayed_and_read_post_can_retry(self):
         session = Mock()
         session.request.side_effect = [requests.Timeout(), response({"items": []})]
@@ -167,6 +187,8 @@ class OperationalExamples(unittest.TestCase):
             Snapshots.save_shop_products(sid, [{"vendorCode": vc, "nmId": sid * 100 + n,
                 "sizeList": [{"chrtId": sid * 1000 + n}]} for n, vc in enumerate(
                 ["BCS-AAAA-1", "BCS-AAAA-2", "BCS-BBBB-3"], 1)])
+
+        map_vcs({'BCS-AAAA-1': 'CUP', 'BCS-AAAA-2': 'CUP', 'BCS-BBBB-3': 'COVER'}, source='prefix')
 
     def run_command(self, *args):
         return main(["--data-dir", str(self.folder), "product", *args])
@@ -228,7 +250,7 @@ class OperationalExamples(unittest.TestCase):
         load.assert_called_once_with(2)
 
     def test_foreign_shop_id_in_legacy_snapshot_blocks_write(self):
-        Snapshots.save_shop_products(1, [{"shopId": 2, "nmId": 200, "vendorCode": "BCS-AAAA-1"}])
+        corrupt_snapshot(1, row_json='{"shopId": 2, "nmId": 200, "vendorCode": "BCS-AAAA-1"}')
         with patch.object(wb, "request") as send, redirect_stderr(StringIO()):
             self.assertEqual(self.run_command("price", "--shops", "1", "--vc", "BCS-AAAA-1",
                                               "--price", "129", "--apply"), 1)

@@ -1,4 +1,6 @@
 """WorkBuddy CLI contract with synthetic workbooks, snapshots and transport replies."""
+
+from catalog_fixture import map_vcs
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import csv
 import io
@@ -71,6 +73,7 @@ class TestWorkBuddyProducts(unittest.TestCase):
         book.close()
         self.save(1, self.row(A, 101, (201,)), self.row(B, 102, (202,)))
         self.save(2, self.row(A, 301, (201,)))
+        map_vcs({A: 'A', B: 'B'}, source='prefix')
 
     @staticmethod
     def row(vc, nm, specs, *, price=99.9, discount=50):
@@ -119,19 +122,13 @@ class TestWorkBuddyProducts(unittest.TestCase):
         self.assertEqual([(r["nmId"], r["length"]) for r in dimensions.call_args.args[1]["dataList"]],
                          [(101, 1.0), (102, 4.0)])
 
-    def test_only_certain_sku_rows_submit_and_ambiguous_row_names_candidates(self):
+    def test_only_confirmed_sku_rows_submit(self):
         self.save(1, self.row(A, 101, (201,)), self.row(B, 102, (202,)),
                   self.row(AMBIGUOUS, 103, (203,)))
-        atomic_dump_json(paths.current.vc_override_json, {AMBIGUOUS: {"cn": "旅行杯"}})
         with patch.object(wb, "request", return_value=accepted()) as send:
             rc, result = self.command("product", "price", "--shops", "1", "--sku", "B", "--apply")
-        self.assertEqual((rc, result["status"]), (1, "partial"))
+        self.assertEqual((rc, result["status"]), (0, "completed"))
         self.assertEqual([r["nmID"] for r in send.call_args.kwargs["json"]["data"]], [102])
-        with Path(result["artifacts"]["receipts_csv"]).open(encoding="utf-8-sig") as file:
-            rows = list(csv.DictReader(file))
-        blocked = next(row for row in rows if row["状态"] == "已阻止")
-        self.assertEqual(blocked["完整VC"], AMBIGUOUS)
-        self.assertIn("候选 SKU：A、B", blocked["平台回执"])
 
     def test_field_intents_validate_before_data_and_bcs_keeps_exact_supported_price(self):
         cases = [("price", "--keep-price"), ("price", "--discount", "0"),
@@ -341,7 +338,7 @@ class TestWorkBuddyProducts(unittest.TestCase):
         self.assertEqual(result["per_shop"][0]["products"]["blocked"], 2)
         self.assertEqual([c.args[0].shop_id for c in send.call_args_list], [2, 2])
 
-    def test_from_price_book_requires_valid_row_but_ordinary_price_can_use_history(self):
+    def test_from_price_book_requires_valid_row_and_report_cannot_supply_old_price(self):
         book = openpyxl.load_workbook(paths.current.price_book_xlsx)
         book.active["C3"] = None
         book.save(paths.current.price_book_xlsx)
@@ -360,8 +357,8 @@ class TestWorkBuddyProducts(unittest.TestCase):
             rc, result = self.command(*args, "--from-price-book", "--discount", "10")
             self.assertEqual((rc, result["per_shop"][0]["products"]["blocked"]), (1, 1))
             send.assert_not_called()
-            self.assertEqual(self.command(*args)[0], 0)
-            self.assertEqual(send.call_args.kwargs["json"]["data"][0]["price"], 85)
+            self.assertEqual(self.command(*args)[0], 1)
+            send.assert_not_called()
         with patch.object(wb, "request", return_value=accepted()) as send:
             self.assertEqual(self.command(*args, "--price", "90", "--discount", "10")[0], 0)
             self.assertEqual(send.call_args.kwargs["json"]["data"][0],

@@ -4,6 +4,11 @@ from sellerops.cli.binding import bind
 
 
 def register(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser('mapping', help='从本地库导出价格映射总表或单店表')
+    p.add_argument('--shop-id', type=int, help='导出指定店铺；省略时导出总表')
+    p.add_argument('--out', default='', help='输出路径（默认 exports/ 下的 .xlsx）')
+    bind(p, 'sellerops.features.catalog.mapping_sync', 'run_export')
+
     p = sub.add_parser('products', help='只读：默认筛选低评分、高退货率及近期出单补货候选 → Excel')
     p.add_argument('--details', action='store_true', help='追加原始汇总、订单、评价和链接证据表（默认仅简洁筛选与覆盖说明）')
     p.add_argument('--shops', default='', help='本机目标店铺ID，逗号分隔（默认本机BCS账号全部店铺；不筛选临时账号或飞书来源）')

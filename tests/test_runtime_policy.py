@@ -18,7 +18,7 @@ def inspect_portable_project(project, working_directory, queue):
     """Fresh process: load a moved release, with only its sibling data directory."""
     os.environ.pop('SELLEROPS_DATA_DIR', None)
     os.chdir(working_directory)
-    sys.argv = [str(Path(project) / 'run.py'), 'task', 'run', 'morning', '--all-shops']
+    sys.argv = [str(Path(project) / 'run.py'), 'migrate-legacy']
     with contextlib.redirect_stdout(io.StringIO()):
         try:
             runpy.run_path(sys.argv[0], run_name='__main__')
@@ -41,27 +41,22 @@ def inspect_portable_project(project, working_directory, queue):
 
 def run_isolated_mapping(directory, barrier, queue):
     from sellerops.cli.main import main
-    from sellerops.features.catalog import single_shop
+    from openpyxl import load_workbook
     from sellerops.persistence.snapshots import ProductSnapshotRepository
     from sellerops.settings import credentials, paths
-    command = ['--data-dir', str(directory), 'catalog', 'shop-mappings', '--shop-id', '42']
-    work = directory / 'state/.mapping-work'
-    replace = os.replace
 
-    def occupied(src, dst):
-        if Path(src).parent == work:
-            raise PermissionError('fixture: workbook occupied')
-        replace(src, dst)
-
+    output = directory / '..' / f'{directory.name}_isolated.xlsx'
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        with patch.object(os, 'replace', side_effect=occupied):
-            interrupted = main(command)
+        migrated = main(['--data-dir', str(directory), 'migrate-legacy'])
         barrier.wait(timeout=15)
-        done = main(command)
-    mapped, _ = single_shop.load_single_shop_rows(42, 'shop42')
+        done = main(['--data-dir', str(directory), 'report', 'mapping', '--shop-id', '42', '--out', str(output)])
+    book = load_workbook(output, read_only=True)
+    try:
+        mapped = [row[1] for row in list(book.worksheets[0].values)[1:]]
+    finally:
+        book.close()
     indexed = ProductSnapshotRepository.load_shop_rows(42)
-    queue.put((paths.current.data_dir, interrupted, done, credentials.get().token,
-               list(mapped), list(indexed), work.exists()))
+    queue.put((paths.current.data_dir, migrated, done, credentials.get().token, mapped, list(indexed)))
 
 
 class TestDataLayout(unittest.TestCase):
@@ -98,7 +93,7 @@ class TestDataLayout(unittest.TestCase):
                 self.assertEqual(main.main(command(b)), 0)
             self.assertEqual(Path(paths.current.data_dir), b)
 
-    def test_parallel_processes_recover_only_their_own_mapping(self):
+    def test_parallel_processes_migrate_and_export_only_their_own_mapping(self):
         from openpyxl import Workbook
         ctx = multiprocessing.get_context('spawn')
         barrier, queue = ctx.Barrier(2), ctx.Queue()
@@ -122,7 +117,7 @@ class TestDataLayout(unittest.TestCase):
                 process = ctx.Process(target=run_isolated_mapping, args=(directory, barrier, queue))
                 process.start()
                 processes.append(process)
-                expected.append((str(directory), 1, 0, name, [vc], [vc], False))
+                expected.append((str(directory), 0, 0, name, [vc], [vc]))
             try:
                 for process in processes:
                     process.join(25)
@@ -246,10 +241,14 @@ class TestNoPostWriteQueries(unittest.TestCase):
         with patch.object(products, 'fetch_all') as fetch, patch.object(bcs, 'sync_shops_parallel') as sync, \
                 patch.object(mapping_sync, 'merge') as merge, contextlib.redirect_stdout(io.StringIO()):
             for module in [bulk_publish, card_publish]:
+                from sellerops.settings import paths
+                self.addCleanup(paths.configure, paths.current.data_dir)
+                folder = tempfile.TemporaryDirectory()
+                self.addCleanup(folder.cleanup)
+                paths.configure(folder.name)
                 with patch.object(bcs, 'fetch_shop_list', return_value=[{'id': 42}]), \
                         patch.object(module, 'resolve_warehouse', return_value=100), \
                         patch.object(module, 'load_records', return_value={}), \
-                        patch.object(module, 'record_publish_success'), patch.object(module, 'save_records'), \
                         patch.object(bcs, 'batch_push_products', return_value={'code': 200, 'data': {'taskId': 1}}), \
                         patch.object(bcs, 'post') as post:
                     post.return_value = {'code': 200}

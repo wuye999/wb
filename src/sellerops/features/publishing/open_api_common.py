@@ -82,6 +82,9 @@ class OperationLog:
     def save(self) -> None:
         atomic_dump_json(self.path, self.document)
 
+    def result_reference(self) -> str:
+        return str(self.path)
+
     def finish(self) -> int:
         self.save()
         rows = self.document['items']
@@ -93,5 +96,5 @@ class OperationLog:
             change = f" → {row['newVC']}" if row.get('newVC') else ''
             print(f"[店{row['shopId']}] {row['vc']}{change} {row['status']} {row.get('reason', '')}")
         print(f'[汇总] 已受理 {accepted} | 待提交 {planned} | 跳过 {skipped} | 失败/未完成 {failed}')
-        print(f'[结果] {self.path}')
+        print(f'[结果] {self.result_reference()}')
         return 1 if failed else 0

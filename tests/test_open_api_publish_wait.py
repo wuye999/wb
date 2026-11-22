@@ -140,11 +140,11 @@ class TestMergedPublishWait(unittest.TestCase):
         item = self.continuation()
         self.api.cards.return_value = []
         store.save_state(self.state)
-        before = store.state_path().read_bytes()
+        before = store.load_state()
         self.run_wait([item], apply=False)
         self.assertEqual(self.api.cards.call_count, 1)
         self.assertFalse(self.sleeps)
-        self.assertEqual(store.state_path().read_bytes(), before)
+        self.assertEqual(store.load_state(), before)
         self.api.save_media.assert_not_called()
         self.api.set_stocks.assert_not_called()
 

@@ -12,84 +12,44 @@ import re
 from collections import defaultdict
 from html import escape
 
-import openpyxl
 
 from sellerops.settings import paths as config
-from sellerops.core.files import safe_load_json
-from sellerops.persistence.headers import COL_ACTUAL_PRICE
-from sellerops.persistence.headers import COL_CN
-from sellerops.persistence.headers import COL_NM
-from sellerops.persistence.headers import COL_VC
-from sellerops.persistence.headers import find_col
-from sellerops.persistence.headers import warn_missing
-from sellerops.features.catalog import mapping
+from sellerops.features.catalog import mapping, products
 from sellerops.domain.snapshot_values import first_price
-from sellerops.persistence.snapshots import ProductSnapshotRepository
 PRICE_DEV_TOL = 5  # 价格偏差阈值（元）
 
 
 def load_mapping_rows():
-    """读映射总表 Sheet 全部行 → [{cn, vc, dp, price, discount, club, stock, title, img, ...}]"""
-    wb = openpyxl.load_workbook(config.current.mapping_xlsx, data_only=True)
+    state, _ = MappingRepository.load_mapping_state()
+    shops_data, _ = products.load_all_shops()
+    main_id = mapping.main_shop(config.current)
+    stores = defaultdict(dict)
+    for sid, rows in shops_data.items():
+        for raw in rows:
+            if (vc := raw.get('vendorCode')) in state:
+                stores[vc][sid] = raw
     rows = []
-    if "映射总表" in wb.sheetnames:
-        ws = wb["映射总表"]
-        headers = [str(c.value or "").strip() for c in ws[1]]
-        idx = {h: i for i, h in enumerate(headers)}
-        need = [COL_CN, COL_VC]
-        if not all(k in idx for k in need):
-            wb.close()
-            raise RuntimeError(f"映射总表缺少必需列（{COL_CN}/{COL_VC}），请先 merge 重建映射表")
-        price_col = f"店铺{mapping.main_shop(mapping.config.current)}价格(CNY)"
-        if price_col not in idx:
-            print(f"⚠ [警告] 映射总表缺少价格列「{price_col}」（主店可能已变化），价格偏差检测将失效，请重新 fetch + merge")
-        i_dp = find_col(headers, COL_ACTUAL_PRICE)
-        if i_dp is None:
-            warn_missing("价格映射表·映射总表", config.current.mapping_xlsx, headers, COL_ACTUAL_PRICE,
-                         hint="dp 为空，价格偏差检测将失效；请运行 sellerops catalog merge 重建")
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            vc = r[idx[COL_VC]]
-            if not vc:
-                continue
-            rows.append({
-                "cn": r[idx[COL_CN]] or "",
-                "vc": str(vc),
-                "dp": r[i_dp] if i_dp is not None else None,
-                "price": r[idx[price_col]] if price_col in idx else None,
-                "discount": r[idx["折扣%"]] if "折扣%" in idx else None,
-                "club": r[idx["club折扣%"]] if "club折扣%" in idx else None,
-                "stock": r[idx["库存"]] if "库存" in idx else None,
-                "title": r[idx["俄文标题"]] if "俄文标题" in idx else "",
-                "img": r[idx["主图链接"]] if "主图链接" in idx else "",
-                "nm_id": r[idx[COL_NM]] if COL_NM in idx else None,
-                "d_l": r[idx["尺寸长(cm)"]] if "尺寸长(cm)" in idx else None,
-                "d_w": r[idx["尺寸宽(cm)"]] if "尺寸宽(cm)" in idx else None,
-                "d_h": r[idx["尺寸高(cm)"]] if "尺寸高(cm)" in idx else None,
-                "weight": r[idx["毛重(kg)"]] if "毛重(kg)" in idx else None,
-                "shops": r[idx["店铺覆盖"]] if "店铺覆盖" in idx else "",
-                "create_at": r[idx["创建时间"]] if "创建时间" in idx else None,
-            })
-    wb.close()
+    for vc, by_store in stores.items():
+        card = by_store.get(main_id) or by_store[min(by_store)]
+        item = state[vc]
+        rows.append(dict(cn=item['cn'], vc=vc, dp=item['dp'], price=first_price(card),
+                         discount=card.get('discount'), club=card.get('clubDiscount'),
+                         stock=mapping.stock_summary(card), title=card.get('title') or '',
+                         img=card.get('repImg') or '', nm_id=card.get('nmId'),
+                         d_l=card.get('dimensionsLength'), d_w=card.get('dimensionsWidth'),
+                         d_h=card.get('dimensionsHeight'), weight=card.get('dimensionsWeightBrutto'),
+                         shops=', '.join(map(str, sorted(by_store))), create_at=card.get('createAt')))
     return rows
 
 
 def load_union_prices():
-    """全部活跃店铺并集价格 → {vc: {sid: price}}（用于跨店一致性检测）"""
+    shops_data, _ = products.load_all_shops()
     out = {}
-    for sid in ProductSnapshotRepository.shop_ids_from_disk():
-        if config.is_shop_archived(sid):
-            continue
-        d = safe_load_json(config.shop_json_path(sid), default={})
-        for r in d.get("rows", []):
-            if r.get("trashedAt"):
-                continue
-            price = first_price(r)
-            if price is None:
-                continue
-            vc = r.get("vendorCode")
-            if not vc:
-                continue
-            out.setdefault(vc, {})[sid] = price
+    for sid, rows in shops_data.items():
+        for row in rows:
+            vc, price = row.get('vendorCode'), first_price(row)
+            if vc and price is not None:
+                out.setdefault(vc, {})[sid] = price
     return out
 
 
@@ -401,7 +361,6 @@ def workbench_write(path, html):
 def run(tol=PRICE_DEV_TOL):
     global PRICE_DEV_TOL
     PRICE_DEV_TOL = tol
-    print(f"读取映射表 {config.current.mapping_xlsx} ...")
     rows = load_mapping_rows()
     if not rows:
         raise RuntimeError("映射表为空，请先 sellerops catalog merge")

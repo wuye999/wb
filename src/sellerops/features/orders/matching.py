@@ -23,42 +23,21 @@ TITLE_SKU_RE = re.compile(r"数量:(.*)$")
 
 STATUS_GROUP_SHIPPING = "GROUP_SHIPPING"
 
-def load_local_mapping():
-    """返回 (vc→中文名, 中文名→价格表库存SKU栏值)，保留发货群标记供分流。
-
-    2026-10-29：改为**按表头名定位**，不再硬编码列号（旧实现读 `r[1]/r[0]` 与
-    `r[2]/r[7]`，一旦用户插列/挪列就会静默读错 —— 轻则全部判 NO_SKU，
-    重则把订单商品替换成错误 SKU，导致发错货）。
-      - vc→中文名：走 `MappingRepository.load_mapping_state()`（映射总表按表头定位，
-        并自动应用 `vc_override.json` 人工纠偏）
-      - 中文名→库存SKU：商品价格表按表头定位「产品中文名」+「库存SKU」两列
-        （`price_book_columns`，缺列不 raise，只在缺「库存SKU」时告警）
-    """
-    from openpyxl import load_workbook
-    from sellerops.persistence.price_book import price_book_columns
+def load_local_mapping() -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve the Chinese name and stock SKU from the same seller SKU."""
+    from sellerops.persistence import db
     from sellerops.persistence.mappings import MappingRepository
 
-    state, _ = MappingRepository.load_mapping_state()
-    vc2cn = {str(vc).strip(): str(st.get("cn") or "").strip() for vc, st in state.items() if vc}
+    MappingRepository.load_price_book(require_price=False, fresh=True)
+    entries = db.vc_entries()
+    names, stocks = {}, {}
+    for vc in entries:
+        row = db.resolve_vc(vc, entries)
+        if row['status'] == 'mapped':
+            names[vc] = row['cn']
+            stocks[vc] = row['stock_sku']
+    return names, stocks
 
-    cn2sku = {}
-    wb = load_workbook(config.current.price_book_xlsx, read_only=True)
-    try:
-        ws = wb[wb.sheetnames[0]]
-        cols = price_book_columns(ws, config.current.price_book_xlsx, required=("cn",))
-        i_cn, i_stock = cols["cn"], cols["stock_sku"]
-        if i_stock is None:
-            print("[警告] 商品价格表缺少「库存SKU」列：所有订单将判 NO_SKU，请先补该列")
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            cn = r[i_cn] if i_cn is not None and len(r) > i_cn else None
-            sku = r[i_stock] if i_stock is not None and len(r) > i_stock else None
-            if cn and sku:
-                name = str(cn).strip()
-                if cn2sku.get(name) != GROUP_SHIPPING_MARKER:
-                    cn2sku[name] = str(sku).strip()
-    finally:
-        wb.close()
-    return vc2cn, cn2sku
 
 def parse_order(o):
     """从订单行提取摘要字段：订单ID/平台单号/店铺/VC/已匹配SKU/预报与交运状态标记"""
@@ -113,7 +92,7 @@ def classify(orders, vc2cn, cn2sku, shop_map):
             recs.append(rec)
             continue
         rec["cn_name"] = cn
-        sku = cn2sku.get(cn)
+        sku = cn2sku.get(p['vc'])
         if not sku:
             rec["status"] = "NO_SKU"
             rec["note"] = "中文名在商品价格表无库存SKU"

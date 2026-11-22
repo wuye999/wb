@@ -265,7 +265,7 @@ def _resolve_missing_cn(agg_rows: List[Dict[str, Any]]) -> int:
     if not todo:
         return 0
     try:
-        resolve_cn, _ = MappingRepository.build_vc_resolver()
+        resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True)
     except Exception as e:
         print(f"  [警告] 中文名真源（映射表）加载失败（{type(e).__name__}: {e}）；缺失中文名将留空")
         return 0

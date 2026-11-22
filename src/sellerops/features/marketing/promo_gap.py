@@ -171,7 +171,7 @@ def promo_gap(days: int = 7, begin: str = "", end: str = "", date: str = "",
         })
 
         if adv["no_snapshot"]:
-            warnings.append(f"店铺 {name} 无 BCS 快照（{config.shop_json_path(sid)} 不存在）→ "
+            warnings.append(f"店铺 {name} 无 BCS 快照（SQLite）→ "
                             f"「是否在架」无法判断，候选商品全部归入「需先上架」；需最新请先跑 python -m sellerops catalog fetch")
         if adv["truncated"]:
             warnings.append(f"店铺 {name} 推广活动分页未取全：平台口径 {adv['total']} 个，实取 "

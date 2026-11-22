@@ -246,17 +246,22 @@ class TestReportRules(unittest.TestCase):
         self.assertIn('冲突', data.register_row(raw)['notes'])
 
     def test_snapshot_missing_wrong_shop_and_incomplete(self):
+        from catalog_fixture import corrupt_snapshot, snapshot
+        from sellerops.settings import paths
+
+        previous = paths.current.data_dir
+        self.addCleanup(paths.configure, previous)
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'snapshot.json'
-            with patch.object(ProductSnapshotRepository, 'get_path', return_value=str(path)):
-                self.assertIsNone(ProductSnapshotRepository.load_snapshot_document(11))
-                for payload in ({'shopId': 12, 'rows': []}, {'shopId': 11, 'total': 2, 'rows': []}, {'total': 0}):
-                    path.write_text(json.dumps(payload), encoding='utf8')
-                    with self.assertRaises(ValueError):
-                        ProductSnapshotRepository.load_snapshot_document(11)
-                path.write_text('{broken', encoding='utf8')
-                with self.assertRaises(Exception):
+            paths.configure(directory)
+            self.assertIsNone(ProductSnapshotRepository.load_snapshot_document(11))
+            snapshot(11, [{'vendorCode': 'fixture', 'nmId': 1}])
+            for payload in ({'shopId': 12}, {'shopId': 11, 'total': 2}, {'total': 0}):
+                corrupt_snapshot(11, snapshot_json=json.dumps(payload))
+                with self.assertRaises(ValueError):
                     ProductSnapshotRepository.load_snapshot_document(11)
+            corrupt_snapshot(11, snapshot_json='{broken')
+            with self.assertRaises(ValueError):
+                ProductSnapshotRepository.load_snapshot_document(11)
 
 
 class TestReportWorkflow(unittest.TestCase):

@@ -32,7 +32,7 @@
 
 ## catalog import-mapping
 
-导入核对结果 → 生成映射表（旧格式）
+导入核对结果 → 保存归属（旧格式）
 
 实现入口 [run_mapping_import](../src/sellerops/cli/catalog_handlers.py)
 
@@ -66,7 +66,7 @@
 
 ## catalog merge
 
-增量合并审核 → 映射表（file 可选）
+保存审核确认的归属（file 可选）
 
 实现入口 [run_merge](../src/sellerops/cli/catalog_handlers.py)
 
@@ -74,7 +74,7 @@
 
 ## catalog rename
 
-纠偏/修改商品中文名（自动级联更新全部店铺单表与聚合总表）
+纠偏/修改商品中文名（按卖家 SKU 重绑）
 
 实现入口 [run_mapping_rename](../src/sellerops/cli/catalog_handlers.py)
 
@@ -85,12 +85,12 @@
 
 ## catalog shop-mappings
 
-刷新/生成各店铺独立映射表（data/shops/shop_*.xlsx）
+刷新/生成各店铺独立映射表（exports/shop_*.xlsx）
 
 实现入口 [run_shops_mapping](../src/sellerops/cli/catalog_handlers.py)
 
 - `--shop-id` 指定店铺ID（默认全部活跃店铺）
-- `--force` 强制全量重新构建
+- `--force` 兼容旧参数；导出总是读取当前库
 
 ## product price
 
@@ -580,6 +580,15 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 - `--no-pending` 飞书登记时不合并「待处理订单」数据源（默认合并，覆盖只匹配未进预报/上传/交运的订单）
 - `--apply` 真正执行（默认 dry-run 预览）
 
+## report mapping
+
+从本地库导出价格映射总表或单店表
+
+实现入口 [run_export](../src/sellerops/features/catalog/mapping_sync.py)
+
+- `--shop-id` 导出指定店铺；省略时导出总表
+- `--out` 输出路径（默认 exports/ 下的 .xlsx）
+
 ## report products
 
 只读：默认筛选低评分、高退货率及近期出单补货候选 → Excel
@@ -794,3 +803,9 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--resume` 仅检查专用浏览器中已保存的登录态
 - `--keep-open` 等待网页登录成功后，在同一个窗口完成连接
 - `--bind` 仅 WB，确认一组新店对应关系，可重复指定
+
+## migrate-legacy
+
+离线迁移旧商品资料、快照和提交记录
+
+实现入口 [run](../src/sellerops/persistence/migrate_legacy.py)

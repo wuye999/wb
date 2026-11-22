@@ -4,7 +4,6 @@ from sellerops.integrations.mabang.session import MabangAuthError
 from sellerops.integrations.mabang.orders import fetch_pending_orders
 from sellerops.integrations.mabang.orders import fetch_all_orders
 import csv
-import json
 
 import re
 
@@ -16,6 +15,7 @@ from sellerops.settings import credentials
 from sellerops.features.orders.matching import load_local_mapping as mabang_load_local_mapping
 from sellerops.features.orders.matching import parse_order as mabang_parse_order
 from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.integrations.feishu.tables import invoke
 from sellerops.integrations.feishu.tables import list_records
 from sellerops.integrations.feishu.tables import resolve_base
@@ -85,41 +85,9 @@ def parse_qty(p):
     t = p.get("kind")
     return int(t) if (t or "").isdigit() else 1
 
-def _cn_resolver(vc2cn):
-    """飞书登记专用：vc → 中文名 三级回退（映射总表 → vc_known 归属池 → 四位前缀码）。
+def _cn_resolver(names):
+    return names.get
 
-    为什么需要：映射总表只含**当前在架**商品，商品一下架，vc 就从表里消失、
-    登记时中文名变空（2026-10-20：74 单黑丝假发受影响）；而 `vc_known.json`
-    是历史归属池，仍记得这些已下架商品的归属。
-    ⚠ 仅用于填「商品中文名」这一列；马帮匹配/预报仍要求 vc 在映射表（在架），
-    避免把已下架商品判成可发货。
-    """
-    from sellerops.persistence.mappings import MappingRepository
-
-    cache = {"known": None, "prefix": None}
-
-    def resolve(vc):
-        vc = str(vc or "").strip()
-        if not vc:
-            return None
-        cn = vc2cn.get(vc)                              # ① 映射总表
-        if cn:
-            return cn
-        if cache["known"] is None:
-            cache["known"] = MappingRepository.load_vc_known()
-        cn = (cache["known"].get(vc) or {}).get("cn")   # ② vc_known 归属池
-        if cn:
-            return str(cn).strip()
-        if cache["prefix"] is None:
-            cache["prefix"] = MappingRepository.load_prefix_map()
-        m = re.match(config.VC_PREFIX_RE, vc) if config.VC_PREFIX_RE else None
-        if m:                                           # ③ 四位前缀码兜底
-            hit = cache["prefix"].get(m.group(1).upper()) or {}
-            if hit.get("cn"):
-                return str(hit["cn"]).strip()
-        return None
-
-    return resolve
 
 def _merge_pending(orders, cred, args):
     """把新增待处理订单并入登记范围，按平台单号去重；days=0 不限日期。
@@ -195,16 +163,11 @@ def build_records(args, *, group_shipping_ids=()):
             shop_ids[shop] = int(m.group(1))
     snaps = {}
     for shop, sid in shop_ids.items():
-        path = config.shop_json_path(sid)
-        try:
-            with open(path, encoding="utf-8") as f:
-                rows = json.load(f)
-        except FileNotFoundError:
-            print(f"  [警告] 店{sid} 快照不存在（wb编号/商品链接将留空）: {path}")
+        document = ProductSnapshotRepository.load_snapshot_document(sid)
+        if document is None:
+            print(f'  [警告] 店{sid} 快照不存在，WB商品码将留空')
             continue
-        if isinstance(rows, dict):
-            rows = rows.get("rows") or []
-        snaps[shop] = {r.get("vendorCode"): r.get("nmId") for r in rows if r.get("vendorCode")}
+        snaps[shop] = {r.get("vendorCode"): r.get("nmId") for r in document['rows'] if r.get("vendorCode")}
 
     # 已取消订单排除（WB 门户取消单；马帮不同步取消单，防御性过滤）
     canceled = set()
@@ -237,7 +200,7 @@ def build_records(args, *, group_shipping_ids=()):
             notice["VC不在映射表(仍登记·中文名留空)"] = notice.get("VC不在映射表(仍登记·中文名留空)", 0) + 1
         elif not p["vc"]:
             notice["无BCS编号(仍登记)"] = notice.get("无BCS编号(仍登记)", 0) + 1
-        stock_sku = cn2sku.get(cn) or None
+        stock_sku = cn2sku.get(p['vc']) or None
         if stock_sku == GROUP_SHIPPING_MARKER or str(p["order_id"]) in group_shipping_ids:
             stock_sku = None
             key = "发货群订单(库存SKU留空)"

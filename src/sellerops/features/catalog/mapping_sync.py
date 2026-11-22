@@ -1,37 +1,22 @@
 """多店铺商品审核、归属纠偏与本地映射表合并。"""
-from datetime import datetime
-import json
-import os
 from pathlib import Path
 import re
 
 from sellerops.settings import paths as config
 from sellerops.core.files import safe_load_json
-from sellerops.domain.bcs_products import deduplicate_bcs_products
-from sellerops.persistence.mapping_batch import mapping_batch
+from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
-from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.features.catalog import mapping, products, single_shop, workbench
 
 VC_PREFIX_RE = re.compile(config.VC_PREFIX_RE)
 
 
 def load_known_vcs():
-    """已知 vendorCode = 全局归属池 + 纠偏 + 排除 + 映射表"""
-    known_set = set()
-    kn, ov, ex = mapping.load_vc_registry()
-    known_set.update(kn.keys())
-    known_set.update(ov.keys())
-    known_set.update(ex.keys())
-    if os.path.exists(config.current.mapping_xlsx):
-        st, excl = MappingRepository.load_mapping_state()
-        known_set.update(st.keys())
-        known_set.update(excl.keys())
-    return known_set
+    return mapping.known_vcs_from_mapping()
 
 
 def calc_new_vcs():
-    """所有店铺在架 vc − 已知 − 空商品 = 待审核/自动补录。
+    """所有店铺在架 vc − 已知 − 空商品 = 待审核和前缀建议。
     返回 (normal_items, auto_items, shops_meta)"""
     shops_data, shops_meta = products.load_all_shops()
     known = load_known_vcs()
@@ -105,7 +90,7 @@ button.ghost{background:#fff;color:#8e44ad}
   <button class="ghost" onclick="resetAll()">重置</button>
 </div>
 <div class="wrap">
-<div class="hint" style="color:#2c3e50">这些是<b>其余店铺在架但映射表中没有</b>的 vendorCode（出现在店已标注）。请为每个选择：归属到某个商品价格表商品（补录）或 非货盘商品（排除）。导出后发我合并进映射表。</div>
+<div class="hint" style="color:#2c3e50">这些是<b>其余店铺在架但映射表中没有</b>的 vendorCode（出现在店已标注）。请为每个选择：归属到某个商品价格表商品（补录）或 非货盘商品（排除）。导出后用 catalog merge 保存归属。</div>
 CARDS_PLACEHOLDER
 <hr><h3>导出结果：</h3><textarea id="out" placeholder="点上方按钮导出"></textarea>
 </div>
@@ -157,173 +142,122 @@ refresh();
 
 def run_review():
     normal, auto, shops_meta = calc_new_vcs()
-    print(f"全部店铺新商品: 普通 {len(normal)} 个 · 前缀自动补录 {len(auto)} 个")
+    print(f"全部店铺新商品: 普通 {len(normal)} 个 · 前缀待确认 {len(auto)} 个")
     for x in auto:
         print(f'  [自动] {x["vc"]} → {x["bossCn"]}（前缀 {x["prefix"]}，店 {x["shops"]}）')
-    gen_review_html(normal, shops_meta)
+    gen_review_html(normal + auto, shops_meta)
 
-
-def _target_shops(shop_id):
-    tables = {s["id"]: s for s in single_shop.list_active_shop_mappings()}
-    shops = tables.copy()
-    for shop in products.snapshot_shops():
-        sid = int(shop["id"])
-        existing = tables.get(sid, {})
-        name = shop.get("name") or existing.get("name") or f"shop{sid}"
-        path = config.shop_mapping_xlsx(sid, name) if shop.get("name") or not existing else existing["path"]
-        shops[sid] = {"id": sid, "name": name, "path": path}
-    if shop_id is not None and config.is_shop_archived(shop_id):
-        print(f"店铺 {shop_id} 已归档，跳过刷新。")
-        return []
-    if shop_id is not None and shop_id not in shops:
-        raise ValueError(f"找不到目标店铺 {shop_id}，未更新映射")
-    candidates = [shops[shop_id]] if shop_id is not None else list(shops.values())
-    active = [s for s in candidates if not config.is_shop_archived(s["id"])]
-    if not active:
-        raise ValueError("没有活跃店铺可生成映射，未更新文件")
-    return active
-
-
-def _snapshot_rows(shop):
-    sid = shop["id"]
-    path = config.shop_json_path(sid)
-    try:
-        document = ProductSnapshotRepository.load_snapshot_document(sid)
-        if document is None:
-            raise ValueError("缺少商品快照")
-        return document["rows"]
-    except Exception as exc:
-        raise ValueError(f"店铺 {sid} 的快照 {path}：{exc}。本次未更新映射。") from exc
-
-
-def _apply_review(rows, known, excluded, boss):
+def _apply_review(rows: list[dict], *, reason: str = '', rename: bool = False) -> int:
     if not isinstance(rows, list):
-        raise ValueError("审核文件应为审核工作台导出的商品列表")
-    prices = {b["sku"]: b["dp"] for b in boss if b.get("sku")}
+        raise ValueError('审核文件应包含商品列表')
+    products_by_sku = {item['sku']: item for item in MappingRepository.load_price_book(fresh=True)}
+    updates = {}
     for row in rows:
-        if not isinstance(row, dict) or not row.get("vc"):
-            raise ValueError("审核记录缺少商品编码 vc")
-        vc = row["vc"]
-        if row.get("action") == "pending":
+        if not isinstance(row, dict) or not isinstance(row.get('vc'), str) or not row['vc'].strip():
+            raise ValueError('审核记录缺少完整 VC')
+        vc = row['vc'].strip()
+        action = 'mapped' if rename else row.get('action')
+        if action == 'pending':
             continue
-        if row.get("action") == "exclude":
-            excluded[vc] = "非货盘商品（人工确认排除）"
-        elif row.get("action") == "mapped" and row.get("bossCn"):
-            sku = row.get("bossSku") or ""
-            price = prices.get(sku)
-            known[vc] = {"cn": row["bossCn"], "sku": sku, "source": "审核补录",
-                         "dp": row.get("bossDp") if price is None else price}
+        if action == 'exclude':
+            update = ('excluded', None, row.get('reason') or '非货盘商品（人工确认排除）')
+        elif action == 'mapped':
+            sku = str(row.get('bossSku') or row.get('sku') or '').strip()
+            name = str(row.get('bossCn') or row.get('cn') or '').strip()
+            matches = [product for product in products_by_sku.values()
+                       if (sku and product['sku'] == sku and (not name or product['cn'] == name))
+                       or (not sku and name and product['cn'] == name)]
+            if len(matches) != 1:
+                raise ValueError(f'{vc} 在商品价格表中找不到唯一卖家 SKU')
+            update = ('mapped', matches[0]['sku'], row.get('reason') or reason)
         else:
-            raise ValueError(f"商品 {vc} 的审核动作或中文名无效")
+            raise ValueError(f'{vc} 的审核动作无效')
+        if vc in updates and updates[vc] != update:
+            raise ValueError(f'{vc} 在同批审核记录有冲突')
+        updates[vc] = update
+    if updates:
+        with db.connect(write=True) as connection:
+            for vc, (status, sku, note) in updates.items():
+                db.set_vc(connection, vc, status, sku=sku, source='manual', note=note)
+    return len(updates)
 
 
-def _apply_renames(rows, reason, known, overrides, boss):
-    if not isinstance(rows, list) or not rows:
-        raise ValueError("请提供要改名的商品编码和中文名")
-    by_name = {b["cn"]: b for b in boss}
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def merge(review_file: str | None = None) -> None:
+    count = _apply_review(safe_load_json(review_file)) if review_file else 0
+    print(f'已保存 {count} 条审核归属。需要 Excel 时运行 sellerops report mapping。')
+
+
+def import_mapping(import_file: str) -> None:
+    document = safe_load_json(import_file)
+    rows = document.get('rows') if isinstance(document, dict) else document
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError('核对文件应包含旧版工作台的商品列表')
+    reviews = []
     for row in rows:
-        if not isinstance(row, dict):
-            raise ValueError("改名记录应包含 vc 和 cn")
-        vc, cn = (str(row.get(k) or "").strip() for k in ("vc", "cn"))
-        if not vc or not cn:
-            raise ValueError("改名记录的商品编码和中文名不能为空")
-        overrides[vc] = {"cn": cn, "reason": row.get("reason") or reason, "updatedAt": stamp}
-        if vc not in known:
-            product = by_name.get(cn, {})
-            known[vc] = {"sku": product.get("sku", ""), "dp": product.get("dp"),
-                         "source": "人工纠偏", "cnUpdatedAt": stamp}
-        known[vc]["cn"] = cn
+        codes = row.get('vendorCodes', [])
+        if 'action' in row or not isinstance(codes, list):
+            raise ValueError('旧格式需包含 vendorCodes；多店审核结果请用 catalog merge')
+        reviews.extend({'vc': vc, 'action': 'mapped', 'bossSku': row.get('sku'),
+                        'bossCn': row.get('cn')} for vc in codes)
+    print(f'已导入 {_apply_review(reviews)} 条归属')
 
 
-def _write_total(batch, shops, mapped_rows, snapshots, registry, boss):
-    known, _, excluded = registry
-    boss_by_name = {b["cn"]: b for b in boss}
-    main_id = mapping.main_shop(config.current)
-    coverage = {}
-    for sid, rows in mapped_rows.items():
-        for vc, row in rows.items():
-            coverage.setdefault(vc, {})[sid] = row
+def set_vc_override(vc: str = '', new_cn: str = '', reason: str = '人工纠偏',
+                    file_path: str = '') -> bool:
+    rows = safe_load_json(file_path) if file_path else [{'vc': vc, 'cn': new_cn}]
+    return _apply_review(rows, reason=reason, rename=True) > 0
 
-    entries = []
-    for vc, stores in sorted(coverage.items()):
-        row = stores[main_id] if main_id in stores else stores[min(stores)]
-        history = known.get(vc, {})
-        cn = row.get("cn") or history.get("cn") or ""
-        product = boss_by_name.get(cn, {})
-        price = product.get("dp")
-        entries.append({"sku": product.get("sku", history.get("sku", "")), "cn": cn,
-                        "dp": row.get("dp") if price is None else price, "vendorCodes": [vc],
-                        "note": row.get("match_type") or "店铺映射汇聚"})
 
-    if main_id in snapshots:
-        main_rows = deduplicate_bcs_products(snapshots[main_id], main_id)
-        bcs_rows = mapping.priced_rows(main_rows)
+def _export_destination(name: str, output: str = '') -> Path:
+    destination = Path(output).resolve() if output else config.current.exports_dir / name
+    if (destination.suffix.lower() != '.xlsx' or destination.name == '商品价格表.xlsx'
+            or Path(config.current.data_dir) in destination.parents
+            or (config.PROJECT_ROOT / 'data') in destination.parents):
+        raise ValueError('请选择数据目录外的 .xlsx 报表路径')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return destination
+
+
+def export_mapping(shop_id: int | None = None, output: str = '') -> Path:
+    if shop_id is not None:
+        path = _export_destination(f'shop_{shop_id}.xlsx', output)
+        single_shop.build_single_shop_xlsx(shop_id, path)
     else:
-        bcs_rows = [] if snapshots else mapping.load_bcs()
-    mapping.build_xlsx([], entries, bcs_rows, excluded_vcs=excluded, shop_coverage=coverage,
-                       shops_meta=shops, main_sid=main_id, load_boss_fn=lambda: boss,
-                       out_path=batch.stage(config.current.mapping_xlsx))
+        from sellerops.features.catalog.mapping_excel import build_xlsx
+
+        state, excluded = MappingRepository.load_mapping_state()
+        shops_data, shops = products.load_all_shops()
+        main_id = mapping.main_shop(config.current)
+        coverage = {}
+        for sid, rows in shops_data.items():
+            for raw in rows:
+                vc = raw.get('vendorCode')
+                if vc:
+                    coverage.setdefault(vc, {})[sid] = {
+                        'price': mapping.price_of(raw), 'stock': mapping.stock_summary(raw),
+                        'nmId': raw.get('nmId'), 'createAt': raw.get('createAt'), 'updateAt': raw.get('updateAt'),
+                        'title': raw.get('title'), 'repImg': raw.get('repImg'),
+                        **{key: raw.get(key) for key in ('discount', 'clubDiscount', 'dimensionsLength',
+                           'dimensionsWidth', 'dimensionsHeight', 'dimensionsWeightBrutto')},
+                    }
+        records = [{'sku': row['sku'], 'cn': row['cn'], 'dp': row['dp'], 'vendorCodes': [vc]}
+                   for vc, row in state.items() if vc in coverage]
+        path = _export_destination('价格映射表.xlsx', output)
+        build_xlsx([], records, mapping.priced_rows(shops_data.get(main_id, [])),
+                   excluded_vcs=excluded, shop_coverage=coverage, shops_meta=shops, main_sid=main_id,
+                   out_path=path)
+    print(f'已导出：{path}')
+    return path
 
 
-def _refresh(command, *, shop_id=None, input_file=None, vc=None, new_cn=None,
-             reason=None, sync_shops=True):
-    with mapping_batch(command, input_file=input_file, shop_id=shop_id, vc=vc, cn=new_cn,
-                       reason=reason, sync_shops=sync_shops) as batch:
-        if batch is None:
-            return
-        shops = _target_shops(shop_id)
-        if not shops:
-            return
-        snapshots = {s["id"]: _snapshot_rows(s) for s in shops} if sync_shops else {}
-        if not Path(config.current.price_book_xlsx).is_file():
-            raise FileNotFoundError(f"缺少商品价格表：{config.current.price_book_xlsx}")
-        boss = MappingRepository.load_price_book()
-        prefix_map = MappingRepository.load_prefix_map(strict=True)
-        registry = mapping.load_vc_registry()
-        known, overrides, excluded = registry
-        if command == "rename":
-            rows = batch.input_data if input_file else [{"vc": vc, "cn": new_cn}]
-            _apply_renames(rows, reason, known, overrides, boss)
-        elif input_file:
-            _apply_review(batch.input_data, known, excluded, boss)
-
-        mapped_rows = {}
-        for shop in shops:
-            sid, name, path = shop["id"], shop["name"], shop["path"]
-            if sync_shops:
-                path = batch.stage(path)
-                try:
-                    counts = single_shop.build_single_shop_xlsx(
-                        sid, name, rows=snapshots[sid], registry=registry, boss=boss,
-                        prefix_map=prefix_map, out_path=path)
-                except ValueError as exc:
-                    raise ValueError(f"店铺 {sid} 的快照 {config.shop_json_path(sid)}：{exc}。本次未更新映射。") from exc
-                print(f"已准备店铺 {sid}（{name}）：已映射 {counts[0]}，未映射 {counts[1]}")
-            if command != "shop-mappings":
-                if not Path(path).is_file():
-                    raise FileNotFoundError(f"缺少店铺 {sid} 的映射表：{path}")
-                mapped_rows[sid], _ = single_shop.load_single_shop_rows(sid, name, path=path)
-
-        data = config.current
-        for path, values in zip((data.vc_known_json, data.vc_override_json, data.vc_excluded_json), registry):
-            previous = safe_load_json(path, default=None if path == data.vc_known_json else {})
-            if values != previous:
-                batch.stage(path).write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n", encoding="utf8")
-        if command != "shop-mappings":
-            _write_total(batch, shops, mapped_rows, snapshots, registry, boss)
-    output = data.shops_dir if command == "shop-mappings" else data.mapping_xlsx
-    print(f"映射已保存：共 {len(shops)} 个店铺。文件位置：{output}")
+def sync_all_shops_mapping(shop_id: int | None = None) -> None:
+    if shop_id is not None:
+        export_mapping(shop_id)
+        return
+    for shop in products.snapshot_shops():
+        export_mapping(shop['id'])
 
 
-def merge(review_file=None, sync_shops=True):
-    _refresh("merge", input_file=review_file, sync_shops=sync_shops)
-
-
-def set_vc_override(vc=None, new_cn=None, reason="人工纠偏", file_path=None):
-    _refresh("rename", input_file=file_path, vc=vc, new_cn=new_cn, reason=reason)
-    return True
-
-
-def sync_all_shops_mapping(shop_id=None, force=False):
-    _refresh("shop-mappings", shop_id=shop_id)
+def run_export(args) -> int:
+    export_mapping(args.shop_id, args.out)
+    return 0

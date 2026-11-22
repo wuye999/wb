@@ -257,7 +257,7 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
     resolve_cn = None
     if with_cn:
         try:
-            resolve_cn, _ = MappingRepository.build_vc_resolver()
+            resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True)
         except Exception as ex:
             print(f"  [警告] 中文名真源（映射表）加载失败（{type(ex).__name__}: {ex}）；中文名将留空")
     cn_stock_sku = load_cn_stock_sku()   # {中文名: 库存SKU}

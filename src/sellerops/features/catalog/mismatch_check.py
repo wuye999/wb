@@ -399,7 +399,6 @@ def _resolve_window(begin, end, days):
 
 
 def run(cn=None, begin="", end="", days=0):
-    print(f"读取映射表 {config.current.mapping_xlsx} ...")
     rows = load_mapping_rows()
     if not rows:
         raise RuntimeError("映射表为空，请先 sellerops catalog merge")

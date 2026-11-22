@@ -15,7 +15,8 @@ from sellerops.features.publishing.open_api_common import (
 from sellerops.features.publishing.open_api_payloads import card_index, positive_id
 from sellerops.features.publishing.vc_normalization_payloads import batch_lengths, rename_payload
 from sellerops.integrations.wildberries.content_api import WBContentAPI
-from sellerops.persistence.vc_normalization import COMMAND, load_attempts, load_catalog
+from sellerops.persistence import db
+from sellerops.persistence.vc_normalization import COMMAND, load_attempts, load_catalog, write_log
 from sellerops.settings import paths
 
 
@@ -181,6 +182,15 @@ def _run(args: Any, requested: list[str], log: OperationLog) -> int:
     return log.finish()
 
 
+class NormalizationLog(OperationLog):
+    def save(self) -> None:
+        with db.connect(write=True) as connection:
+            write_log(connection, self.path.stem, self.document)
+
+    def result_reference(self) -> str:
+        return f'{paths.current.database} ({self.path.stem})'
+
+
 def run(args: Any) -> int:
     if sum((bool(args.vc), bool(args.name), bool(getattr(args, "name_contains", None)), bool(args.all))) != 1:
         raise ValueError('须且只能用 --vc、--name 或 --all 选择商品')
@@ -191,7 +201,7 @@ def run(args: Any) -> int:
         ids = [positive_id(value) for value in split_values(args.shops)]
         if len(ids) != len(set(ids)):
             raise ValueError('店铺 ID 重复')
-    log = OperationLog(COMMAND, args.apply)
+    log = NormalizationLog(COMMAND, args.apply)
     log.document.update(version=1, selection=dict(vc=requested, name=args.name, name_contains=getattr(args, "name_contains", None), all=args.all))
     try:
         # 同一 data 下串行覆盖历史读取、完整避重、提交与回执，避免两进程分配同码。
