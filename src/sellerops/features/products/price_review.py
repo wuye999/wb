@@ -106,17 +106,18 @@ def review_submitted_prices(sid: int, accepted: list[dict], result, *, stopped: 
         result.record(sid, item, status, message, review=True)
 
 
-def process_shop(shop, root_version, args, rows):
+def process_shop(shop, root_version, args, rows, *, frozen=None):
     st = {"total": 0, "applied": 0, "failed": 0}
     s = wb_api.make_session(shop, root_version)
     name = shop.get("shopName", shop.get("shopId"))
     print(f"\n=== 店铺 {name} (id={shop['shopId']}) ===")
-    items = fetch_all_quarantine(s)
+    items = fetch_all_quarantine(s) if frozen is None else frozen
     st["total"] = len(items)
     print(f"  [待审列表] {len(items)} 个商品待审核")
     if not items:
+        s.close()
         return st
-    if args.limit > 0:
+    if frozen is None and args.limit > 0:
         items = items[:args.limit]
         print(f"  [截断] 按 --limit 仅处理前 {len(items)} 个")
 
@@ -135,10 +136,12 @@ def process_shop(shop, root_version, args, rows):
     if args.apply:
         ids = [it.get("id") for it in items if it.get("id") is not None]
         if not ids:
+            s.close()
             return st
         try:
             d = apply_prices(s, ids)
             ok = d.get("error") is False
+            st['unknown'] = type(d.get('error')) is not bool
             if ok:
                 st["applied"] = len(ids)
                 for row in rows[-len(items):]:
@@ -151,16 +154,20 @@ def process_shop(shop, root_version, args, rows):
                   f"{'' if ok else ': ' + str(d.get('errorText'))}")
         except Exception as e:
             st["failed"] = len(ids)
-            for row in rows[-len(items):]:
-                row["结果"] = f"失败:{str(e)[:50]}"
-            print(f"    >> 审核提交异常: {e}")
+            st['unknown'] = True
+            print(f'\u5ba1\u6838\u56de\u6267\u672a\u77e5\uff08{type(e).__name__}\uff09')
+    s.close()
     return st
 
 
 def run(args):
     common.ensure_utf8_stdout()
     cred = credentials.get()
-    shops = cred.wb_shops()
+    from sellerops.features.catalog.shops import archive_set
+    archived = archive_set()
+    frozen = {plan['shopId']: plan['items'] for plan in args.frozen} if hasattr(args, 'frozen') else None
+    shops = [shop for shop in cred.wb_shops()
+             if shop['shopId'] not in archived and (frozen is None or shop['shopId'] in frozen)]
     if not shops:
         print("[错误] credentials.json 中没有已填 cookie 的店铺")
         return 1
@@ -176,10 +183,13 @@ def run(args):
 
     rows = []
     totals = {"total": 0, "applied": 0, "failed": 0}
-    shop_errors = 0
+    shop_errors = len(frozen.keys() - {shop['shopId'] for shop in shops}) if frozen else 0
+    unknown = False
     for shop in shops:
         try:
-            st = process_shop(shop, root_version, args, rows)
+            st = process_shop(shop, root_version, args, rows,
+                              frozen=None if frozen is None else frozen[shop['shopId']])
+            unknown |= st.get('unknown', False)
             for k in totals:
                 totals[k] += st[k]
         except common.CookieExpiredError as e:
@@ -204,5 +214,7 @@ def run(args):
             w.writerows(rows)
         print(f"[日志] {path}")
     if not args.apply:
-        print("（dry-run 未提交任何审核；确认清单后加 --apply 执行）")
+        args.prepared = [{'shopId': sid, 'items': [row for row in rows if row['shopId'] == sid]}
+                         for sid in sorted({row['shopId'] for row in rows})]
+    args.outcome = {'items': [{'status': 'unknown'}] if unknown else [], **totals}
     return 1 if totals["failed"] or shop_errors else 0

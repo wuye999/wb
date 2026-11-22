@@ -22,19 +22,28 @@ def run_shops(args):
 
 def run_fetch(args):
     from sellerops.persistence import db
+    from sellerops.features.catalog.shops import require_active
 
     with db.connect():
         pass
     parallel = getattr(args, 'parallel', 4)
     if parallel < 1:
         raise ValueError('并发店铺数必须为正整数')
-    if getattr(args, "shop_id", None) is not None:
-        catalog_products.fetch_shop(args.shop_id, no_sync=getattr(args, "no_sync", False),
-                                    source=getattr(args, 'source', 'bcs'))
+    if getattr(args, 'shop_id', None) is not None:
+        require_active(args.shop_id)
+        _, total = catalog_products.fetch_shop(args.shop_id, no_sync=getattr(args, 'no_sync', False),
+                                                source=getattr(args, 'source', 'bcs'))
+        args.output = {'fetched': [{'id': args.shop_id, 'total': total}], 'missing_shops': []}
     else:
-        catalog_products.fetch_all(no_sync=getattr(args, "no_sync", False),
-                                   source=getattr(args, 'source', 'bcs'), parallel=parallel)
-    return 0
+        args.output = catalog_products.fetch_all(no_sync=getattr(args, 'no_sync', False),
+                                                  source=getattr(args, 'source', 'bcs'), parallel=parallel)
+    if args.output is None:
+        return 0
+    if args.output['missing_shops']:
+        args.next_action = '\u8bf7\u8fd0\u8425\u786e\u8ba4\u7f3a\u5931\u5e97\u94fa\u540e\u518d\u5f52\u6863'
+    args.summary = '\u540c\u6b65\u90e8\u5206\u5931\u8d25' if args.output.get('errors') else '\u5feb\u7167\u540c\u6b65\u5b8c\u6210'
+    return int(bool(args.output.get('errors')))
+
 
 def run_mapping(args):
     catalog_mapping.run_mapping(main_shop_only=getattr(args, "main_shop_only", False))

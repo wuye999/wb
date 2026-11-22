@@ -251,7 +251,7 @@ class TestNormalizationCommand(unittest.TestCase):
         return write
 
     def cli(self, *args):
-        from sellerops.cli.main import main
+        from operation_fixture import run_business_cli as main
         self.wrote = False
         return main(['--data-dir', str(self.folder), 'listing', 'normalize-vc', *([] if '--shops' in args else ['--all-shops']), *args])
 
@@ -277,6 +277,22 @@ class TestNormalizationCommand(unittest.TestCase):
             api.warehouses.assert_not_called()
             api.prices.assert_not_called()
             api.stocks.assert_not_called()
+
+    def test_public_plan_freezes_original_card_and_replacement_code(self):
+        from sellerops.cli.main import main
+
+        prefix = ['--data-dir', str(self.folder)]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main([*prefix, 'ops', 'normalize-vc', '--all-shops', '--all', '--json']), 0)
+        plan_id = json.loads(output.getvalue())['plan_id']
+        self.active[1] = [card(999)]
+        reads = list(self.events)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main([*prefix, 'apply', '--plan', plan_id, '--json']), 0)
+        self.assertEqual(self.events, [*reads, ('write', 1), ('write', 2)])
+        self.assertEqual(self.clients[1].update_cards.call_args.args[0][0]['nmID'], 101)
+        self.assertEqual(self.clients[1].update_cards.call_args.args[0][0]['vendorCode'], NEW)
 
     def test_apply_reads_all_shops_first_and_preserves_each_shops_identifiers(self):
         before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file() and p != Path(paths.current.database)}

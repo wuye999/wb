@@ -15,6 +15,7 @@ from sellerops.features.products.warehouse import resolve_warehouse
 
 
 import copy
+from dataclasses import asdict
 
 
 import os
@@ -60,6 +61,8 @@ def execute_publish(
     csv_path: Optional[str] = None,
     row_formatter: Optional[Any] = None,
     check_exists: bool = True,
+    capture: bool = False,
+    frozen: dict | None = None,
 ) -> Dict[str, Any]:
     """
     使用新版批量接口 (POST /products/batch/push) 执行商品上架。
@@ -79,88 +82,105 @@ def execute_publish(
         执行统计字典: {"ok": int, "skip": int, "fail": int, "plans": len(items), "csv": str}
     """
     common.validate_batch_options(interval=interval)
-    # 1. 获取目标店铺与仓库
-    all_shops = bcs.fetch_shop_list()
-    all_shop_ids = [s["id"] for s in all_shops if s.get("id")]
-    if not all_shop_ids:
-        print("[错误] 未获取到可用店铺列表")
-        return {"ok": 0, "skip": 0, "fail": len(items), "plans": len(items), "csv": ""}
+    if frozen is not None:
+        valid_items = [{**row, 'item': PublishItem(**row['item'])} for row in frozen['items']]
+        items = [row['item'] for row in valid_items]
+        warehouses = {int(sid): wh for sid, wh in frozen['warehouses'].items()}
+        skip_count = fail_count = 0
+    else:
+        # 1. 获取目标店铺与仓库
+        all_shops = bcs.fetch_shop_list()
+        all_shop_ids = [s["id"] for s in all_shops if s.get("id")]
+        if capture:
+            from sellerops.features.catalog.shops import archive_set
+            archived = archive_set()
+            all_shop_ids = [sid for sid in all_shop_ids if sid not in archived]
+        if not all_shop_ids:
+            print("[错误] 未获取到可用店铺列表")
+            return {"ok": 0, "skip": 0, "fail": len(items), "plans": len(items), "csv": ""}
 
-    warehouses: Dict[int, int] = {}
-    for sid in all_shop_ids:
-        wh = resolve_warehouse(sid)
-        if wh is not None:
-            warehouses[sid] = wh
+        warehouses: Dict[int, int] = {}
+        for sid in all_shop_ids:
+            wh = resolve_warehouse(sid)
+            if wh is not None:
+                warehouses[sid] = wh
 
-    records = load_records()
-    restrictions = db.vc_entries()
+        records = load_records()
+        restrictions = db.vc_entries()
 
-    # 2. 查重过滤与店铺候选拆分
-    valid_items: List[Dict[str, Any]] = []
-    skip_count = 0
-    fail_count = 0
+        # 2. 查重过滤与店铺候选拆分
+        valid_items: List[Dict[str, Any]] = []
+        skip_count = 0
+        fail_count = 0
 
-    for it in items:
-        target_sids = [sid for sid in (it.target_shops or all_shop_ids) if sid in warehouses]
-        if not target_sids:
-            print(f"  [跳过] 商品 {it.nm_id} 无可用目标店铺或仓库无法解析")
-            fail_count += 1
-            continue
+        for it in items:
+            target_sids = [sid for sid in (it.target_shops or all_shop_ids) if sid in warehouses]
+            if not target_sids:
+                print(f"  [跳过] 商品 {it.nm_id} 无可用目标店铺或仓库无法解析")
+                fail_count += 1
+                continue
 
-        actual_vc = f'{it.prefix}-{it.nm_id}'
-        keys = publish_keys(it) | {actual_vc}
-        target_sids = [sid for sid in target_sids
-                       if not any(str(sid) in records.get(key, {}) for key in keys)
-                       and not db.listing_blocked(it.vendor_code or actual_vc, sid, restrictions)
-                       and not db.listing_blocked(actual_vc, sid, restrictions)]
-        if check_exists:
-            final_targets = []
-            for sid in target_sids:
-                if vc_exists_in_shop(it.vendor_code or "", sid, records):
-                    continue
-                final_targets.append(sid)
-        else:
-            final_targets = target_sids
+            actual_vc = f'{it.prefix}-{it.nm_id}'
+            keys = publish_keys(it) | {actual_vc}
+            target_sids = [sid for sid in target_sids
+                           if not any(str(sid) in records.get(key, {}) for key in keys)
+                           and not db.listing_blocked(it.vendor_code or actual_vc, sid, restrictions)
+                           and not db.listing_blocked(actual_vc, sid, restrictions)]
+            if check_exists:
+                final_targets = []
+                for sid in target_sids:
+                    if vc_exists_in_shop(it.vendor_code or "", sid, records):
+                        continue
+                    final_targets.append(sid)
+            else:
+                final_targets = target_sids
 
-        if not final_targets:
-            print(f"  [跳过] 商品 {it.nm_id} ({it.vendor_code}) 目标店铺均已存在或已提交")
-            skip_count += 1
-            continue
+            if not final_targets:
+                print(f"  [跳过] 商品 {it.nm_id} ({it.vendor_code}) 目标店铺均已存在或已提交")
+                skip_count += 1
+                continue
 
-        p_val = float(it.price or 0.0)
-        price_str = str(int(p_val)) if p_val.is_integer() else f"{p_val:.2f}"
-        stk = stock_for(it.cn, overrides, default=it.stock)
+            p_val = float(it.price or 0.0)
+            price_str = str(int(p_val)) if p_val.is_integer() else f"{p_val:.2f}"
+            stk = stock_for(it.cn, overrides, default=it.stock)
 
-        # 检查是否使用非前缀式自定义 VC 并提示
-        expected_vc = f"{it.prefix}-{it.nm_id}"
-        if it.vendor_code and it.vendor_code != expected_vc:
-            print(f"  [提示] 新接口上架为平台自动按前缀生成 vendorCode: '{expected_vc}'（传入的完整 VC '{it.vendor_code}' 不会被直接透传；若需原生透传完整 VC 请用 create-cards）")
+            # 检查是否使用非前缀式自定义 VC 并提示
+            expected_vc = f"{it.prefix}-{it.nm_id}"
+            if it.vendor_code and it.vendor_code != expected_vc:
+                print(f"  [提示] 新接口上架为平台自动按前缀生成 vendorCode: '{expected_vc}'（传入的完整 VC '{it.vendor_code}' 不会被直接透传；若需原生透传完整 VC 请用 create-cards）")
 
-        valid_items.append({
-            "item": it,
-            "sku": int(it.nm_id),
-            "vc": it.vendor_code or expected_vc,
-            "prefix": it.prefix,
-            "cn": it.cn,
-            "price_str": price_str,
-            "packageLength": it.length,
-            "packageWidth": it.width,
-            "packageHeight": it.height,
-            "weightBrut": it.weight,
-            "targets": final_targets,
-            "stock": stk,
-        })
+            valid_items.append({
+                "item": it,
+                "sku": int(it.nm_id),
+                "vc": it.vendor_code or expected_vc,
+                "prefix": it.prefix,
+                "cn": it.cn,
+                "price_str": price_str,
+                "packageLength": it.length,
+                "packageWidth": it.width,
+                "packageHeight": it.height,
+                "weightBrut": it.weight,
+                "targets": final_targets,
+                "stock": stk,
+            })
 
-    # 3. dry-run 预览
-    if not apply:
-        preview_list = []
-        for v in valid_items:
-            it_copy = copy.copy(v["item"])
-            it_copy.target_shops = v["targets"]
-            preview_list.append(it_copy)
-        print_publish_preview(preview_list, all_shop_ids)
-        print(f"\n[dry-run] 共 {len(items)} 个候选，{len(valid_items)} 个待提交上架，跳过 {skip_count} 个。加 --apply 真正执行。")
-        return {"ok": 0, "skip": skip_count, "fail": fail_count, "plans": len(items), "csv": ""}
+        # 3. dry-run 预览
+        if not apply:
+            preview_list = []
+            for v in valid_items:
+                it_copy = copy.copy(v["item"])
+                it_copy.target_shops = v["targets"]
+                preview_list.append(it_copy)
+            print_publish_preview(preview_list, all_shop_ids)
+            print(f"\n[dry-run] 共 {len(items)} 个候选，{len(valid_items)} 个待提交上架，跳过 {skip_count} 个。加 --apply 真正执行。")
+            result = {"ok": 0, "skip": skip_count, "fail": fail_count, "plans": len(items), "csv": ""}
+            if capture and valid_items:
+                result['prepared'] = {
+                    'items': [{**row, 'item': asdict(row['item'])} for row in valid_items],
+                    'warehouses': {sid: warehouses[sid] for row in valid_items for sid in row['targets']},
+                    'blocked_count': fail_count,
+                }
+            return result
 
     # 4. 执行真正上架
     print(f"\n[开始执行] 新版批量上品接口：{len(valid_items)} 个待上架商品 ...")
@@ -192,6 +212,7 @@ def execute_publish(
             writer.writerow(row)
 
     ok_count = 0
+    details = []
     t0 = time.time()
 
     # 按目标店铺组合与库存量进行分组分片
@@ -237,17 +258,21 @@ def execute_publish(
                     print(f"  ✓ 批次提交成功 (taskId={task_id})")
                     for it in chunk:
                         ok_count += 1
+                        details.append({'vc': it['vc'], 'targets': list(target_tuple), 'task_id': task_id,
+                                        'status': 'accepted'})
                         write_log(now, it, "成功", f"taskId={task_id}")
                 else:
                     msg = resp.get("msg") or f"code={resp.get('code')}"
                     print(f"  ✗ 批次提交失败: {msg}")
                     for it in chunk:
                         fail_count += 1
+                        details.append({'vc': it['vc'], 'targets': list(target_tuple), 'status': 'failed'})
                         write_log(now, it, "失败", msg)
             except Exception as e:
                 print(f"  ✗ 批次请求异常: {e}")
                 for it in chunk:
                     fail_count += 1
+                    details.append({'vc': it['vc'], 'targets': list(target_tuple), 'status': 'unknown'})
                     write_log(now, it, "失败", str(e))
 
             if curr_chunk < total_chunks:
@@ -261,7 +286,7 @@ def execute_publish(
     if ok_count > 0 and managed_file:
         common.print_write_hint()
 
-    return {"ok": ok_count, "skip": skip_count, "fail": fail_count, "plans": len(items), "csv": csv_path or ""}
+    return {"ok": ok_count, "skip": skip_count, "fail": fail_count, "plans": len(items), "csv": csv_path or "", "details": details}
 
 
 def publish_product(
@@ -435,5 +460,8 @@ def run(args: Any) -> int:
         apply=getattr(args, "apply", False),
         interval=getattr(args, "interval", 1.0),
         overrides=overrides,
+        **({'capture': True} if getattr(args, 'capture_plan', False) else {}),
     )
+    if isinstance(res, dict) and res.get('prepared'):
+        args.prepared = res['prepared']
     return 1 if resolution_failures or res["fail"] else 0

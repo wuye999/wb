@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 import openpyxl
 import requests
 
-from sellerops.cli.main import main
+from operation_fixture import run_business_cli as main
 from sellerops.core.errors import AuthenticationError, PlatformApiError
 from sellerops.core.files import atomic_dump_json
 from sellerops.domain.product_reports import ProductReport, ReportIssue
@@ -235,13 +235,13 @@ class TestWorkBuddyProducts(unittest.TestCase):
             return accepted(802)
         with patch.object(wb, "request", side_effect=submit) as send, patch.object(bcs, "post") as bcs_write:
             args = daily.build_steps("adjust-discounts", True, "1,2")[0][5:]
-            self.assertIn("--target", args)
+            self.assertEqual(args[:2], ['ops', 'discount'])
+            self.assertNotIn('--apply', args)
             self.assertEqual(args[args.index("--target") + 1], "50")
-            rc, result = self.command(*args)
-        self.assertEqual((rc, result["status"], result["channel"]), (1, "partial", "wb"))
-        self.assertEqual(result["per_shop"][0]["task_ids"], ["802"])
+            rc, result = self.command('product', *args[1:])
+        self.assertEqual((rc, result["status"], result["channel"]), (1, "failed", "wb"))
         self.assertIsNone(result["per_shop"][1]["products"]["matched"])
-        self.assertEqual([c.args[0].shop_id for c in send.call_args_list if "upload/task" in c.args[2]], [1, 1])
+        self.assertEqual([c.args[0].shop_id for c in send.call_args_list if "upload/task" in c.args[2]], [])
         bcs_write.assert_not_called()
         args = ("product", "discount", "--shops", "1", "--all-products", "--target", "50")
         for packet, expected in ((page(), "no_match"), ({"error": False, "data": {}}, "failed")):

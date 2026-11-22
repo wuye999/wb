@@ -186,6 +186,9 @@ def _add_shop(report: ProductReport, sid: int, name: str, source: str, *, target
 def _sources(report: ProductReport, wanted: set[int],
              extra_bcs_accounts: Sequence[BCSSession]) -> list[OpenAPIShop]:
     """先选本机目标，再加入临时来源；重复ID不覆盖优先来源或扩大目标范围。"""
+    from sellerops.features.catalog.shops import archive_set
+
+    archived = archive_set()
     report.target_shop_ids = set()
     selected: dict[int, OpenAPIShop] = {}
     unknown = set(wanted)
@@ -202,7 +205,7 @@ def _sources(report: ProductReport, wanted: set[int],
             continue
         if index == 0:
             unknown -= {item.id for item in accesses}
-            accesses = [item for item in accesses if not wanted or item.id in wanted]
+            accesses = [item for item in accesses if item.id not in archived and (not wanted or item.id in wanted)]
         for access in accesses:
             if access.id in selected:
                 if selected[access.id].name != access.name:

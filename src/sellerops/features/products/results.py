@@ -42,7 +42,15 @@ class ProductResult:
         except Exception as error:
             self.error = f"{type(error).__name__}：{error}" if isinstance(error, (ValueError, OSError, AuthenticationError)) else type(error).__name__
             print(f"[错误] {self.error}")
-        return self.finish()
+        code = self.finish()
+        args.outcome = {
+            'error': self.error,
+            'receipts': [{'shop_id': r.shop_id, 'status': r.status, 'task_id': r.task_id,
+                          'detail': r.detail, 'vc': r.item.get('vc'), 'nmId': r.item.get('nmID'),
+                          'chrtId': r.item.get('chrtId')} for receipts in self.receipts.values() for r in receipts],
+            'artifacts': {key: str(value) for key, value in self.artifacts.items()},
+        }
+        return code
 
     def add_plans(self, plans: list[dict]) -> None:
         for plan in plans:

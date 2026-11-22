@@ -156,6 +156,10 @@ def _submit(clients: dict[int, WBContentAPI], prepared: list[PreparedRename], lo
 def _run(args: Any, requested: list[str], log: OperationLog) -> int:
     catalog, attempts = load_catalog(), load_attempts()
     _, shops = select_accesses(args.shops)
+    if getattr(args, 'capture_plan', False):
+        from sellerops.features.catalog.shops import archive_set
+        archived = archive_set()
+        shops = [shop for shop in shops if shop.id not in archived]
     log.document['shops'] = [{'id': shop.id, 'name': shop.name} for shop in shops]
     cards, occupied, clients = {}, {}, {}
     failed = False
@@ -177,6 +181,9 @@ def _run(args: Any, requested: list[str], log: OperationLog) -> int:
             return log.finish()
         prepared = _prepare(args, catalog, attempts, cards, occupied, requested, log)
         log.save()
+        if getattr(args, 'capture_plan', False):
+            args.prepared = {'items': [item.record for item in prepared],
+                             'blocked': [row for row in log.document['items'] if row['status'] != 'planned']}
         if args.apply:
             _submit(clients, prepared, log)
     return log.finish()
@@ -214,3 +221,32 @@ def run(args: Any) -> int:
         except Exception:
             print('[错误] 改码日志无法保存；已停止，禁止据此重放提交')
             return 1
+
+
+def apply_frozen(args: Any) -> int:
+    log = NormalizationLog(COMMAND, True)
+    log.document['version'] = 1
+    planned = args.frozen['items']
+    ids = sorted({row['shopId'] for row in planned})
+    with FileLock(Path(paths.current.log_dir) / COMMAND), ExitStack() as stack:
+        _, shops = select_accesses(','.join(map(str, ids)))
+        history = load_attempts()
+        completed = {(row.shop_id, row.nm_id) for row in history}
+        clients = {shop.id: stack.enter_context(closing(WBContentAPI(shop.api_key))) for shop in shops}
+        prepared = []
+        for record in planned:
+            row = dict(record)
+            log.document['items'].append(row)
+            if (row['shopId'], row['nmID']) in completed:
+                row.update(status='blocked', reason='\u672c\u5e97\u540c\u5361\u5df2\u6709\u63d0\u4ea4\u8bb0\u5f55')
+                continue
+            previous = {attempt.new_vc for attempt in history if attempt.old_vc == row['vc']}
+            conflict = any(attempt.new_vc.upper() == row['newVC'].upper() and attempt.old_vc != row['vc']
+                           for attempt in history)
+            if conflict or (previous and previous != {row['newVC']}):
+                row.update(status='blocked', reason='\u8be5\u65e7 VC \u7684\u5386\u53f2\u65b0\u7801\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u65b0\u9884\u89c8')
+                continue
+            prepared.append(PreparedRename(row['shopId'], row['card'], row))
+        _submit(clients, prepared, log)
+    args.outcome = {'items': log.document['items']}
+    return log.finish()

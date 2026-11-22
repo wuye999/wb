@@ -15,6 +15,7 @@ from sellerops.persistence.snapshots import ProductSnapshotRepository, save_shop
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
 from sellerops.integrations.wildberries.open_api import OpenAPIResponseError
 from sellerops.features.catalog import snapshot_open_api
+from sellerops.features.catalog.shops import require_active, shop_status
 from sellerops.domain.snapshot_values import first_price, stock_values, valid_sizes
 
 _OPEN_API_METHOD = 'wb-openapi(content.cards, prices.nmList, moscow.chrtIds)'
@@ -32,6 +33,7 @@ def fetch_shop(shop_id: int, no_sync: bool = False,
     """完整拉取并原子保存单店快照；默认走 BCS 快照，Open API 失败不回退 BCS。"""
     if type(shop_id) is not int or shop_id <= 0:
         raise ValueError('店铺 ID 必须为正整数')
+    require_active(shop_id)
     if source not in {'wb-openapi', 'bcs'}:
         raise ValueError('未知快照数据来源')
     metadata = {}
@@ -95,6 +97,9 @@ def _save_snapshot(shop_id: int, rows: list[dict], source: str,
         **metadata,
     }
     with db.connect(write=True) as connection:
+        row = connection.execute('SELECT status FROM shops WHERE shop_id=?', (str(shop_id),)).fetchone()
+        if row and row['status'] == 'archived':
+            raise ValueError(f'店铺 {shop_id} 已归档，已保留原快照')
         total = save_snapshot(connection, shop_id, result, name=name)
     print(f'[店铺{shop_id}] 已保存快照：{total} 条')
     vcs = len({r.get("vendorCode") for r in rows})
@@ -149,7 +154,7 @@ def _fetch_open_api_shops(accesses: list[OpenAPIShop], parallel: int) -> tuple[l
     return fetched, errors
 
 
-def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) -> None:
+def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) -> dict:
     """BCS 默认先同步再读 BASE 缓存；显式 wb-openapi 时最多4店并发；失败保留旧快照，汇总后报错。"""
     if source not in {'wb-openapi', 'bcs'}:
         raise ValueError('未知快照数据来源')
@@ -159,16 +164,24 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
     shops = ([{'id': shop.id, 'name': shop.name} for shop in accesses]
              if source == 'wb-openapi' else bcs.fetch_shop_list())
     print(f"共 {len(shops)} 个店铺: {[(s['id'], s['name']) for s in shops]}")
+    present = {shop['id'] for shop in shops}
+    previous = shop_status()
+    archived = {int(shop['shop_id']) for shop in previous if shop['status'] == 'archived'}
+    missing = [shop for shop in previous if shop['status'] == 'active' and int(shop['shop_id']) not in present]
+    if missing:
+        print('[缺失店铺] ' + '、'.join(f"{shop['shop_name']}({shop['shop_id']})" for shop in missing))
+    shops = [shop for shop in shops if shop['id'] not in archived]
+    accesses = [shop for shop in accesses if shop.id not in archived]
     with db.connect(write=True) as connection:
         for shop in shops:
             save_shop(connection, shop['id'], shop['name'])
 
     status = {"fetchedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-              "shops": shops, "errors": [], "source": source, "fetched": []}
+              "shops": shops, "errors": [], "source": source, "fetched": [], "missing_shops": missing}
 
     if source == 'wb-openapi' and no_sync:
         print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
-    if source == 'bcs' and not no_sync:
+    if source == 'bcs' and shops and not no_sync:
         t0 = time.time()
         print("\n>>> 并发同步全部店铺（WB → BCS）...")
         bcs.sync_shops_parallel([s["id"] for s in shops])
@@ -193,8 +206,7 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
         for error in status['errors']:
             connection.execute('UPDATE shops SET last_sync_error = ? WHERE shop_id = ?',
                                (error['error'], str(error['id'])))
-    if status['errors']:
-        raise RuntimeError(f"{len(status['errors'])} 个店铺拉取失败，失败店铺保留原快照")
+    return status
 
 
 def snapshot_shops() -> list[dict]:

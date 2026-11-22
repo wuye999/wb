@@ -221,6 +221,10 @@ def resume(args: Any) -> int:
                 row = log.add(shop.id, entry['vc'], 'planned', warehouse=warehouse,
                               sourceNm=entry['sourceNm'], cardReceipt=entry.get('receipt'))
                 continuations.append(PublishContinuation(entry, row, api, warehouse))
+        if getattr(args, 'capture_plan', False):
+            args.prepared = {'create': [], 'continue': [item.entry for item in continuations],
+                             'blocked': [row for row in log.document['items'] if row['status'] != 'planned']}
+            return log.finish()
         wait_and_finish(continuations, state, log, timeout=args.wait_timeout,
                         interval=args.wait_interval, apply=args.apply)
     return log.finish()

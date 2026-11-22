@@ -40,6 +40,10 @@ def run(args: Any) -> int:
     source, targets = select_accesses(args.shops, source_id)
     log = OperationLog('publish-openapi', args.apply)
     with store.operation_lock(), ExitStack() as stack:
+        if getattr(args, 'capture_plan', False):
+            from sellerops.features.catalog.shops import require_active
+            for shop in targets:
+                require_active(shop.id)
         state = store.load_state()
         shared_records = store.load_shared_records()
         restrictions = db.vc_entries()
@@ -124,67 +128,116 @@ def run(args: Any) -> int:
                 except Exception as exc:
                     log.add(shop.id, vc, 'failed', reason=safe_reason(exc))
         log.save()
-        stopped_shops = set()
-        if args.apply:
-            for sid, operations in prepared.items():
-                stopped = False
-                for offset in range(0, len(operations), 100):
-                    batch = operations[offset:offset + 100]
-                    if stopped:
-                        for _, entry in batch:
-                            row = next(r for r in log.document['items'] if r['shopId'] == sid and r['vc'] == entry['vc'])
-                            row.update(status='blocked', reason='该店此前提交失败，剩余商品未发送')
-                        log.save()
-                        continue
-                    # 持久化意图后才发送第一个请求；进程退出也不会自动重复建卡。
-                    for key, entry in batch:
-                        entry['status'] = 'preparing'
-                        state['items'][key] = entry
-                    store.save_state(state)
-                    try:
-                        count = sum(len(entry['card']['variants'][0]['sizes']) for _, entry in batch)
-                        barcodes = []
-                        for start in range(0, count, 5000):
-                            barcodes.extend(clients[sid].barcodes(min(5000, count - start)))
-                        if len(set(barcodes)) != count:
-                            raise ValueError('条码跨批次重复，已阻止建卡')
-                        cursor = 0
-                        for _, entry in batch:
-                            for size in entry['card']['variants'][0]['sizes']:
-                                size['skus'] = [barcodes[cursor]]
-                                cursor += 1
-                            entry['status'] = 'submitting'
-                        store.save_state(state)
-                        receipt = clients[sid].create_cards([entry['card'] for _, entry in batch])
-                        for key, entry in batch:
-                            entry.update(status='accepted', receipt=receipt)
-                        store.save_state(state)
-                        store.record_shared(sid, [entry['vc'] for _, entry in batch])
-                    except Exception as exc:
-                        stopped = True
-                        stopped_shops.add(sid)
-                        for _, entry in batch:
-                            if entry['status'] != 'accepted':
-                                entry['status'] = 'prepare_failed' if entry['status'] == 'preparing' else 'unknown'
-                            entry['reason'] = safe_reason(exc)
-                        store.save_state(state)
+        if getattr(args, 'capture_plan', False):
+            args.prepared = {'create': [entry for rows in prepared.values() for _, entry in rows],
+                             'continue': [item.entry for item in continuations],
+                             'blocked': [row for row in log.document['items'] if row['status'] != 'planned']}
+        else:
+            execute_prepared(args, clients, warehouses, prepared, continuations, state, log)
+    return log.finish()
+
+
+def execute_prepared(args, clients: dict, warehouses: dict, prepared: dict, continuations: list,
+                     state: dict, log: OperationLog) -> None:
+    stopped_shops = set()
+    if args.apply:
+        for sid, operations in prepared.items():
+            stopped = False
+            for offset in range(0, len(operations), 100):
+                batch = operations[offset:offset + 100]
+                if stopped:
                     for _, entry in batch:
                         row = next(r for r in log.document['items'] if r['shopId'] == sid and r['vc'] == entry['vc'])
-                        row.update(status=('partial' if entry.get('reason') and entry['status'] == 'accepted'
-                                           else 'failed' if entry['status'] == 'prepare_failed' else entry['status']))
-                        row['receipt'] = entry.get('receipt')
-                        if entry.get('reason'):
-                            row['reason'] = entry['reason']
-                        elif entry['status'] == 'accepted':
-                            row['cardReceipt'] = entry['receipt']
-                            continuations.append(PublishContinuation(entry, row, clients[sid], warehouses[sid]))
+                        row.update(status='blocked', reason='该店此前提交失败，剩余商品未发送')
                     log.save()
-        active_continuations = []
-        for item in continuations:
-            if item.entry['shopId'] in stopped_shops:
-                item.row.update(status='blocked', reason='该店建卡提交失败，已受理商品保留记录，本轮不继续后续阶段')
-            else:
-                active_continuations.append(item)
-        wait_and_finish(active_continuations, state, log, timeout=args.wait_timeout,
-                        interval=args.wait_interval, apply=args.apply)
+                    continue
+                # 持久化意图后才发送第一个请求；进程退出也不会自动重复建卡。
+                for key, entry in batch:
+                    entry['status'] = 'preparing'
+                    state['items'][key] = entry
+                store.save_state(state)
+                try:
+                    count = sum(len(entry['card']['variants'][0]['sizes']) for _, entry in batch)
+                    barcodes = []
+                    for start in range(0, count, 5000):
+                        barcodes.extend(clients[sid].barcodes(min(5000, count - start)))
+                    if len(set(barcodes)) != count:
+                        raise ValueError('条码跨批次重复，已阻止建卡')
+                    cursor = 0
+                    for _, entry in batch:
+                        for size in entry['card']['variants'][0]['sizes']:
+                            size['skus'] = [barcodes[cursor]]
+                            cursor += 1
+                        entry['status'] = 'submitting'
+                    store.save_state(state)
+                    receipt = clients[sid].create_cards([entry['card'] for _, entry in batch])
+                    for key, entry in batch:
+                        entry.update(status='accepted', receipt=receipt)
+                    store.save_state(state)
+                    store.record_shared(sid, [entry['vc'] for _, entry in batch])
+                except Exception as exc:
+                    stopped = True
+                    stopped_shops.add(sid)
+                    for _, entry in batch:
+                        if entry['status'] != 'accepted':
+                            entry['status'] = 'prepare_failed' if entry['status'] == 'preparing' else 'unknown'
+                        entry['reason'] = safe_reason(exc)
+                    store.save_state(state)
+                for _, entry in batch:
+                    row = next(r for r in log.document['items'] if r['shopId'] == sid and r['vc'] == entry['vc'])
+                    row.update(status=('partial' if entry.get('reason') and entry['status'] == 'accepted'
+                                       else 'failed' if entry['status'] == 'prepare_failed' else entry['status']))
+                    row['receipt'] = entry.get('receipt')
+                    if entry.get('reason'):
+                        row['reason'] = entry['reason']
+                    elif entry['status'] == 'accepted':
+                        row['cardReceipt'] = entry['receipt']
+                        continuations.append(PublishContinuation(entry, row, clients[sid], warehouses[sid]))
+                log.save()
+    active_continuations = []
+    for item in continuations:
+        if item.entry['shopId'] in stopped_shops:
+            item.row.update(status='blocked', reason='该店建卡提交失败，已受理商品保留记录，本轮不继续后续阶段')
+        else:
+            active_continuations.append(item)
+    wait_and_finish(active_continuations, state, log, timeout=args.wait_timeout,
+                    interval=args.wait_interval, apply=args.apply)
+
+def apply_frozen(args) -> int:
+    frozen = args.frozen
+    entries = frozen['create'] + frozen['continue']
+    target_ids = sorted({entry['shopId'] for entry in entries})
+    _, targets = select_accesses(','.join(map(str, target_ids)))
+    log = OperationLog('publish-openapi', True)
+    with store.operation_lock(), ExitStack() as stack:
+        state = store.load_state()
+        shared = store.load_shared_records()
+        restrictions = db.vc_entries()
+        clients, warehouses, prepared, continuations = {}, {}, {}, []
+        for shop in targets:
+            api = stack.enter_context(closing(WBContentAPI(shop.api_key)))
+            warehouse = moscow_warehouse(api.warehouses())
+            clients[shop.id], warehouses[shop.id] = api, warehouse
+        for entry in frozen['create']:
+            sid, vc = entry['shopId'], entry['vc']
+            key = store.item_key(sid, vc)
+            prior = state['items'].get(key)
+            if (entry['warehouse']['id'] != warehouses[sid]['id'] or db.listing_blocked(vc, sid, restrictions)
+                    or store.legacy_submitted(sid, vc, shared)
+                    or (prior and prior['status'] not in {'preparing', 'prepare_failed'})):
+                log.add(sid, vc, 'blocked', reason='\u4e0a\u67b6\u8303\u56f4\u3001\u83ab\u65af\u79d1\u4ed3\u6216\u8bb0\u5f55\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u65b0\u9884\u89c8')
+                continue
+            prepared.setdefault(sid, []).append((key, copy.deepcopy(entry)))
+            log.add(sid, vc, 'planned', sourceNm=entry['sourceNm'], warehouse=warehouses[sid],
+                    card=entry['card'], media=entry['media'], stock=entry['stock'])
+        for entry in frozen['continue']:
+            sid, vc = entry['shopId'], entry['vc']
+            current = state['items'].get(store.item_key(sid, vc))
+            if current != entry or warehouses[sid]['id'] != entry['warehouse']['id'] or not can_continue(current):
+                log.add(sid, vc, 'blocked', reason='\u539f\u5b9a\u4e0a\u67b6\u9636\u6bb5\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u65b0\u9884\u89c8')
+                continue
+            row = log.add(sid, vc, 'planned', sourceNm=entry['sourceNm'], warehouse=warehouses[sid])
+            continuations.append(PublishContinuation(current, row, clients[sid], warehouses[sid]))
+        execute_prepared(args, clients, warehouses, prepared, continuations, state, log)
+    args.outcome = {'items': log.document['items']}
     return log.finish()

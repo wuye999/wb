@@ -121,12 +121,7 @@ class BCSClient:
 
     def fetch_shop_list(self) -> List[Dict[str, Any]]:
         """账号全部店铺 → [{'id', 'name'}]"""
-        url = f"{self.base_url}/system/wbShop/user/list?pageNum=1&pageSize=100"
-        d = self.get(url)
-        if d.get("code") != 200:
-            raise PlatformApiError(f"获取店铺列表失败 code={d.get('code')} msg={d.get('msg')}")
-        return [{"id": r.get("id"), "name": r.get("shopName")}
-                for r in (d.get("rows") or []) if r.get("id")]
+        return [{'id': shop.id, 'name': shop.name} for shop in self.fetch_open_api_shops()]
 
     def get_main_shop(self) -> int:
         if config.MAIN_SHOP:

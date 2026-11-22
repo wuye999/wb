@@ -88,7 +88,7 @@ def submit_bcs_stock(plan: dict, result: ProductResult) -> None:
 
 
 def apply_trash(plans: list[dict], *, channel: str, chunk: int | None = None,
-                interval: float | None = None) -> tuple[int, int]:
+                interval: float | None = None, outcome: dict | None = None) -> tuple[int, int]:
     """按原顺序先确认所有规格清零，再提交移回收站。"""
     from sellerops.features.products import trash
 
@@ -131,6 +131,9 @@ def apply_trash(plans: list[dict], *, channel: str, chunk: int | None = None,
         time.sleep(SHOP_SLEEP)
     write_product_receipts(config.current, receipts)
     append_product_history(config.current, receipts)
+    if outcome is not None:
+        outcome['receipts'] = [{'shop_id': r.shop_id, 'vc': r.item.get('vc'), 'nmId': r.item.get('nmID'),
+                                'status': r.status, 'task_id': r.task_id, 'detail': r.detail} for r in receipts]
     ok = sum(r.status == "accepted" for r in receipts)
     fail = len(receipts) - ok
     print(f"\n结果：移回收站已受理 {ok} 个商品卡，失败或阻止 {fail} 个")

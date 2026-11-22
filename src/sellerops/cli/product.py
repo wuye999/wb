@@ -7,7 +7,7 @@ from sellerops.cli.arguments import add_shop_scope
 from sellerops.cli.arguments import add_product_scope
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> None:
     p = sub.add_parser('price', help="改价或按显式价格意图设折扣（默认 WB 后台，默认预览）",
                        description="按表改价可直接使用本命令。只设折扣用 product discount --target D。"
                                    "按表同时改价和设折扣用 --from-price-book --discount D。")
@@ -34,41 +34,42 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument('--channel', choices=['wb', 'bcs'], default='wb', help='提交平台，默认 WB 后台')
     bind(p, 'sellerops.cli.product', 'run_trash')
 
-    p = sub.add_parser('dimensions', help="批量修改尺寸（按价格表或 --dims 自定义，dry-run 默认，--apply 执行）")
-    add_product_scope(p)
-    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
-    p.add_argument("--dims", default="", help="自定义尺寸 '长*宽*高/毛重'（例: 8*14*26/0.3）")
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+    if not planned_only:
+        p = sub.add_parser('dimensions', help="批量修改尺寸（按价格表或 --dims 自定义，dry-run 默认，--apply 执行）")
+        add_product_scope(p)
+        p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
+        p.add_argument("--dims", default="", help="自定义尺寸 '长*宽*高/毛重'（例: 8*14*26/0.3）")
+        p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
 
-    bind(p, 'sellerops.features.products.dimension', 'run')
+        bind(p, 'sellerops.features.products.dimension', 'run')
 
-    p = sub.add_parser('check-dimensions', help="查询 WB 包装尺寸/重量偏差待验证商品（只读）")
-    p.add_argument("--type", choices=["dims", "weight", "all"], default="dims",
-                       help="dims=尺寸偏差 / weight=重量偏差 / all=两者合并去重（默认 dims）")
-    names = p.add_mutually_exclusive_group()
-    names.add_argument("--name", default="", help="完整中文商品名")
-    names.add_argument("--name-contains", help="中文商品名包含指定文字")
-    p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
-    p.add_argument("--limit", type=int, default=0, help="每店最多查询 N 条（0=不限）")
-    bind(p, 'sellerops.features.products.dims_check', 'run')
+        p = sub.add_parser('check-dimensions', help="查询 WB 包装尺寸/重量偏差待验证商品（只读）")
+        p.add_argument("--type", choices=["dims", "weight", "all"], default="dims",
+                           help="dims=尺寸偏差 / weight=重量偏差 / all=两者合并去重（默认 dims）")
+        names = p.add_mutually_exclusive_group()
+        names.add_argument("--name", default="", help="完整中文商品名")
+        names.add_argument("--name-contains", help="中文商品名包含指定文字")
+        p.add_argument("--shops", default="", help="限定店铺 id 逗号分隔")
+        p.add_argument("--limit", type=int, default=0, help="每店最多查询 N 条（0=不限）")
+        bind(p, 'sellerops.features.products.dims_check', 'run')
 
-    p = sub.add_parser('banned', help="查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）")
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
-    add_shop_scope(p)
-    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
-    p.add_argument("--yes", action="store_true", help="跳过不可逆确认（移到回收站）")
+        p = sub.add_parser('banned', help="查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）")
+        p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+        add_shop_scope(p)
+        p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
+        p.add_argument("--yes", action="store_true", help="跳过不可逆确认（移到回收站）")
 
-    bind(p, 'sellerops.features.products.banned', 'run')
+        bind(p, 'sellerops.features.products.banned', 'run')
 
-    p = sub.add_parser('clean', help="清理草稿箱/回收站")
-    p.add_argument("--target", required=True, choices=["basket", "draft", "all"],
-                       help="basket=回收站 / draft=草稿箱 / all=先草稿后回收站")
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
-    add_shop_scope(p)
-    p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条，草稿和回收站共用总额，0 为不限")
+        p = sub.add_parser('clean', help="清理草稿箱/回收站")
+        p.add_argument("--target", required=True, choices=["basket", "draft", "all"],
+                           help="basket=回收站 / draft=草稿箱 / all=先草稿后回收站")
+        p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+        add_shop_scope(p)
+        p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条，草稿和回收站共用总额，0 为不限")
 
-    p.add_argument("--yes", action="store_true", help="确认永久删除所列商品")
-    bind(p, 'sellerops.features.products.clean', 'run')
+        p.add_argument("--yes", action="store_true", help="确认永久删除所列商品")
+        bind(p, 'sellerops.features.products.clean', 'run')
 
     p = sub.add_parser('discount',
                            help="设目标折扣，--threshold 只修正超过阈值的商品。BCS 仅支持 --all-products")

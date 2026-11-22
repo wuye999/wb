@@ -113,11 +113,13 @@ class TestExecutionContracts(unittest.TestCase):
             self.assertEqual(dispatch(parser.parse_args(['task', 'schedule'])), 0)
             self.assertEqual(dispatch(parser.parse_args(['task', 'schedule', '--remove'])), 0)
 
-    def test_daily_write_flag_propagates_and_shop_scope_is_kept(self):
+    def test_daily_discount_generates_plan_in_original_shop_scope(self):
         from sellerops.features.system.daily import build_steps
-        for argv in build_steps('morning', apply=True, shops='1,2'):
-            self.assertIn('--apply', argv)
-            self.assertEqual(argv[-2:], ['--shops', '1,2'])
+        marketing, discount = build_steps('morning', apply=True, shops='1,2')
+        self.assertIn('--apply', marketing)
+        self.assertEqual(discount[5:7], ['ops', 'discount'])
+        self.assertNotIn('--apply', discount)
+        self.assertEqual(discount[-2:], ['--shops', '1,2'])
         for argv in build_steps('morning'):
             self.assertNotIn('--apply', argv)
 

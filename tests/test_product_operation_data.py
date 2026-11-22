@@ -210,7 +210,7 @@ class TestProductOperationData(unittest.TestCase):
         self.assertEqual(selection.resolve_filters(selector, state, book)[0], [VC])
 
     def test_stock_cli_finishes_all_preparation_before_writing_and_never_refreshes_snapshots(self):
-        from sellerops.cli.main import main
+        from operation_fixture import run_business_cli as main
         from sellerops.features.catalog import products, mapping_sync
         from sellerops.integrations.wildberries import stocks as stock_api
         before = {sid: self.save(sid) for sid in (1, 2)}
@@ -255,7 +255,7 @@ class TestProductOperationData(unittest.TestCase):
                 self.assertEqual(result[0]['items'], [])
 
     def test_discount_cli_records_missing_id_and_submits_only_resolved_targets(self):
-        from sellerops.cli.main import main
+        from operation_fixture import run_business_cli as main
         from sellerops.features.products import discounts
         bad_vc = 'BCS-HSJF-bad'
         Snapshots.save_shop_products(1, [{'vendorCode': VC, 'nmId': 101},
@@ -333,7 +333,7 @@ class TestProductOperationData(unittest.TestCase):
         self.assertEqual(len(result[0]['blocked_items']), 1)
 
     def test_discount_corrupt_shop_is_reported_while_next_shop_can_be_submitted(self):
-        from sellerops.cli.main import main
+        from operation_fixture import run_business_cli as main
         from sellerops.features.products import discounts
 
         self.save(1)

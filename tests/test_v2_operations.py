@@ -13,7 +13,8 @@ from unittest.mock import Mock, patch
 import openpyxl
 import requests
 
-from sellerops.cli.main import build_parser, main
+from sellerops.cli.main import build_parser
+from operation_fixture import run_business_cli as main
 from sellerops.core.errors import AuthenticationError, PlatformApiError
 from sellerops.features.products import clean, warehouse
 from sellerops.integrations.wildberries import client as wb

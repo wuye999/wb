@@ -151,7 +151,8 @@ def run(args: Any) -> int:
         print(f"[阻止] {b['vc']}: {b['reason']}")
     print_publish_preview(items, sorted(shops_data))
     print(f"候选 {len(items)} 个 VC，目标商品卡 {sum(len(it.target_shops) for it in items)} 张，阻止 {len(blocked)} 个")
-    if not getattr(args, "apply", False):
+    capture = getattr(args, "capture_plan", False)
+    if not getattr(args, "apply", False) and not capture:
         print("[dry-run] 使用本地快照及提交记录；加 --apply 提交。")
         return 1 if blocked else 0
     resolved_items = []
@@ -163,6 +164,9 @@ def run(args: Any) -> int:
             print(f"[阻止] {it.vendor_code}: {err}")
         else:
             resolved_items.append(resolved)
-    result = card_publish.execute_publish(resolved_items, apply=True,
-                                         interval=getattr(args, "interval", 1.0))
+    result = card_publish.execute_publish(resolved_items, apply=args.apply,
+                                         interval=getattr(args, "interval", 1.0),
+                                         **({'capture': True} if capture else {}))
+    if result.get('prepared'):
+        args.prepared = result['prepared']
     return 1 if blocked or result["fail"] else 0

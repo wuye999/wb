@@ -5,18 +5,38 @@
 
 ## shop list
 
-账号店铺列表
+查看本地店铺状态和快照时间
 
-实现入口 [run_shops](../src/sellerops/cli/catalog_handlers.py)
+实现入口 [run_list](../src/sellerops/features/catalog/shops.py)
 
-- `--name` 精确查找店名，重名或未命中时列出候选
+- `--name` 精确查找店名
+- `--json` 输出单个 JSON 对象
+
+## shop archive
+
+将店铺软归档
+
+实现入口 [run_status](../src/sellerops/features/catalog/shops.py)
+
+- `--shop-id` 店铺 ID
+- `--json` 输出单个 JSON 对象
+
+## shop restore
+
+恢复店铺
+
+实现入口 [run_status](../src/sellerops/features/catalog/shops.py)
+
+- `--shop-id` 店铺 ID
+- `--json` 输出单个 JSON 对象
 
 ## catalog fetch
 
-拉取商品快照（默认 BCS 快照，可显式改用 WB 官方 API）
+拉取商品快照
 
 实现入口 [run_fetch](../src/sellerops/cli/catalog_handlers.py)
 
+- 最多选一项 --shop-id
 - `--shop-id` 店铺ID（默认全部）
 - `--source` 快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）（bcs / wb-openapi）
 - `--parallel` WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
@@ -791,6 +811,328 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--remove` 删除全部任务
 - `--apply` 真正注册或删除任务
 - `--yes` 确认删除任务
+
+## map candidates
+
+按完整 VC 和同源码查看待认领商品
+
+实现入口 [run_candidates](../src/sellerops/features/catalog/vc_mapping.py)
+
+- `--limit` 最多返回的候选组数
+- `--json` 输出单个 JSON 对象
+
+## map batch-set
+
+确认明确列出的完整 VC
+
+实现入口 [run_batch_set](../src/sellerops/features/catalog/vc_mapping.py)
+
+- `--file` 批量确认 JSON 文件路径，省略时从标准输入读取
+- `--json` 输出单个 JSON 对象
+
+## map export-pending
+
+导出六列待确认 Excel 表
+
+实现入口 [run_export](../src/sellerops/features/catalog/vc_mapping.py)
+
+- `--out` 输出路径，默认 exports/待确认商品.xlsx
+- `--json` 输出单个 JSON 对象
+
+## map import-excel
+
+导入六列表的运营最终确认
+
+实现入口 [run_import](../src/sellerops/features/catalog/vc_mapping.py)
+
+- `file` 待确认商品 Excel 路径
+- `--json` 输出单个 JSON 对象
+
+## doctor
+
+快速体检
+
+实现入口 [run](../src/sellerops/features/system/doctor.py)
+
+- `--json` 输出单个 JSON 对象
+- `--check-online` 显式进行只读鉴权
+
+## sync
+
+同步商品快照
+
+实现入口 [run_fetch](../src/sellerops/cli/catalog_handlers.py)
+
+- 最多选一项 --all / --shop-id
+- `--all` 同步全部在营店铺
+- `--shop-id` 店铺ID（默认全部）
+- `--source` 快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）（bcs / wb-openapi）
+- `--parallel` WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
+- `--no-sync` BCS来源：跳过后台同步直接读取已同步快照；Open API来源无需同步
+- `--json` 输出单个 JSON 对象
+
+## ops price
+
+改价或按显式价格意图设折扣（默认 WB 后台，默认预览）
+
+实现入口 [run_price](../src/sellerops/cli/product.py)
+
+- 必选其一 --shops / --all-shops
+- 必选其一 --sku / --name / --name-contains / --prefix / --vc / --all-products
+- 最多选一项 --price / --from-price-book / --keep-price
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--sku` 商品价格表卖家 SKU
+- `--name` 完整中文商品名
+- `--name-contains` 中文商品名包含指定文字
+- `--prefix` 商品价格表前缀码
+- `--vc` 完整 VC，多个用逗号分隔
+- `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
+- `--apply` 真正执行（默认 dry-run）
+- `--yes` 跳过不可逆操作确认
+- `--price` 指定正整数价格
+- `--from-price-book` 按对应价格表行取价；同时设折扣时必填此项或其他明确价格意图
+- `--keep-price` 保持各规格原价，须同时指定折扣
+- `--discount` 折扣 0-100，配合 --price、--from-price-book 或 --keep-price
+- `--club-discount` BCS 俱乐部折扣 0-100，须明确价格意图
+- `--auto-review` 改价后自动「应用新价格」（降价 30-49.9% 进审查时，精确匹配刚改价商品）
+- `--chunk` 每批提交条数（≤300，对齐 discount 实践，默认 100）
+- `--interval` 批/店间请求间隔秒
+- `--channel` WB 支持设置批次，BCS 使用固定批次；俱乐部折扣仅 BCS 支持（wb / bcs）
+- `--json` 输出单个 JSON 对象
+
+## ops stock
+
+改库存（默认 WB 原生在线接口；dry-run 默认，归零须 --yes）
+
+实现入口 [run_stock](../src/sellerops/cli/product.py)
+
+- 必选其一 --shops / --all-shops
+- 必选其一 --sku / --name / --name-contains / --prefix / --vc / --all-products
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--sku` 商品价格表卖家 SKU
+- `--name` 完整中文商品名
+- `--name-contains` 中文商品名包含指定文字
+- `--prefix` 商品价格表前缀码
+- `--vc` 完整 VC，多个用逗号分隔
+- `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
+- `--apply` 真正执行（默认 dry-run）
+- `--yes` 跳过不可逆操作确认
+- `--amount` 目标库存，归零传 0
+- `--chunk` 每批提交条数（≤1000，探针实测 1000 可行，默认 500）
+- `--interval` 批/店间请求间隔秒
+- `--max-pages` WB 游标分页安全上限（--resolve live 时使用）
+- `--resolve` snapshot=本地完整规格（默认，缺标识时官方API定向补齐）；live=另读莫斯科当前库存，缺库存记录不减少规格（snapshot / live）
+- `--channel` WB 支持实时库存；BCS 仅支持快照和固定批次（wb / bcs）
+- `--json` 输出单个 JSON 对象
+
+## ops trash
+
+下架（默认 WB 原生 moveNmsToTrash 移回收站；先清库存；不可逆）
+
+实现入口 [run_trash](../src/sellerops/cli/product.py)
+
+- 必选其一 --shops / --all-shops
+- 必选其一 --sku / --name / --name-contains / --prefix / --vc / --all-products
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--sku` 商品价格表卖家 SKU
+- `--name` 完整中文商品名
+- `--name-contains` 中文商品名包含指定文字
+- `--prefix` 商品价格表前缀码
+- `--vc` 完整 VC，多个用逗号分隔
+- `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
+- `--apply` 真正执行（默认 dry-run）
+- `--yes` 跳过不可逆操作确认
+- `--chunk` 每批移回收站条数（≤300，默认 300）
+- `--interval` 批间间隔秒
+- `--channel` 提交平台，默认 WB 后台（wb / bcs）
+- `--json` 输出单个 JSON 对象
+
+## ops discount
+
+设目标折扣，--threshold 只修正超过阈值的商品。BCS 仅支持 --all-products
+
+实现入口 [run_discount](../src/sellerops/cli/product.py)
+
+- 必选其一 --shops / --all-shops
+- 必选其一 --sku / --name / --name-contains / --prefix / --vc / --all-products
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--sku` 商品价格表卖家 SKU
+- `--name` 完整中文商品名
+- `--name-contains` 中文商品名包含指定文字
+- `--prefix` 商品价格表前缀码
+- `--vc` 完整 VC，多个用逗号分隔
+- `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
+- `--channel` （wb / bcs）
+- `--apply` 提交修改（默认预览）
+- `--target` 目标折扣，必填（0 至 100）
+- `--threshold` 仅修改平台当前折扣严格高于此值的商品
+- `--below` 也修改平台当前折扣严格低于此值的商品（WB）
+- `--limit` 每店最多处理的商品数
+- `--chunk` 每批商品数（仅 WB，默认 100）
+- `--json` 输出单个 JSON 对象
+
+## ops review-price
+
+价格审核：查看并应用新价格（降价 30-49.9% 进审查的商品）
+
+实现入口 [run](../src/sellerops/features/products/price_review.py)
+
+- 必选其一 --shops / --all-shops
+- `--apply` 真正应用新价格（默认 dry-run）
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--limit` 每店最多审核 N 个（0=全部）
+- `--json` 输出单个 JSON 对象
+
+## ops replicate
+
+跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）
+
+实现入口 [run](../src/sellerops/features/publishing/replicate.py)
+
+- 必选其一 --vc / --prefix / --name / --name-contains / --all-products
+- 必选其一 --shops / --all-shops
+- `--vc` 完整 VC
+- `--prefix` 四位前缀
+- `--name` 完整中文商品名
+- `--name-contains` 中文商品名包含指定文字
+- `--all-products` 源店全部商品
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--source-shops` 源店铺 id 逗号分隔（默认全部本地店铺，按完整 VC 去重）
+- `--price-source` 价格来源：snapshot=源店快照价格；minimum=商品价格表最低售价（snapshot / minimum）
+- `--price-multiplier` 价格来源乘数，按分四舍五入（默认 1）
+- `--stock` 上架库存（默认999，可显式设为0）
+- `--limit` 最多处理 N 个 vc（0=不限）
+- `--apply` 真正执行（默认 dry-run）
+- `--interval` 批次上架请求间隔秒
+- `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
+- `--json` 输出单个 JSON 对象
+
+## ops import
+
+他人映射表导入上架：他人有我方无的商品（按真实 WB商品码 匹配）上架到我的店铺
+
+实现入口 [run](../src/sellerops/features/publishing/import_publish.py)
+
+- 最多选一项 --name / --name-contains
+- 必选其一 --shops / --all-shops
+- `xlsx` 他人映射表 xlsx 路径（同项目「映射总表」格式）
+- `--name` 外部表中的完整中文商品名
+- `--name-contains` 外部表商品名包含指定文字
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--limit` 最多处理 N 个商品（0=不限）
+- `--apply` 真正执行（默认 dry-run）
+- `--interval` 批次上架请求间隔秒
+- `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
+- `--json` 输出单个 JSON 对象
+
+## ops publish
+
+批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）
+
+实现入口 [run](../src/sellerops/features/publishing/bulk_publish.py)
+
+- 必选其一 --shops / --all-shops
+- `nms` WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+- `--nm` WB 商品码（逗号分隔多个，兼容命令行参数传参）
+- `--vc` 完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
+- `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
+- `--price` 指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+- `--dims` 自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
+- `--length` 包装长 (cm)
+- `--width` 包装宽 (cm)
+- `--height` 包装高 (cm)
+- `--weight` 包装毛重 (kg)
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--stock` 上架库存量（默认 999）
+- `--cn` 商品中文名（辅助匹配价格与包装规格）
+- `--file` 批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+- `--cn-stock` 按中文名指定库存（'中文名:库存,...'）
+- `--interval` 批次/商品请求间隔秒（默认 1.0）
+- `--apply` 真正调用平台接口执行（默认仅 dry-run 预览）
+- `--json` 输出单个 JSON 对象
+
+## ops create-cards
+
+建卡发布上架：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡）
+
+实现入口 [run](../src/sellerops/features/publishing/card_publish.py)
+
+- 必选其一 --shops / --all-shops
+- `nms` WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+- `--nm` WB 商品码（逗号分隔多个，兼容命令行参数传参）
+- `--vc` 完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
+- `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
+- `--price` 指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+- `--dims` 自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
+- `--length` 包装长 (cm)
+- `--width` 包装宽 (cm)
+- `--height` 包装高 (cm)
+- `--weight` 包装毛重 (kg)
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--stock` 上架库存量（默认 999）
+- `--cn` 商品中文名（辅助匹配价格与包装规格）
+- `--file` 批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+- `--cn-stock` 按中文名指定库存（'中文名:库存,...'）
+- `--interval` 批次/商品请求间隔秒（默认 1.0）
+- `--apply` 真正调用平台接口执行（默认仅 dry-run 预览）
+- `--json` 输出单个 JSON 对象
+
+## ops publish-openapi
+
+[备用] WB Open API 上架：建卡、有限等待标识、上传图片和莫斯科库存；支持续办
+
+实现入口 [run](../src/sellerops/features/publishing/open_api_publish.py)
+
+- `--source-shop` 自有源店 BCS 店铺 ID；不传则从公开 CDN 读取任意商品码
+- `--nm` 源 WB 商品码，逗号分隔；自有源店模式使用该店商品码
+- `--vc` 源店模式为完整 VC 筛选；公开商品模式指定目标完整 VC（支持 {nm} 模板）
+- `--all` 源店全部非回收站商品；仅自有源店模式
+- `--file` 公开商品 JSON 对象数组：nmId/vendorCode/price，可用 card 覆盖官方字段
+- `--shops` 目标店铺 ID，逗号分隔；不可包含源店
+- `--price` 新建全部规格的整数价格（目标店币种）；文件可逐项指定 price
+- `--dims` 覆盖包装尺寸：长*宽*高/毛重，单位 cm/kg
+- `--stock` 莫斯科仓各规格库存（默认 999，0 保留）
+- `--limit` 最多选择 N 个源商品（0=不限）
+- `--resume` 按 --shops/--vc 续办已有记录，不重新建卡；沿用原图片和库存计划
+- `--wait-timeout` 等待完整商品/规格标识的总时限秒（默认1800，0=只查询一次，最多7200）
+- `--wait-interval` 标识查询轮次间隔秒（默认15，范围1..60；仍遵守接口限流）
+- `--apply` 执行完整上架或续办流程（默认仅预览，不等待、不写入）
+- `--json` 输出单个 JSON 对象
+
+## ops normalize-vc
+
+WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店一致序号
+
+实现入口 [run](../src/sellerops/features/publishing/vc_normalization.py)
+
+- 必选其一 --vc / --name / --name-contains / --all
+- 必选其一 --shops / --all-shops
+- `--vc` 完整旧 VC，逗号分隔
+- `--name` 已确认的完整中文商品名
+- `--name-contains` 中文商品名包含指定文字
+- `--all` 全部非回收站商品；无明确归属的项记录阻止原因
+- `--shops` 目标店铺 ID，多个用逗号分隔
+- `--all-shops` 本动作的全部目标店铺
+- `--apply` 提交改码（默认预览）；保留历史防重放日志，不更新本地映射/快照
+- `--json` 输出单个 JSON 对象
+
+## apply
+
+按运营确认的固定计划单提交
+
+实现入口 [run_apply](../src/sellerops/cli/ops.py)
+
+- `--plan` 预览生成的计划单号
+- `--json` 输出单个 JSON 对象
 
 ## login
 

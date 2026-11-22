@@ -76,22 +76,27 @@ def run(args) -> int:
 
 
 def _run(args, result: ProductResult) -> None:
-    shops = {int(shop["id"]): shop["name"] for shop in bcs.fetch_shop_list()}
-    if not result.shops:
-        result.shops = list(shops)
-    if not result.shops:
-        raise ValueError("BCS 未返回可处理的店铺")
-    entries = db.vc_entries()
-    plans = []
-    for sid in result.shops:
-        try:
-            if sid not in shops:
-                raise ValueError("BCS 店铺列表中无此店")
-            plan = collect(sid, args.threshold, args.limit, args.target, entries=entries)
-        except Exception as error:
-            reason = str(error) if isinstance(error, ValueError) else f"本店折扣数据读取失败（{type(error).__name__}）"
-            plan = {"shopId": sid, "items": [], "blocked_items": [], "skipped_items": [], "range_error": reason}
-        plans.append(plan)
+    plans = getattr(args, 'frozen', None)
+    if plans is None:
+        shops = {int(shop["id"]): shop["name"] for shop in bcs.fetch_shop_list()}
+        if not result.shops:
+            result.shops = list(shops)
+        if not result.shops:
+            raise ValueError("BCS 未返回可处理的店铺")
+        entries = db.vc_entries()
+        plans = []
+        for sid in result.shops:
+            try:
+                if sid not in shops:
+                    raise ValueError("BCS 店铺列表中无此店")
+                plan = collect(sid, args.threshold, args.limit, args.target, entries=entries)
+            except Exception as error:
+                reason = str(error) if isinstance(error, ValueError) else f"本店折扣数据读取失败（{type(error).__name__}）"
+                plan = {"shopId": sid, "items": [], "blocked_items": [], "skipped_items": [], "range_error": reason}
+            plans.append(plan)
+        args.prepared = plans
+    else:
+        shops = {}
     report_plan_skips(plans, "BCS 改折扣")
     result.add_plans(plans)
     for plan in plans:

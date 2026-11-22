@@ -77,7 +77,9 @@ def price_book_packages(data: config.DataPaths):
     try:
         wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=True)
         ws = wb["Sheet1"]
-        cols = price_book_columns(ws, config.current.price_book_xlsx, required=("cn", "dim"))
+        cols = price_book_columns(ws, config.current.price_book_xlsx, required=("cn",))
+        if cols["dim"] is None:
+            return {}
         for r in ws.iter_rows(min_row=2, values_only=True):
             cn = str(r[cols["cn"]] or "").strip()
             dim = str(r[cols["dim"]] or "").strip()

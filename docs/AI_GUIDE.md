@@ -19,13 +19,32 @@
 - WB 直连时，页面连接上限 3 分钟，店铺列表恢复上限 4 分钟，人工登录上限 20 分钟。保持命令运行，由用户按窗口提示完成验证，然后等待连接结果。已登录但恢复超时时，可用 `login wb --resume` 检查专用浏览器会话。
 - 已配置 `bcs.login` 自动续期的 BCS 命令可在会话缺失或失效时更新本地会话。已发出的业务写请求保留原结果。遇到滑块或网关校验时，由用户发起 `login bcs` 并在官网完成验证。见 [BCS 配置](CONFIGURATION.md#bcsbcs)。
 
+## 首次体检与计划单
+
+```powershell
+python run.py doctor --json
+python run.py doctor --check-online --json
+python run.py sync --all --json
+python run.py map candidates --limit 20 --json
+python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
+python run.py apply --plan P018 --json
+```
+
+默认体检仅检查本机 Python、SQLite、依赖、凭证文件、主表表头、快照时间和待认领数。加 `--check-online` 才用已有凭证只读探测，登录由用户显式发起。
+
+`sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，`missing_shops` 提示运营核对。经确认才运行 `shop archive`，需要恢复时运行 `shop restore`。
+
+`map candidates` 的前缀、价格和同源结果供确认。按明确完整 VC 串联候选与目标卖家 SKU，使用 `map batch-set`，或者使用 `map export-pending` 及 `map import-excel` 完成同样的确认。原归属 HTML 工作台在新人实测通过前可继续使用。
+
+商品写入先预览固定计划单。展示店铺、商品、规格、目标值与受阻明细，运营确认后提交单号。提交中和结果未知的单号停止重发；已受理上架需要补图片或库存时，用 `ops publish-openapi --resume` 确认原记录并生成续办单。其他业务命令按各自流程执行。
+
 ## 选择与执行命令
 
 | 用户意图 | 入口与注意事项 |
 | --- | --- |
 | 中文名改价、设折扣、设库存、下架 | 先用 `shop list --name` 确认唯一店铺 ID。`product price`、`product discount`、`product stock`、`product trash` 需要显式店铺及商品范围。`--name` 精确匹配，`--name-contains` 用于用户明确要求包含的任务。库存必须给数量。 |
 | 商品综合报告 | `report products`。低评分、高退货率、近 7/14 天出单和链接缺口见 [报告说明](PRODUCT_REPORT.md)。 |
-| 修改快照或映射 | 用户明确要求更新时独立执行 `catalog fetch` 或 `catalog merge`。核对归属使用 catalog 下的工作台和审核命令。 |
+| 修改快照或映射 | 用户明确要求更新时用 sync。归属用 map 查看候选、确认或排除。 |
 | 导入、复制及官方上架 | `listing import`、`listing replicate`、`listing publish` 或 `listing create-cards`。官方通道使用 `listing publish-openapi`，按原记录续办。 |
 | 处理新订单 | `order process` 处理配置店铺的全部新增待处理订单。预报确认后才交运。发货群使用 `order group-ship`。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
@@ -64,7 +83,7 @@ BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 
 
 ## 写操作结束规则
 
-用户要求纠正历史 VC 前缀时使用 `listing normalize-vc`：按已有明确归属取价格表前缀，默认预览，`--apply` 才提交；显式使用 --all-shops 才覆盖 BCS 全部店铺，`--vc/--name/--all` 三选一。不得按随机前缀或标题猜商品。只修改前缀不一致的商品，保留原有数字和其他尾部字符；新码冲突时才在末尾追加跨店一致的正整数避重序号，不改写原尾号。任一店商品/回收站读取失败整轮停止；保留 `sellerops.db` 中改码记录的已受理、未知或提交中状态。不增加旧新码兼容，不修改本地映射/快照/归属，旧码订单衔接由用户另行维护。完整规则见 [规范化说明](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。
+历史 VC 前缀用 `ops normalize-vc` 生成计划单，经确认后用 `apply --plan` 提交。按已有明确归属取当前价格表前缀，保留原尾部，冲突时追加正整数避重序号。任一店铺读取失败整轮停止。保留已受理、未知或提交中状态，结束后不附加快照拉取或同步。
 
 WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗时较长。提交并记录本次返回后立即结束：
 
@@ -90,7 +109,7 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 
 ## 常见禁止误用
 
-- 把 task run adjust-discounts 当成只读：它在 --apply 时会修改折扣。
+- 每日折扣任务生成计划单。需要更改折扣时，仍由运营确认单号。
 - 手动 daily 使用本次命令的店铺范围。注册的计划任务使用注册时传入的 `--shops` 或 `--all-shops`。
 - 把 --mode back 当成已发送：它只生成草稿，发送还需 --apply。
 - 把 ai-test 当成离线测试：它会调用真实 LLM。

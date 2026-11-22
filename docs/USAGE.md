@@ -1,5 +1,28 @@
 # 日常操作流程
 
+## WorkBuddy 入门
+
+```powershell
+python run.py doctor --json
+python run.py sync --all --json
+python run.py shop list --json
+python run.py map candidates --limit 20 --json
+```
+
+体检默认只查本机。显式 `--check-online` 进行只读鉴权。用户要求拉取快照时运行 `sync`，已在 BCS 同步时可加 `--no-sync`。完整列表发现缺失店铺时返回 `missing_shops`，由运营确认后按店铺 ID 执行 `shop archive` 或 `shop restore`。
+
+`map batch-set` 从标准输入或 `--file` 读取 JSON 数组。例 `[{"vc":"BCS-TEST-123","action":"map","sku":"SKU-1"}]`。动作可用 `map`、`rebind`、`exclude`、`block`、`unblock`。禁上架使用 `shops: "ALL"` 或店铺 ID 列表，保留原有归属。
+也可导出六列审核表，最终确认列填唯一商品中文名、卖家 SKU 或「排除」，留空继续待定。
+
+```powershell
+python run.py map export-pending --json
+python run.py map import-excel exports/待确认商品.xlsx --json
+python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
+python run.py apply --plan P018 --json
+```
+
+`P018` 为示例，提交时用本次预览的单号。改价、折扣、库存、下架、上架、改码的旧命令也可用于预览，实际写请求通过 `apply --plan` 发送。每日折扣任务会生成待确认单号。
+
 命令均在项目根目录执行，店铺 ID `1001`、商品码 `123456789` 和商品名仅为示例。批量商品命令要求明确指定店铺和商品范围。只读查询与履约任务的默认范围见对应命令。完整参数见 [CLI](CLI.md)，配置见 [CONFIGURATION](CONFIGURATION.md)。
 
 ## 看懂读写边界
@@ -10,7 +33,7 @@
 | 平台查询与报表 | shops、product-report、orders、dims-check、promo-goods、promo-gap、feishu-vc-stats、fbs-delivery、order-stats、chats、appeals、ratings | 读取对应平台，通常生成本地输出；orders 默认先同步订单 |
 | 本地工作台与映射 | catalog 下的工作台、审核导入和纠偏，report mapping | 使用本地库，按需生成 HTML 或 Excel |
 | 数据更新 | fetch | 默认走 BCS 快照（先同步再读 BASE 缓存）；显式 --source wb-openapi 才从 WB 官方接口完整采集商品、价格及莫斯科仓库存 |
-| 业务写入 | 改价、库存、上架、清理、折扣、促销、订单处理、飞书写入、客服发送 | 默认预览，--apply 提交；范围和确认机制逐命令核对 |
+| 业务写入 | 商品改价、折扣、库存、下架、上架、改码 | 用 ops 预览并按单号 apply。清理、促销、履约、飞书和客服按各自命令提交。 |
 | 会话/AI | login、ai-test、客服监听 | 可能回写凭证/状态或调用 LLM；细节见下文 |
 
 所有 WB/BCS 写入提交并记录结果后结束，不做写后查询，不追加同步或映射表合并。终端中的“提交成功”不是即时最终状态证明。本地日志、接口错误和任务号是本次汇报依据。
@@ -94,11 +117,9 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 先看预览，确认后才执行相同范围的写入：
 
 ```powershell
-python run.py product price --shops 1001 --name "示例商品"
-python run.py product price --shops 1001 --name "示例商品" --apply
-python run.py product price --shops 1001 --name "示例商品" --from-price-book --discount 35
-python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
-python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 --apply
+python run.py ops price --shops 1001 --name "示例商品"
+python run.py ops price --shops 1001 --name "示例商品" --from-price-book --discount 35
+python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 ```
 
 | 用户意图 | WorkBuddy 首选命令 | 修改字段 |
@@ -110,7 +131,7 @@ python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 -
 | 只设折扣 | `product discount --target D` | 折扣 |
 | 设置库存 | `product stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
 
-三项命令默认使用 WB 卖家后台。每条命令都需加店铺范围与商品范围。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零用 `--amount 0 --apply --yes`。
+三项命令默认使用 WB 卖家后台。每条命令都需加店铺范围与商品范围。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
 
 `product price --keep-price --discount D` 仍可只设折扣。单独给 `--keep-price` 或单独给 `--discount` 会报参数错误。`--price`、`--keep-price`、`--from-price-book` 互斥。BCS 俱乐部折扣也需明确价格意图，参数为 `--channel bcs --club-discount D`。
 
@@ -139,14 +160,14 @@ python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 -
 ## 发布商品与跨店补齐
 
 ```powershell
-python run.py listing publish 123456789 --shops 1001 --price 59 --dims "10*20*30/0.5" --stock 20
-python run.py listing create-cards 123456789 --shops 1001 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20
-python run.py listing publish --file "examples/publish.example.json" --shops 1001
-python run.py listing replicate --shops 1001 --name "示例商品" --limit 1
-python run.py listing import "_scratch/foreign.xlsx" --shops 1001 --limit 1
+python run.py ops publish 123456789 --shops 1001 --price 59 --dims "10*20*30/0.5" --stock 20
+python run.py ops create-cards 123456789 --shops 1001 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20
+python run.py ops publish --file "examples/publish.example.json" --shops 1001
+python run.py ops replicate --shops 1001 --name "示例商品" --limit 1
+python run.py ops import "_scratch/foreign.xlsx" --shops 1001 --limit 1
 ```
 
-这些示例均为预览，需要真实提交时另外加 `--apply`。发布默认库存是 999。需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。默认 BCS 上架把初始库存随建卡或推送请求提交。
+这些示例生成固定计划单，经确认后用 `apply --plan` 提交。发布默认库存是 999。需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。默认 BCS 上架把初始库存随建卡或推送请求提交。
 
 `listing publish` 使用批量发布协议，平台按前缀生成 VC，不保证透传任意完整自定义 VC；需要完整 VC 建卡语义时使用 `listing create-cards`。`listing replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码取自选中的源店快照，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
 
@@ -155,14 +176,14 @@ BCS 建卡已停用商品详情代理。`listing create-cards` 和 `listing repl
 复制上架可分别限定源店与目标店，并按商品价格表的「最低售价」定价：
 
 ```powershell
-python run.py listing replicate --source-shops 1001,1002 --shops 1003 --price-source minimum --price-multiplier 10 --stock 999 --all-products
+python run.py ops replicate --source-shops 1001,1002 --shops 1003 --price-source minimum --price-multiplier 10 --stock 999 --all-products
 ```
 
-示例默认预览，加 `--apply` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认1；`minimum` 必须匹配唯一的同中文名最低售价，不能回退到「实际售价」或整数价。金额按分四舍五入；库存默认999，显式0保留为0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，仅解析目标店莫斯科仓；任一目标仓缺失时阻止该商品组，提交后记录受理响应并结束。
+示例生成计划单，经确认后用 `apply --plan` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认1；`minimum` 必须匹配唯一的同中文名最低售价，不能回退到「实际售价」或整数价。金额按分四舍五入；库存默认999，显式0保留为0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，仅解析目标店莫斯科仓；任一目标仓缺失时阻止该商品组，提交后记录受理响应并结束。
 
-备用官方上架与跨店内容更新使用 `listing publish-openapi`、`listing sync-cards`，详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。原有 BCS 上架默认入口保留。上架支持自有源店与任意 WB 商品码，统一完成建卡、有限标识等待、图片/莫斯科库存提交；超时用 `listing publish-openapi --resume --shops ... --vc ...` 续办。内容同步按完整 VC 匹配各店自己的商品码，不修改价格/库存。默认预览，`--apply` 才执行。
+备用官方上架与跨店内容更新使用 `listing publish-openapi`、`listing sync-cards`，详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。原有 BCS 上架默认入口保留。上架支持自有源店与任意 WB 商品码，统一完成建卡、有限标识等待、图片/莫斯科库存提交；超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再用新单号续办。内容同步按完整 VC 匹配本店商品码，单独使用其 `--apply`。
 
-历史随机 VC 前缀使用 `listing normalize-vc --shops 1001 --name "示例商品"` 预览，加 `--apply` 才提交。`--vc/--name/--all` 三选一；省略店铺时覆盖 BCS 全部店铺。只改前缀不一致的商品，按已有明确归属取价格表前缀，保留原尾部；仅新码冲突时追加跨店一致的避重序号；任一店商品/回收站读取失败整轮不提交。完整流程与日志防重放规则见 [VC 前缀规范化](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。仅远端改码并留日志，旧码订单和历史记录由用户另行维护；不自动改本地表格或追加同步。
+历史随机 VC 前缀使用 `ops normalize-vc --shops 1001 --name "示例商品"` 生成计划单。写入只改前缀不一致的商品，保留原尾部；店铺或回收站资料不完整先停止。详见 [VC 前缀规范化](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。
 
 ## 尺寸、下架和清理
 
@@ -170,15 +191,15 @@ python run.py listing replicate --source-shops 1001,1002 --shops 1003 --price-so
 python run.py product dimensions --shops 1001 --name "示例商品"
 python run.py product dimensions --shops 1001 --vc "BCS-TEST-123456789" --dims "10*20*30/0.5"
 python run.py product check-dimensions --shops 1001 --type all
-python run.py product trash --shops 1001 --vc "BCS-TEST-123456789"
+python run.py ops trash --shops 1001 --vc "BCS-TEST-123456789"
 python run.py product banned --shops 1001 --limit 10
 python run.py product clean --target draft --shops 1001 --limit 10
 ```
 
 - 自定义尺寸沿用显式商品范围。省略 `--dims` 时使用每个完整 VC 对应价格表行的包装尺寸。
-- `product trash --apply --yes` 从本地快照读取商品和全部规格 ID，先清莫斯科仓库存，再移回收站；无需先单独运行 stock，也不全量查询远端商品或库存。无法确认唯一可用的莫斯科仓库时阻止该店；商品 ID 或任一规格 ID 缺失时阻止该商品，不只清部分规格后下架。
+- `ops trash` 从本地快照读取商品和全部规格 ID，先清莫斯科仓库存，再移回收站；无需先单独运行 stock，也不全量查询远端商品或库存。无法确认唯一可用的莫斯科仓库时阻止该店；商品 ID 或任一规格 ID 缺失时阻止该商品，不只清部分规格后下架。
 - 清库存失败或受理回执不完整时，受影响商品不会移回收站，其他正常商品继续；命令返回非零状态，日志记录被阻止原因。预览发现不完整计划也返回非零状态。收到清零受理回执后直接进入回收站提交，不进行写后查询验证。`product trash --channel bcs` 同样遵守清库存前提，是独立 BCS 通道，不作为 WB 失败后的自动兜底。
-- `product banned --apply` 会先要求输入确认，再提交被阻止商品到回收站；已确认授权范围的自动化可传 --yes。拒绝确认时不创建平台会话，提交后不重查列表。
+- `product banned` 可列出被阻止的商品。要下架时用清单中的完整 VC 生成 `ops trash` 计划并确认单号。
 - `product clean` 以 --target 选择草稿箱、回收站或两者。预览和删除使用同一份受 --limit 约束的清单，提交须 --apply --yes。回收站需要归零时通过 BCS 提交本店莫斯科仓对应规格，归零已受理后才通过 WB 删除。结果依据按商品 ID 返回的受理回执。
 
 这些操作不能仅凭“有 dry-run”就扩大范围或自动确认。
@@ -186,16 +207,16 @@ python run.py product clean --target draft --shops 1001 --limit 10
 ## 折扣、促销和推广审计
 
 ```powershell
-python run.py product discount --shops 1001 --name "示例商品" --target 50
-python run.py product discount --shops 1001 --threshold 55 --below 40 --target 50 --all-products
-python run.py product discount --channel bcs --shops 1001 --threshold 50 --target 50 --all-products
+python run.py ops discount --shops 1001 --name "示例商品" --target 50
+python run.py ops discount --shops 1001 --threshold 55 --below 40 --target 50 --all-products
+python run.py ops discount --channel bcs --shops 1001 --threshold 50 --target 50 --all-products
 python run.py marketing enroll --shops 1001
 python run.py product review-price --shops 1001
 python run.py marketing ads --shops 1001
 python run.py marketing audit --shops 1001 --mode both --days 7
 ```
 
-折扣、促销报名和价格审核需要 `--apply` 才提交；后三类查询/审计的结果位置以终端打印为准。独立折扣命令的 `--target` 必填，接受 0 至 100。对指定商品无阈值设折扣时，每条新指令均提交赋值，本地快照中的旧值不参与跳过判断。定向条件命令在预览和执行时各读取本店平台当前折扣，`--threshold` 严格大于，`--below` 严格小于，两侧取并集。WB 全店按折扣排序分页，无法确认范围完整时整店零提交，完整的其他店铺可以继续。显式 BCS 折扣仅支持全店，可加 `--threshold`。
+折扣和价格审核用计划单提交，促销报名使用该命令的 `--apply`。查询或审计结果位置以终端打印为准。独立折扣命令的 `--target` 必填，接受 0 至 100。对指定商品无阈值设折扣时，每条新指令均提交赋值，本地快照中的旧值不参与跳过判断。定向条件命令在预览时读取本店平台当前折扣并固定范围，`--threshold` 严格大于，`--below` 严格小于，两侧取并集。WB 全店按折扣排序分页，无法确认范围完整时整店零提交，完整的其他店铺可以继续。显式 BCS 折扣仅支持全店，可加 `--threshold`。
 
 `marketing audit` 依赖飞书订单登记、目标店快照和推广信息，按目标店合计销量与各店推广状态计算缺口/浪费。它只输出建议，不自动创建或关闭广告，不应把其他店的商品码直接用于本店写入。
 

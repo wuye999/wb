@@ -74,42 +74,47 @@ def _run(args, result: ProductResult) -> None:
     from sellerops.persistence.mappings import MappingRepository
 
     cred = credentials.get()
-    shops = result.shops or list(dict.fromkeys(int(shop["shopId"]) for shop in cred.shops if shop.get("shopId")))
-    result.shops = shops
-    if not shops:
-        raise ValueError("没有配置 WB 目标店铺")
-    direct = not getattr(args, "all_products", False)
-    if direct:
-        state, shop_rows, book = load_state(shops)
-        vcs, desc = resolve_filters(args, state, book)
-        print(f"商品范围：{desc}，目标折扣 {args.target}%")
+    plans = getattr(args, 'frozen', None)
+    if plans is None:
+        shops = result.shops or list(dict.fromkeys(int(shop["shopId"]) for shop in cred.shops if shop.get("shopId")))
+        result.shops = shops
+        if not shops:
+            raise ValueError("没有配置 WB 目标店铺")
+        direct = not getattr(args, "all_products", False)
+        if direct:
+            state, shop_rows, book = load_state(shops)
+            vcs, desc = resolve_filters(args, state, book)
+            print(f"商品范围：{desc}，目标折扣 {args.target}%")
+        else:
+            resolve_cn, _ = MappingRepository.build_vc_resolver()
+            entries = db.vc_entries()
+        plans, shop_config = [], {}
+        with ProductDataResolver() as resolver:
+            for sid in shops:
+                client = None
+                try:
+                    shop = cred.wb_shop(sid)
+                    if not shop:
+                        raise AuthenticationError("缺少 WB 网页凭证，请运行 sellerops login wb")
+                    shop_config[sid] = shop
+                    if direct:
+                        plan = targeted_discount_plan(sid, vcs, shop_rows[sid], state, args, resolver)
+                    else:
+                        client = WBClient(shop, cred.root_version)
+                        plan = _storewide_plan(sid, client, args, resolve_cn, entries)
+                except Exception as error:
+                    reason = str(error) if isinstance(error, AuthenticationError) else f"本店折扣范围读取不完整：{error}"
+                    plan = {"shopId": sid, "items": [], "blocked_items": [], "skipped_items": [], "range_error": reason}
+                finally:
+                    if client is not None:
+                        client.session.close()
+                plans.append(plan)
+        args.prepared = plans
     else:
-        resolve_cn, _ = MappingRepository.build_vc_resolver()
-        entries = db.vc_entries()
-    plans, shop_config = [], {}
-    with ProductDataResolver() as resolver:
-        for sid in shops:
-            client = None
-            try:
-                shop = cred.wb_shop(sid)
-                if not shop:
-                    raise AuthenticationError("缺少 WB 网页凭证，请运行 sellerops login wb")
-                shop_config[sid] = shop
-                if direct:
-                    plan = targeted_discount_plan(sid, vcs, shop_rows[sid], state, args, resolver)
-                else:
-                    client = WBClient(shop, cred.root_version)
-                    plan = _storewide_plan(sid, client, args, resolve_cn, entries)
-            except Exception as error:
-                reason = str(error) if isinstance(error, AuthenticationError) else f"本店折扣范围读取不完整：{error}"
-                plan = {"shopId": sid, "items": [], "blocked_items": [], "skipped_items": [], "range_error": reason}
-            finally:
-                if client is not None:
-                    client.session.close()
-            plans.append(plan)
+        shop_config = {plan['shopId']: cred.wb_shop(plan['shopId']) for plan in plans}
     report_plan_skips(plans, "改折扣")
     result.add_plans(plans)
-    names = {sid: shop.get("shopName", "") for sid, shop in shop_config.items()}
+    names = {sid: (shop or {}).get("shopName", "") for sid, shop in shop_config.items()}
     for plan in plans:
         sid = plan["shopId"]
         if not result.apply:

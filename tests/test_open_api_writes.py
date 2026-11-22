@@ -246,7 +246,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         return write
 
     def cli(self, *args):
-        from sellerops.cli.main import main
+        from operation_fixture import run_business_cli as main
         self.invocation_wrote = False
         self.asset_wrote = False
         if args[:2] == ('listing', 'sync-cards') and '--shops' not in args:
@@ -266,6 +266,29 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(plan['stock'], 0)
         self.assertEqual(plan['warehouse']['id'], 42)
         self.assertEqual(plan['card']['variants'][0]['vendorCode'], VC)
+
+    def test_frozen_public_plan_uses_no_source_reads_during_apply(self):
+        from contextlib import redirect_stdout
+        from sellerops.cli.main import main
+
+        prefix = ['--data-dir', str(self.folder)]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main([*prefix, 'ops', 'publish-openapi', '--source-shop', '1', '--shops', '2',
+                         '--vc', VC, '--price', '59', '--stock', '0', '--json'])
+        self.assertEqual(code, 0, self.output.getvalue())
+        plan_id = json.loads(out.getvalue())['plan_id']
+        src = self.clients['fixture-secret-1']
+        api = self.clients['fixture-secret-2']
+        source_reads = src.cards.call_count
+        api.barcodes.assert_not_called()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main([*prefix, 'apply', '--plan', plan_id, '--json'])
+        self.assertEqual(code, 0, self.output.getvalue())
+        self.assertEqual(json.loads(out.getvalue())['data']['status'], 'done')
+        self.assertEqual(src.cards.call_count, source_reads)
+        api.set_stocks.assert_called_once_with(42, [{'chrtId': 22, 'amount': 0}])
 
     def test_one_command_creates_waits_for_ids_and_submits_assets_without_final_reads(self):
         self.assertEqual(self.creation('--apply'), 0)

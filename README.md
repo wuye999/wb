@@ -6,7 +6,7 @@ Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需�
 
 可以对 AI 说“把 A 店和 B 店里中文名为旅行杯的商品库存改成 25”或“生成 A 店近 14 天的商品运营报告”。AI 用店铺列表定位 ID，按完整中文名匹配，输出命中链接、目标数量、受理结果和明细路径。有相似名称时，只有明确要求“名称包含”才采用包含筛选。
 
-WorkBuddy 按表改价用 `product price`，按表同时改折扣加 `--from-price-book --discount`。只设折扣用 `product discount --target`，设置库存用 `product stock --amount`。三项默认通过 WB 卖家后台提交，并在末行输出 JSON 供自动汇报。命令和修改字段见 [商品操作对照表](docs/AI_GUIDE.md#选择与执行命令)，原脚本更新见 [迁移说明](docs/MIGRATION.md)。
+WorkBuddy 先用 `doctor --json` 体检，用 `map candidates --json` 核对待认领商品。使用 `ops` 预览修改，展示单号和影响范围，经运营确认后用 `apply --plan` 提交。完整流程见 [日常操作指南](docs/AI_GUIDE.md)。
 
 ## 从这里开始
 
@@ -93,22 +93,22 @@ python run.py task schedule
 配置完成后可查询 BCS 店铺列表：
 
 ```powershell
-python run.py shop list
+python run.py doctor --json
 ```
 
-这只能检查 BCS 店铺查询，不能证明其他平台已登录可用。已有表格和快照时，按自己的店铺和商品生成操作预览：
+默认体检只读取本机信息。需要检查现有会话时显式使用 `doctor --check-online --json`。已有价格表和快照时，按自己的店铺和商品生成操作预览：
 
 ```powershell
-python run.py product price --shops 1001 --name "示例商品"
+python run.py ops price --shops 1001 --name "示例商品" --json
 ```
 
 店铺 ID 和商品名都是占位示例。核对范围、数量、价格及授权后，再对相同范围显式提交：
 
 ```powershell
-python run.py product price --shops 1001 --name "示例商品" --apply --yes
+python run.py apply --plan P018
 ```
 
-业务命令的 dry-run 可能读取平台并生成本地报告。首次需要初始化或更新商品快照时，按 [操作流程](docs/USAGE.md) 单独执行 `catalog fetch`。`catalog fetch` 默认走 BCS 快照接口：先同步 WB → BCS，再读取各店 BASE 缓存；已在后台同步过可加 `--no-sync` 直接读取。显式 `--source wb-openapi` 才会改用 BCS 保存的各店 apiKey 直接读取 WB 官方中国区商品、价格及莫斯科仓库存（全店默认4店并发，`--parallel` 可调整，不等待 BCS 商品同步）。不要把同步当作每次启动或写入后的固定步骤。
+用户要求更新快照时单独运行 `sync`。默认通过 BCS 先同步 WB → BCS 再读缓存，已在后台同步时可加 `--no-sync`。显式 `--source wb-openapi` 直读 WB 中国区接口。
 
 ## 日常使用边界
 

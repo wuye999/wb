@@ -13,12 +13,13 @@ WORKFLOWS = {'morning': ('marketing enroll', 'product discount'), 'adjust-discou
 def build_steps(mode: str, apply: bool = False, shops: str = '') -> list[list[str]]:
     steps = []
     for command in WORKFLOWS[mode]:
-        argv = [sys.executable, '-m', 'sellerops', '--data-dir', config.current.data_dir, *command.split()]
+        route = 'ops discount' if command == 'product discount' else command
+        argv = [sys.executable, '-m', 'sellerops', '--data-dir', config.current.data_dir, *route.split()]
         if command == "product discount":
             argv += ["--all-products", "--threshold", str(config.DISCOUNT_THRESHOLD_DEF), "--target", str(config.DISCOUNT_TARGET_DEF)]
             if not shops:
                 argv.append("--all-shops")
-        if apply:
+        if apply and command != 'product discount':
             argv.append('--apply')
         if shops:
             argv += ['--shops', shops]

@@ -33,22 +33,25 @@ def run(action: str, args, *, channel: str) -> int:
 
 
 def _bcs(args, result: ProductResult) -> None:
-    shops = result.shops = selected_shops(args)
-    state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False),
-                                       fresh=(result.action == 'price' and result.apply and getattr(args, 'price', None) is None
-                                              and not getattr(args, 'keep_price', False)
-                                              and (getattr(args, 'from_price_book', False)
-                                                   or getattr(args, 'discount', None) is None)))
-    vcs, desc = resolve_filters(args, state, book)
-    print(f"目标：{desc}，通道 BCS")
-    with ProductDataResolver() as resolver:
-        if result.action == "price":
-            plans = plan_price(vcs, shops, state, getattr(args, "price", None), getattr(args, "discount", None),
-                               getattr(args, "club_discount", None), keep_price=getattr(args, "keep_price", False),
-                               resolver=resolver, shop_rows=shop_rows,
-                               from_price_book=getattr(args, "from_price_book", False))
-        else:
-            plans = plan_stock(vcs, shops, state, args.amount, resolver=resolver, shop_rows=shop_rows)
+    plans = getattr(args, 'frozen', None)
+    if plans is None:
+        shops = result.shops = selected_shops(args)
+        state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False),
+                                           fresh=(result.action == 'price' and result.apply and getattr(args, 'price', None) is None
+                                                  and not getattr(args, 'keep_price', False)
+                                                  and (getattr(args, 'from_price_book', False)
+                                                       or getattr(args, 'discount', None) is None)))
+        vcs, desc = resolve_filters(args, state, book)
+        print(f"目标：{desc}，通道 BCS")
+        with ProductDataResolver() as resolver:
+            if result.action == "price":
+                plans = plan_price(vcs, shops, state, getattr(args, "price", None), getattr(args, "discount", None),
+                                   getattr(args, "club_discount", None), keep_price=getattr(args, "keep_price", False),
+                                   resolver=resolver, shop_rows=shop_rows,
+                                   from_price_book=getattr(args, "from_price_book", False))
+            else:
+                plans = plan_stock(vcs, shops, state, args.amount, resolver=resolver, shop_rows=shop_rows)
+        args.prepared = plans
     result.add_plans(plans)
     if not result.apply:
         dry_run(plans, result.action)
@@ -74,12 +77,15 @@ def _bcs(args, result: ProductResult) -> None:
 
 
 def _trash(args, channel: str) -> int:
-    shops = selected_shops(args)
-    state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False))
-    vcs, desc = resolve_filters(args, state, book)
-    print(f"目标：{desc}，通过 {channel.upper()} 移回收站（先清库存）")
-    with ProductDataResolver() as resolver:
-        plans = plan_trash(vcs, shops, state, resolver=resolver, shop_rows=shop_rows)
+    plans = getattr(args, 'frozen', None)
+    if plans is None:
+        shops = selected_shops(args)
+        state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False))
+        vcs, desc = resolve_filters(args, state, book)
+        print(f"目标：{desc}，通过 {channel.upper()} 移回收站（先清库存）")
+        with ProductDataResolver() as resolver:
+            plans = plan_trash(vcs, shops, state, resolver=resolver, shop_rows=shop_rows)
+        args.prepared = plans
     failed = any(plan.get("range_error") or plan["blocked_items"] for plan in plans)
     if not getattr(args, "apply", False):
         dry_run(plans, "trash")
@@ -88,7 +94,10 @@ def _trash(args, channel: str) -> int:
         return int(failed)
     if not confirm_irreversible("trash", None, getattr(args, "yes", False)):
         return int(failed)
-    _, failures = apply_trash(plans, channel=channel, chunk=getattr(args, "chunk", None),
-                             interval=getattr(args, "interval", None))
+    outcome = {}
+    successes, failures = apply_trash(plans, channel=channel, chunk=getattr(args, "chunk", None),
+                             interval=getattr(args, "interval", None),
+                                       **({'outcome': outcome} if getattr(args, 'frozen', None) is not None else {}))
     common.print_write_hint()
+    args.outcome = {**outcome, 'accepted': successes, 'failed': failures}
     return int(failed or failures > 0)

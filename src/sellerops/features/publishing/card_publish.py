@@ -1,6 +1,7 @@
 """保留完整供应商代码的建卡发布。"""
 from sellerops.settings import paths as config
 import copy
+from dataclasses import asdict
 import os
 import time
 from datetime import datetime
@@ -33,6 +34,8 @@ def execute_publish(
     row_formatter: Optional[Any] = None,
     check_exists: bool = True,
     warehouses: Optional[Dict[int, int]] = None,
+    capture: bool = False,
+    frozen: dict | None = None,
 ) -> Dict[str, Any]:
     """保留完整 VC 建卡；先完成整批读取和载荷准备，再提交写入。
 
@@ -43,76 +46,91 @@ def execute_publish(
     from sellerops.persistence.snapshots import ProductSnapshotRepository
 
     common.validate_batch_options(interval=interval)
-    result = {"ok": 0, "skip": 0, "fail": 0, "plans": len(items),
-              "csv": csv_path or "", "details": []}
-    if not items:
-        return result
-    explicit = {sid for it in items for sid in (it.target_shops or [])}
-    if any(it.target_shops is None for it in items):
-        all_shop_ids = [s["id"] for s in bcs.fetch_shop_list() if s.get("id")]
+    if frozen is not None:
+        prepared = [(PublishItem(**it), targets, payload) for it, targets, payload in frozen['items']]
+        result = {'ok': 0, 'skip': 0, 'fail': 0, 'plans': len(prepared), 'csv': '', 'details': []}
+        overrides = frozen['overrides']
     else:
-        all_shop_ids = sorted(explicit)
-    target_ids = explicit | {sid for it in items if it.target_shops is None for sid in all_shop_ids}
-    if warehouses is None:
-        warehouses = {sid: wh for sid in sorted(target_ids)
-                      if (wh := resolve_warehouse(sid)) is not None}
-    records = load_records()
-    restrictions = db.vc_entries()
-    existing = {}
-    if check_exists:
-        for sid in sorted(target_ids):
-            if not ProductSnapshotRepository.exists(sid):
-                raise ValueError(f"店{sid}缺少本地快照，不能把未知商品清单当作空店")
-            existing[sid] = {r.get("vendorCode") for r in ProductSnapshotRepository.load_shop_products(sid)}
+        result = {"ok": 0, "skip": 0, "fail": 0, "plans": len(items),
+                  "csv": csv_path or "", "details": []}
+        if not items:
+            return result
+        explicit = {sid for it in items for sid in (it.target_shops or [])}
+        if any(it.target_shops is None for it in items):
+            all_shop_ids = [s["id"] for s in bcs.fetch_shop_list() if s.get("id")]
+        else:
+            all_shop_ids = sorted(explicit)
+        target_ids = explicit | {sid for it in items if it.target_shops is None for sid in all_shop_ids}
+        if capture:
+            from sellerops.features.catalog.shops import archive_set
+            archived = archive_set()
+            target_ids -= archived
+            items = [it for it in items if it.target_shops is None or set(it.target_shops).isdisjoint(archived)]
+            all_shop_ids = [sid for sid in all_shop_ids if sid not in archived]
+        if warehouses is None:
+            warehouses = {sid: wh for sid in sorted(target_ids)
+                          if (wh := resolve_warehouse(sid)) is not None}
+        records = load_records()
+        restrictions = db.vc_entries()
+        existing = {}
+        if check_exists:
+            for sid in sorted(target_ids):
+                if not ProductSnapshotRepository.exists(sid):
+                    raise ValueError(f"店{sid}缺少本地快照，不能把未知商品清单当作空店")
+                existing[sid] = {r.get("vendorCode") for r in ProductSnapshotRepository.load_shop_products(sid)}
 
-    prepared = []
-    seen = set()
-    # 所有网络读取必须在首个写请求之前结束。
-    for it in items:
-        targets = list(dict.fromkeys(it.target_shops if it.target_shops is not None else all_shop_ids))
-        invalid = [sid for sid in targets if not warehouses.get(sid)]
-        if not targets or invalid:
-            result["fail"] += 1
-            result["details"].append({"vc": it.vendor_code, "targets": targets,
-                                      "ok": False, "msg": f"目标店或莫斯科仓不可用：{invalid}"})
-            continue
-        final_targets = []
-        for sid in targets:
-            pair = (it.vendor_code, sid)
-            submitted = any(str(sid) in records.get(key, {}) for key in publish_keys(it))
-            if (pair in seen or submitted or db.listing_blocked(it.vendor_code, sid, restrictions)
-                    or (check_exists and it.vendor_code in existing[sid])):
+        prepared = []
+        seen = set()
+        # 所有网络读取必须在首个写请求之前结束。
+        for it in items:
+            targets = list(dict.fromkeys(it.target_shops if it.target_shops is not None else all_shop_ids))
+            invalid = [sid for sid in targets if not warehouses.get(sid)]
+            if not targets or invalid:
+                result["fail"] += 1
+                result["details"].append({"vc": it.vendor_code, "targets": targets,
+                                          "ok": False, "msg": f"目标店或莫斯科仓不可用：{invalid}"})
                 continue
-            final_targets.append(sid)
-            seen.add(pair)
-        if not final_targets:
-            result["skip"] += 1
-            continue
-        card_info = it.extra.get("card_info") or fetch_card_json(it.nm_id)
-        if not card_info:
-            result["fail"] += 1
-            result["details"].append({"vc": it.vendor_code, "targets": final_targets,
-                                      "ok": False, "msg": "card.json获取失败"})
-            continue
-        detail = it.extra.get("wb_detail")
-        payload, err = build_card_payload(it, final_targets, warehouses, card_info, detail, overrides)
-        if err or not payload:
-            result["fail"] += 1
-            result["details"].append({"vc": it.vendor_code, "targets": final_targets,
-                                      "ok": False, "msg": err or "载荷构造失败"})
-            continue
-        prepared.append((it, final_targets, payload))
-    for d in result["details"]:
-        print(f"[失败] {d['vc']}: {d['msg']}")
-    if not apply:
-        preview = []
-        for it, targets, _ in prepared:
-            cp = copy.copy(it)
-            cp.target_shops = targets
-            preview.append(cp)
-        print_publish_preview(preview, all_shop_ids)
-        print(f"[dry-run] 待提交 {len(prepared)} 组，跳过 {result['skip']}，失败 {result['fail']}。")
-        return result
+            final_targets = []
+            for sid in targets:
+                pair = (it.vendor_code, sid)
+                submitted = any(str(sid) in records.get(key, {}) for key in publish_keys(it))
+                if (pair in seen or submitted or db.listing_blocked(it.vendor_code, sid, restrictions)
+                        or (check_exists and it.vendor_code in existing[sid])):
+                    continue
+                final_targets.append(sid)
+                seen.add(pair)
+            if not final_targets:
+                result["skip"] += 1
+                continue
+            card_info = it.extra.get("card_info") or fetch_card_json(it.nm_id)
+            if not card_info:
+                result["fail"] += 1
+                result["details"].append({"vc": it.vendor_code, "targets": final_targets,
+                                          "ok": False, "msg": "card.json获取失败"})
+                continue
+            detail = it.extra.get("wb_detail")
+            payload, err = build_card_payload(it, final_targets, warehouses, card_info, detail, overrides)
+            if err or not payload:
+                result["fail"] += 1
+                result["details"].append({"vc": it.vendor_code, "targets": final_targets,
+                                          "ok": False, "msg": err or "载荷构造失败"})
+                continue
+            prepared.append((it, final_targets, payload))
+        for d in result["details"]:
+            print(f"[失败] {d['vc']}: {d['msg']}")
+        if not apply:
+            preview = []
+            for it, targets, _ in prepared:
+                cp = copy.copy(it)
+                cp.target_shops = targets
+                preview.append(cp)
+            print_publish_preview(preview, all_shop_ids)
+            print(f"[dry-run] 待提交 {len(prepared)} 组，跳过 {result['skip']}，失败 {result['fail']}。")
+            if capture and prepared:
+                result['prepared'] = {'items': [(asdict(it), targets, payload) for it, targets, payload in prepared],
+                                      'warehouses': {sid: warehouses[sid] for _, targets, _ in prepared for sid in targets},
+                                      'overrides': overrides, 'blocked': result['details']}
+            return result
 
     managed_file = writer is None
     csv_file = None
@@ -318,5 +336,8 @@ def run(args: Any) -> int:
         apply=getattr(args, "apply", False),
         interval=getattr(args, "interval", 1.0),
         overrides=overrides,
+        **({'capture': True} if getattr(args, 'capture_plan', False) else {}),
     )
+    if isinstance(res, dict) and res.get('prepared'):
+        args.prepared = res['prepared']
     return 1 if resolution_failures or res["fail"] else 0

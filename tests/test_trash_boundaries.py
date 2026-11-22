@@ -71,7 +71,7 @@ class TestLocalPlanning(unittest.TestCase):
         ProductSnapshotRepository.save_shop_products(42, rows)
 
     def run_cli(self, command, apply=False):
-        from sellerops.cli.main import main
+        from operation_fixture import run_business_cli as main
         return main(['--data-dir', str(self.data), 'product', command, '--shops', '42', *(['--amount', '0'] if command == 'stock' else []), '--vc', 'BCS-TEST-101',
                      *(['--apply', '--yes'] if apply else [])])
 
@@ -133,7 +133,7 @@ class TestLocalPlanning(unittest.TestCase):
         resolve.assert_not_called()
 
     def test_cli_partial_plan_failure_still_executes_only_healthy_local_card(self):
-        from sellerops.cli.main import main
+        from operation_fixture import run_business_cli as main
         from sellerops.features.products import warehouse, stocks, trash
         from sellerops.integrations.wildberries import stocks as stock_api
         self.save([

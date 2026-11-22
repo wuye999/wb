@@ -108,12 +108,15 @@ def run(args) -> int:
 
 
 def _run(args, result: ProductResult) -> None:
-    shops = result.shops = selected_shops(args)
-    state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False))
-    vcs, desc = resolve_filters(args, state, book)
-    print(f"目标：{desc}，通道 WB 后台")
-    plans = build_plans(vcs, shops, state, args.amount, resolve=getattr(args, "resolve", "snapshot"),
-                        max_pages=getattr(args, "max_pages", 200), shop_rows=shop_rows)
+    plans = getattr(args, 'frozen', None)
+    if plans is None:
+        shops = result.shops = selected_shops(args)
+        state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False))
+        vcs, desc = resolve_filters(args, state, book)
+        print(f"目标：{desc}，通道 WB 后台")
+        plans = build_plans(vcs, shops, state, args.amount, resolve=getattr(args, "resolve", "snapshot"),
+                            max_pages=getattr(args, "max_pages", 200), shop_rows=shop_rows)
+        args.prepared = plans
     result.add_plans(plans)
     if not result.apply:
         dry_run(plans, "stock")

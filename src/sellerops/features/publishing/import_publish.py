@@ -144,7 +144,8 @@ def run(args):
     if not plans:
         print("无可执行任务")
         return 0
-    if not args.apply:
+    capture = getattr(args, "capture_plan", False)
+    if not args.apply and not capture:
         print(f"\n[dry-run] 共 {len(plans)} 个商品待上架。加 --apply 执行。")
         return 0
 
@@ -289,7 +290,7 @@ def run(args):
 
     res = publish_backend.execute_publish(
         shelve_items,
-        apply=True,
+        apply=args.apply,
         interval=getattr(args, "interval", 1.0),
         overrides=overrides,
         csv_prefix="导入上架",
@@ -297,7 +298,10 @@ def run(args):
         csv_path=csv_path,
         row_formatter=import_row_formatter,
         check_exists=False,
+        **({'capture': True} if capture else {}),
     )
+    if res.get('prepared'):
+        args.prepared = res['prepared']
     csv_file.close()
     print(f"\n[汇总] 计划 {len(plans)} | 成功 {res['ok']} | 跳过 {skip + res['skip']} | 失败 {fail + res['fail']}（耗时 {time.time() - t0:.0f}s）")
     print(f"明细：{csv_path}")

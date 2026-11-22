@@ -4,7 +4,7 @@ from sellerops.cli.binding import bind
 from sellerops.cli.arguments import add_shop_scope, nonempty, shop_ids, add_publish_args
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> None:
     p = sub.add_parser('replicate', help="跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）")
     selection = p.add_mutually_exclusive_group(required=True)
     selection.add_argument("--vc", type=nonempty, help="完整 VC")
@@ -74,6 +74,9 @@ def register(sub: argparse._SubParsersAction) -> None:
     add_shop_scope(p)
     p.add_argument('--apply', action='store_true', help='提交改码（默认预览）；保留历史防重放日志，不更新本地映射/快照')
     bind(p, 'sellerops.features.publishing.vc_normalization', 'run')
+
+    if planned_only:
+        return
 
     p = sub.add_parser('sync-cards', help='WB Open API：按相同完整 VC 将源店商品内容同步到其他店')
     p.add_argument('--source-shop', type=int, required=True, help='修改后的源店 BCS 店铺 ID（例如袁州1店对应 ID）')
