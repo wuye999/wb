@@ -1,4 +1,5 @@
 """本地商品快照的规格与数值语义；缺失、无效和真实零值分别处理。"""
+from decimal import Decimal, InvalidOperation
 from math import isfinite
 from typing import Any
 
@@ -80,3 +81,26 @@ def first_price(row: dict[str, Any]) -> int | float | None:
     if not isfinite(number) or number < 0:
         return None
     return int(number) if number.is_integer() else number
+
+def bcs_keep_price(row: dict[str, Any]) -> int | float | None:
+    """单一正价格能以 BCS 的商品级金额无损表示时，才允许保价。"""
+    sizes = row.get("sizeList")
+    if not isinstance(sizes, list) or not sizes:
+        return None
+    prices = set()
+    for size in sizes:
+        value = size.get("price") if isinstance(size, dict) else None
+        try:
+            number = Decimal(str(value))
+            if not number.is_finite() or number <= 0:
+                return None
+            wire = float(number)
+            if not isfinite(wire) or Decimal(str(wire)) != number or number % Decimal("0.01"):
+                return None
+        except (InvalidOperation, OverflowError):
+            return None
+        prices.add(number)
+    if len(prices) != 1:
+        return None
+    price = prices.pop()
+    return int(price) if price == price.to_integral_value() else float(price)

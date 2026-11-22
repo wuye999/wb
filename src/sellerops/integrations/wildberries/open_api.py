@@ -168,7 +168,9 @@ class WBOpenAPI:
             batch = ids[offset:offset + 1000]
             response = self._request('discounts-prices-api', 'POST', '/api/v2/list/goods/filter',
                                      json={'nmList': batch})
-            data = response.get('data') if isinstance(response, dict) else None
+            if not isinstance(response, dict) or response.get('error') not in (None, False):
+                raise OpenAPIResponseError('WB 价格接口返回业务错误')
+            data = response.get('data')
             chunk = data.get('listGoods') if isinstance(data, dict) else None
             if not isinstance(chunk, list):
                 raise OpenAPIResponseError('WB 价格响应缺少 data.listGoods')

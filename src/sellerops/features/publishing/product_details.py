@@ -9,18 +9,12 @@ import string
 
 
 from sellerops.settings import paths as config
-from sellerops.persistence.mappings import MappingRepository
 
 
 from sellerops.integrations.wildberries.client import fetch_card_json
 
 
 from functools import lru_cache
-
-
-@lru_cache(maxsize=1)
-def _own_map(data: config.DataPaths):
-    return MappingRepository.load_mapping_state()[0]
 
 
 def parse_package_info(card_info):

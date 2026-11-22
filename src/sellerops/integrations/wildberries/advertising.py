@@ -19,14 +19,13 @@ sellerops Wildberries 广告推广（cmp.wildberries.ru）适配器
 一律走 wb_client.make_session + wb_client.request（403 → CookieExpiredError，[1,3,8] 退避）。
 """
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from sellerops.core import utils as common
 from sellerops.integrations.wildberries import client as wb_api
 
 CMP_BASE = "https://cmp.wildberries.ru"
 URL_ADVERTS = CMP_BASE + "/api/v1/adverts"
-URL_SUPPLIERS = CMP_BASE + "/api/v5/suppliers"
 
 # 与后台默认视图一致（HAR 实测 status=[4,9,11]；9=在投 / 11=暂停 / 4=其它）
 STATUS_DEFAULT: Tuple[int, ...] = (4, 9, 11)
@@ -45,27 +44,13 @@ def supplier_uuid_from_cookie(shop: Dict[str, Any]) -> str:
     return m.group(1) if m else ""
 
 
-def supplier_uuid(session, shop: Dict[str, Any]) -> str:
-    """店铺 → 供应商 UUID：优先 cookie，取不到时兜底 GET /api/v5/suppliers（按 oldID==shopId 匹配）。"""
-    uid = supplier_uuid_from_cookie(shop)
-    if uid:
-        return uid
-    shop_id = common.to_int(shop.get("shopId") or shop.get("shop_id"))
-    d = wb_api.request(session, "GET", URL_SUPPLIERS, headers=cmp_headers(shop, supplier_id=""))
-    for s in ((d.get("result") or {}).get("suppliers") or []):
-        if common.to_int(s.get("oldID")) == shop_id:
-            return str(s.get("id") or "")
-    return ""
-
-
-def cmp_headers(shop: Dict[str, Any], supplier_id: Optional[str] = None) -> Dict[str, str]:
+def cmp_headers(shop: Dict[str, Any]) -> Dict[str, str]:
     """cmp.wildberries.ru 域必需请求头。
 
     make_session 默认的 Referer/Origin 指向 seller.wildberries.ru，本域逐请求覆盖；
     （requests 逐请求 headers 优先于 session.headers，故无需改 make_session）。
-    supplier_id 显式传空串 → 不下发 x-supplierid（用于 UUID 兜底查询本身）。
     """
-    uid = supplier_uuid_from_cookie(shop) if supplier_id is None else supplier_id
+    uid = supplier_uuid_from_cookie(shop)
     headers = {
         "accept": "application/json, text/plain, */*",
         "authorizev3": shop["authorizev3"],

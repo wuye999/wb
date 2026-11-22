@@ -3,6 +3,8 @@ from sellerops.features.catalog import selection
 from contextlib import ExitStack, redirect_stdout
 import csv
 import io
+import json
+from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,9 +12,8 @@ from unittest.mock import Mock, patch
 
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
 from sellerops.core.files import atomic_dump_json
-from sellerops.domain.models import DiscountPlan
 from sellerops.features.products import dimension, plans, prices, product_data, stocks
-from sellerops.features.products.discount_products import snapshot_discount_items
+from sellerops.features.products.discount_products import targeted_discount_plan
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.persistence.snapshots import ProductSnapshotRepository as Snapshots
 from sellerops.settings import paths
@@ -85,13 +86,13 @@ class TestProductOperationData(unittest.TestCase):
     def test_price_dimension_and_discount_only_ignore_unrelated_missing_fields(self):
         self.save(1)
         with product_data.ProductDataResolver() as resolver:
-            price = plans.plan_price([VC], [1], {}, [], 100, None, None, resolver=resolver)
-            discount = plans.plan_price([VC], [1], {}, [], None, 30, None, keep_price=True,
+            price = plans.plan_price([VC], [1], {}, 100, None, None, resolver=resolver)
+            discount = plans.plan_price([VC], [1], {}, None, 30, None, keep_price=True,
                                         resolver=resolver, allow_discount_only=True)
-            dims = dimension.build_plans([VC], [1], {}, {}, dims=(10, 20, 30, .5), resolver=resolver)
+            dims = dimension.build_plans([VC], [1], {}, dims=(10, 20, 30, .5), resolver=resolver)
         self.assertEqual(price[0]['items'][0]['price'], 100)
         self.assertEqual(dims[0]['items'][0]['nmId'], 101)
-        payload = prices._build_payload(discount[0]['items'][0], 30)
+        payload = prices._build_payload(discount[0]['items'][0])
         self.assertEqual(payload['discount'], 30)
         self.assertNotIn('price', payload)
         self.keys.assert_not_called()
@@ -163,7 +164,7 @@ class TestProductOperationData(unittest.TestCase):
         self.save(1)
         self.save(2)
         with product_data.ProductDataResolver() as resolver:
-            plan = dimension.build_plans([VC], [1, 2], {}, {}, dims=(10, 20, 30, .5), resolver=resolver)
+            plan = dimension.build_plans([VC], [1, 2], {}, dims=(10, 20, 30, .5), resolver=resolver)
         plan[1]['items'] = []
         plan[1]['blocked_items'] = [{'vc': VC, 'reason': 'fixture missing required ID'}]
         with patch.object(dimension, '_post', return_value=(True, 'accepted')) as submit, patch.object(dimension.time, 'sleep'):
@@ -173,27 +174,22 @@ class TestProductOperationData(unittest.TestCase):
         self.assertEqual(rows[-1][-2:], ['跳过', 'fixture missing required ID'])
 
     def test_discount_without_threshold_uses_no_price_or_spec_and_unknown_is_not_zero(self):
-        from sellerops.features.products.discounts import Discounts
-        plan = DiscountPlan(target_vcs=[VC], threshold=-1, target_discount=0)
-        tracker = plans.SkipTracker()
-        items, blocked = snapshot_discount_items(1, {VC: {'nmId': 101, 'discount': None}}, plan,
-                                                 lambda *args: '黑丝假发', Discounts._matches_filters,
-                                                 Discounts._disc_matched, tracker)
-        self.assertEqual(blocked, [])
-        self.assertEqual(len(items), 1)
-        self.assertIsNone(items[0]['old_discount'])
+        args = SimpleNamespace(threshold=None, below=-1, target=0, limit=0)
+        with product_data.ProductDataResolver() as resolver:
+            plan = targeted_discount_plan(1, [VC], {VC: {'nmId': 101, 'discount': None}}, {}, args, resolver)
+        self.assertEqual(plan['blocked_items'], [])
+        self.assertEqual(len(plan['items']), 1)
+        self.assertIsNone(plan['items'][0]['old_discount'])
         self.keys.assert_not_called()
 
-    def test_discount_threshold_requires_and_repairs_only_discount_field(self):
-        from sellerops.features.products.discounts import Discounts
-        plan = DiscountPlan(target_vcs=[VC], threshold=50, target_discount=20)
+    def test_discount_threshold_requires_current_discount_even_with_a_cached_value(self):
+        args = SimpleNamespace(threshold=50, below=-1, target=20, limit=0)
         api = self.clients['secret-1']
         api.prices.return_value = [{'nmID': 101, 'vendorCode': VC, 'discount': 60, 'sizes': []}]
-        items, blocked = snapshot_discount_items(1, {VC: {'nmId': 101}}, plan,
-                                                 lambda *args: '黑丝假发', Discounts._matches_filters,
-                                                 Discounts._disc_matched, plans.SkipTracker())
-        self.assertEqual(blocked, [])
-        self.assertEqual(items[0]['old_discount'], 60)
+        with product_data.ProductDataResolver() as resolver:
+            plan = targeted_discount_plan(1, [VC], {VC: {'nmId': 101, 'discount': 40}}, {}, args, resolver)
+        self.assertEqual(plan['blocked_items'], [])
+        self.assertEqual(plan['items'][0]['old_discount'], 60)
         api.cards.assert_not_called()
         api.stocks.assert_not_called()
         api.prices.assert_called_once_with([101])
@@ -233,7 +229,7 @@ class TestProductOperationData(unittest.TestCase):
 
         with patch.object(stocks.credentials, 'get', return_value=cred), \
                 patch.object(stocks.wb_api, 'make_session'), patch.object(stocks.time, 'sleep'), \
-                patch.object(stock_api, 'post_stocks', side_effect=submit), patch.object(stocks, 'write_product_receipts'), \
+                patch.object(stock_api, 'post_stocks', side_effect=submit), \
                 patch.object(products, 'fetch_all') as fetch, patch.object(mapping_sync, 'merge') as merge:
             code = main(['--data-dir', str(self.data), 'product', 'stock', '--vc', VC,
                          '--shops', '1,2', '--amount', '0', '--apply', '--yes'])
@@ -254,29 +250,29 @@ class TestProductOperationData(unittest.TestCase):
                 self.assertEqual(len(result[0]['blocked_items']), 1)
                 self.assertEqual(result[0]['items'], [])
 
-    def test_discount_service_records_missing_id_skip_and_submits_only_resolved_targets(self):
-        from sellerops.features.products.discounts import Discounts
-        from sellerops.persistence.mappings import MappingRepository
+    def test_discount_cli_records_missing_id_and_submits_only_resolved_targets(self):
+        from sellerops.cli.main import main
+        from sellerops.features.products import discounts
         bad_vc = 'BCS-HSJF-bad'
-        Snapshots.save_shop_products(1, [{'vendorCode': VC, 'nmId': 101, 'discount': None},
+        Snapshots.save_shop_products(1, [{'vendorCode': VC, 'nmId': 101},
                                        {'vendorCode': bad_vc, 'nmId': None}])
         self.clients['secret-1'].cards.return_value = []
         client = Mock()
-        client.upload_batch_discount.return_value = Mock(success=True, task_id=123,
-                                                          price_modal=False, quarantine_modal=False)
-        plan = DiscountPlan(target_vcs=[VC, bad_vc], threshold=-1, target_discount=0, is_apply=True)
-        with patch('sellerops.features.products.discounts.WBClient', return_value=client), \
-                patch.object(MappingRepository, 'build_vc_resolver', return_value=(lambda *args: '黑丝假发', {})):
-            result = Discounts().execute_plan(plan, [{'shopId': 1, 'shopName': '店1'}])
-        self.assertEqual((result['total_applied'], result['total_failed']), (1, 1))
+        client.upload_batch_discount.return_value = Mock(success=True, task_id=123)
+        cred = Mock(root_version='fixture')
+        cred.wb_shop.return_value = {'shopId': 1, 'shopName': '店1'}
+        with patch.object(discounts, 'WBClient', return_value=client), \
+                patch.object(discounts.credentials, 'get', return_value=cred):
+            self.assertEqual(main(['--data-dir', str(self.data), 'product', 'discount', '--shops', '1',
+                                   '--vc', f'{VC},{bad_vc}', '--target', '0', '--apply']), 1)
+        result = json.loads(self.output.getvalue().splitlines()[-1])
+        self.assertEqual(result['status'], 'partial')
         payload = client.upload_batch_discount.call_args.args[0]
-        self.assertEqual(len(payload), 1)
-        self.assertEqual(payload[0]['vendorCode'], VC)
-        self.assertNotIn('price', payload[0])
-        with Path(result['log_path']).open(encoding='utf-8-sig', newline='') as stream:
+        self.assertEqual(payload, [{'vendorCode': VC, 'nmID': 101, 'currencyIsoCode': 'CNY', 'discount': 0}])
+        with Path(result['artifacts']['discount_csv']).open(encoding='utf-8-sig', newline='') as stream:
             rows = list(csv.DictReader(stream))
-        self.assertEqual({row['status'] for row in rows}, {'skip', 'success'})
-        self.assertTrue(next(row['error'] for row in rows if row['status'] == 'skip'))
+        self.assertEqual({row['status'] for row in rows}, {'blocked', 'accepted'})
+        self.assertTrue(next(row['error'] for row in rows if row['status'] == 'blocked'))
 
     def test_live_stock_absence_keeps_all_confirmed_specs_and_reads_moscow_only(self):
         from sellerops.integrations.wildberries import stocks as stock_api
@@ -311,40 +307,53 @@ class TestProductOperationData(unittest.TestCase):
         self.assertEqual(plan['warehouses'], [])
         self.assertEqual(len(plan['blocked_items']), 1)
 
-    def test_bcs_keep_price_repairs_prices_by_spec_id_and_blocks_missing_first_price(self):
+    def test_bcs_keep_price_blocks_different_and_missing_spec_prices(self):
         self.save(1)
         api = self.clients['secret-1']
         api.prices.return_value = [{'nmID': 101, 'vendorCode': VC, 'sizes': [
             {'sizeID': 102, 'price': 20}, {'sizeID': 101, 'price': 30}]}]
         with product_data.ProductDataResolver() as resolver:
-            result = plans.plan_price([VC], [1], {}, [], None, 10, None, keep_price=True, resolver=resolver)
-        self.assertEqual(result[0]['items'][0]['price'], 30)
+            result = plans.plan_price([VC], [1], {}, None, 10, None, keep_price=True, resolver=resolver)
+        self.assertEqual(result[0]['items'], [])
+        self.assertEqual(len(result[0]['blocked_items']), 1)
         api.prices.assert_called_once_with([101])
+        api.prices.return_value = [{'nmID': 101, 'vendorCode': VC, 'sizes': [
+            {'sizeID': 102, 'price': 20.25}, {'sizeID': 101, 'price': 20.25}]}]
+        with product_data.ProductDataResolver() as resolver:
+            result = plans.plan_price([VC], [1], {}, None, 10, None, keep_price=True, resolver=resolver)
+        self.assertEqual(result[0]['items'][0]['price'], 20.25)
         api.prices.return_value = [{'nmID': 101, 'vendorCode': VC, 'sizes': [{'sizeID': 102, 'price': 20}]}]
         with product_data.ProductDataResolver() as resolver:
-            result = plans.plan_price([VC], [1], {}, [], None, 10, None, keep_price=True, resolver=resolver)
+            result = plans.plan_price([VC], [1], {}, None, 10, None, keep_price=True, resolver=resolver)
         self.assertEqual(result[0]['items'], [])
         self.assertEqual(len(result[0]['blocked_items']), 1)
 
     def test_discount_corrupt_shop_is_reported_while_next_shop_can_be_submitted(self):
-        from sellerops.features.products.discounts import Discounts
-        from sellerops.persistence.mappings import MappingRepository
+        from sellerops.cli.main import main
+        from sellerops.features.products import discounts
+
         atomic_dump_json(paths.shop_json_path(1), {'shopId': 999, 'rows': [{'vendorCode': VC}]})
         self.save(2)
         client = Mock()
-        client.upload_batch_discount.return_value = Mock(success=True, task_id=123,
-                                                          price_modal=False, quarantine_modal=False)
-        plan = DiscountPlan(target_vcs=[VC], threshold=-1, target_discount=20, is_apply=True)
-        with patch('sellerops.features.products.discounts.WBClient', return_value=client), \
-                patch.object(MappingRepository, 'build_vc_resolver', return_value=(lambda *args: '黑丝假发', {})):
-            result = Discounts().execute_plan(plan, [{'shopId': 1}, {'shopId': 2}])
-        self.assertEqual((result['total_applied'], result['total_failed']), (1, 1))
+        client.upload_batch_discount.return_value = Mock(success=True, task_id=123)
+        cred = Mock(root_version='fixture')
+        cred.wb_shop.side_effect = lambda sid: {'shopId': sid}
+        with patch.object(discounts, 'WBClient', return_value=client), \
+                patch.object(discounts.credentials, 'get', return_value=cred):
+            self.assertEqual(main(['--data-dir', str(self.data), 'product', 'discount', '--shops', '1,2',
+                                   '--vc', VC, '--target', '20', '--apply']), 1)
+        result = json.loads(self.output.getvalue().splitlines()[-1])
+        self.assertEqual(result['status'], 'partial')
+        first, second = result['per_shop']
+        self.assertIsNone(first['products']['matched'])
+        self.assertFalse(first['range_complete'])
+        self.assertEqual(second['task_ids'], ['123'])
         self.assertEqual(client.upload_batch_discount.call_args.args[0][0]['nmID'], 102)
-        with Path(result['log_path']).open(encoding='utf-8-sig', newline='') as stream:
+        with Path(result['artifacts']['discount_csv']).open(encoding='utf-8-sig', newline='') as stream:
             rows = list(csv.DictReader(stream))
-        failed = next(row for row in rows if row['status'] == 'skip')
+        failed = next(row for row in rows if row['status'] == 'blocked')
         self.assertEqual(failed['shop_id'], '1')
-        self.assertIn('准备失败', failed['error'])
+        self.assertIn('快照缺失或不可读', failed['error'])
 
 
 if __name__ == '__main__':

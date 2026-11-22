@@ -1,6 +1,8 @@
 """商品操作逐项回执；各通道使用相同表头、编码、锁和归档规则。"""
 import csv
-from collections import Counter
+from dataclasses import dataclass
+import json
+from typing import Any
 from pathlib import Path
 import glob
 import os
@@ -78,33 +80,64 @@ def append_results(data: DataPaths, rows):
             writer.writerows(rows)
 
 
-def write_product_receipts(data: DataPaths, plans, rows):
-    """保留历史流水，并将本次回执与运营可识别的名称、完整 VC 和店铺配对。"""
-    append_results(data, rows)
-    lookup = {}
-    for plan in plans:
-        for item in [*plan.get("items", []), *plan.get("blocked_items", [])]:
-            for field in ("vc", "nmID", "chrtId"):
-                if (key := item.get(field)) is not None:
-                    lookup[plan["shopId"], field, key] = item
-    output = Path(data.log_dir) / f"商品操作回执_{datetime.now():%Y%m%d_%H%M%S_%f}.csv"
-    counts = {}
+STATUS_LABELS = {
+    "planned": "可提交", "accepted": "已受理", "failed": "失败",
+    "unknown": "结果未知", "blocked": "已阻止", "skipped": "正常跳过",
+}
+
+
+@dataclass(frozen=True)
+class ProductReceipt:
+    shop_id: int
+    item: dict
+    action: str
+    target: Any
+    status: str
+    message: str = ""
+    task_id: str | None = None
+
+    @property
+    def identifier(self) -> Any:
+        return self.item.get("chrtId") or self.item.get("nmID") or self.item.get("vc")
+
+    @property
+    def detail(self) -> str:
+        return " ".join(part for part in (self.message, f"taskId={self.task_id}" if self.task_id else "") if part)
+
+
+def append_product_history(data: DataPaths, receipts: list[ProductReceipt]) -> str | None:
+    """沿用既有操作流水表头。"""
+    ts = str(datetime.now())
+    rows = []
+    for receipt in receipts:
+        if receipt.action == "price_review" or receipt.status == "skipped":
+            continue
+        value = receipt.target.get("price", "") if isinstance(receipt.target, dict) else receipt.target
+        prefix = {"blocked": "SKIP:", "failed": "FAIL:"}.get(receipt.status, STATUS_LABELS[receipt.status])
+        rows.append([receipt.shop_id, receipt.identifier, receipt.action, value,
+                     f"{prefix} {receipt.detail}".strip(), ts])
+    if rows:
+        append_results(data, rows)
+        return data.result_csv
+    return None
+
+
+def write_product_receipts(data: DataPaths, receipts: list[ProductReceipt]) -> Path | None:
+    """保存结构化的当次回执。"""
+    if not receipts:
+        return None
+    ts = datetime.now()
+    output = Path(data.log_dir) / f"商品操作回执_{ts:%Y%m%d_%H%M%S_%f}.csv"
+    output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(["店铺ID", "商品中文名", "完整VC", "商品或规格ID", "操作", "目标值", "状态", "平台回执", "时间"])
-        for sid, key, action, target, message, ts in rows:
-            if message.startswith(("SKIP", "鉴权中止")):
-                status = "已阻止"
-            elif "结果未知" in message:
-                status = "结果未知"
-            elif message.startswith("FAIL"):
-                status = "失败"
-            else:
-                status = "已受理"
-            counts.setdefault(sid, Counter())[status] += 1
-            field = "chrtId" if action in {"stock", "stock_wb"} else "nmID"
-            item = lookup.get((sid, field, key)) or lookup.get((sid, "vc", key), {})
-            writer.writerow([sid, item.get("cn", ""), item.get("vc", ""), key, action, target, status, message, ts])
-    for sid, count in counts.items():
-        print(f"店 {sid}：" + "，".join(f"{label} {count[label]}" for label in ("已受理", "已阻止", "失败", "结果未知")))
+        for receipt in receipts:
+            value = receipt.target
+            if isinstance(value, dict):
+                value = json.dumps(value, ensure_ascii=False)
+            writer.writerow([receipt.shop_id, receipt.item.get("cn", ""), receipt.item.get("vc", ""),
+                             receipt.identifier, receipt.action, value, STATUS_LABELS[receipt.status],
+                             receipt.detail, str(ts)])
     print(f"[本次逐项回执] {output}")
+    return output

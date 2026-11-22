@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from sellerops.settings import credentials
 from sellerops.core import utils as common
 from sellerops.domain.models import DiscountUploadResult
+from sellerops.domain.snapshot_values import positive_id, quantity
 from sellerops.core.errors import AuthenticationError
 from sellerops.core.errors import PlatformApiError
 
@@ -112,91 +113,67 @@ class WBClient:
         self.shop_name = shop_dict.get("shopName") or shop_dict.get("shop_name") or f"shop_{self.shop_id}"
         self.session = make_session(shop_dict, root_version)
 
-    def fetch_discount_goods_desc(
-        self,
-        threshold: int,
-        limit: int = 0,
-        page_size: int = 100,
-        max_pages: int = 200,
-    ) -> List[Dict[str, Any]]:
-        """从高到低分页拉取折扣商品，遇到首条 <= threshold 提前截断（返回折扣 > threshold）。"""
-        return self._fetch_discount_goods(threshold, limit, page_size, max_pages, sort_order=0)
+    def fetch_discount_goods_desc(self, threshold: int, limit: int = 0, page_size: int = 100,
+                                  max_pages: int = 200, *, skip_discount: int | None = None) -> list[dict]:
+        """读取严格高于阈值的商品；threshold=-1 读取全部。"""
+        return self._fetch_discount_goods(threshold, limit, page_size, max_pages, 0, skip_discount)
 
-    def fetch_discount_goods_asc(
-        self,
-        threshold: int,
-        limit: int = 0,
-        page_size: int = 100,
-        max_pages: int = 200,
-    ) -> List[Dict[str, Any]]:
-        """从低到高分页拉取折扣商品（sortOrder=1），遇到首条 >= threshold 提前截断（返回折扣 < threshold）。
+    def fetch_discount_goods_asc(self, threshold: int, limit: int = 0, page_size: int = 100,
+                                 max_pages: int = 200, *, skip_discount: int | None = None,
+                                 seen_ids: set[int] | None = None) -> list[dict]:
+        """读取严格低于阈值的商品，已由降序侧覆盖的商品不占配额。"""
+        return self._fetch_discount_goods(threshold, limit, page_size, max_pages, 1, skip_discount, seen_ids)
 
-        用于「折扣 < N」侧筛选：降序接口在首条 ≤ threshold 时即截断，永远覆盖不到低折扣区间。
-        实测来源：抓包 `api/网络请求/wb折扣从小到大排序api.har`（body 仅 sortOrder 由 0 改 1）。
-        """
-        return self._fetch_discount_goods(threshold, limit, page_size, max_pages, sort_order=1)
-
-    def _fetch_discount_goods(
-        self,
-        threshold: int,
-        limit: int = 0,
-        page_size: int = 100,
-        max_pages: int = 200,
-        sort_order: int = 0,
-    ) -> List[Dict[str, Any]]:
-        """按折扣排序分页拉取（sortOrder=0 降序取 >threshold / 1 升序取 <threshold）。
-
-        提前截断：首条不满足条件即停（降序 = 首条 ≤ threshold；升序 = 首条 ≥ threshold）。
-        """
+    def _fetch_discount_goods(self, threshold: int, limit: int, page_size: int, max_pages: int,
+                              sort_order: int, skip_discount: int | None,
+                              seen_ids: set[int] | None = None) -> list[dict]:
         ascending = sort_order == 1
-        items: List[Dict[str, Any]] = []
-        offset = 0
-        pages = 0
-
-        while pages < max_pages:
+        items, seen = [], set()
+        previous = None
+        qualified = 0
+        for page in range(max_pages):
             body = {
-                "limit": page_size,
-                "offset": offset,
-                "facets": [],
-                "filterWithoutPrice": False,
-                "filterWithLeftovers": False,
-                "filterWithoutCompetitivePrice": False,
-                "sort": "discount",
-                "sortOrder": sort_order,
+                "limit": page_size, "offset": page * page_size, "facets": [],
+                "filterWithoutPrice": False, "filterWithLeftovers": False,
+                "filterWithoutCompetitivePrice": False, "sort": "discount", "sortOrder": sort_order,
             }
-            res = request(self.session, "POST", self.DISC_LIST, read_only=True, json=body)
-            goods = (res.get("data") or {}).get("listGoods") or []
-            pages += 1
-            if not goods:
-                break
-
-            first_d = goods[0].get("discount")
-            if threshold >= 0 and first_d is not None:
-                if (ascending and int(first_d) >= threshold) or (not ascending and int(first_d) <= threshold):
-                    break
-
-            for g in goods:
-                disc = g.get("discount")
-                if threshold >= 0:
-                    if disc is None:
-                        continue
-                    if ascending and int(disc) >= threshold:
-                        continue
-                    if not ascending and int(disc) <= threshold:
-                        continue
-                items.append(g)
-                if limit and len(items) >= limit:
-                    break
-
-            if limit and len(items) >= limit:
-                break
+            response = request(self.session, "POST", self.DISC_LIST, read_only=True, json=body)
+            if not isinstance(response, dict):
+                raise PlatformApiError("WB 折扣列表响应格式无效")
+            if response.get("error", False) is not False or response.get("code") not in (None, 0, 200, "200"):
+                raise PlatformApiError("WB 折扣列表返回业务错误")
+            data = response.get("data")
+            goods = data.get("listGoods") if isinstance(data, dict) else None
+            if not isinstance(goods, list) or len(goods) > page_size:
+                raise PlatformApiError("WB 折扣列表缺少有效 listGoods")
+            checked = []
+            for row in goods:
+                nm_id = positive_id(row.get("nmID")) if isinstance(row, dict) else None
+                discount = quantity(row.get("discount")) if nm_id else None
+                if (nm_id is None or not isinstance(row.get("vendorCode"), str) or not row["vendorCode"].strip()
+                        or discount is None or discount > 100):
+                    raise PlatformApiError("WB 折扣列表包含无效商品标识或折扣")
+                if nm_id in seen:
+                    raise PlatformApiError("WB 折扣列表重复商品，无法确认翻页范围")
+                if previous is not None and (discount < previous if ascending else discount > previous):
+                    raise PlatformApiError("WB 折扣列表顺序不一致，无法确认阈值范围")
+                previous = discount
+                seen.add(nm_id)
+                checked.append((nm_id, discount, row))
+            for nm_id, discount, row in checked:
+                if threshold >= 0 and (discount >= threshold if ascending else discount <= threshold):
+                    return items
+                if seen_ids and nm_id in seen_ids:
+                    continue
+                items.append({**row, "nmID": nm_id, "discount": discount})
+                qualified += discount != skip_discount
+                if limit and qualified >= limit:
+                    return items
             if len(goods) < page_size:
-                break
-
-            offset += page_size
-            time.sleep(0.15)
-
-        return items
+                return items
+            if page + 1 < max_pages:
+                time.sleep(0.15)
+        raise PlatformApiError("WB 折扣列表到达安全分页上限，店铺范围不完整")
 
     def precheck_batch_discount(self, data_payload: List[Dict[str, Any]]) -> Dict[str, Any]:
         """提交前预检（checkChange=true）：判定是否触发「降价提示 / 隔离区提示」弹窗。
@@ -209,14 +186,16 @@ class WBClient:
         """
         res = request(self.session, "POST", self._disc_upload_url(check_change=True),
                       json={"data": data_payload})
-        if not isinstance(res.get("error"), bool) or (res["error"] is False and not isinstance(res.get("data"), dict)):
+        if (not isinstance(res, dict) or type(res.get("error")) is not bool
+                or (res["error"] is False and not isinstance(res.get("data"), dict))):
             raise ValueError("预检回执缺少明确状态")
-        r_data = res.get("data") or {}
+        r_data = res.get("data") if isinstance(res.get("data"), dict) else {}
         return {
             "priceModal": bool(r_data.get("priceModal")),
             "quarantineModal": bool(r_data.get("quarantineModal")),
             "error": bool(res.get("error")),
             "errorText": res.get("errorText") or "",
+            "taskId": positive_id(r_data.get("id")),
         }
 
     def upload_batch_discount(
@@ -246,12 +225,14 @@ class WBClient:
 
         price_modal = False
         quarantine_modal = False
+        precheck_task_id = None
 
         if precheck:
             try:
                 pre = self.precheck_batch_discount(data_payload)
                 price_modal = pre["priceModal"]
                 quarantine_modal = pre["quarantineModal"]
+                precheck_task_id = pre.get("taskId")
                 if pre.get("error"):
                     return DiscountUploadResult(
                         success=False,
@@ -264,51 +245,40 @@ class WBClient:
             except AuthenticationError:
                 raise
             except Exception as error:
-                return DiscountUploadResult(success=False, shop_id=self.shop_id,
+                return DiscountUploadResult(success=False, shop_id=self.shop_id, outcome="unknown",
                                             error_message=f"预检结果未知，已停止：{error}")
 
         try:
             res = request(self.session, "POST", self._disc_upload_url(check_change=False),
                           json={"data": data_payload})
-            err = res.get("error")
-            err_text = res.get("errorText") or ""
-            r_data = res.get("data") or {}
-            task_id = r_data.get("id")
-            already_exists = bool(r_data.get("alreadyExists"))
-
-            if err:
-                return DiscountUploadResult(
-                    task_id=task_id,
-                    success=False,
-                    processed_count=0,
-                    error_message=err_text or "WB 返回未知错误",
-                    shop_id=self.shop_id,
-                    already_exists=already_exists,
-                    price_modal=price_modal,
-                    quarantine_modal=quarantine_modal,
-                )
-
-            return DiscountUploadResult(
-                task_id=task_id,
-                success=bool(task_id),
-                error_message="" if task_id else "结果未知：缺少受理任务号",
-                processed_count=len(data_payload) if task_id else 0,
-                shop_id=self.shop_id,
-                already_exists=already_exists,
-                price_modal=price_modal,
-                quarantine_modal=quarantine_modal,
-            )
-        except AuthenticationError:
-            raise
-        except Exception as e:
-            return DiscountUploadResult(
-                success=False,
-                processed_count=0,
-                error_message=str(e),
-                shop_id=self.shop_id,
-                price_modal=price_modal,
-                quarantine_modal=quarantine_modal,
-            )
+            if not isinstance(res, dict) or type(res.get("error")) is not bool:
+                raise ValueError("提交回执缺少明确状态")
+            data = res.get("data")
+            task_id = positive_id(data.get("id")) if isinstance(data, dict) else None
+            already_exists = isinstance(data, dict) and data.get("alreadyExists") is True
+            if res["error"]:
+                outcome = "unknown" if precheck_task_id is not None else "failed"
+                message = res.get("errorText") or "WB 拒绝提交"
+            elif task_id is None:
+                outcome = "unknown"
+                message = "缺少受理任务号"
+            else:
+                outcome = "accepted"
+                message = ""
+            return DiscountUploadResult(task_id=task_id or precheck_task_id, success=outcome == "accepted",
+                                        outcome=outcome, error_message=message,
+                                        processed_count=len(data_payload) if outcome == "accepted" else 0,
+                                        shop_id=self.shop_id, already_exists=already_exists,
+                                        price_modal=price_modal, quarantine_modal=quarantine_modal)
+        except AuthenticationError as error:
+            if precheck_task_id is None:
+                raise
+            return DiscountUploadResult(task_id=precheck_task_id, success=False, outcome="unknown",
+                                        error_message=str(error), shop_id=self.shop_id, auth_stopped=True)
+        except Exception as error:
+            return DiscountUploadResult(task_id=precheck_task_id, success=False, outcome="unknown",
+                                        error_message=str(error), shop_id=self.shop_id,
+                                        price_modal=price_modal, quarantine_modal=quarantine_modal)
 
 
 CANCELED_URL = ("https://marketplace.wildberries.ru/ns/marketplace-app/"

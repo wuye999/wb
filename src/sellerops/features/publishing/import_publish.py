@@ -14,7 +14,6 @@ sellerops 他人映射表导入上架（import-shelve）
 用法：sellerops listing import <他人映射表.xlsx> [--cn|--shops|--limit] [--apply] [--interval S]
 """
 from sellerops.features.products.warehouse import resolve_warehouse
-from sellerops.features.publishing.product_details import price_book_packages as replicate_price_book_packages
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.features.catalog import products as catalog_products
 
@@ -46,7 +45,6 @@ from sellerops.features.publishing.foreign_table import load_foreign
 from sellerops.features.publishing.foreign_table import resolve_import_package
 
 # ---------------- 兼容工具函数 ----------------
-price_book_packages = replicate_price_book_packages
 
 
 # ---------------- 差集与候选计划 ----------------

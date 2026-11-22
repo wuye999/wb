@@ -94,12 +94,13 @@
 
 ## product price
 
-改价/改折扣（默认 WB 原生 dp-api 批量，自动确认降价/隔离区弹窗；dry-run 默认）
+改价或按显式价格意图设折扣（默认 WB 后台，默认预览）
 
 实现入口 [run_price](../src/sellerops/cli/product.py)
 
 - 必选其一 --shops / --all-shops
 - 必选其一 --sku / --name / --name-contains / --prefix / --vc / --all-products
+- 最多选一项 --price / --from-price-book / --keep-price
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--sku` 商品价格表卖家 SKU
@@ -110,10 +111,11 @@
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
 - `--apply` 真正执行（默认 dry-run）
 - `--yes` 跳过不可逆操作确认
-- `--price` 目标价（默认 floor(商品价格表实际售价)）
-- `--discount` 折扣 0-100（不传=不改）
-- `--club-discount` club折扣 0-100（不传=不改）
-- `--keep-price` 价格保持当前值（只改折扣/俱乐部折扣）
+- `--price` 指定正整数价格
+- `--from-price-book` 按对应价格表行取价；同时设折扣时必填此项或其他明确价格意图
+- `--keep-price` 保持各规格原价，须同时指定折扣
+- `--discount` 折扣 0-100，配合 --price、--from-price-book 或 --keep-price
+- `--club-discount` BCS 俱乐部折扣 0-100，须明确价格意图
 - `--auto-review` 改价后自动「应用新价格」（降价 30-49.9% 进审查时，精确匹配刚改价商品）
 - `--chunk` 每批提交条数（≤300，对齐 discount 实践，默认 100）
 - `--interval` 批/店间请求间隔秒
@@ -244,11 +246,11 @@
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
 - `--channel` （wb / bcs）
 - `--apply` 提交修改（默认预览）
-- `--target` 目标折扣
-- `--threshold` 仅修改当前折扣高于此值的商品
-- `--below` 也修改折扣低于此值的商品（WB）
+- `--target` 目标折扣，必填（0 至 100）
+- `--threshold` 仅修改平台当前折扣严格高于此值的商品
+- `--below` 也修改平台当前折扣严格低于此值的商品（WB）
 - `--limit` 每店最多处理的商品数
-- `--chunk` 每批规格数（仅 WB，默认 100）
+- `--chunk` 每批商品数（仅 WB，默认 100）
 
 ## product review-price
 

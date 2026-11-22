@@ -90,10 +90,10 @@ class TestRegression(unittest.TestCase):
         from sellerops.core import utils as common
         from sellerops.features.products import trash as T
         self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {}}, [1, 2]), {})
-        self.assertEqual(T.parse_move_response({'error': True, 'errorText': 'boom'}, [1, 2]), {1: 'boom', 2: 'boom'})
-        self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {'2': '有库存'}}, [1, 2]), {2: '有库存'})
-        self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {'errors': [{'params': {'1': '3'}, 'trKey': 'trDelivered'}]}}, [3, 4]), {3: 'trDelivered'})
-        self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {'globalErr': 'x'}}, [5, 6]), {5: 'globalErr:x', 6: 'globalErr:x'})
+        self.assertEqual(T.parse_move_response({'error': True, 'errorText': 'boom'}, [1, 2]), {1: ('failed', 'boom'), 2: ('failed', 'boom')})
+        self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {'2': '有库存'}}, [1, 2]), {2: ('failed', '有库存')})
+        self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {'errors': [{'params': {'1': '3'}, 'trKey': 'trDelivered'}]}}, [3, 4]), {3: ('failed', 'trDelivered')})
+        self.assertEqual(T.parse_move_response({'error': False, 'additionalErrors': {'globalErr': 'x'}}, [5, 6]), {5: ('unknown', 'globalErr:x'), 6: ('unknown', 'globalErr:x')})
         calls = []
 
         def fake_post(session, url, payload, allow_400_json=True):
@@ -207,58 +207,32 @@ class TestRegression(unittest.TestCase):
             self.assertEqual(parser.parse_args([*args, "--channel", "bcs"]).channel, "bcs")
 
     def test_price_wb_offline(self):
-        """price_wb 离线断言（**不触网、不写平台**）。
-
-            依据 HAR `api/网络请求/wb在线批量修改价格.har`：
-            - 提交条目 {"vendorCode","nmID","price","currencyIsoCode":"CNY"}（只改价无 discount 字段）
-            - checkChange=true 预检（可能返回 priceModal/quarantineModal）→ checkChange=false 落库
-              =「自动确认提交」（用户确认的语义，与改折扣两阶段同机制）
-            """
+        from types import SimpleNamespace
         from unittest import mock
-        from argparse import Namespace
-        from sellerops.integrations.wildberries import client as wc
-        from sellerops.features.products import prices as price_wb
-        shop = {'shopId': 9352, 'shopName': '袁州1', 'cookie': '', 'authorizev3': 't', 'wb_seller_lk': 't'}
-        it = {'vc': 'BCS-X-1', 'nmID': 123, 'price': 150, 'cur_price': 198.0, 'orig_zero': False, 'discount': None, 'clubDiscount': None, 'cn': '测试'}
-        p0 = price_wb._build_payload(it, None)
-        self.assertEqual(p0, {'vendorCode': 'BCS-X-1', 'nmID': 123, 'price': 150, 'currencyIsoCode': 'CNY'})
-        self.assertEqual(price_wb._build_payload(it, 30)['discount'], 30)
-        self.assertEqual(price_wb._build_payload(it, 0)['discount'], 0)
-        calls = []
+        from sellerops.features.products.prices import submit_wb_prices
+        from sellerops.features.products.results import ProductResult
+        from sellerops.integrations.wildberries import client as wb
 
-        def fake_request(session, method, url, **kwargs):
-            calls.append((url.split('?')[-1], kwargs.get('json')))
-            if url.endswith('checkChange=true'):
-                return {'data': {'priceModal': True, 'quarantineModal': True}, 'error': False, 'errorText': ''}
-            return {'data': {'id': 166628902, 'alreadyExists': False}, 'error': False, 'errorText': ''}
-        items = [{'vc': f'BCS-WB-{i}', 'nmID': 1000 + i, 'price': 150, 'cur_price': 198.0, 'orig_zero': False, 'discount': None, 'clubDiscount': None, 'cn': '测试'} for i in range(4)]
+        with mock.patch.object(wb, 'make_session'):
+            client = wb.WBClient({'shopId': 9352})
+        items = [{'vc': f'BCS-WB-{i}', 'nmID': 1000 + i, 'price': 150}
+                 for i in range(4)]
         plan = {'shopId': 9352, 'items': items}
-        pargs = Namespace(chunk=2, interval=0, discount=None)
-        client = wc.WBClient(shop, root_version='v1.113.3')
-        results, ts = ([], '2026-09-24 12:00:00')
-        with mock.patch.object(wc, 'request', side_effect=fake_request):
-            ok, fail = price_wb.exec_shop(client, plan, pargs, results, ts)
-        self.assertEqual((ok, fail), (4, 0))
-        self.assertEqual([c[0] for c in calls], ['checkChange=true', 'checkChange=false', 'checkChange=true', 'checkChange=false'])
-        self.assertEqual(calls[0][1], {'data': [{'vendorCode': 'BCS-WB-0', 'nmID': 1000, 'price': 150, 'currencyIsoCode': 'CNY'}, {'vendorCode': 'BCS-WB-1', 'nmID': 1001, 'price': 150, 'currencyIsoCode': 'CNY'}]})
-        self.assertEqual(len(results), 4)
-        self.assertTrue(all((r[2] == 'price_wb' for r in results)))
-
-        def fake_request_exists(session, method, url, **kwargs):
-            if url.endswith('checkChange=true'):
-                return {'data': {'priceModal': False, 'quarantineModal': False}, 'error': False, 'errorText': ''}
-            return {'data': {'id': 166628902, 'alreadyExists': True}, 'error': False, 'errorText': ''}
-        results = []
-        with mock.patch.object(wc, 'request', side_effect=fake_request_exists):
-            self.assertEqual(price_wb.exec_shop(client, plan, pargs, results, ts), (4, 0))
-        self.assertTrue(all("166628902" in row[4] and "已存在" in row[4] for row in results))
-        bad_items = [{'vc': 'BCS-WB-9', 'nmID': 9999, 'price': 99, 'cur_price': 198.0, 'orig_zero': False, 'discount': None, 'clubDiscount': None, 'cn': '测试'}]
-        plan_bad = {'shopId': 9352, 'items': bad_items}
-        calls.clear()
-        with mock.patch.object(wc, 'request', side_effect=fake_request):
-            ok2, fail2 = price_wb.exec_shop(client, plan_bad, pargs, [], ts)
-        self.assertEqual((ok2, fail2), (0, 1))  # rejected target prices must surface as failures
-        self.assertEqual(calls, [])
+        result = ProductResult('price', 'wb', SimpleNamespace(price=150))
+        with mock.patch.object(wb, 'request', side_effect=[
+            {'error': False, 'data': {'priceModal': True}},
+            {'error': False, 'data': {'id': 166628902, 'alreadyExists': True}},
+            {'error': False, 'data': {}}, {'error': False, 'data': {'id': 166628903}},
+        ]) as request:
+            self.assertEqual(submit_wb_prices(client, plan, 2, 0, result), (items, False))
+        self.assertEqual([c.args[2].split('=')[-1] for c in request.call_args_list],
+                         ['true', 'false', 'true', 'false'])
+        self.assertEqual(request.call_args_list[1].kwargs['json'], {'data': [
+            {'vendorCode': row['vc'], 'nmID': row['nmID'], 'currencyIsoCode': 'CNY', 'price': 150}
+            for row in items[:2]]})
+        self.assertEqual([r.task_id for r in result.receipts[9352]], ['166628902'] * 2 + ['166628903'] * 2)
+        self.assertTrue(all(r.status == 'accepted' for r in result.receipts[9352]))
+        self.assertIn('已存在', result.receipts[9352][0].message)
 
     def test_price_boss_dp_formula_unit(self):
         """price 目标价：商品价格表 D 列「实际售价」公式解析 + floor 口径（离线）。
@@ -307,8 +281,8 @@ class TestRegression(unittest.TestCase):
             self.assertEqual([b['floor'] for b in boss], [80, 41, 79, 60, 88, 100, None])
             self.assertIn('缓存', err.getvalue())
             self.assertIn('无法解析', err.getvalue())
-            self.assertEqual(ops_plan.target_price('VC-X', {'VC-X': {'cn': '无', 'dp': 88.9}}, [], None), 88)
-            self.assertIsNone(ops_plan.target_price('VC-Y', {'VC-Y': {'cn': '无', 'dp': 'bad'}}, [], None))
+            self.assertEqual(ops_plan.target_price('VC-X', {'VC-X': {'cn': '无', 'dp': 88.9}}), 88)
+            self.assertIsNone(ops_plan.target_price('VC-Y', {'VC-Y': {'cn': '无', 'dp': 'bad'}}))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

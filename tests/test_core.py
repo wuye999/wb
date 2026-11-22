@@ -93,21 +93,6 @@ class TestExecutionContracts(unittest.TestCase):
         self.assertEqual(extract_wb_nm('BCS-ABCD-tag/123456-2'), '123456')
         self.assertIsNone(extract_wb_nm('invalid'))
 
-    def test_invalid_discount_plans_fail_before_platform_calls(self):
-        from sellerops.domain.models import DiscountPlan
-        for values in ({'target_discount': -1}, {'chunk_size': 0}, {'chunk_size': 301}, {'limit': -1}):
-            with self.assertRaises(ValueError):
-                DiscountPlan(**values)
-
-    def test_discount_partial_failure_returns_nonzero(self):
-        from sellerops.cli.main import build_parser
-        from sellerops.features.products import discounts
-        from types import SimpleNamespace
-        fixture = SimpleNamespace(shops=[{'shopId': 1}])
-        with patch.object(discounts.credentials, 'get', return_value=fixture), \
-                patch.object(discounts.Discounts, 'execute_plan', return_value={'total_failed': 1}):
-            self.assertEqual(discounts.run_cli(build_parser().parse_args(['product', 'discount', '--all-products', '--all-shops', '--threshold', '50', '--apply'])), 1)
-
     def test_ambiguous_bcs_write_is_not_retried(self):
         from sellerops.integrations.bcs.client import BCSClient
         from sellerops.core.errors import NetworkError

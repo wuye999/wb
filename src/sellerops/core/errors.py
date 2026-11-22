@@ -30,14 +30,6 @@ class PlatformApiError(SellerOpsError):
         super().__init__(f"平台接口异常 [{status_code}]: {message}" if status_code else f"平台接口异常: {message}")
 
 
-class TaskTimeoutError(SellerOpsError):
-    """异步任务轮询超时"""
-    def __init__(self, task_id, timeout_sec):
-        self.task_id = task_id
-        self.timeout_sec = timeout_sec
-        super().__init__(f"任务 {task_id} 执行超时 (已等待 {timeout_sec} 秒未完成)")
-
-
 class StorageLockError(SellerOpsError):
     """文件排他锁获取超时（并发竞争）"""
     def __init__(self, filepath, timeout_sec):

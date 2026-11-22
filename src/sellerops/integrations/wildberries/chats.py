@@ -21,7 +21,6 @@ CHAT_BASE = "https://seller-chat.wildberries.ru/ns/sellers-chat-srv-1"
 CHATS_URL = CHAT_BASE + "/chat/v4/seller/chats"
 HISTORY_URL = CHAT_BASE + "/chat/v2/seller/chat/history"
 SEND_URL = CHAT_BASE + "/chat/v5/seller/send"
-UNREAD_URL = CHAT_BASE + "/chat/v2/seller/unread"
 
 BUYER_CHAT_TYPE = 1   # 1=买家聊天（有数据）；3 实测返回空
 
@@ -67,12 +66,6 @@ def send_message(session, chat_id: str, text: str, seller_name: str, client_name
                     "text": text},
     }
     d = wb_api.request(session, "POST", SEND_URL, json=payload)
-    return d if isinstance(d, dict) else {}
-
-
-def fetch_unread(session, chat_type: str = "1,2,3") -> Dict[str, Any]:
-    """GET 未读计数（发送前后对比，验证「回完是否清零」）。"""
-    d = wb_api.request(session, "GET", f"{UNREAD_URL}?chatType={chat_type}")
     return d if isinstance(d, dict) else {}
 
 

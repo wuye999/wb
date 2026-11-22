@@ -235,46 +235,6 @@ class TestNoPostWriteQueries(unittest.TestCase):
         self.assertEqual(fetch.call_count, 1)
         count.assert_not_called()
 
-    def test_price_stock_and_operations_finish_after_execution(self):
-        from sellerops.cli.main import build_parser
-        from sellerops.features.products import prices, stocks, operations
-        from sellerops.features.catalog import products, mapping_sync
-        from sellerops.integrations.bcs.client import client as bcs
-        fixture = Mock(root_version='fixture')
-        fixture.wb_shop.return_value = {'shopId': 42}
-        plan = [{'shopId': 42, 'items': [{'nmID': 123, 'vc': 'BCS-TEST-123', 'price': 10, 'chrtId': 456, 'amount': 1}]}]
-        parser = build_parser()
-        with patch.object(products, 'fetch_all') as fetch, patch.object(bcs, 'sync_shops_parallel') as sync, \
-                patch.object(mapping_sync, 'merge') as merge, contextlib.redirect_stdout(io.StringIO()):
-            for module, command in [(prices, 'price'), (stocks, 'stock')]:
-                args = parser.parse_args(['product', command, '--shops', '42', *(['--amount','0'] if command == 'stock' else []), '--vc', 'BCS-TEST-123', '--apply', '--yes'])
-                args.sync = True  # stale callers must not reactivate removed hooks
-                planner = 'plan_price' if module is prices else 'build_plans'
-                executor = 'exec_shop' if module is prices else 'exec_online'
-                with patch.object(module, 'resolve_filters', return_value=(['BCS-TEST-123'], 'fixture')), \
-                        patch.object(module, 'selected_shops', return_value=[42]), \
-                        patch.object(module, 'load_state', return_value=({}, {}, [])), \
-                        patch.object(module, planner, return_value=plan), \
-                        patch.object(module, executor, return_value=(1, 0)) as execute, \
-                        patch.object(module.wb_api, 'make_session'), \
-                        patch.object(module.credentials, 'get', return_value=fixture), \
-                        patch.object(module, 'write_product_receipts'), patch.object(module, '_report_zero_items'):
-                    self.assertEqual(module.run(args), 0)
-                    execute.assert_called_once()
-            for action in ['price', 'stock', 'trash']:
-                args = parser.parse_args(['product', action, '--channel', 'bcs' if action != 'trash' else 'wb', '--shops','42','--all-products', *(['--amount','0'] if action=='stock' else []), '--apply', '--yes'])
-                args.sync = True
-                with patch.object(operations, 'resolve_filters', return_value=(['BCS-TEST-123'], 'fixture')), \
-                        patch.object(operations, 'selected_shops', return_value=[42]), \
-                        patch.object(operations, 'load_state', return_value=({}, {}, [])), \
-                        patch.object(operations, 'plan_' + action, return_value=plan), \
-                        patch.object(operations, 'run_apply', return_value=(1, 0)) as execute:
-                    operations.run(action, args, channel="wb" if action == "trash" else "bcs")
-                    execute.assert_called_once()
-            fetch.assert_not_called()
-            sync.assert_not_called()
-            merge.assert_not_called()
-
     def test_publish_interfaces_stop_after_acceptance(self):
         from sellerops.features.publishing import bulk_publish, card_publish
         from sellerops.domain.models import PublishItem

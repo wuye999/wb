@@ -51,27 +51,28 @@ def add_ops_args(p: argparse.ArgumentParser, *, with_price: bool = False, with_s
     p.add_argument("--yes", action="store_true", help="跳过不可逆操作确认")
 
     if with_price:
-        p.add_argument("--price", type=int, help="目标价（默认 floor(商品价格表实际售价)）")
-        p.add_argument("--discount", type=int, help="折扣 0-100（不传=不改）")
-        p.add_argument("--club-discount", type=int, help="club折扣 0-100（不传=不改）")
-        p.add_argument("--keep-price", action="store_true", help="价格保持当前值（只改折扣/俱乐部折扣）")
+        intent = p.add_mutually_exclusive_group()
+        intent.add_argument("--price", type=int, help="指定正整数价格")
+        intent.add_argument("--from-price-book", action="store_true",
+                            help="按对应价格表行取价；同时设折扣时必填此项或其他明确价格意图")
+        intent.add_argument("--keep-price", action="store_true", help="保持各规格原价，须同时指定折扣")
+        p.add_argument("--discount", type=int, help="折扣 0-100，配合 --price、--from-price-book 或 --keep-price")
+        p.add_argument("--club-discount", type=int, help="BCS 俱乐部折扣 0-100，须明确价格意图")
         p.add_argument("--auto-review", action="store_true",
                        help="改价后自动「应用新价格」（降价 30-49.9%% 进审查时，精确匹配刚改价商品）")
     if with_stock:
         p.add_argument("--amount", type=int, required=True, help="目标库存，归零传 0")
 
 
-from sellerops.settings import paths as config
-
 def add_discount_args(parser):
     add_product_scope(parser)
     parser.add_argument("--channel", choices=["wb", "bcs"], default="wb")
     parser.add_argument("--apply", action="store_true", help="提交修改（默认预览）")
-    parser.add_argument("--target", type=int, default=config.DISCOUNT_TARGET_DEF, help="目标折扣")
-    parser.add_argument("--threshold", type=int, help="仅修改当前折扣高于此值的商品")
-    parser.add_argument("--below", type=int, default=-1, help="也修改折扣低于此值的商品（WB）")
+    parser.add_argument("--target", type=int, required=True, help="目标折扣，必填（0 至 100）")
+    parser.add_argument("--threshold", type=int, help="仅修改平台当前折扣严格高于此值的商品")
+    parser.add_argument("--below", type=int, default=-1, help="也修改平台当前折扣严格低于此值的商品（WB）")
     parser.add_argument("--limit", type=int, default=0, help="每店最多处理的商品数")
-    parser.add_argument("--chunk", type=int, help="每批规格数（仅 WB，默认 100）")
+    parser.add_argument("--chunk", type=int, help="每批商品数（仅 WB，默认 100）")
 
 
 def add_publish_args(parser):

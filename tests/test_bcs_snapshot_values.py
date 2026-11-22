@@ -66,13 +66,11 @@ class TestMissingSnapshotValues(unittest.TestCase):
                     patch.object(plans.warehouse, 'resolve_warehouse', return_value=42):
                 item = plans.plan_stock([VC], [1], {}, 0)[0]['items'][0]
             self.assertIsNone(item['cur_amt'])
-            self.assertFalse(item['orig_zero'])
             self.assertEqual(item['warehouseId'], 42)
         with patch.object(plans, 'load_shop_rows', return_value={VC: row([size(amount='0')])}), \
                 patch.object(plans.warehouse, 'resolve_warehouse', return_value=42):
             item = plans.plan_stock([VC], [1], {}, 9)[0]['items'][0]
         self.assertEqual(item['cur_amt'], 0)
-        self.assertTrue(item['orig_zero'])
         for sizes in ([], [size(None)], [size(), size()]):
             with patch.object(plans, 'load_shop_rows', return_value={VC: row(sizes)}), \
                     patch.object(plans.warehouse, 'resolve_warehouse', return_value=42):

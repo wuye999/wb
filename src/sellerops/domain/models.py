@@ -8,40 +8,6 @@ from typing import Optional, List, Dict, Any, Tuple
 
 
 @dataclass(slots=True, frozen=True)
-class DiscountPlan:
-    """折扣批量修改规划输入模型
-
-    threshold/below 为「折扣区间」双侧条件，取并集：
-      - threshold >= 0 → 命中「折扣 > threshold」
-      - below >= 0     → 命中「折扣 < below」
-      - 两者都为 -1 或 is_all=True → 不限折扣
-    例：threshold=55, below=40 → 「>55% 或 <40%」。
-    """
-    threshold: int = 50
-    below: int = -1
-    target_discount: int = 50
-    name_contains: str = ""
-    name_filter: str = ""
-    prefix_filter: str = ""
-    target_vcs: Optional[List[str]] = None
-    target_shops: Optional[List[int]] = None
-    limit: int = 0
-    chunk_size: int = 100
-    is_apply: bool = False
-    is_all: bool = False
-
-    def __post_init__(self) -> None:
-        if not 0 <= self.target_discount <= 100:
-            raise ValueError('目标折扣必须在 0 到 100 之间')
-        if not 1 <= self.chunk_size <= 300:
-            raise ValueError('折扣批次大小必须在 1 到 300 之间')
-        if self.limit < 0:
-            raise ValueError('条数上限不能为负数')
-        if not -1 <= self.threshold <= 100 or not -1 <= self.below <= 100:
-            raise ValueError('折扣阈值必须为 -1 或 0 到 100')
-
-
-@dataclass(slots=True, frozen=True)
 class TaskResult:
     """异步任务或批次执行结果"""
     task_id: Optional[int] = None
@@ -60,6 +26,8 @@ class DiscountUploadResult(TaskResult):
     `api/网络请求/wb批量修改折扣+降价提示.har`），真正落库必须再以
     `checkChange=false` 提交并拿到 `data.id`。
     """
+    outcome: str = "failed"
+    auth_stopped: bool = False
     already_exists: bool = False
     price_modal: bool = False
     quarantine_modal: bool = False
@@ -96,11 +64,6 @@ class Complaint:
     decide_counter: Optional[int] = None
     products: Tuple[ComplaintProduct, ...] = field(default_factory=tuple)
     raw_data: Optional[Dict[str, Any]] = field(default=None, repr=False)
-
-    @property
-    def is_pending(self) -> bool:
-        """是否为「未处理」投诉（等待回复）"""
-        return self.status_id == 1
 
     @classmethod
     def from_list_dict(

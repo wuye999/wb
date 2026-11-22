@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from sellerops.core.command_summary import emit_summary
 from sellerops.core.errors import AuthenticationError, RateLimitError
 from sellerops.domain.product_reports import ProductReport, ReportIssue
 from sellerops.domain.warehouses import moscow_warehouse
@@ -305,6 +306,7 @@ def collect(*, shops: str = '', order_days: int = 30, feedback_days: int = 0,
 
 def run(args: Any) -> int:
     """生成完整或注明缺失的本地工作簿；不提供 --apply。"""
+    from sellerops.features.reports.product_report_analysis import return_metrics
     from sellerops.features.reports.product_report_xlsx import write_report
 
     output = getattr(args, 'out', '')
@@ -323,18 +325,54 @@ def run(args: Any) -> int:
         except (UnicodeError, OSError):
             raise ValueError('无法读取临时BCS抓包，请通过标准输入传入UTF-8文本') from None
         extra_bcs_accounts = parse_sessions(capture)
-    report = collect(shops=args.shops, order_days=args.order_days, feedback_days=args.feedback_days,
-                     region=args.wb_region, url=args.url, table=args.table,
-                     extra_bcs_accounts=extra_bcs_accounts)
-    target = Path(output) if output else Path(paths.current.log_dir) / (
-        '商品运营报告_' + data.timestamp(report.generated_at).strftime('%Y%m%d_%H%M%S') + '.xlsx')
-    screening = write_report(report, target, details=getattr(args, 'details', False))
-    print(f'[报告] {target.resolve()}')
-    print(f'[统计期间] 订单 {report.order_begin} 至 {report.end}；评价 {report.feedback_begin or "全部历史"} 至 {report.end}')
-    print(f'[范围] {len(report.shops)}店，莫斯科仓订单{len(report.orders)}条，'
-          f'评价{len(report.feedbacks)}条，飞书近14天记录{len(report.sales)}条')
-    print(f'[默认筛选] 低评分{len(screening.low_rating)}个VC，高退货率{len(screening.high_returns)}个VC，'
-          f'近期出单候选{len(screening.recent)}个VC；缺口按同数字段判断')
-    for issue in [*report.issues, *screening.issues]:
+    report = screening = target = None
+    error = None
+    try:
+        report = collect(shops=args.shops, order_days=args.order_days, feedback_days=args.feedback_days,
+                         region=args.wb_region, url=args.url, table=args.table,
+                         extra_bcs_accounts=extra_bcs_accounts)
+        target = Path(output) if output else Path(paths.current.log_dir) / (
+            '商品运营报告_' + data.timestamp(report.generated_at).strftime('%Y%m%d_%H%M%S') + '.xlsx')
+        screening = write_report(report, target, details=getattr(args, 'details', False))
+    except Exception as exc:
+        error = f"生成报告失败（{type(exc).__name__}）"
+        print(f"[错误] {error}")
+    if report is None:
+        emit_summary("report products", "read", "failed",
+                     [int(sid) for sid in args.shops.split(",") if data.positive_id(sid.strip())], {},
+                     coverage_complete=False, issues=[vars(ReportIssue("商品报告", error))])
+        return 1
+    issues = [*report.issues, *(screening.issues if screening is not None else [])]
+    if error:
+        issues.append(ReportIssue("商品报告", error))
+    else:
+        print(f'[报告] {target.resolve()}')
+        print(f'[统计期间] 订单 {report.order_begin} 至 {report.end}；评价 {report.feedback_begin or "全部历史"} 至 {report.end}')
+        print(f'[范围] {len(report.shops)}店，莫斯科仓订单{len(report.orders)}条，'
+              f'评价{len(report.feedbacks)}条，飞书近14天记录{len(report.sales)}条')
+        print(f'[默认筛选] 低评分{len(screening.low_rating)}个VC，高退货率{len(screening.high_returns)}个VC，'
+              f'近期出单候选{len(screening.recent)}个VC；缺口按同数字段判断')
+    for issue in issues:
         print(f'[{issue.severity}] {issue.source} 店铺={issue.shop_id or "-"}：{issue.message}')
-    return 1 if report.failed or screening.failed else 0
+    complete = not (report.failed or (screening and screening.failed))
+    status = "failed" if error else "completed" if complete else "partial"
+    target_ids = (report.target_shop_ids if report.target_shop_ids is not None
+                  else {shop["id"] for shop in report.shops})
+    returns = return_metrics(report.orders)
+    orders_complete = not report.unavailable_accounts and all(
+        report.coverage.get(shop["id"], {}).get("orders") == "完整" for shop in report.shops)
+    if not orders_complete and not report.orders:
+        returns = dict.fromkeys(returns)
+    emit_summary("report products", "read", status, sorted(target_ids),
+                 {"workbook": target} if not error else {},
+                 period={"orders_from": report.order_begin, "feedbacks_from": report.feedback_begin or None,
+                         "sales_7_from": (data.timestamp(report.end) - timedelta(days=6)).date().isoformat(),
+                         "sales_14_from": (data.timestamp(report.end) - timedelta(days=13)).date().isoformat(),
+                         "through": report.end},
+                 coverage_complete=complete, orders_complete=orders_complete,
+                 sources=[{**shop, "coverage": report.coverage.get(shop["id"], {})} for shop in report.shops],
+                 wb_region=report.region, feishu_complete=report.feishu_complete,
+                 publish_records_complete=report.publish_records_complete,
+                 unavailable_accounts=report.unavailable_accounts, return_metrics=returns,
+                 issues=[vars(issue) for issue in issues])
+    return int(bool(error or not complete))

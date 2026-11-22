@@ -65,33 +65,6 @@ class TestCommandFailures(unittest.TestCase):
         session.assert_not_called()
         process.assert_not_called()
 
-    def test_price_stock_and_bcs_operations_return_partial_failure(self):
-        from sellerops.features.products import prices, stocks, operations
-        plan = [{'shopId': 42, 'items': [{'nmID': 123, 'vc': 'BCS-TEST-123',
-                 'price': 10, 'chrtId': 456, 'amount': 1}]}]
-        for module, command, planner, executor in [
-            (prices, 'price', 'plan_price', 'exec_shop'),
-            (stocks, 'stock', 'build_plans', 'exec_online'),
-            (operations, 'price-bcs', 'plan_price', 'run_apply'),
-        ]:
-            with self.subTest(command=command), ExitStack() as stack:
-                args = self.parser.parse_args(['product', command.removesuffix('-bcs'), '--shops','42', '--all-products', *(['--amount','0'] if command == 'stock' else []), '--apply', '--yes'])
-                stack.enter_context(patch.object(module, 'resolve_filters', return_value=(['BCS-TEST-123'], 'fixture')))
-                stack.enter_context(patch.object(module, 'load_state', return_value=({}, {}, [])))
-                stack.enter_context(patch.object(module, planner, return_value=plan))
-                stack.enter_context(patch.object(module, executor, return_value=(1, 1)))
-                if module is operations:
-                    stack.enter_context(patch.object(module, 'selected_shops', return_value=[42]))
-                    result = module.run('price', args, channel='bcs')
-                else:
-                    stack.enter_context(patch.object(module, 'selected_shops', return_value=[42]))
-                    stack.enter_context(patch.object(module.credentials, 'get', return_value=credential_fixture()))
-                    stack.enter_context(patch.object(module.wb_api, 'make_session'))
-                    stack.enter_context(patch.object(module, 'write_product_receipts'))
-                    stack.enter_context(patch.object(module, '_report_zero_items'))
-                    result = module.run(args)
-                self.assertEqual(result, 1)
-
     def test_clean_all_preserves_failures_from_first_target(self):
         from sellerops.features.products import clean
         args = self.parser.parse_args(['product', 'clean', '--shops', '42', '--yes', '--target', 'all', '--apply'])
@@ -109,7 +82,7 @@ class TestCommandFailures(unittest.TestCase):
 
     def test_discount_bcs_does_not_report_empty_after_failed_collection(self):
         from sellerops.features.products import discount_bcs
-        args = self.parser.parse_args(['product', 'discount', '--channel', 'bcs', '--all-products', '--all-shops', '--threshold', '50'])
+        args = self.parser.parse_args(['product', 'discount', '--channel', 'bcs', '--all-products', '--all-shops', '--threshold', '50', '--target', '35'])
         with patch.object(discount_bcs.bcs, 'fetch_shop_list', return_value=[{'id': 42, 'name': 'fixture'}]), \
                 patch.object(discount_bcs, 'collect', side_effect=RuntimeError('expired')), \
                 patch.object(discount_bcs.time, 'sleep'):
@@ -117,12 +90,12 @@ class TestCommandFailures(unittest.TestCase):
 
     def test_discount_bcs_missing_item_response_is_failure(self):
         from sellerops.features.products import discount_bcs
-        args = self.parser.parse_args(['product', 'discount', '--channel', 'bcs', '--all-products', '--all-shops', '--threshold', '50', '--apply'])
-        item = {'nmID': 123, 'vc': 'BCS-TEST-123', 'title': 'fixture', 'old_d': 50, 'price': 100}
+        args = self.parser.parse_args(['product', 'discount', '--channel', 'bcs', '--all-products', '--all-shops', '--threshold', '50', '--target', '35', '--apply'])
+        item = {'nmID': 123, 'vc': 'BCS-TEST-123', 'title': 'fixture', 'old_discount': 60, 'price': 100, 'discount': 35}
         with patch.object(discount_bcs.bcs, 'fetch_shop_list', return_value=[{'id': 42, 'name': 'fixture'}]), \
-                patch.object(discount_bcs, 'collect', return_value=([item], {'blocked': []})), \
-                patch.object(discount_bcs, 'apply', return_value={}), \
-                patch.object(discount_bcs, 'write_csv', return_value='fixture.csv'), \
+                patch.object(discount_bcs, 'collect', return_value={'shopId': 42, 'items': [item], 'blocked_items': [], 'skipped_items': []}), \
+                patch.object(discount_bcs.bcs, 'batch_set_prices', return_value={}), \
+                patch.object(discount_bcs, '_write_csv'), \
                 patch.object(discount_bcs.time, 'sleep'):
             self.assertEqual(discount_bcs.run(args), 1)
 
@@ -169,7 +142,7 @@ class TestCommandFailures(unittest.TestCase):
                 patch.object(dimension, 'load_state', return_value=({}, {}, [])), \
                 patch.object(dimension, 'selected_shops', return_value=[42]), \
                 patch.object(dimension, 'resolve_filters', return_value=(['BCS-TEST-123'], 'fixture')), \
-                patch.object(dimension, 'build_plans', return_value=[{}]), \
+                patch.object(dimension, 'build_plans', return_value=[{'items': [{}], 'blocked_items': []}]), \
                 patch.object(dimension, 'apply_plans', return_value=(1, 1, [])):
             self.assertEqual(dimension.run(args), 1)
 

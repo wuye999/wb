@@ -88,7 +88,7 @@ class TestLocalPlanning(unittest.TestCase):
             for command in ['stock', 'trash']:
                 self.assertEqual(self.run_cli(command), 0)
             result = plans.plan_trash(['BCS-TEST-101'], [42], {})
-        self.assertEqual(result[0]['nmIds'], [101])
+        self.assertEqual([item['nmID'] for item in result[0]['items']], [101])
         self.assertEqual(result[0]['items'][0]['stock_specs'], [(201, 100), (202, 100)])
         for mock in [read_stock, read_products, write_stock, write_trash]:
             mock.assert_not_called()
@@ -128,8 +128,8 @@ class TestLocalPlanning(unittest.TestCase):
         from sellerops.features.products import plans, warehouse
         self.save([])
         with patch.object(warehouse, 'resolve_warehouse') as resolve:
-            self.assertEqual(plans.plan_trash(['BCS-TEST-101'], [42], {}), [])
-            self.assertEqual(plans.plan_stock(['BCS-TEST-101'], [42], {}, 0), [])
+            self.assertEqual(plans.plan_trash(['BCS-TEST-101'], [42], {})[0]['items'], [])
+            self.assertEqual(plans.plan_stock(['BCS-TEST-101'], [42], {}, 0)[0]['items'], [])
         resolve.assert_not_called()
 
     def test_cli_partial_plan_failure_still_executes_only_healthy_local_card(self):
@@ -145,7 +145,7 @@ class TestLocalPlanning(unittest.TestCase):
         with patch.object(warehouse, 'resolve_warehouse', return_value=100), \
                 patch.object(stocks.credentials, 'get', return_value=cred), \
                 patch.object(stocks, 'set_stock', side_effect=lambda shop, wh, rows, **kw: response(rows)) as clear, \
-                patch.object(trash, 'move_nms', return_value={'ok': 1, 'fail': 0, 'details': [{'nmID': 101, 'ok': True, 'msg': 'OK'}]}) as move, \
+                patch.object(trash, 'move_nms', return_value={'ok': 1, 'fail': 0, 'details': [{'nmID': 101, 'ok': True, 'status': 'accepted', 'msg': 'OK'}]}) as move, \
                 patch.object(stock_api, 'get_stocks') as read_stock:
             code = main(['--data-dir', str(self.data), 'product', 'trash', '--shops', '42', '--vc', 'BCS-TEST-101,BCS-TEST-102', '--apply', '--yes'])
         self.assertEqual(code, 1)
@@ -173,11 +173,11 @@ class TestTrashExecution(unittest.TestCase):
         self.bcs = self.stack.enter_context(patch.object(execution.bcs, 'remove_to_trash', return_value={'code': 200}))
 
     def move_response(self, shop, ids, **kwargs):
-        return {'ok': len(ids), 'fail': 0, 'details': [{'nmID': n, 'ok': True, 'msg': 'OK'} for n in ids]}
+        return {'ok': len(ids), 'fail': 0, 'details': [{'nmID': n, 'ok': True, 'status': 'accepted', 'msg': 'OK'} for n in ids]}
 
     def execute(self, items, channel='wb', blocked=None):
-        return self.execution.run_apply([{'shopId': 42, 'items': items,
-            'nmIds': [i.get('nmID') for i in items], 'blocked_items': blocked or []}], 'trash', channel=channel)
+        return self.execution.apply_trash([{'shopId': 42, 'items': items,
+            'nmIds': [i.get('nmID') for i in items], 'blocked_items': blocked or []}], channel=channel)
 
     def test_partial_clear_failure_blocks_entire_affected_card_only(self):
         events = []
@@ -236,7 +236,7 @@ class TestTrashExecution(unittest.TestCase):
         plans = [{'shopId': 42, 'items': [item(101, 201)], 'nmIds': [101]},
                  {'shopId': 43, 'items': [item(102, 202)], 'nmIds': [102]}]
         with patch.object(self.stocks, 'set_stock', side_effect=clear):
-            self.assertEqual(self.execution.run_apply(plans, 'trash', channel='wb'), (1, 1))
+            self.assertEqual(self.execution.apply_trash(plans, channel='wb'), (1, 1))
         self.move.assert_called_once()
         self.assertEqual(self.move.call_args.args[0]['shopId'], 43)
 

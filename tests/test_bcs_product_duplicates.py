@@ -180,7 +180,7 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
     def test_direct_bcs_discount_also_collects_each_product_once(self):
         raw = [complete_row(), complete_row(id=20)]
         with patch.object(discount_bcs.bcs, 'get', return_value={'code': 200, 'rows': raw, 'total': 2}):
-            items, _ = discount_bcs.collect(1, 40, 0)
+            items = discount_bcs.collect(1, 40, 0, 55)['items']
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['nmID'], 101)
 

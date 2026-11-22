@@ -7,7 +7,7 @@ import re
 
 from sellerops.core import utils as common
 from sellerops.core.files import safe_load_json
-from sellerops.domain.snapshot_values import first_price, valid_sizes
+from sellerops.domain.snapshot_values import first_price
 from sellerops.features.catalog import keywords, workbench
 from sellerops.features.catalog.mapping_excel import build_xlsx, stock_summary
 from sellerops.integrations.bcs.client import client as bcs
@@ -75,12 +75,6 @@ def priced_rows(rows: list[dict]) -> list[dict]:
         c["img"] = r.get("repImg") or ""
         out.append(c)
     return out
-
-
-def size_summary(r):
-    """sizeList 压成 'chrtId(techSize)@price; ...'"""
-    return "; ".join(f"{s.get('chrtId')}({s.get('techSizeName') or s.get('name') or ''})@{s.get('price')}"
-                     for s in (valid_sizes(r) or []))
 
 
 def price_of(r):

@@ -20,7 +20,6 @@ COL_W = "尺寸宽(cm)"
 COL_H = "尺寸高(cm)"
 COL_WT = "毛重(kg)"
 COL_NM = "WB商品码"
-COL_SHOPS = "店铺覆盖"
 COL_SHOP_CNY_RE = r"^店铺\d+价格\(CNY\)$"
 
 # 旧列名：**仅用于报错/提示文案**，不做读取兼容（用户口径：只认新名）

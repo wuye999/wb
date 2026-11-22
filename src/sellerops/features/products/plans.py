@@ -1,36 +1,27 @@
-"""
-sellerops 操作计划生成与 dry-run 模块 (ops_plan)
-负责命令行筛选条件解析、目标价格与库存计算、跳过统计与变更计划构建。
-"""
-import math
-from sellerops.features.catalog.selection import load_shop_rows
+"""商品选择与提交计划；预览和执行共用字段及归属检查。"""
+from collections import defaultdict
+
+from sellerops.features.catalog.selection import load_shop_rows, selection_error
 from sellerops.features.products import warehouse
 from sellerops.features.products.skip_report import SkipTracker
-from sellerops.domain.snapshot_values import first_price, positive_id, stock_at
+from sellerops.domain.snapshot_values import bcs_keep_price, first_price, positive_id, stock_at, valid_sizes
+from sellerops.persistence.price_book import floor_price
 
 RED = "\033[91m"
-GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
-PRICE_HALF_LIMIT_NOTE = "低于原价一半（WB 将静默拒绝），已跳过"
 
-
-def target_price(vc, state, boss, manual=None):
-    """目标价：--price 手动 > 商品价格表 floor(实际售价) > 映射表实际售价快照 floor"""
+def target_price(vc: str, state: dict, manual: int | None = None, *,
+                 strict: bool = False) -> int | None:
     if manual is not None:
-        return int(manual)
-    cn = state.get(vc, {}).get("cn", "")
-    b = next((x for x in boss if x["cn"] == cn), None)
-    if b and b.get("floor") is not None:
-        return b["floor"]
-    dp = state.get(vc, {}).get("dp")
-    if dp is not None:
-        try:
-            return math.floor(float(dp))
-        except (TypeError, ValueError):
-            return None
-    return None
+        return manual
+    identity = state.get(vc, {})
+    entry = identity.get("price_row")
+    price = entry.get("floor") if entry else None
+    if price is None and not strict and identity.get("dp_cn", identity.get("cn")) == identity.get("cn"):
+        price = floor_price(identity.get("dp"))
+    return price if price and price > 0 else None
 
 
 def report_blocked(plans: list[dict], tracker: SkipTracker, label: str) -> None:
@@ -40,78 +31,104 @@ def report_blocked(plans: list[dict], tracker: SkipTracker, label: str) -> None:
     tracker.report(label)
 
 
-def plan_price(vcs, shops, state, boss, manual, discount, club, keep_price=False, *,
-               resolver=None, allow_discount_only=False, shop_rows=None):
-    plans = []
+def report_plan_skips(plans: list[dict], label: str) -> None:
     tracker = SkipTracker()
+    for plan in plans:
+        if plan.get("range_error") and not plan["blocked_items"]:
+            tracker.add(plan["shopId"], "", plan["range_error"])
+        for item in plan["skipped_items"]:
+            tracker.add(plan["shopId"], item["vc"], item["reason"])
+    report_blocked(plans, tracker, label)
+    if tracker.path:
+        plans[0]["skip_report"] = tracker.path
+
+
+def blocked_item(vc: str, row: dict, state: dict, reason: str) -> dict:
+    return {"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
+            "nmID": row.get("nmId"), "reason": reason}
+
+
+def shop_targets(sid: int, vcs: list[str], rows: dict | None, state: dict) -> tuple[dict, dict]:
+    plan = {"shopId": sid, "items": [], "blocked_items": [], "skipped_items": []}
+    targets = {}
+    if rows is None:
+        reason = "本店快照缺失或不可读，无法定位商品"
+        plan["range_error"] = reason
+        plan["blocked_items"] = [blocked_item(vc, {}, state, reason) for vc in dict.fromkeys(vcs)]
+        return plan, targets
+    for vc in dict.fromkeys(vcs):
+        if vc not in rows:
+            item = blocked_item(vc, {}, state, "该店无此商品（未在架或未同步）")
+            plan["skipped_items"].append({**item, "present": False})
+        elif reason := selection_error(vc, state):
+            plan["blocked_items"].append(blocked_item(vc, rows[vc], state, reason))
+        else:
+            targets[vc] = rows[vc]
+    return plan, targets
+
+
+def prepare_cards(sid: int, targets: dict, rows: dict, state: dict, blocked: list[dict],
+                  resolver, *, price: bool = False) -> dict:
+    prepared = {}
+    owners = defaultdict(set)
+    for vc, row in (rows or {}).items():
+        if nm := positive_id(row.get("nmId")):
+            owners[nm].add(vc)
+    for vc, row in targets.items():
+        if resolver:
+            entry = resolver.ensure(sid, vc, row, price=price)
+            if entry.reason:
+                blocked.append(blocked_item(vc, row, state, entry.reason))
+                continue
+            row = entry.row
+        nm = positive_id(row.get("nmId"))
+        if nm is None:
+            blocked.append(blocked_item(vc, row, state, "缺少有效 nmId"))
+            continue
+        owners[nm].add(vc)
+        prepared[vc] = row
+    for vc, row in list(prepared.items()):
+        if len(owners[positive_id(row["nmId"])]) > 1:
+            blocked.append(blocked_item(vc, row, state, "本店商品码对应多个完整 VC"))
+            del prepared[vc]
+    return prepared
+
+
+def plan_price(vcs, shops, state, manual, discount, club, keep_price=False, *,
+               resolver=None, allow_discount_only=False, shop_rows=None, from_price_book=False):
+    plans = []
     for sid in shops:
         rows = shop_rows[sid] if shop_rows is not None else load_shop_rows(sid)
-        if rows is None:
-            plans.append({'shopId': sid, 'items': [], 'dataList': [], 'blocked_items': [
-                _blocked_item(vc, {}, state, '本店快照缺失或不可读，无法定位商品') for vc in dict.fromkeys(vcs)]})
-            continue
-        items, blocked = [], []
-        for vc in dict.fromkeys(vcs):
-            r = rows.get(vc)
-            if not r:
-                tracker.add(sid, vc, "该店无此商品（未在架或未同步）")
-                continue
-            only_discount = keep_price and allow_discount_only and discount is not None
-            if resolver:
-                prepared = resolver.ensure(sid, vc, r, price=keep_price and not only_discount)
-                if prepared.reason:
-                    blocked.append(_blocked_item(vc, r, state, prepared.reason))
-                    continue
-                r = prepared.row
-            nm_id = positive_id(r.get("nmId"))
-            if nm_id is None:
-                blocked.append(_blocked_item(vc, r, state, '缺少有效nmId，无法改价'))
-                continue
-            cur = first_price(r)
-            orig_zero = (cur is not None and float(cur) == 0)
-            if only_discount:
-                p = None  # WB支持只传折扣，避免依赖或覆盖缺失/多规格的原价。
+        plan, targets = shop_targets(sid, vcs, rows, state)
+        plans.append(plan)
+        items, blocked = plan["items"], plan["blocked_items"]
+        prepared = prepare_cards(sid, targets, rows, state, blocked, resolver,
+                                 price=keep_price and not allow_discount_only)
+        for vc, row in prepared.items():
+            nm_id = positive_id(row["nmId"])
+            cur = first_price(row)
+            if keep_price and allow_discount_only:
+                price = None
             elif keep_price:
-                if cur is None or float(cur) == 0:
-                    print(f"  [跳过] 店{sid} {vc} 当前价格 {cur}（0/空=WB 官方延迟或受限），无法保持价格改折扣（可普通改价）")
-                    blocked.append(_blocked_item(vc, r, state, f"当前价格 {cur} 无法 keep-price"))
+                price = bcs_keep_price(row)
+                if price is None:
+                    blocked.append(blocked_item(vc, row, state, "无法无损保持全部规格的单一原价"))
                     continue
-                p = int(float(cur))
             else:
-                p = target_price(vc, state, boss, manual)
-                if p is None:
-                    print(f"  [跳过] 店{sid} {vc} 无目标价（商品价格表无该商品且映射表实际售价为空），用 --price 指定")
-                    blocked.append(_blocked_item(vc, r, state, '无目标价，请用--price指定'))
+                price = target_price(vc, state, manual, strict=from_price_book)
+                if price is None:
+                    blocked.append(blocked_item(vc, row, state, "无有效目标价，请检查对应价格表行或用 --price 指定"))
                     continue
-            items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
-                          "nmID": nm_id, "price": p, "cur_price": cur,
-                          "orig_zero": orig_zero,
-                          "discount": discount, "clubDiscount": club})
+                if cur is not None and price <= cur / 2:
+                    blocked.append(blocked_item(vc, row, state, f"目标价 {price} 低于原价一半或等于一半（原价 {cur}）"))
+                    continue
+            items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""), "nmID": nm_id,
+                          "price": price, "cur_price": cur, "discount": discount, "clubDiscount": club,
+                          "keep_price": keep_price})
         if resolver:
             resolver.block_after_auth_failure(sid, items, blocked)
-        if items or blocked:
-            plans.append({"shopId": sid, "items": items,
-                          "blocked_items": blocked,
-                          "dataList": [{"nmID": it["nmID"], "price": it["price"],
-                                        "discount": it["discount"], "clubDiscount": it["clubDiscount"]}
-                                       for it in items]})
-    report_blocked(plans, tracker, f"改价 {len(vcs)} 个 vendorCode × {len(shops)} 店")
+    report_plan_skips(plans, "改价")
     return plans
-
-
-def price_limit_violations(items):
-    bad = []
-    for it in items:
-        cur = it.get("cur_price")
-        if cur is None or it.get("price") is None:
-            continue
-        try:
-            cur = float(cur)
-        except (TypeError, ValueError):
-            continue
-        if it["price"] <= cur / 2:
-            bad.append((it["vc"], it.get("cn", ""), cur, it["price"]))
-    return bad
 
 
 def price_review_items(items):
@@ -134,26 +151,6 @@ def price_review_items(items):
     return review
 
 
-def _group_warehouses(items):
-    by_wh = {}
-    for it in items:
-        by_wh.setdefault(it["warehouseId"], {})[it["chrtId"]] = it["amount"]
-    return [{"warehouseId": wh, "stockItems": [{"chrtId": c, "amount": a} for c, a in sorted(d.items())]}
-            for wh, d in sorted(by_wh.items())]
-
-
-def _snapshot_specs(row: dict) -> tuple[list[int], str | None]:
-    sizes = row.get("sizeList")
-    if not isinstance(sizes, list) or not sizes:
-        return [], "无完整规格数据（sizeList 为空或无效）"
-    ids = [positive_id(s.get("chrtId")) if isinstance(s, dict) else None for s in sizes]
-    if any(chrt is None for chrt in ids):
-        return [], "存在缺失或无效的 chrtId，不能只清理部分规格"
-    if len(set(ids)) != len(ids):
-        return [], "存在重复的 chrtId，无法确认完整规格"
-    return sorted(set(ids)), None
-
-
 def trash_item_error(item: dict) -> str | None:
     """下架前必须有有效商品 ID、完整规格和单一目标仓库。"""
     if positive_id(item.get("nmID")) is None:
@@ -164,150 +161,123 @@ def trash_item_error(item: dict) -> str | None:
     if any(not isinstance(s, (list, tuple)) or len(s) != 2
            or positive_id(s[0]) is None or positive_id(s[1]) is None for s in specs):
         return "清库存规格或仓库 ID 不完整"
+    if len({int(s[0]) for s in specs}) != len(specs):
+        return "下架清库存计划包含重复规格"
     if len({int(s[1]) for s in specs}) != 1:
         return "下架清库存计划不能涉及多个仓库"
     return None
 
 
-def _blocked_item(vc, row, state, reason):
-    return {"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
-            "nmID": row.get("nmId"), "reason": reason}
+
+def _claims(owners: dict[int, set[str]], vc: str, row: dict) -> None:
+    sizes = row.get("sizeList")
+    if isinstance(sizes, list):
+        for size in sizes:
+            if isinstance(size, dict) and (spec := positive_id(size.get("chrtId"))) is not None:
+                owners[spec].add(vc)
 
 
-def plan_stock(vcs, shops, state, amount, *, resolver=None, shop_rows=None):
+def _stock_plans(vcs, shops, state, amount, *, trash, resolver, shop_rows):
     plans = []
-    tracker = SkipTracker()
     for sid in shops:
         rows = shop_rows[sid] if shop_rows is not None else load_shop_rows(sid)
-        if rows is None:
-            plans.append({'shopId': sid, 'items': [], 'warehouses': [], 'blocked_items': [
-                _blocked_item(vc, {}, state, '本店快照缺失或不可读，无法定位商品') for vc in dict.fromkeys(vcs)]})
-            continue
-        targets = [(vc, rows[vc]) for vc in dict.fromkeys(vcs) if vc in rows]
-        for vc in dict.fromkeys(vcs):
-            if vc not in rows:
-                tracker.add(sid, vc, "该店无此商品（未在架或未同步）")
+        plan, targets = shop_targets(sid, vcs, rows, state)
+        plans.append(plan)
+        plan["warehouses"] = []
+        blocked = plan["blocked_items"]
         if not targets:
             continue
-        default_wh = warehouse.resolve_warehouse(sid)
-        if default_wh is None:
-            reason = "无法确认该店莫斯科仓库，已阻止库存操作"
-            blocked = [_blocked_item(vc, r, state, reason) for vc, r in targets]
-            plans.append({"shopId": sid, "items": [], "warehouses": [], "blocked_items": blocked})
+        wh = warehouse.resolve_warehouse(sid)
+        if wh is None:
+            blocked.extend(blocked_item(vc, row, state, "无法确认该店莫斯科仓库") for vc, row in targets.items())
             continue
-        items, blocked = [], []
-        for vc, r in targets:
+        owners = defaultdict(set)
+        for vc, row in rows.items():
+            _claims(owners, vc, row)
+        for index, row in enumerate(getattr(rows, "other_cards", []), 1):
+            vc = row.get("vendorCode") or row.get("goodsCode")
+            nm = positive_id(row.get("nmId"))
+            if not (isinstance(vc, str) and vc in rows and nm is not None
+                    and nm == positive_id(rows[vc].get("nmId"))):
+                _claims(owners, f"非在架目标行 {index}（{vc or nm or '缺标识'}）", row)
+        prepared_rows = {}
+        for vc, row in targets.items():
             if resolver:
-                prepared = resolver.ensure(sid, vc, r, nm=False, specs=True)
+                prepared = resolver.ensure(sid, vc, row, nm=trash, specs=True)
                 if prepared.reason:
-                    blocked.append(_blocked_item(vc, r, state, prepared.reason))
+                    blocked.append(blocked_item(vc, row, state, prepared.reason))
                     continue
-                r = prepared.row
-            spec_ids, reason = _snapshot_specs(r)
-            if reason:
-                blocked.append(_blocked_item(vc, r, state, reason))
+                row = prepared.row
+            _claims(owners, vc, row)
+            prepared_rows[vc] = row
+
+        items = plan["items"]
+        for vc, row in prepared_rows.items():
+            sizes = valid_sizes(row)
+            if sizes is None:
+                blocked.append(blocked_item(vc, row, state, "缺少完整且唯一的规格（sizeList/chrtId）"))
                 continue
-            by_id = {int(s["chrtId"]): s for s in r["sizeList"]}
-            for chrt in spec_ids:
-                s = by_id[chrt]
-                # 只读取已确认的本店莫斯科仓；缺失或重复库存记录不补零、不求和。
-                cur_amt = stock_at(s, default_wh)
-                items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
-                              "chrtId": chrt, "warehouseId": default_wh, "amount": amount,
-                              "orig_zero": (cur_amt == 0), "cur_amt": cur_amt,
-                              "wh_fallback": cur_amt is None})
+            ids = sorted(positive_id(size["chrtId"]) for size in sizes)
+            shared = [(spec, sorted(owners[spec] - {vc})) for spec in ids if owners[spec] - {vc}]
+            if shared:
+                evidence = "；".join(f"{spec} 与 {', '.join(others)}" for spec, others in shared)
+                blocked.append({**blocked_item(vc, row, state, f"规格归属冲突：{evidence}"),
+                                "candidate_specs": ids})
+                continue
+            item = {"vc": vc, "cn": state.get(vc, {}).get("cn", ""), "nmID": positive_id(row.get("nmId"))}
+            if trash:
+                item["stock_specs"] = [(spec, wh) for spec in ids]
+                if reason := trash_item_error(item):
+                    blocked.append(blocked_item(vc, row, state, reason))
+                    continue
+                items.append(item)
+            else:
+                by_id = {positive_id(size["chrtId"]): size for size in sizes}
+                for spec in ids:
+                    current = stock_at(by_id[spec], wh)
+                    items.append({**item, "chrtId": spec, "warehouseId": wh, "amount": amount,
+                                  "cur_amt": current})
         if resolver:
             resolver.block_after_auth_failure(sid, items, blocked)
-        if items or blocked:
-            plans.append({"shopId": sid, "items": items,
-                          "warehouses": _group_warehouses(items), "blocked_items": blocked})
-    report_blocked(plans, tracker, f"设库存 {len(vcs)} 个 vendorCode × {len(shops)} 店")
+        if items and not trash:
+            plan["warehouses"] = [{"warehouseId": wh, "stockItems": [
+                {"chrtId": item["chrtId"], "amount": amount} for item in sorted(items, key=lambda it: it["chrtId"])]}]
+    return plans
+
+
+def plan_stock(vcs, shops, state, amount, *, resolver=None, shop_rows=None, report=True):
+    plans = _stock_plans(vcs, shops, state, amount, trash=False, resolver=resolver, shop_rows=shop_rows)
+    if report:
+        report_plan_skips(plans, "设库存")
     return plans
 
 
 def plan_trash(vcs, shops, state, *, resolver=None, shop_rows=None):
-    plans = []
-    tracker = SkipTracker()
-    for sid in shops:
-        rows = shop_rows[sid] if shop_rows is not None else load_shop_rows(sid)
-        if rows is None:
-            plans.append({'shopId': sid, 'items': [], 'nmIds': [], 'blocked_items': [
-                _blocked_item(vc, {}, state, '本店快照缺失或不可读，无法定位商品') for vc in dict.fromkeys(vcs)]})
-            continue
-        targets = [(vc, rows[vc]) for vc in dict.fromkeys(vcs) if vc in rows]
-        for vc in dict.fromkeys(vcs):
-            if vc not in rows:
-                tracker.add(sid, vc, "该店无此商品（未在架或未同步）")
-        if not targets:
-            continue
-        default_wh = warehouse.resolve_warehouse(sid)
-        if default_wh is None:
-            reason = "无法确认该店莫斯科仓库，已阻止下架"
-            blocked = [_blocked_item(vc, r, state, reason) for vc, r in targets]
-            plans.append({"shopId": sid, "items": [], "nmIds": [], "blocked_items": blocked})
-            continue
-        items, blocked = [], []
-        for vc, r in targets:
-            if resolver:
-                prepared = resolver.ensure(sid, vc, r, specs=True)
-                if prepared.reason:
-                    blocked.append(_blocked_item(vc, r, state, prepared.reason))
-                    continue
-                r = prepared.row
-            spec_ids, reason = _snapshot_specs(r)
-            item = {"vc": vc, "cn": state.get(vc, {}).get("cn", ""),
-                    "nmID": r.get("nmId"), "stock_specs": [(c, default_wh) for c in spec_ids]}
-            reason = reason or trash_item_error(item)
-            if reason:
-                blocked.append(_blocked_item(vc, r, state, reason))
-                continue
-            item["nmID"] = int(item["nmID"])
-            items.append(item)
-        if resolver:
-            resolver.block_after_auth_failure(sid, items, blocked)
-        if items or blocked:
-            plans.append({"shopId": sid, "items": items,
-                          "nmIds": [it["nmID"] for it in items], "blocked_items": blocked})
-    report_blocked(plans, tracker, f"下架 {len(vcs)} 个 vendorCode × {len(shops)} 店")
+    plans = _stock_plans(vcs, shops, state, 0, trash=True, resolver=resolver, shop_rows=shop_rows)
+    report_plan_skips(plans, "下架")
     return plans
 
 
-def dry_run(plans, action, amount=None):
-    print(f"\n{YELLOW}===== 计划清单（dry-run，未执行）====={RESET}")
-    total = 0
-    blocked = 0
-    for p in plans:
-        n_products = len({it["vc"] for it in p["items"]})
-        specs = f"，{len(p['items'])} 个规格" if action == "stock" else ""
-        print(f"\n店{p['shopId']}（{n_products} 个商品{specs}）:")
-        for it in p["items"]:
+def dry_run(plans: list[dict], action: str) -> None:
+    print("\n===== 计划清单（预览，未提交）=====")
+    for plan in plans:
+        items = plan["items"]
+        blocked, skipped = plan.get("blocked_items", []), plan.get("skipped_items", [])
+        specs = f"，{len(items)} 个规格" if action == "stock" else ""
+        print(f"店{plan['shopId']}：可提交 {len({it['vc'] for it in items})}{specs}，"
+              f"阻止 {len(blocked)}，正常跳过 {len(skipped)}")
+        for item in items:
             if action == "price":
-                target = f"price={it['price']}" if it['price'] is not None else '保持各规格原价（不提交价格字段）'
-                if it.get("discount") is not None:
-                    target += f", discount={it['discount']}"
-                if it.get("clubDiscount") is not None:
-                    target += f", clubDiscount={it['clubDiscount']}"
+                target = ", ".join(f"{field}={item[field]}" for field in ("price", "discount", "clubDiscount")
+                                   if item.get(field) is not None)
+                if item.get("keep_price"):
+                    label = f"各规格原价 {item['price']}" if item["price"] is not None else "保留各规格原价"
+                    target = f"{label}，{target}"
             elif action == "stock":
-                target = f"stock={it['amount']}（chrtId={it['chrtId']}, warehouse={it['warehouseId']}"
-                if it.get("wh_fallback"):
-                    target += f"{YELLOW}·店铺默认仓库{RESET}"
-                if it.get('cur_amt') is None:
-                    target += f"{YELLOW}·当前库存未知{RESET}"
-                target += ")"
+                current = item["cur_amt"] if item["cur_amt"] is not None else "未知"
+                target = f"库存 {current} → {item['amount']}（规格 {item['chrtId']}，莫斯科仓库 {item['warehouseId']}）"
             else:
-                target = f"移回收站（nmId={it['nmID']}"
-                specs = it.get("stock_specs") or []
-                target += f"{YELLOW}·先清库存{len(specs)}规格→0{RESET}" if specs else f"{YELLOW}·无库存规格可清{RESET}"
-                target += ")"
-            if action == "price" and price_limit_violations([it]):
-                target += f"  {RED}⚠ {PRICE_HALF_LIMIT_NOTE}{RESET}"
-            if it.get("orig_zero"):
-                target += f"  {YELLOW}⚠ 当前值为 0（WB 延迟/受限），照常修改；复查仍 0 属 WB 官方原因{RESET}"
-            print(f"  {it['vc']} | {it['cn']} | {target}")
-            total += 1
-        for it in p.get("blocked_items", []):
-            print(f"  [已阻止] {it['vc']} | {it.get('cn', '')} | {it['reason']}")
-            blocked += 1
-    print(f"\n合计 {total} 条操作（{len(plans)} 个店铺）。加 --apply 真正执行。")
-    if blocked:
-        print(f"[失败] {blocked} 个商品的计划不完整，已阻止操作；请处理上方原因")
+                target = f"清零 {len(item['stock_specs'])} 个规格后移回收站（nmID={item['nmID']}）"
+            print(f"  {item['vc']} | {item['cn']} | {target}")
+        for item in blocked:
+            print(f"  [已阻止] {item['vc']} | {item['reason']}")

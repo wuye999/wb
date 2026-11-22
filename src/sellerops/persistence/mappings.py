@@ -78,6 +78,7 @@ class MappingRepository:
             i_dp, i_prefix, i_stock = cols["dp"], cols["prefix"], cols["stock_sku"]
             cache = CachedDpReader(config.current.price_book_xlsx, col=(i_dp or 0) + 1)
             minimum_cache = CachedDpReader(config.current.price_book_xlsx, col=(cols["price"] or 0) + 1)
+            dimension_cache = CachedDpReader(config.current.price_book_xlsx, col=(cols["dim"] or 0) + 1)
             items: List[Dict[str, Any]] = []
             by_cache: List[Tuple] = []
             missing: List[Tuple] = []
@@ -107,6 +108,9 @@ class MappingRepository:
                         minimum = to_number(minimum_cache.get(row[0].row))
                         print(f"[警告] 最低售价行{row[0].row}公式无法求值，"
                               + ("使用 Excel 缓存值" if minimum is not None else "且无可用缓存值"))
+                    dimensions = val(row, cols["dim"])
+                    if isinstance(dimensions, str) and dimensions.startswith("="):
+                        dimensions = dimension_cache.get(row[0].row)
                     items.append({
                         "idx": len(items) + 1,
                         "sku": sku,
@@ -117,10 +121,12 @@ class MappingRepository:
                         "floor": floor_price(dp),
                         "prefix": str(val(row, i_prefix) or "").strip().upper(),
                         "stock_sku": str(val(row, i_stock) or "").strip(),
+                        "dimensions": dimensions,
                     })
             finally:
                 cache.close()
                 minimum_cache.close()
+                dimension_cache.close()
         finally:
             wb.close()
         warn_unresolved(config.current.price_book_xlsx, by_cache, missing)
@@ -337,6 +343,8 @@ class MappingRepository:
         # 自动应用全局纠偏更正（高优先级）
         for vc, ov in overrides.items():
             if vc in state and isinstance(ov, dict) and ov.get("cn"):
+                if state[vc]["cn"] != ov["cn"]:
+                    state[vc]["dp_cn"] = state[vc]["cn"]
                 state[vc]["cn"] = ov["cn"]
 
         return state, excluded

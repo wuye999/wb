@@ -74,3 +74,12 @@
 外部表上架旧参数 `--cn` 按包含匹配。迁移到 `listing import --name-contains` 可沿用原筛选；`--name` 只匹配完整名称。
 
 客服监听恢复时沿用原店铺和间隔。查看使用默认展示模式，起草使用 `--mode back`，发送使用 `--mode back --apply`。旧监听单独使用 `--apply` 也代表后台发送。前台展示与发送不能同时选择。
+
+## WorkBuddy 商品命令迁移
+
+| 旧用法 | 当前用法 |
+| --- | --- |
+| 手动运行 `product discount` 并依赖默认目标 50 | 显式指定 `product discount --target 50`，或填写用户指定的 0 至 100 |
+| `product price --discount D` 同时按价格表改价 | 显式指定 `product price --from-price-book --discount D`，只改折扣用 `product discount --target D` |
+
+原有 `product price --keep-price --discount D` 可继续使用。三项日常命令默认 WB，计划任务支持 `--shops` 并继续显式传入目标折扣 50。库存用 `--amount` 指定数量。自动化可从三项商品命令及 `report products` 的标准输出末行读取 `schema_version=1` JSON，既有数据目录可直接沿用。

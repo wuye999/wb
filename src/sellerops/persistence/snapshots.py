@@ -9,10 +9,18 @@ from sellerops.core.files import atomic_dump_json
 from sellerops.core.files import safe_load_json
 
 
+class ShopRows(dict[str, dict]):
+    """在架商品索引，保留同一快照内无法作为操作目标的原行。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.other_cards: list[dict] = []
+
+
 class ProductSnapshotRepository:
     """商品快照仓储类"""
 
-    _cache: Dict[tuple[str, int, int], Dict[str, Any]] = {}
+    _cache: dict[tuple[str, int, int], ShopRows] = {}
 
     @staticmethod
     def get_path(shop_id: Any) -> str:
@@ -69,7 +77,7 @@ class ProductSnapshotRepository:
         cls._cache = {key: value for key, value in cls._cache.items() if key[0] != path}
 
     @classmethod
-    def load_shop_rows(cls, shop_id: Any) -> Optional[Dict[str, Dict[str, Any]]]:
+    def load_shop_rows(cls, shop_id: Any) -> ShopRows | None:
         """按 vendorCode 构建在架商品索引字典（完全兼容原 ops.load_shop_rows 输出契约）。
 
         过滤已进回收站商品 (not r.get("trashedAt"))。
@@ -86,19 +94,17 @@ class ProductSnapshotRepository:
 
         document = cls.load_snapshot_document(shop_id)
         products = document['rows'] if document is not None else []
-        rows: Dict[str, Dict[str, Any]] = {}
+        rows = ShopRows()
         for item in products:
-            if not isinstance(item, dict):
-                continue
             if item.get("shopId") is not None and str(item["shopId"]) != str(shop_id):
                 raise ValueError("商品行声明的店铺与快照不符")
-            if item.get("trashedAt"):
-                continue
             vc = item.get("vendorCode") or item.get("goodsCode") or ""
-            if vc:
-                if not isinstance(vc, str) or not vc.strip() or vc.strip() in rows:
-                    raise ValueError('商品快照包含无效或重复vendorCode，无法唯一定位商品')
-                rows[vc.strip()] = item
+            if item.get("trashedAt") or not vc:
+                rows.other_cards.append(item)
+                continue
+            if not isinstance(vc, str) or not vc.strip() or vc.strip() in rows:
+                raise ValueError('商品快照包含无效或重复vendorCode，无法唯一定位商品')
+            rows[vc.strip()] = item
 
         cls._cache = {key: value for key, value in cls._cache.items() if key[0] != path}
         cls._cache[cache_key] = rows

@@ -194,12 +194,6 @@ class BCSClient:
                   f'保留{len(unique)}个商品，移除{len(rows) - len(unique)}条重复记录')
         return unique
 
-    def count_by_filter(self, shop_id: int) -> Dict[str, Any]:
-        d = self.get(f"{self.base_url}/shopKeeper/productList/countByFilter?shopId={shop_id}")
-        if d.get("code") != 200:
-            raise PlatformApiError(f"countByFilter 失败 code={d.get('code')}")
-        return d.get("data") or {}
-
     def batch_set_prices(self, shop_id: int, items: list[dict]) -> dict:
         rows = [{**item, "shopId": shop_id} for item in items]
         return self.post(f"{self.base_url}/shopKeeper/price/batch", {"dataList": rows})

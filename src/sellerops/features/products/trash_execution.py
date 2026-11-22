@@ -17,6 +17,10 @@ def clear_stock_for_trash(sid: int, items: list[dict]) -> tuple[list[dict], list
         else:
             valid.append({**item, "nmID": int(item["nmID"]),
                           "stock_specs": sorted({(int(c), int(w)) for c, w in item["stock_specs"]})})
+    owners = Counter(c for item in valid for c, _ in item["stock_specs"])
+    conflicted = [item for item in valid if any(owners[c] > 1 for c, _ in item["stock_specs"])]
+    blocked.extend({**item, "reason": "规格被多个下架商品认领"} for item in conflicted)
+    valid = [item for item in valid if all(owners[c] == 1 for c, _ in item["stock_specs"])]
     if not valid:
         return [], blocked
     warehouses = {w for item in valid for _, w in item["stock_specs"]}

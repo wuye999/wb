@@ -8,7 +8,9 @@ from sellerops.cli.arguments import add_product_scope
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser('price', help="改价/改折扣（默认 WB 原生 dp-api 批量，自动确认降价/隔离区弹窗；dry-run 默认）")
+    p = sub.add_parser('price', help="改价或按显式价格意图设折扣（默认 WB 后台，默认预览）",
+                       description="按表改价可直接使用本命令。只设折扣用 product discount --target D。"
+                                   "按表同时改价和设折扣用 --from-price-book --discount D。")
     add_ops_args(p, with_price=True)
     p.add_argument("--chunk", type=int, default=100, help="每批提交条数（≤300，对齐 discount 实践，默认 100）")
     p.add_argument("--interval", type=float, default=0.3, help="批/店间请求间隔秒")
@@ -83,16 +85,25 @@ def register(sub: argparse._SubParsersAction) -> None:
 def run_price(args):
     if args.price is not None and args.price <= 0:
         raise ValueError("目标价必须为正数")
-    if args.keep_price and args.price is not None:
-        raise ValueError("指定目标价与保持原价不能同时使用")
+    discounts = (args.discount, args.club_discount)
+    if any(value is not None and not 0 <= value <= 100 for value in discounts):
+        raise ValueError("折扣须在 0 至 100 之间")
+    if args.club_discount is not None and args.channel == "wb":
+        raise ValueError("俱乐部折扣需要显式选择 BCS 通道")
+    has_discount = any(value is not None for value in discounts)
+    if ((args.keep_price and not has_discount)
+            or (has_discount and not (args.keep_price or args.from_price_book or args.price is not None))):
+        raise ValueError("只改折扣用 product discount --target D 或 --keep-price --discount D，"
+                         "按表同时改价用 --from-price-book --discount D。"
+                         "BCS 俱乐部折扣同样须指定 --price、--from-price-book 或 --keep-price")
+    if args.auto_review and args.keep_price:
+        raise ValueError("自动审核需要提交新价格")
     if args.channel == "bcs":
         from sellerops.features.products.operations import run
         if args.chunk != 100 or args.interval != 0.3:
             raise ValueError("BCS 改价使用固定批次与间隔")
         return run("price", args, channel="bcs")
     from sellerops.features.products.prices import run
-    if args.club_discount is not None:
-        raise ValueError("俱乐部折扣需要显式选择 BCS 通道")
     return run(args)
 
 
@@ -114,7 +125,7 @@ def run_trash(args):
 
 
 def run_discount(args):
-    if not 0 <= args.target <= 100 or args.limit < 0 or (args.chunk is not None and args.chunk <= 0):
+    if not 0 <= args.target <= 100 or args.limit < 0 or (args.chunk is not None and not 1 <= args.chunk <= 300):
         raise ValueError("请核对目标折扣、数量和批次大小")
     if (args.threshold is not None and not 0 <= args.threshold <= 100) or not -1 <= args.below <= 100:
         raise ValueError("折扣阈值须在 0 至 100 之间")

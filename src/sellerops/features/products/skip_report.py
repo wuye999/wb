@@ -14,6 +14,7 @@ RESET = "\033[0m"
 
 class SkipTracker:
     def __init__(self) -> None:
+        self.path: Path | None = None
         self.items: list[tuple[int, str, str]] = []
 
     def add(self, sid: int, vc: str, reason: str) -> None:
@@ -34,7 +35,7 @@ class SkipTracker:
             writer.writerow(['操作', '店铺', 'vendorCode', '原因'])
             writer.writerows((action_label, sid, vc, reason) for sid, vc, reason in self.items)
         reasons = Counter(x[2] for x in self.items)
-        print(f"\n{RED}⚠ [跳过汇总] {action_label}：共 {len(self.items)} 条未操作{RESET}")
+        print(f"\n{RED}[跳过汇总] {action_label}：共 {len(self.items)} 条未操作{RESET}")
         for reason, n in reasons.most_common():
             print(f"  {YELLOW}{reason}{RESET}：{n} 条")
         if show_detail:
@@ -45,5 +46,6 @@ class SkipTracker:
                 print(f"    ... 其余 {len(self.items) - 30} 条见完整报告")
         else:
             print(f"  （明细略；共 {len(self.items)} 条）")
+        self.path = report
         print(f'  [完整跳过报告] {report}')
         return self.items

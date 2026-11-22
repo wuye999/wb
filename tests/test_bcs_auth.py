@@ -108,16 +108,20 @@ class TestBCSRefresh(TestCase):
         self.assertNotIn('shopId', price[0])
 
     def test_discount_batches_keep_the_original_price_and_individual_receipts(self):
-        from sellerops.features.products import discount_bcs
-        items = [{'nmID': number, 'price': number + 10} for number in (1, 2, 3)]
-        with patch.object(discount_bcs, 'CHUNK', 2), patch.object(discount_bcs.time, 'sleep'), \
-                patch.object(discount_bcs.bcs, 'post', side_effect=[{'code': 200}, {'code': 400}]) as send:
-            result = discount_bcs.apply(42, items, 55)
+        from types import SimpleNamespace
+        from sellerops.features.products import execution
+        from sellerops.features.products.results import ProductResult
+        items = [{'nmID': number, 'price': number + 10, 'discount': 55} for number in (1, 2, 3)]
+        result = ProductResult('discount', 'bcs', SimpleNamespace(target=55))
+        with patch.object(execution.time, 'sleep'), \
+                patch.object(execution.bcs, 'post', side_effect=[{'code': 200, 'taskId': 'one'}, {'code': 400}]) as send:
+            self.assertEqual(execution.submit_bcs_prices(42, items, result, chunk=2), items[:2])
         batches = [call.args[1]['dataList'] for call in send.call_args_list]
-        expected = [{**item, 'discount': 55, 'clubDiscount': None, 'shopId': 42} for item in items]
+        expected = [{**item, 'clubDiscount': None, 'shopId': 42} for item in items]
         self.assertEqual(batches, [expected[:2], expected[2:]])
-        self.assertEqual((result[1], result[2]), ('成功', '成功'))
-        self.assertIn('400', result[3])
+        self.assertEqual([(r.status, r.task_id) for r in result.receipts[42]],
+                         [('accepted', 'one'), ('accepted', 'one'), ('failed', None)])
+        self.assertIn('400', result.receipts[42][-1].message)
 
     def test_auto_refresh_retries_rejected_read_once_with_new_headers(self):
         client = BCSClient()

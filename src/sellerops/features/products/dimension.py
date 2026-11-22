@@ -8,13 +8,11 @@ sellerops 批量修改尺寸（dimension）
 用法：sellerops product dimensions [--vc|--prefix|--name] [--shops] [--limit] [--dims '长*宽*高/毛重'] [--apply]
 安全：默认 dry-run；--apply 执行；提交后不验证、不同步、不合并。
 """
-from sellerops.features.products.skip_report import SkipTracker
-
-
 import csv
+from itertools import islice
+from math import isfinite
 import os
 import re
-import sys
 import time
 from datetime import datetime
 from sellerops.features.catalog.selection import selected_shops, resolve_filters, load_state, load_shop_rows
@@ -22,11 +20,9 @@ from sellerops.features.catalog.selection import selected_shops, resolve_filters
 from sellerops.integrations.bcs.client import client as bcs
 from sellerops.core import utils as common
 from sellerops.settings import paths as config
-from sellerops.features.products.plans import report_blocked
+from sellerops.features.products.plans import prepare_cards, report_plan_skips, shop_targets
 from sellerops.features.products.product_data import ProductDataResolver
 from sellerops.domain.snapshot_values import positive_id
-
-from sellerops.features.publishing.import_publish import price_book_packages
 
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -40,68 +36,43 @@ BATCH_SLEEP = 0.15
 _DIM_RE = re.compile(r"^([\d.]+)\s*\*\s*([\d.]+)\s*\*\s*([\d.]+)\s*/\s*([\d.]+)$")
 
 
-def _parse_dims(s):
-    """解析 --dims：'长*宽*高/毛重' → (L,W,H,wt)；空串返回 None；非法格式报错退出。"""
-    if not s or not s.strip():
-        return None
-    m = _DIM_RE.match(s.strip())
-    if not m:
-        print(f"[错误] --dims 格式非法：'{s}'，应为 '长*宽*高/毛重'（例 8*14*26/0.3）")
-        sys.exit(1)
-    return (float(m.group(1)), float(m.group(2)),
-            float(m.group(3)), float(m.group(4)))
+def _parse_dims(value) -> tuple[float, float, float, float] | None:
+    match = _DIM_RE.fullmatch(str(value or "").strip())
+    if match:
+        try:
+            length, width, height, weight = map(float, match.groups())
+        except ValueError:
+            return None
+        if all(isfinite(number) and number > 0 for number in (length, width, height, weight)):
+            return length, width, height, weight
+    return None
 
 
-def build_plans(vcs, shops, state, pkg, dims=None, *, resolver=None, shop_rows=None, limit=0):
-    """逐店组装改尺寸计划 + 跳过统计。dims=(L,W,H,wt) 时优先用它，不再查价格表。"""
+def build_plans(vcs, shops, state, dims=None, *, resolver=None, shop_rows=None, limit=0):
+    """优先使用显式尺寸；按表时使用完整 VC 对应的价格表行。"""
     plans = []
-    tracker = SkipTracker()
     for sid in shops:
         rows = shop_rows[sid] if shop_rows is not None else load_shop_rows(sid)
-        if rows is None:
-            plans.append({'shopId': sid, 'items': [], 'blocked_items': [
-                {'vc': vc, 'cn': state.get(vc, {}).get('cn', ''), 'reason': '本店快照缺失或不可读，无法定位商品'}
-                for vc in dict.fromkeys(vcs)]})
-            continue
-        items, blocked = [], []
-        considered = 0
-        for vc in dict.fromkeys(vcs):
-            r = rows.get(vc)
-            if not r:
-                tracker.add(sid, vc, "该店无此商品（未在架或未同步）")
+        plan, targets = shop_targets(sid, vcs, rows, state)
+        plans.append(plan)
+        items, blocked = plan["items"], plan["blocked_items"]
+        packages, eligible = {}, {}
+        for vc, row in islice(targets.items(), limit or None):
+            identity = state.get(vc, {})
+            package = dims or _parse_dims((identity.get("price_row") or {}).get("dimensions"))
+            if not package:
+                blocked.append({"vc": vc, "cn": identity.get("cn", ""), "reason": "对应价格表行缺少有效尺寸"})
                 continue
-            if limit and considered >= limit:
-                break
-            considered += 1
-            cn = state.get(vc, {}).get('cn', '')
-            if resolver:
-                prepared = resolver.ensure(sid, vc, r)
-                if prepared.reason:
-                    blocked.append({'vc': vc, 'cn': cn, 'reason': prepared.reason})
-                    continue
-                r = prepared.row
-            nm_id = positive_id(r.get("nmId"))
-            if nm_id is None:
-                blocked.append({'vc': vc, 'cn': cn, 'reason': '缺少有效nmId'})
-                continue
-            if dims is not None:
-                L, W, H, wt = dims
-                src = "自定义"
-            else:
-                p = pkg.get(cn)
-                if not p:
-                    blocked.append({'vc': vc, 'cn': cn, 'reason': f"中文名「{cn or '-'}」无商品价格表尺寸"})
-                    continue
-                L, W, H, wt = p
-                src = "价格表"
-            items.append({"vc": vc, "cn": cn, "nmId": nm_id,
-                          "length": L, "width": W, "height": H,
-                          "weightBrutto": wt, "src": src})
+            packages[vc] = package
+            eligible[vc] = row
+        for vc, row in prepare_cards(sid, eligible, rows, state, blocked, resolver).items():
+            length, width, height, weight = packages[vc]
+            items.append({"vc": vc, "cn": state.get(vc, {}).get("cn", ""), "nmId": positive_id(row["nmId"]),
+                          "length": length, "width": width, "height": height,
+                          "weightBrutto": weight, "src": "自定义" if dims else "价格表"})
         if resolver:
             resolver.block_after_auth_failure(sid, items, blocked)
-        if items or blocked:
-            plans.append({"shopId": sid, "items": items, 'blocked_items': blocked})
-    report_blocked(plans, tracker, f"改尺寸 {len(vcs)} 个 vendorCode × {len(shops)} 店")
+    report_plan_skips(plans, "改尺寸")
     return plans
 
 
@@ -171,35 +142,25 @@ def apply_plans(plans):
 
 
 def run(args):
-    dims = _parse_dims(getattr(args, "dims", "") or "")
-    pkg = price_book_packages(config.current) if dims is None else {}
-    if dims is not None and not (getattr(args, "vc", "") or getattr(args, "name", "") or getattr(args, "name_contains", "") or getattr(args, "prefix", "") or getattr(args, "sku", "") or getattr(args, "all_products", False)):
-        print("[错误] 使用 --dims 时必须用 --vc / --name / --prefix 至少其一圈定目标，防止误改全部商品")
-        sys.exit(1)
-    if not pkg and dims is None:
-        print("[错误] 商品价格表无可用尺寸数据（请确认「尺寸」列格式为 长*宽*高/毛重）")
-        sys.exit(1)
+    dims = _parse_dims(args.dims)
+    if args.dims and dims is None:
+        raise ValueError("--dims 应为有效的 长*宽*高/毛重，例如 8*14*26/0.3")
     shops = selected_shops(args)
     state, shop_rows, boss = load_state(shops, all_products=getattr(args, "all_products", False))
 
     vcs, _ = resolve_filters(args, state, boss)
-    if not vcs:
-        print("[提示] 筛选结果为空，无操作")
-        return 0
     limit = getattr(args, "limit", 0)
     if limit < 0:
         raise ValueError("每店数量上限不能为负数")
 
     with ProductDataResolver() as resolver:
-        plans = build_plans(vcs, shops, state, pkg, dims=dims, resolver=resolver, shop_rows=shop_rows, limit=limit)
-    if not plans:
-        print(f"\n{RED}⚠ [无任何可执行项]{RESET} 目标商品在各店铺数据中均无法改尺寸（上方 [跳过] 已列明原因）")
-        print("  可能原因：未先 fetch 最新数据 / 商品已下架 / nmId 为空 / 中文名无商品价格表尺寸。")
-        return 0
-
+        plans = build_plans(vcs, shops, state, dims=dims, resolver=resolver, shop_rows=shop_rows, limit=limit)
+    incomplete = any(plan.get("range_error") or plan["blocked_items"] for plan in plans)
     if not args.apply:
         dry_run(plans)
-        return 1 if any(p.get('blocked_items') for p in plans) else 0
+        return int(incomplete)
+    if not any(plan["items"] or plan["blocked_items"] for plan in plans):
+        return int(incomplete)
 
     ok, fail, results = apply_plans(plans)
 
@@ -212,4 +173,4 @@ def run(args):
     print(f"\n结果: 成功 {ok} · 失败 {fail}（明细已保存 {csv_path}）")
 
     common.print_write_hint()
-    return 1 if fail else 0
+    return int(incomplete or fail > 0)

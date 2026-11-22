@@ -12,6 +12,10 @@ import time
 from sellerops.settings import paths as config
 from sellerops.settings import credentials
 from sellerops.core import utils as common
+from sellerops.core.errors import AuthenticationError
+from sellerops.domain.snapshot_values import positive_id
+from sellerops.features.products.plans import price_review_items
+from sellerops.persistence.price_book import to_number
 from sellerops.integrations.wildberries import client as wb_api
 
 QUARANTINE = "https://discounts-prices.wildberries.ru/ns/dp-api/discounts-prices/suppliers/api/v1/quarantine/goods"
@@ -20,28 +24,86 @@ PAGE_SIZE = 100
 
 def fetch_quarantine(session, limit=PAGE_SIZE, offset=0):
     """GET 待审商品列表（单页）。返回 items 列表。"""
-    d = wb_api.request(session, "GET", f"{QUARANTINE}?limit={limit}&offset={offset}")
-    return (d.get("data") or {}).get("quarantineGoods") or []
+    reply = wb_api.request(session, "GET", f"{QUARANTINE}?limit={limit}&offset={offset}")
+    data = reply.get("data") if isinstance(reply, dict) and reply.get("error") in (None, False) else None
+    items = data.get("quarantineGoods") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("WB 价格审核清单回执不完整")
+    return items
 
 
-def fetch_all_quarantine(session, limit=PAGE_SIZE):
-    """翻页拉全部待审商品，直到取完（列表默认只加载前 50 个，可能更多，需翻页）。"""
-    all_items = []
-    offset = 0
-    while True:
-        items = fetch_quarantine(session, limit, offset)
-        if not items:
-            break
+def fetch_all_quarantine(session, limit=PAGE_SIZE, max_pages=200):
+    """读取完整待审列表并拒绝重复页。"""
+    all_items, seen = [], set()
+    for page in range(max_pages):
+        items = fetch_quarantine(session, limit, page * limit)
+        for item in items:
+            review_id = positive_id(item.get("id")) if isinstance(item, dict) else None
+            if review_id is None or review_id in seen:
+                raise ValueError("WB 价格审核清单含无效或重复 ID")
+            seen.add(review_id)
         all_items.extend(items)
         if len(items) < limit:
-            break
-        offset += limit
-    return all_items
+            return all_items
+    raise ValueError("WB 价格审核清单超过安全分页上限")
 
 
 def apply_prices(session, ids):
     """POST 审核：body {"data": ids}。返回响应 dict。"""
     return wb_api.request(session, "POST", QUARANTINE, json={"data": ids})
+
+
+def review_submitted_prices(sid: int, accepted: list[dict], result, *, stopped: bool = False) -> None:
+    """单独记录本轮已受理改价对应的审核结果。"""
+    items = price_review_items(accepted)
+    if not items:
+        return
+    session = None
+    ready, ids = [], []
+    try:
+        shop = credentials.get().wb_shop(sid)
+        if stopped or not shop:
+            raise AuthenticationError("WB 会话不可用，未提交价格审核")
+        session = wb_api.make_session(shop)
+        pending = {}
+        for row in fetch_all_quarantine(session):
+            nm_id = positive_id(row.get("nmID"))
+            if nm_id is not None:
+                pending.setdefault(nm_id, []).append(row)
+        for item in items:
+            candidates = [row for row in pending.get(item["nmID"], [])
+                          if to_number(row.get("newPrice")) == item["price"]]
+            qid = positive_id(candidates[0].get("id")) if len(candidates) == 1 else None
+            if qid is None:
+                result.record(sid, item, "blocked", "待审列表尚无唯一匹配的本次目标价", review=True)
+            else:
+                ready.append(item)
+                ids.append(qid)
+    except Exception as error:
+        for item in items:
+            result.record(sid, item, "blocked", f"价格审核准备失败（{type(error).__name__}）", review=True)
+        if session is not None:
+            session.close()
+        return
+    if not ready:
+        session.close()
+        return
+    try:
+        if len(set(ids)) != len(ids):
+            status, message = "blocked", "待审核记录 ID 重复"
+        else:
+            reply = apply_prices(session, ids)
+            flag = reply.get("error") if isinstance(reply, dict) else None
+            status = "accepted" if flag is False else "failed" if flag is True else "unknown"
+            message = str(reply.get("errorText") or "") if isinstance(reply, dict) else ""
+    except AuthenticationError as error:
+        status, message = "blocked", str(error)
+    except Exception as error:
+        status, message = "unknown", f"价格审核回执不可用（{type(error).__name__}）"
+    finally:
+        session.close()
+    for item in ready:
+        result.record(sid, item, status, message, review=True)
 
 
 def process_shop(shop, root_version, args, rows):

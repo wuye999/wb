@@ -26,7 +26,6 @@ BASE = ("https://marketplace.wildberries.ru/ns/marketplace-app/"
         "marketplace-remote-wh/api/v3/portal")
 SUPPLIES_DELIVERY_URL = BASE + "/supplies/delivery"
 SUPPLY_ORDERS_TPL = BASE + "/supplies/{sid}/orders/delivery"
-ORDERS_COUNT_URL = BASE + "/fbs/orders/count"
 # 仓库/门店短列表已迁至 adapters/wb_warehouse_client.py（2026-10-29，避免同端点两处定义）
 
 PAGE_SIZE = 100          # 抓包实测 limit=100
@@ -104,10 +103,3 @@ def iter_supply_orders(session, supply_id: str, order: str = "asc",
             break
         seen = nxt
     return items
-
-
-def fetch_orders_count(session) -> Dict[str, int]:
-    """各 tab 订单计数 → {'new','assemble','delivery','canceled'}（口径=订单数，非清单数）。"""
-    d = wb_api.request(session, "GET", ORDERS_COUNT_URL)
-    data = d.get("data") or {}
-    return {k: int(data.get(k) or 0) for k in ("new", "assemble", "delivery", "canceled")}

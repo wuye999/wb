@@ -1,20 +1,4 @@
-"""sellerops 移回收站 WB 原生接口门面 (trash_wb)
-
-接口：POST https://seller-content.wildberries.ru/ns/source/content-card/source/v2/moveNmsToTrash
-      body 为裸数组 [{"nmID": int}, ...]；
-      响应 {"data":{},"error":false,"errorText":"","additionalErrors":{}}
-
-抓包实证（api/网络请求/wb批量移至回收站.har，2026-10-29）：
-  仅需 WB 三件套（AuthorizeV3 + Seller-Lk + root-version），**不需要 BCS**；
-  该接口**不清库存**、**不返回成功条数**，只能靠 error + additionalErrors 判定；
-  有库存/在途的商品可能被 WB 拒收 ⇒ 故 trash 流程仍保留「先清库存」两阶段。
-
-这是 product trash 的默认 WB 通道。清零和移入回收站的提交顺序由 execution 管理。
-运营人员可以用 --channel bcs 显式选择 BCS。
-
-与 banned.py:move_to_trash 的关系：逻辑同源（同一接口、同一 additionalErrors 解析），
-此处复制并参数化，**故意不复用**——避免「换通道」牵连 `sellerops product banned` 的既有行为。
-"""
+"""WB 移回收站请求及逐商品受理判定，供下架和禁售商品命令复用。"""
 import time
 
 from sellerops.core import utils as common
@@ -26,22 +10,10 @@ WB_MOVE_TRASH = ("https://seller-content.wildberries.ru/ns/source/"
 CHUNK = 300        # 单批 nmID 上限（项目硬性 ≤300/批）
 MAX_CHUNK = 300    # chunk 参数硬夹取上限
 INTERVAL = 0.3     # 批间间隔秒
-ACTION_TAG = "trash_wb"   # ops_result.csv「操作」列标签（BCS 通道为 trash_bcs）
-
-
-def _dedupe(nm_ids):
-    """去重保序。同一批内重复 nmID 无意义，且可能触发平台校验失败。"""
-    seen, out = set(), []
-    for n in nm_ids:
-        n = int(n)
-        if n not in seen:
-            seen.add(n)
-            out.append(n)
-    return out
 
 
 def parse_move_response(d, chunk):
-    """响应 → {nmID: 失败原因}；返回空 dict 表示整批成功。纯函数，可离线单测。
+    """响应 → {nmID: (状态, 原因)}；未列出的商品已受理。
 
     判定顺序：
       ① error=true              → 整批失败（errorText）
@@ -53,15 +25,15 @@ def parse_move_response(d, chunk):
     """
     chunk = list(chunk)
     if not isinstance(d, dict) or type(d.get("error")) is not bool:
-        return dict.fromkeys(chunk, "结果未知：未返回明确状态")
+        return dict.fromkeys(chunk, ("unknown", "未返回明确状态"))
     if d["error"]:
         reason = d.get("errorText") or "error=true"
-        return {n: reason for n in chunk}
-    add = d.get("additionalErrors") or {}
-    if not add:
+        return dict.fromkeys(chunk, ("failed", reason))
+    add = d.get("additionalErrors")
+    if add is None or add == {}:
         return {}
     if not isinstance(add, dict) or not isinstance(add.get("errors", []), list):
-        return dict.fromkeys(chunk, "结果未知：无法识别商品回执")
+        return dict.fromkeys(chunk, ("unknown", "无法识别商品回执"))
     failed, unmapped = {}, []
     for k, v in add.items():
         if k == "errors":
@@ -80,11 +52,12 @@ def parse_move_response(d, chunk):
         except (AttributeError, TypeError, ValueError):
             unmapped.append(str(e)[:60])
     if set(failed) - set(chunk):
-        return dict.fromkeys(chunk, "结果未知：包含清单以外的商品编号")
+        return dict.fromkeys(chunk, ("unknown", "包含清单以外的商品编号"))
+    failed = {nm: ("failed", reason) for nm, reason in failed.items()}
     if unmapped or not failed:
         summary = ("；".join(unmapped) or "未知原因")[:80]
         for n in chunk:
-            failed.setdefault(n, summary)
+            failed.setdefault(n, ("unknown", summary))
     return failed
 
 
@@ -106,16 +79,16 @@ def move_nms(shop, nm_ids, *, root_version=None, chunk=CHUNK, interval=INTERVAL)
         "SKIP: cookie 失效（本店中止）" 并置 aborted。
         原因：一次调用跨多批，外抛会让调用方把已成功下架的 nmID 也误记为失败。
     """
-    ids = _dedupe(nm_ids)
+    ids = list(dict.fromkeys(map(int, nm_ids)))
     try:
         session = wb_api.make_session(shop, root_version)
     except common.CookieExpiredError as e:
         aborted = str(e) or "cookie 失效"
-        details = [{"nmID": n, "ok": False, "msg": "SKIP: cookie 失效（本店中止）"} for n in ids]
+        details = [{"nmID": n, "ok": False, "status": "blocked", "msg": "SKIP: cookie 失效（本店中止）"} for n in ids]
         return {"ok": 0, "fail": len(details), "details": details, "aborted": aborted}
     except Exception as e:
         aborted = str(e) or "建会话失败"
-        details = [{"nmID": n, "ok": False, "msg": f"SKIP: {aborted}"[:80]} for n in ids]
+        details = [{"nmID": n, "ok": False, "status": "blocked", "msg": f"SKIP: {aborted}"[:80]} for n in ids]
         return {"ok": 0, "fail": len(details), "details": details, "aborted": aborted}
 
     try:
@@ -126,7 +99,7 @@ def move_nms(shop, nm_ids, *, root_version=None, chunk=CHUNK, interval=INTERVAL)
 
 
 def move_in_session(session, nm_ids, *, chunk=CHUNK, interval=INTERVAL):
-    ids = _dedupe(nm_ids)
+    ids = list(dict.fromkeys(map(int, nm_ids)))
     chunk = max(1, min(int(chunk), MAX_CHUNK))
     details, aborted = [], None
     for i in range(0, len(ids), chunk):
@@ -137,16 +110,15 @@ def move_in_session(session, nm_ids, *, chunk=CHUNK, interval=INTERVAL):
             bad = parse_move_response(d or {}, part)
         except common.CookieExpiredError as e:
             aborted = str(e) or "cookie 失效"
-            details.extend({"nmID": n, "ok": False, "msg": "SKIP: cookie 失效（本店中止）"}
+            details.extend({"nmID": n, "ok": False, "status": "blocked", "msg": "SKIP: cookie 失效（本店中止）"}
                            for n in ids[i:])
             break
         except Exception as e:
-            bad = {n: f"{type(e).__name__}: {e}"[:80] for n in part}
+            bad = dict.fromkeys(part, ("unknown", f"{type(e).__name__}: {e}"[:80]))
 
         for n in part:
-            good = n not in bad
-            details.append({"nmID": n, "ok": good,
-                            "msg": "OK" if good else (bad[n] or "未知原因")})
+            status, message = bad.get(n, ("accepted", ""))
+            details.append({"nmID": n, "ok": status == "accepted", "status": status, "msg": message})
         if i + chunk < len(ids):
             time.sleep(interval)
 

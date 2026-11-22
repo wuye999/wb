@@ -405,18 +405,18 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
             self.assertEqual(read.call_args.args[0].api_key, 'secret-1')
         from sellerops.persistence.snapshots import ProductSnapshotRepository
         from sellerops.features.catalog.mapping import price_of
-        from sellerops.features.products.plans import _snapshot_specs
+        from sellerops.domain.snapshot_values import valid_sizes
         doc = ProductSnapshotRepository.load_snapshot_document(1)
         self.assertEqual(doc['source'], 'wb-openapi')
         self.assertEqual((doc['total'], doc['fetchedCount']), (1, 1))
         row = next(iter(ProductSnapshotRepository.load_shop_rows(1).values()))
         self.assertEqual(price_of(row), 0)
-        self.assertEqual(_snapshot_specs(row), ([11, 12], None))
+        self.assertEqual([size["chrtId"] for size in valid_sizes(row)], [11, 12])
         from sellerops.features.products import plans
         with patch.object(plans.warehouse, 'resolve_warehouse', return_value=42):
             plan = plans.plan_stock([row['vendorCode']], [1], {}, 0)[0]
         self.assertEqual(len(plan['items']), 2)
-        self.assertTrue(all(item['cur_amt'] is None and not item['orig_zero'] for item in plan['items']))
+        self.assertTrue(all(item['cur_amt'] is None for item in plan['items']))
         self.assertTrue(all(item['amount'] == 0 for item in plan['items']))
         self.assertFalse(Path(paths.shop_json_path(2)).exists())
         self.sync.assert_not_called()

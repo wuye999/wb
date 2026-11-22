@@ -105,11 +105,11 @@ class ProductBoundaries(unittest.TestCase):
                 {"vendorCode": "b", "nmId": 2, "sizeList": [{"price": 10}, {"price": 20}], "discount": 70},
                 {"vendorCode": "c", "nmId": 3, "sizeList": [{"price": 30}], "discount": 70}]
         with patch.object(clean.bcs, "fetch_shop_products", return_value=rows):
-            valid, stats = collect(7, 50, 0, 35)
-            self.assertEqual([row["nmID"] for row in valid], [3])
-            self.assertEqual([row["vc"] for row in stats["blocked"]], ["a", "b"])
-            valid, _ = collect(7, -1, 0, 35)
-            self.assertEqual([row["nmID"] for row in valid], [1, 3])
+            plan = collect(7, 50, 0, 35)
+            self.assertEqual([row["nmID"] for row in plan["items"]], [3])
+            self.assertEqual([row["vc"] for row in plan["blocked_items"]], ["a", "b"])
+            plan = collect(7, -1, 0, 35)
+            self.assertEqual([row["nmID"] for row in plan["items"]], [1, 3])
 
     def test_write_timeout_is_not_replayed_and_read_post_can_retry(self):
         session = Mock()

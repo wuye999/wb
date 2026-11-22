@@ -29,25 +29,11 @@ from sellerops.persistence.headers import require_col
 # 他人表「映射总表」Sheet 用到的列名（按表头定位）
 COL_DP = COL_ACTUAL_PRICE
 
-OZON_BADGE = "ozon-card"
 
 
 def nm_of(vc):
     """从 vendorCode 提取原始 WB 商品码（用于跨账号跨店铺查重与差集比对）"""
     return common.extract_wb_nm(vc)
-
-
-def vc_tail_badge(vc):
-    """提取他人 vc 除去前缀与末段 nm 后的中间修饰段（如 ozon-card 或 WRLINWI/ 等）"""
-    import re
-    s = str(vc or "").strip()
-    if "/" in s:
-        m = re.match(r"^BCS-[A-Z]{4}-([^/]+/)\d+$", s)
-        if m:
-            return m.group(1)
-    elif f"-{OZON_BADGE}-" in s:
-        return f"{OZON_BADGE}-"
-    return ""
 
 
 def load_foreign(xlsx_path):

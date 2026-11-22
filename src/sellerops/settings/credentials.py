@@ -109,9 +109,6 @@ class Credentials:
                 return s
         return None
 
-    def wb_shop_ids(self):
-        return [s.get("shopId") for s in self.shops]
-
     def validate(self):
         """校验凭证完整性，返回 (ok, 问题列表)"""
         problems = []

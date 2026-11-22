@@ -1,9 +1,12 @@
 """按目标店铺、商品归属与显式条件选择商品。"""
+from collections import defaultdict
+import re
+
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.settings import paths as config
 from sellerops.settings import credentials
-from sellerops.domain.vendor_codes import extract_vc_prefix
+from sellerops.domain.vendor_codes import VC_PREFIX_RE, extract_vc_prefix
 
 
 def load_shop_rows(sid):
@@ -30,70 +33,80 @@ def selected_shops(args):
     return shops
 
 
-def load_state(shops, *, all_products=False):
-    """本次操作的归属视图；纳入快照中新商品，不改写映射表或历史归属。"""
+def load_state(shops: list[int], *, all_products: bool = False) -> tuple[dict, dict, list]:
+    """读取本轮归属和价格表行，保留既有纠偏及排除。"""
     state, excluded = MappingRepository.load_mapping_state()
-    boss = MappingRepository.load_price_book(require_price=False)
-    prefix_map = {}
-    for row in boss:
-        prefix = str(row.get("prefix") or "").upper()
-        if prefix:
-            previous = prefix_map.setdefault(prefix, {"cn": row["cn"]})
-            if previous["cn"] != row["cn"]:
-                previous["cn"] = ""
-    resolve_cn, _ = MappingRepository.build_vc_resolver(prefix_map)
+    book = MappingRepository.load_price_book(require_price=False)
+    by_name, by_prefix = defaultdict(list), defaultdict(list)
+    for entry in book:
+        if entry.get("cn"):
+            by_name[entry["cn"]].append(entry)
+        if entry.get("prefix"):
+            by_prefix[entry["prefix"].upper()].append(entry)
+
+    resolve_cn, _ = MappingRepository.build_vc_resolver({})
     excluded_vcs = {str(vc).upper() for vc in (*excluded, *MappingRepository.load_vc_excluded())}
     state = {vc: item for vc, item in state.items() if vc.upper() not in excluded_vcs}
-    by_cn = {item['cn']: item for item in boss if item.get('cn')}
+    historical = {vc.upper(): item for vc, item in state.items()}
     shop_rows = {sid: load_shop_rows(sid) for sid in shops}
-    for rows in shop_rows.values():
-        if rows is None:
+    observed = dict.fromkeys(vc for rows in shop_rows.values() if rows is not None for vc in rows)
+    for vc in dict.fromkeys([*state, *observed]):
+        if vc.upper() in excluded_vcs:
             continue
-        for vc in rows:
-            if vc in state or vc.upper() in excluded_vcs:
-                continue
-            cn = resolve_cn(vc, '')
-            if cn in by_cn or all_products:
-                state[vc] = {'cn': cn or '', 'dp': by_cn.get(cn, {}).get('dp')}
-    if not state and all_products and any(rows is None for rows in shop_rows.values()):
-        raise ValueError("目标店铺快照缺失或不可读，无法枚举全部商品")
-    return state, shop_rows, boss
+        old = historical.get(vc.upper(), {})
+        cn = old.get("cn") or resolve_cn(vc, "")
+        code = re.fullmatch(VC_PREFIX_RE, vc.upper())
+        prefix = extract_vc_prefix(vc) if cn else (code.group(1) if code else None)
+        prefixed = by_prefix.get(prefix, [])
+        candidates = by_name.get(cn, []) if cn else prefixed
+        if cn and len(candidates) > 1:
+            candidates = [row for row in candidates if row in prefixed] or candidates
+        if not cn and len({row["cn"] for row in candidates}) == 1:
+            cn = candidates[0]["cn"]
+        if cn or candidates or all_products or old:
+            state[vc] = {**old, "cn": cn or "", "price_row": candidates[0] if len(candidates) == 1 else None,
+                         "candidates": candidates}
+    return state, shop_rows, book
 
 
-def resolve_filters(args, state, boss):
-    """将显式商品条件解析为完整 VC 清单及运营摘要。"""
+def selection_error(vc: str, state: dict) -> str | None:
+    candidates = state.get(vc, {}).get("candidates", [])
+    if len(candidates) > 1:
+        skus = "、".join(str(row.get("sku") or "空") for row in candidates)
+        return f"归属无法唯一确认，候选 SKU：{skus}"
+    return None
+
+
+def resolve_filters(args, state: dict, boss: list) -> tuple[list[str], str]:
+    """依据已确认的价格表行筛选，保留可能命中但需阻止的歧义链接。"""
     if getattr(args, "vc", None):
         vcs = list(dict.fromkeys(v.strip() for v in args.vc.split(",") if v.strip()))
-        miss = [v for v in vcs if v not in state]
-        if miss:
-            print(f"[警告] 以下 vendorCode 不在映射表中：{miss}（仍将尝试执行，可能查不到 nmId）")
-        return vcs, f"vc 列表({len(vcs)} 个)"
+        return vcs, f"完整 VC（{len(vcs)} 个）"
 
-    if getattr(args, "sku", None) or getattr(args, "name", None) or getattr(args, "name_contains", None) or getattr(args, "prefix", None):
-        matched_boss = []
-        for b in boss:
-            if getattr(args, "sku", None) and b["sku"] == args.sku:
-                matched_boss.append(b)
-            elif getattr(args, "name", None) and args.name == b["cn"]:
-                matched_boss.append(b)
-            elif getattr(args, "name_contains", None) and args.name_contains in (b["cn"] or ""):
-                matched_boss.append(b)
-            elif getattr(args, "prefix", None) and str(b.get("prefix") or "").upper() == args.prefix.upper():
-                matched_boss.append(b)
-        if not matched_boss:
-            print(f"[错误] 商品价格表中未匹配到商品（sku={getattr(args, 'sku', None)} name={getattr(args, 'name', None)} prefix={getattr(args, 'prefix', None)}）")
-            candidates = sorted({b["cn"] for b in boss if b.get("cn") and getattr(args, "name", None)
-                                 and args.name in b["cn"]})
-            raise ValueError("没有匹配的商品。" + ("相似名称：" + "、".join(candidates[:20]) if candidates else ""))
-        cns = {b["cn"] for b in matched_boss}
-        vcs = sorted(vc for vc, st in state.items() if st["cn"] in cns)
-        if getattr(args, "prefix", None):
-            vcs = [vc for vc in vcs if extract_vc_prefix(vc) == args.prefix.upper()]
-        desc = " / ".join(f"{b['cn']}({b['sku']})" for b in matched_boss)
-        if not vcs:
-            raise ValueError(f"{desc} 没有可确认归属的商品链接")
-        return vcs, f"商品价格表商品: {desc}"
+    sku = getattr(args, "sku", None)
+    name = getattr(args, "name", None)
+    contains = getattr(args, "name_contains", None)
+    prefix = getattr(args, "prefix", None)
+    if not (sku or name or contains or prefix):
+        return sorted(state), "全部商品（保留人工排除）"
 
-    return sorted(state.keys()), "全部商品（已排除记录除外）"
+    def matches(row: dict) -> bool:
+        cn = row.get("cn") or ""
+        if sku:
+            return row.get("sku") == sku
+        if prefix:
+            return str(row.get("prefix") or "").upper() == prefix.upper()
+        return cn == name if name else contains in cn
 
-
+    vcs = []
+    for vc, identity in state.items():
+        if prefix and extract_vc_prefix(vc) != prefix.upper():
+            continue
+        candidates = identity.get("candidates", [])
+        if candidates:
+            if any(matches(row) for row in candidates):
+                vcs.append(vc)
+        elif matches(identity) or (prefix and extract_vc_prefix(vc) == prefix.upper()):
+            vcs.append(vc)
+    labels = [f"{row['cn']}({row['sku']})" for row in boss if matches(row)]
+    return sorted(vcs), " / ".join(labels) or f"商品筛选 {sku or name or contains or prefix}"

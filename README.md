@@ -6,6 +6,8 @@ Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需�
 
 可以对 AI 说“把 A 店和 B 店里中文名为旅行杯的商品库存改成 25”或“生成 A 店近 14 天的商品运营报告”。AI 用店铺列表定位 ID，按完整中文名匹配，输出命中链接、目标数量、受理结果和明细路径。有相似名称时，只有明确要求“名称包含”才采用包含筛选。
 
+WorkBuddy 按表改价用 `product price`，按表同时改折扣加 `--from-price-book --discount`。只设折扣用 `product discount --target`，设置库存用 `product stock --amount`。三项默认通过 WB 卖家后台提交，并在末行输出 JSON 供自动汇报。命令和修改字段见 [商品操作对照表](docs/AI_GUIDE.md#选择与执行命令)，原脚本更新见 [迁移说明](docs/MIGRATION.md)。
+
 ## 从这里开始
 
 | 读者或任务 | 阅读入口 |

@@ -95,12 +95,24 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 
 ```powershell
 python run.py product price --shops 1001 --name "示例商品"
-python run.py product price --shops 1001 --name "示例商品" --apply --yes
+python run.py product price --shops 1001 --name "示例商品" --apply
+python run.py product price --shops 1001 --name "示例商品" --from-price-book --discount 35
 python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 --apply
 ```
 
-改价默认使用价格表「实际售价」向下取整，`--price` 可指定整数目标价；只改折扣可以使用 `--keep-price --discount`。库存默认 amount=0，执行归零需 `--yes`，不要把没有 --amount 的命令当作补库存。
+| 用户意图 | WorkBuddy 首选命令 | 修改字段 |
+| --- | --- | --- |
+| 按表改价 | `product price` | 对应价格表行的实际售价，向下取整 |
+| 指定价格 | `product price --price P` | 价格 |
+| 同时指定价格与折扣 | `product price --price P --discount D` | 价格、折扣 |
+| 按表改价并设折扣 | `product price --from-price-book --discount D` | 对应价格表行的价格、折扣 |
+| 只设折扣 | `product discount --target D` | 折扣 |
+| 设置库存 | `product stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
+
+三项命令默认使用 WB 卖家后台。每条命令都需加店铺范围与商品范围。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零用 `--amount 0 --apply --yes`。
+
+`product price --keep-price --discount D` 仍可只设折扣。单独给 `--keep-price` 或单独给 `--discount` 会报参数错误。`--price`、`--keep-price`、`--from-price-book` 互斥。BCS 俱乐部折扣也需明确价格意图，参数为 `--channel bcs --club-discount D`。
 
 `product stock` 默认使用本地映射及快照中可确认归属的商品筛选供应商代码，并从本地商品快照解析规格 ID（`--resolve snapshot`）。库存归零直接将目标规格设为 0，不需要先联网读取当前库存，即使本地库存未知或已为 0 也照常提交。缺少必要标识时按下表定向补齐；仍无法确认仓库或完整规格的商品会被阻止，预览和执行均以非零状态报告。仓库 ID 仍需逐店确认，更新商品快照使用独立的 fetch/merge 流程。
 
@@ -108,21 +120,21 @@ python run.py product stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20 -
 
 | 操作 | 必要数据 | 缺失数据的处理 |
 | --- | --- | --- |
-| 设置库存 | 本店完整、唯一的 chrtId，以及已确认的莫斯科仓 ID | 不要求旧库存、现价、图片或包装尺寸；规格标识缺失时定向查询本店商品卡 |
+| 设置库存 | 本店完整、归属唯一的 chrtId，以及已确认的莫斯科仓 ID | 不要求旧库存、现价、图片或包装尺寸；规格标识缺失时定向查询本店商品卡 |
 | 普通改价 | 本店 nmId 和目标价 | 不要求规格库存或旧包装尺寸；缺 nmId 时定向补齐，目标价仍取手工参数或价格表 |
-| WB `product price --keep-price --discount` / 不限原折扣的 `product discount` | 本店 nmId 和目标折扣 | 仅提交折扣，不传价格；缺现价、规格或旧折扣不阻止操作。按原折扣阈值筛选时仍须确认旧折扣，可定向查询价格记录 |
+| WB `product price --keep-price --discount` / 不限原折扣的 `product discount` | 本店 nmId 和目标折扣 | 仅提交折扣，不传价格；缺现价、规格或旧折扣不阻止操作。按原折扣阈值筛选时，每轮通过 WB 官方价格接口读取本店商品当前值 |
 | 修改包装尺寸/毛重 | 本店 nmId，以及参数或价格表中的目标尺寸 | 不要求旧尺寸、规格或库存；缺 nmId 时定向补齐 |
 | 下架 | 本店 nmId、完整 chrtId 和已确认的莫斯科仓 ID | 不要求旧库存；先补齐必要标识，再提交全部规格清零，清零受理不完整时仍阻止下架 |
 
-提交后打开控制台给出的「本次逐项回执」，按店铺 ID、中文名和完整 VC 核对状态。历史 ops_result.csv 仍按原表头追加。
+`product price`、`product stock`、`product discount` 和 `report products` 在标准输出末尾附加一行 UTF-8 JSON。用 `artifacts` 定位本次实际生成的 CSV 或 Excel。商品计数按本店商品卡，库存另列规格计数。摘要区分完整预览、完整提交、已确认无待办、部分成功及失败，店铺范围未知时对应数量为 `null`。改价和库存的历史 `ops_result.csv` 沿用原表头。逐项回执区分已受理、明确失败、结果未知、已阻止和正常跳过，`--auto-review` 单列审核结果。
 
-定向补齐使用 BCS 保存的该店官方 apiKey 和中国区接口，只查询本地已有但必要字段不完整的商品；按完整 VC 精确匹配，核对已有 nmId，不从其他店借用标识。完整本地数据不额外查询商品；不自动全量扫描平台、不刷新本地快照、不触发 BCS 同步或映射合并，也不更换写入通道。该店官方鉴权失败会阻止整店提交。限流或网络读取失败时停止该店后续补齐，已具备必要字段的商品可继续。BCS `product price --channel bcs --keep-price` 仍需要当前价格，缺失时尝试定向读取；不能将其等同于 WB 的只传折扣。
+定向补齐使用 BCS 保存的该店官方 apiKey 和中国区接口，只查询本地已有但必要字段不完整的商品；按完整 VC 精确匹配，核对已有 nmId，不从其他店借用标识。完整本地数据不额外查询商品；不自动全量扫描平台、不刷新本地快照、不触发 BCS 同步或映射合并，也不更换写入通道。该店官方鉴权失败会阻止整店提交。限流或网络读取失败时停止该店后续补齐，已具备必要字段的商品可继续。显式 BCS 保价写入（含独立折扣命令）要求每个规格价格可确认、全部相同，且商品级价格可精确到分提交。遇到异价、缺价或超精度时阻止该商品。
 
 按商品名筛选会纳入快照中新出现、且通过既有归属/纠偏/价格表前缀能确认中文名的 VC，尊重排除记录；这些补充只进入本次内存视图，不修改映射表。本地完全无记录的商品、缺失或损坏的店铺快照、无法唯一确认的标识及缺少目标价/尺寸等情况都会报告。跳过汇总的完整明细保存在 `data/logs/商品操作跳过_*.csv`，包含操作、店铺、完整 VC 和原因，超过终端显示上限的明细也不省略；提交阶段仍保留原有操作日志。内容覆盖、复制和上架等操作仍须满足各自接口的完整字段要求，不能用空值覆盖未取得的数据。
 
 改价与设库存默认走 WB；`--channel bcs` 是另选的 BCS 通道。WB 网页会话失效时先用 `login wb` 恢复，不要让 AI 自动换通道提交同一批可能已被接受的操作。`product stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店莫斯科仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
 
-部分大幅降价会被 WB 的隔离区规则限制；查看本次跳过和错误原因，不通过反复重跑绕过。明确需要审核新价格时，可单独预览/执行 `product review-price`；用户明确要求整合审核时才使用支持它的 `--auto-review`。
+计划在预览和执行前均阻止目标价低于或等于已知原价一半的商品。规格 ID 同时被本店不同卡认领时，库存与下架清零均阻止涉及的目标卡，即使另一张卡未被选中。明确需要审核新价格时，可单独预览/执行 `product review-price`；用户明确要求整合审核时才使用支持它的 `--auto-review`。
 
 ## 发布商品与跨店补齐
 
@@ -134,7 +146,7 @@ python run.py listing replicate --shops 1001 --name "示例商品" --limit 1
 python run.py listing import "_scratch/foreign.xlsx" --shops 1001 --limit 1
 ```
 
-这些示例均为预览，需要真实提交时另外加 `--apply`。发布默认库存是 999；需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。
+这些示例均为预览，需要真实提交时另外加 `--apply`。发布默认库存是 999。需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。默认 BCS 上架把初始库存随建卡或推送请求提交。
 
 `listing publish` 使用批量发布协议，平台按前缀生成 VC，不保证透传任意完整自定义 VC；需要完整 VC 建卡语义时使用 `listing create-cards`。`listing replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码读取映射表，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
 
@@ -163,11 +175,11 @@ python run.py product banned --shops 1001 --limit 10
 python run.py product clean --target draft --shops 1001 --limit 10
 ```
 
-- 自定义尺寸必须同时用 VC、中文名或前缀限定；不指定 --dims 时依据价格表包装列。
+- 自定义尺寸沿用显式商品范围。省略 `--dims` 时使用每个完整 VC 对应价格表行的包装尺寸。
 - `product trash --apply --yes` 从本地快照读取商品和全部规格 ID，先清莫斯科仓库存，再移回收站；无需先单独运行 stock，也不全量查询远端商品或库存。无法确认唯一可用的莫斯科仓库时阻止该店；商品 ID 或任一规格 ID 缺失时阻止该商品，不只清部分规格后下架。
 - 清库存失败或受理回执不完整时，受影响商品不会移回收站，其他正常商品继续；命令返回非零状态，日志记录被阻止原因。预览发现不完整计划也返回非零状态。收到清零受理回执后直接进入回收站提交，不进行写后查询验证。`product trash --channel bcs` 同样遵守清库存前提，是独立 BCS 通道，不作为 WB 失败后的自动兜底。
 - `product banned --apply` 会先要求输入确认，再提交被阻止商品到回收站；已确认授权范围的自动化可传 --yes。拒绝确认时不创建平台会话，提交后不重查列表。
-- `product clean` 以 --target 选择草稿箱、回收站或两者。预览和删除使用同一份受 --limit 约束的清单，提交须 --apply --yes。回收站仅按本店莫斯科仓及完整规格处理，未确认归零的卡保留；结果依据按商品 ID 返回的受理回执。
+- `product clean` 以 --target 选择草稿箱、回收站或两者。预览和删除使用同一份受 --limit 约束的清单，提交须 --apply --yes。回收站需要归零时通过 BCS 提交本店莫斯科仓对应规格，归零已受理后才通过 WB 删除。结果依据按商品 ID 返回的受理回执。
 
 这些操作不能仅凭“有 dry-run”就扩大范围或自动确认。
 
@@ -183,7 +195,7 @@ python run.py marketing ads --shops 1001
 python run.py marketing audit --shops 1001 --mode both --days 7
 ```
 
-折扣、促销报名和价格审核需要 `--apply` 才提交；后三类查询/审计的结果位置以终端打印为准。折扣 threshold/below 是并集：`>55` 或 `<40`；--vc、--all、显式阈值的优先关系见帮助。
+折扣、促销报名和价格审核需要 `--apply` 才提交；后三类查询/审计的结果位置以终端打印为准。独立折扣命令的 `--target` 必填，接受 0 至 100。对指定商品无阈值设折扣时，每条新指令均提交赋值，本地快照中的旧值不参与跳过判断。定向条件命令在预览和执行时各读取本店平台当前折扣，`--threshold` 严格大于，`--below` 严格小于，两侧取并集。WB 全店按折扣排序分页，无法确认范围完整时整店零提交，完整的其他店铺可以继续。显式 BCS 折扣仅支持全店，可加 `--threshold`。
 
 `marketing audit` 依赖飞书订单登记、目标店快照和推广信息，按目标店合计销量与各店推广状态计算缺口/浪费。它只输出建议，不自动创建或关闭广告，不应把其他店的商品码直接用于本店写入。
 
@@ -291,9 +303,10 @@ morning 执行促销报名和折扣调整，adjust-discounts 只执行折扣调�
 ```powershell
 python run.py task run morning --shops 1001 --apply
 python run.py task schedule --all-shops --apply
+python run.py task schedule --shops 1001,1002 --apply
 python run.py task schedule --remove --apply --yes
 ```
 
-schedule 注册 SellerOps_Morning（09:00）及 SellerOps_Check11/15/19（11:00、15:00、19:00），按运行电脑本地时间执行；自动任务自身包含 --apply，默认覆盖相应步骤的全部可用店铺。当前 schedule 不提供 --shops，所以只运行指定店铺时，应使用显式 scoped 的 daily 命令或由维护者设计任务，不能假设预览里的范围会自动继承。
+schedule 注册 SellerOps_Morning（09:00）及 SellerOps_Check11/15/19（11:00、15:00、19:00），按运行电脑本地时间执行。自动任务包含 `--apply`，支持 `--shops` 固定指定店铺，也可用 `--all-shops` 覆盖相应步骤的全部可用店铺。每日折扣沿用 WB，显式传入策略目标 `--target 50`。
 
 注册时固定当前解释器、代码路径和数据路径；移动目录或换解释器后需重新注册，并清理不再使用的任务以免重复执行。daily 每步最多等待 1 小时，某步非零退出会停止后续步骤；日志在 data/logs/daily_日期.log。

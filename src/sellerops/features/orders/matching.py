@@ -18,7 +18,6 @@ from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
 
 VC_RE = re.compile(r"(BCS-[A-Z]{4}-(?:(?:ozon-card-)?[A-Za-z0-9-]+|[^/*\s]+/\d+))(?:\*\d+)?$")
 
-SKU_RE = re.compile(r"商品编号\*数量:(.+?)\*?\d*$")
 
 TITLE_SKU_RE = re.compile(r"数量:(.*)$")
 
