@@ -31,7 +31,6 @@ class DataPaths:
         self.price_book_xlsx = str(root / '商品价格表.xlsx')
         self.mapping_xlsx = str(root / '价格映射表.xlsx')
         self.status_json = str(root / 'state/多店铺同步状态.json')
-        self.auto_add_json = str(root / 'state/多店铺自动新增清单.json')
         self.vc_known_json = str(root / 'state/vc_known.json')
         self.vc_override_json = str(root / 'state/vc_override.json')
         self.vc_excluded_json = str(root / 'state/vc_excluded.json')

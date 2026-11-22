@@ -234,7 +234,8 @@ def run(args: Any) -> int:
     cred = credentials.get()
     wb_shops = cred.wb_shops()
     if not wb_shops:
-        print("[错误] credentials.json 没有已配置可用 cookie 的店铺")
+        args.summary = "凭证文件中没有已配置 WB 会话的店铺"
+        print(f"[错误] {args.summary}")
         return 1
 
     pairs = [(s, common.to_int(s.get("shopId"))) for s in wb_shops]
@@ -243,7 +244,8 @@ def run(args: Any) -> int:
         pairs = [p for p in pairs if p[1] in want]
 
     if not pairs:
-        print("[错误] 没有匹配的店铺（检查 --shops 参数或 credentials.json）")
+        args.summary = "没有匹配的店铺，请核对 --shops 或店铺凭证"
+        print(f"[错误] {args.summary}")
         return 1
 
     shop_desc = ", ".join(f"{s['shopName']}({sid})" for s, sid in pairs)
@@ -278,6 +280,7 @@ def run(args: Any) -> int:
 
 
     matched_items: List[ProductRatingItem] = []
+    failed_shops = []
     total_scanned = 0
 
     for shop, sid in pairs:
@@ -350,9 +353,11 @@ def run(args: Any) -> int:
             time.sleep(SHOP_SLEEP)
 
         except common.CookieExpiredError as e:
+            failed_shops.append({'shop_id': sid, 'error': 'WB 会话已失效'})
             print(f"  [警告] 店铺 {name} Cookie 已失效: {e}（跳过该店）")
             continue
         except Exception as e:
+            failed_shops.append({'shop_id': sid, 'error': '评分查询失败'})
             print(f"  [警告] 店铺 {name} 查询失败: {e}（跳过该店）")
             continue
 
@@ -361,8 +366,10 @@ def run(args: Any) -> int:
     print(f"==========================================")
 
     if not matched_items:
+        args.summary = "部分店铺评分读取失败" if failed_shops else "没有符合条件的评分记录"
+        args.output = {"rows": 0, 'failed_shops': failed_shops}
         print("未检索到符合条件的商品。")
-        return 0
+        return int(bool(failed_shops))
 
     # 控制台预览前 10 条
     print("\n[预览前 10 条结果]")
@@ -384,9 +391,11 @@ def run(args: Any) -> int:
     if out_opt:
         if out_opt.lower().endswith(".xlsx"):
             _export_excel(matched_items, out_opt)
+            artifacts = {"workbook": os.path.abspath(out_opt)}
             print(f"\n[报表已导出] Excel: {out_opt}")
         else:
             _export_csv(matched_items, out_opt)
+            artifacts = {"csv": os.path.abspath(out_opt)}
             print(f"\n[报表已导出] CSV: {out_opt}")
     else:
         # 默认同时导出 CSV 与 XLSX 到 data/logs/
@@ -394,8 +403,11 @@ def run(args: Any) -> int:
         xlsx_file = os.path.join(config.current.log_dir, f"ratings_{ts}.xlsx")
         _export_csv(matched_items, csv_file)
         _export_excel(matched_items, xlsx_file)
+        artifacts = {"workbook": xlsx_file, "csv": csv_file}
         print(f"\n[报表已自动导出]")
         print(f"  - CSV : {csv_file}")
         print(f"  - Excel: {xlsx_file}")
 
-    return 0
+    args.summary = "已导出商品评分报表，部分店铺读取失败" if failed_shops else "已导出商品评分报表"
+    args.output = {"rows": len(matched_items), "artifacts": artifacts, 'failed_shops': failed_shops}
+    return int(bool(failed_shops))

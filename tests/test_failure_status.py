@@ -100,16 +100,15 @@ class TestCommandFailures(unittest.TestCase):
             self.assertEqual(discount_bcs.run(args), 1)
 
     def test_publish_partial_success_and_existing_only_results(self):
-        from sellerops.features.publishing import bulk_publish, card_publish
+        from sellerops.features.publishing import bulk_publish, card_publish, publish_details
         from sellerops.domain.models import PublishItem
         item = PublishItem(nm_id=123, price=10, prefix='BCS-TEST')
         for module, command in [(bulk_publish, 'publish'), (card_publish, 'create-cards')]:
             for counts, expected in [({'ok': 1, 'fail': 1}, 1), ({'ok': 0, 'fail': 0, 'skip': 1}, 0)]:
                 with self.subTest(command=command, counts=counts), \
-                        patch.object(module.MappingRepository, 'load_mapping_state', return_value=({}, {})), \
-                        patch.object(module.MappingRepository, 'load_prefix_map', return_value={}), \
-                        patch.object(module, 'price_book_packages', return_value={}), \
-                        patch.object(module, 'resolve_publish_details', return_value=(item, None)), \
+                        patch.object(publish_details.MappingRepository, 'load_mapping_state', return_value=({}, {})), \
+                        patch.object(publish_details.MappingRepository, 'load_price_book', return_value=[]), \
+                        patch.object(publish_details, 'resolve_publish_details', return_value=(item, None)), \
                         patch.object(module, 'execute_publish', return_value=counts):
                     self.assertEqual(module.run(self.parser.parse_args(['listing', command, '123', '--shops','42', '--apply'])), expected)
 

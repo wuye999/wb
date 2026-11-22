@@ -1,8 +1,10 @@
 """publish details。"""
 import copy
+from collections import defaultdict
 
 
 import math
+import re
 
 
 from typing import Dict, Any, List, Optional, Tuple
@@ -14,10 +16,9 @@ from sellerops.persistence.snapshots import ProductSnapshotRepository
 
 
 from sellerops.features.publishing.product_details import fetch_card_json
-from sellerops.features.publishing.product_details import parse_package_info
 from sellerops.domain.vendor_codes import extract_vc_prefix
 from sellerops.domain.snapshot_values import first_price
-from sellerops.features.publishing.product_details import resolve_vendor_prefix
+from sellerops.features.publishing.product_details import random_prefix
 from sellerops.features.publishing.product_details import resolve_replicate_package
 from sellerops.integrations.wildberries.client import basket_base
 from sellerops.features.publishing.publish_inputs import DEFAULT_STOCK
@@ -75,17 +76,17 @@ def build_synthetic_detail(
 def resolve_publish_details(
     item: PublishItem,
     mapping_state: Optional[Dict[str, Any]] = None,
-    pmap: Optional[Dict[str, Any]] = None,
-    boss_pkg: Optional[Dict[str, Any]] = None,
+    price_book: Optional[List[dict]] = None,
     card_cache: Optional[Dict[int, Any]] = None,
     *, fresh_price: bool = False,
+    generated: dict | None = None,
 ) -> Tuple[Optional[PublishItem], Optional[str]]:
     """
     智能补全上架商品缺失字段：
     1. 校验 nm_id
     2. 中文名自动补全（若空则查本地映射表）
     3. 价格自动补全（指定价格 > 映射表在架价/快照价 > 价格表实际售价 floor）
-    4. 前缀码与完整 VC 自动推导（指定完整 VC 优先；或指定前缀码；或中文名价格表前缀；或随机 4 位）
+    4. 使用显式完整 VC、指定前缀、卖家 SKU 的唯一登记前缀或明确允许的随机前缀
     5. 尺寸重量自动补全（显式传入 > 价格映射表 > 价格表 > card.json 包装组）
     6. 标题与图片提取（从 card.json 获取并组装）
     返回: (resolved_item, None) 或 (None, err_msg)
@@ -95,104 +96,80 @@ def resolve_publish_details(
         return None, f"无效的 WB商品码: {nm_id}"
 
     card_cache = card_cache if card_cache is not None else {}
-    mapping_state = mapping_state if mapping_state is not None else {}
-    boss_pkg = boss_pkg if boss_pkg is not None else {}
-    pmap = pmap if pmap is not None else {}
+    if mapping_state is None:
+        mapping_state, _ = MappingRepository.load_mapping_state()
+    if price_book is None:
+        price_book = MappingRepository.load_price_book(require_price=False, fresh=fresh_price)
 
-    # 构建快速 nmId -> 映射表行索引
+    # 优先使用完整 VC 和源卡的已确认归属。
     vc = (item.vendor_code or '').strip()
     source_card = ProductSnapshotRepository.find_source(nm_id, item.extra.get('src_sid'))
     source_vc = (source_card or {}).get('vendorCode') or ''
-    matched_map_row = mapping_state.get(vc) or mapping_state.get(source_vc)
+    matched_map_row = mapping_state.get(vc) or mapping_state.get(source_vc) or {}
+    confirmed = {value for value in (item.extra.get('seller_sku'),
+                 (mapping_state.get(vc) or {}).get('sku'),
+                 (mapping_state.get(source_vc) or {}).get('sku')) if value}
+    if len(confirmed) > 1:
+        return None, '指定的卖家 SKU 与已有归属冲突，请先核对源商品与目标 VC'
+    sku = next(iter(confirmed), None)
+    matches = [row for row in price_book if (row['sku'] == sku if sku else row['cn'] == item.cn.strip())]
+    if len(matches) != 1:
+        return None, '无法确认唯一卖家 SKU，请核对《商品价格表.xlsx》并通过 --sku 指定'
+    product = matches[0]
+    sku, cn = product['sku'], product['cn']
 
-    cn = item.cn.strip()
-    if not cn and matched_map_row:
-        cn = matched_map_row.get("cn") or ""
-
-    # 2. 完整 VC 与前缀码决策
-    prefix = (item.prefix or "").strip()
-
+    prefix = (item.prefix or '').strip().upper().removeprefix('BCS-')
     if vc:
-        # 指定了完整 VC
-        if not prefix:
-            extracted = extract_vc_prefix(vc)
-            prefix = f"BCS-{extracted}" if extracted else "BCS-CUSTOM"
-        elif not prefix.startswith("BCS-"):
-            prefix = f"BCS-{prefix}"
+        prefix = extract_vc_prefix(vc) or 'CUSTOM'
+        vc_source = 'explicit_vc'
+    elif prefix:
+        if not re.fullmatch(r'[A-Z]{4}', prefix):
+            return None, '请通过 --prefix 指定四个英文字母'
+        vc_source = 'explicit_prefix'
     else:
-        # 未指定完整 VC，按规则推导前缀并拼接 BCS-{prefix}-{nmId}
-        if prefix:
-            prefix_clean = prefix.upper().replace("BCS-", "").strip()
-            prefix = f"BCS-{prefix_clean}"
+        registered = product['prefix']
+        if re.fullmatch(r'[A-Z]{4}', registered or '') and sum(
+                row['prefix'] == registered for row in price_book) == 1:
+            prefix, vc_source = registered, 'registered_prefix'
+        elif item.extra.get('random_prefix'):
+            generated = {} if generated is None else generated
+            key = (nm_id, sku)
+            if key not in generated:
+                generated[key] = random_prefix()
+            prefix, vc_source = generated[key], 'random'
         else:
-            p_code, _ = resolve_vendor_prefix(cn, matched_map_row.get("goodsCode") if matched_map_row else None, pmap)
-            prefix = p_code
-        vc = f"{prefix}-{nm_id}"
+            return None, f'卖家 SKU {sku} 没有唯一登记前缀，请指定 --prefix 或明确选择 --random-prefix'
+    prefix = f'BCS-{prefix}'
+    vc = vc or f'{prefix}-{item.extra.get("source_tail") or nm_id}'
+    if (mapping_state.get(vc) or {}).get('sku') not in (None, sku):
+        return None, f'完整 VC {vc} 已有其他卖家 SKU 归属，请先核对'
 
     # 3. 价格决策
     price = item.price
     if price is None or price <= 0:
         price = first_price(source_card) if source_card is not None else None
-        if not price and cn:
-            book = MappingRepository.load_price_book(fresh=fresh_price)
-            sku = (matched_map_row or {}).get('sku')
-            prices = {row['floor'] for row in book
-                      if (row['sku'] == sku if sku else row['cn'] == cn)}
-            if len(prices) == 1:
-                price = next(iter(prices))
-    if price is None or price <= 0:
+        if not price:
+            price = product['floor']
+    if price is None or not math.isfinite(price) or price <= 0:
         return None, f"商品 {nm_id} 价格缺失且无法从映射表自动匹配，请通过 --price 指定"
 
     # 4. 包装尺寸与重量决策
-    l, w, h, wt = item.length, item.width, item.height, item.weight
-    valid_dims = (
-        l is not None and l > 0 and
-        w is not None and w > 0 and
-        h is not None and h > 0 and
-        wt is not None and wt > 0
-    )
-
-    card_info = item.extra.get("card_info")
+    dimensions = {
+        **matched_map_row, 'sku': sku, 'dimensions': product.get('dimensions'),
+        'L': item.length or matched_map_row.get('L'), 'W': item.width or matched_map_row.get('W'),
+        'H': item.height or matched_map_row.get('H'), 'weight': item.weight or matched_map_row.get('weight'),
+    }
+    card_info = item.extra.get('card_info')
     if card_info:
         card_cache[nm_id] = card_info
-    elif nm_id in card_cache:
-        card_info = card_cache[nm_id]
+    dims, error = resolve_replicate_package(vc, cn, nm_id, {vc: dimensions}, card_cache)
+    if error or not dims:
+        return None, f'商品 {nm_id} 包装尺寸或毛重缺失，请通过 --dims 指定'
+    l, w, h, wt = dims
 
-    if not valid_dims:
-        # 尝试查映射表 / 价格表 / card.json
-        dims, err = resolve_replicate_package(vc, cn, nm_id, {vc: matched_map_row or {}}, card_cache)
-        if err or not dims:
-            # 尝试直接抓 card.json
-            if card_info is None:
-                card_info = fetch_card_json(nm_id)
-                card_cache[nm_id] = card_info
-            if card_info:
-                pkg = parse_package_info(card_info)
-                l = l or pkg.get("length")
-                w = w or pkg.get("width")
-                h = h or pkg.get("height")
-                wt = wt or pkg.get("weight")
-            if (not l or not w or not h or not wt) and cn:
-                bp = boss_pkg.get(cn)
-                if bp:
-                    bl, bw, bh, bwt = bp
-                    l = l or bl
-                    w = w or bw
-                    h = h or bh
-                    wt = wt or bwt
-            if l and w and h and wt:
-                l, w, h, wt = math.ceil(float(l)), math.ceil(float(w)), math.ceil(float(h)), round(float(wt), 3)
-            else:
-                return None, f"商品 {nm_id} 包装尺寸重量缺失（L={l}, W={w}, H={h}, 重量={wt}），请通过 --dims 指定"
-        else:
-            l, w, h, wt = dims
-    else:
-        l, w, h, wt = math.ceil(float(l)), math.ceil(float(w)), math.ceil(float(h)), round(float(wt), 3)
-
-    # 5. 标题与图片提取（针对旧接口或详情需要）
-    if card_info is None:
-        card_info = fetch_card_json(nm_id)
-        card_cache[nm_id] = card_info
+    if nm_id not in card_cache:
+        card_cache[nm_id] = fetch_card_json(nm_id)
+    card_info = card_cache[nm_id]
 
     title = item.title or (card_info.get("imt_name") if card_info else "") or ""
     photo_count = ((card_info.get("media") or {}).get("photo_count")) if card_info else 1
@@ -218,6 +195,37 @@ def resolve_publish_details(
         extra={
             **item.extra,
             "card_info": card_info,
+            'seller_sku': sku,
+            'vc_source': vc_source,
         }
     )
     return resolved, None
+
+
+def resolve_publish_items(args, items, *, bulk=False):
+    """准备两个普通上架入口共用的商品信息和受阻明细。"""
+    mapping_state, _ = MappingRepository.load_mapping_state()
+    book = MappingRepository.load_price_book(require_price=False, fresh=getattr(args, 'apply', False))
+    card_cache, generated = {}, {}
+    owners = defaultdict(set)
+    resolved_items, blocked = [], []
+    for item in items:
+        resolved, error = resolve_publish_details(item, mapping_state, book, card_cache, generated=generated)
+        if resolved and bulk and resolved.vendor_code and resolved.vendor_code != f'{resolved.prefix}-{resolved.nm_id}':
+            error = f'批量接口无法保留完整 VC {resolved.vendor_code}，请用 ops create-cards 预览'
+        if error or not resolved:
+            blocked.append({'nm_id': item.nm_id, 'reason': error or '商品信息不完整'})
+            print(f'[跳过] 商品 {item.nm_id}: {blocked[-1]["reason"]}')
+        else:
+            resolved_items.append(resolved)
+            owners[resolved.vendor_code].add(resolved.extra.get('seller_sku'))
+    if conflicts := {vc for vc, skus in owners.items() if len(skus) > 1}:
+        blocked.extend({'nm_id': item.nm_id, 'reason': f'完整 VC {item.vendor_code} 同时指定了多个卖家 SKU'}
+                       for item in resolved_items if item.vendor_code in conflicts)
+        resolved_items = [item for item in resolved_items if item.vendor_code not in conflicts]
+    if blocked:
+        args.outcome = {'blocked': blocked}
+        args.next_action = blocked[0]['reason']
+        if not resolved_items:
+            args.summary = f'商品 {blocked[0]["nm_id"]} 未通过上架检查'
+    return resolved_items, len(blocked)

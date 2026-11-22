@@ -69,6 +69,8 @@ python run.py apply --plan P018 --json
 
 已配置自动续期的马帮命令可在预览或执行时更新本地会话。遇到验证码或短信验证时停止，提示用户发起 `login mabang`，在官网完成验证并关窗。可用 `--resume` 续办，或在关窗恢复失败时用 `--keep-open`。不读取或输出账号密码，不把认证失败当成无订单、模板缺失或普通逐单失败。已发出的业务写请求不因续期重放。见 [马帮配置](CONFIGURATION.md#马帮mabang)。
 
+普通上架先确认卖家 SKU，再展示完整 VC 和编码来源。手工指定完整 VC 时保留原码，批量接口无法透传时用 `ops create-cards`。无唯一登记前缀时请运营指定前缀，或明确同意使用 `--random-prefix`，再生成计划单。
+
 复制上架使用 `listing replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分；默认库存999，显式0不替换。默认商品清单与查重读取本地快照和提交记录，缺快照不当作空店；快照滞后时结合已受理的下架/上架回执处理范围。回收站已有卡不会自动恢复，需先区分恢复与新建；不把 BCS 缓存命中直接视为实时状态。整批详情和目标莫斯科仓必须在首个写请求前准备好。
 
 使用已有帮助解决语法问题，不通过执行写入命令“试参数”。dry-run 可以联网和生成本地记录；`login`、`catalog rename`、`catalog merge` 等本地写操作不受 --apply 控制。
@@ -95,11 +97,10 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 
 ## 根据什么汇报
 
-解析 `product price`、`product stock`、`product discount` 和 `report products` 标准输出末行的 UTF-8 JSON。根据逐店计数、任务号和 `artifacts` 中的文件汇报。部分成功时保留已受理数量，区分商品卡数与实际提交的库存规格数，单独汇报价格审核。店铺范围未知时说明无法枚举，并保留其他店铺已取得的受理结果。
+调用 `doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report` 时加 `--json`，把 stdout 整体解析为一条 UTF-8 JSON。统一字段为 `ok`、`summary`、`plan_id`、`data`、`next_action`。进度日志在 stderr。即使 `ok` 为假，也要查看 `data` 中已经保存的预览、部分回执或报表路径。
 
-- 摘要的 `schema_version` 固定为 `1`。`mode` 取 `preview`、`apply` 或 `read`。`status` 取 `preview`、`completed`、`no_match`、`partial`、`failed` 或 `cancelled`。有阻止、拒绝、未知结果或范围不完整时返回非零。
-- 写入字段见 `fields`，目标值见 `targets`。实际逐店计划价格范围见 `planned_price`，逐卡价格见 CSV。BCS 保价为满足接口要求还会携带原价，见 `submission_fields`。`per_shop` 中的 `products` 与 `specs` 对应商品卡和库存规格。`task_ids` 仅保存平台实际返回的编号。`range_complete` 为假时，无法枚举的数量用 `null` 表示。
-- 报告的 `period`、`sources`、`coverage_complete` 和 `issues` 对应工作簿的统计期间、数据来源、覆盖与异常。部分报告仍在 `artifacts.workbook` 返回工作簿路径。
+- 商品预览的实际目标见 `data.scope`。商品回执见 `data.receipt`，汇报时区分商品卡数、库存规格数和平台已返回的任务号。
+- 报表路径见 `data.artifacts`。`report products` 的期间、数据来源、覆盖和缺失分别见 `data.period`、`data.sources`、`data.coverage_complete`、`data.issues`。
 
 必须阅读本次日志中的成功、失败、跳过和人工待处理项；退出码 0 不能证明平台已最终生效。非零退出也可能已有部分提交，不能因此盲目重放整批。持续监听会记录本轮异常并继续，单轮 --once 遇到失败则退出。没有执行过的步骤不能声称完成；失败时说明停在匹配、预报、交运、登记还是其他具体阶段。
 

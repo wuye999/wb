@@ -366,11 +366,11 @@ class TestWorkBuddyProducts(unittest.TestCase):
 
     def test_publishing_keeps_initial_stock_in_bcs_push(self):
         from sellerops.domain.models import PublishItem
-        from sellerops.features.publishing import bulk_publish
+        from sellerops.features.publishing import publish_details
         item = PublishItem(nm_id=123, price=90, prefix="BCS-BBBB", vendor_code="BCS-BBBB-123",
                            length=4, width=5, height=6, weight=0.7, stock=17, target_shops=[1])
         with patch.object(bcs, "fetch_shop_list", return_value=[{"id": 1, "name": "店1"}]), \
-                patch.object(bulk_publish, "resolve_publish_details", return_value=(item, None)), \
+                patch.object(publish_details, "resolve_publish_details", return_value=(item, None)), \
                 patch.object(bcs, "post", return_value={"code": 200, "data": {"taskId": "push"}}) as post, \
                 patch.object(wb_stock, "post_stocks") as stock, redirect_stdout(io.StringIO()):
             self.assertEqual(main(["--data-dir", str(self.folder), "listing", "publish", "123",

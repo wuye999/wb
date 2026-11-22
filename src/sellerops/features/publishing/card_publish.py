@@ -1,5 +1,4 @@
 """保留完整供应商代码的建卡发布。"""
-from sellerops.settings import paths as config
 import copy
 from dataclasses import asdict
 import os
@@ -11,15 +10,14 @@ from sellerops.core import utils as common
 from sellerops.domain.models import PublishItem
 from sellerops.integrations.bcs.client import client as bcs
 from sellerops.persistence import db
-from sellerops.persistence.mappings import MappingRepository
 from sellerops.features.products.warehouse import resolve_warehouse
 from sellerops.features.publishing.publish_inputs import (
-    DEFAULT_STOCK, load_publish_file, parse_cn_stock, parse_dims_str, stock_for,
+    DEFAULT_STOCK, load_publish_file, parse_cn_stock, parse_dims_str, publish_codes, stock_for,
 )
-from sellerops.features.publishing.publish_records import load_records, publish_keys, submit_once
-from sellerops.features.publishing.publish_details import resolve_publish_details
+from sellerops.features.publishing.publish_records import load_records, publish_keys, publish_task_id, submit_once
+from sellerops.features.publishing.publish_details import resolve_publish_details, resolve_publish_items
 from sellerops.features.publishing.publish_report import create_publish_csv, print_publish_preview
-from sellerops.features.publishing.product_details import fetch_card_json, price_book_packages
+from sellerops.features.publishing.product_details import fetch_card_json
 from sellerops.features.publishing.card_payload import build_card_payload
 
 
@@ -153,7 +151,12 @@ def execute_publish(
             status = "已受理" if accepted else "失败"
             result["ok" if accepted else "fail"] += 1
             result["details"].append({"vc": it.vendor_code, "targets": targets,
-                                      "ok": accepted, "msg": msg, "response": response})
+                                      "ok": accepted, "msg": msg, "response": response,
+                                      'task_id': publish_task_id(response) if isinstance(response, dict) else None,
+                                      'status': 'accepted' if accepted else 'failed'
+                                      if isinstance(response, dict) and type(response.get('code')) is int else 'unknown',
+                                      'mapping_conflict': isinstance(response, dict)
+                                      and it.vendor_code in response.get('mapping_conflicts', [])})
             stock = stock_for(it.cn, overrides, default=it.stock)
             if row_formatter:
                 row = row_formatter({"time": now, "item": it, "targets_str": target_str,
@@ -241,7 +244,8 @@ def run(args: Any) -> int:
             unique_nms.append(int(nm))
 
     if not unique_nms and not file_items:
-        print("[错误] 未指定任何 WB 商品码，请传入商品码或 --file 文件。")
+        args.summary = "未指定任何 WB 商品码，请传入商品码或 --file 文件"
+        print(f"[错误] {args.summary}")
         return 1
 
     allow_shops = (
@@ -256,22 +260,16 @@ def run(args: Any) -> int:
     height = dims_tuple[2] if dims_tuple else getattr(args, "height", None)
     weight = dims_tuple[3] if dims_tuple else getattr(args, "weight", None)
 
-    raw_vc = getattr(args, "vc", "").strip()
-    vc_list = [v.strip() for v in raw_vc.split(",") if v.strip()] if "," in raw_vc else []
-
-    mapping_state, _ = MappingRepository.load_mapping_state()
-    pmap = MappingRepository.load_prefix_map()
-    boss_pkg = price_book_packages(config.current)
-    card_cache: Dict[int, Any] = {}
+    file_nms = [int(row.get('nmId') or row.get('sku') or row.get('nm')) for row in file_items]
+    codes = publish_codes(getattr(args, 'vc', ''), file_nms + unique_nms)
 
     shelve_items: List[PublishItem] = []
 
-    for f_it in file_items:
-        f_nm = int(f_it.get("nmId") or f_it.get("sku") or f_it.get("nm"))
+    for f_it, f_nm, code in zip(file_items, file_nms, codes[:len(file_items)], strict=True):
         shelve_items.append(PublishItem(
             nm_id=f_nm,
             price=f_it.get("price") if f_it.get("price") is not None else getattr(args, "price", None),
-            vendor_code=f_it.get("vendorCode") or f_it.get("vc"),
+            vendor_code=f_it.get("vendorCode") or f_it.get("vc") or code,
             prefix=f_it.get("prefix") or getattr(args, "prefix", None),
             length=f_it.get("length") or length,
             width=f_it.get("width") or width,
@@ -287,20 +285,14 @@ def run(args: Any) -> int:
                 **(f_it.get("extra") or {}),
                 "orig_vc": f_it.get("orig_vc"),
                 "orig_nm": f_it.get("orig_nm"),
+                "source_tail": f_it.get("source_tail"),
+                "seller_sku": str(f_it.get("sellerSku") or getattr(args, "sku", "")).strip(),
+                "random_prefix": f_it.get("randomPrefix") is True or getattr(args, "random_prefix", False),
                 "raw_cur_nm": f_it.get("raw_cur_nm"),
             }
         ))
 
-    for idx, nm in enumerate(unique_nms):
-        item_vc = None
-        if raw_vc:
-            if "{nm}" in raw_vc:
-                item_vc = raw_vc.format(nm=nm)
-            elif vc_list and idx < len(vc_list):
-                item_vc = vc_list[idx]
-            elif len(unique_nms) == 1:
-                item_vc = raw_vc
-
+    for nm, item_vc in zip(unique_nms, codes[len(file_items):], strict=True):
         shelve_items.append(PublishItem(
             nm_id=nm,
             price=getattr(args, "price", None),
@@ -313,18 +305,10 @@ def run(args: Any) -> int:
             stock=getattr(args, "stock", DEFAULT_STOCK),
             target_shops=allow_shops,
             cn=getattr(args, "cn", ""),
+            extra={"seller_sku": getattr(args, "sku", ""), "random_prefix": getattr(args, "random_prefix", False)},
         ))
 
-    resolved_items: List[PublishItem] = []
-    resolution_failures = 0
-    for it in shelve_items:
-        resolved, err = resolve_publish_details(it, mapping_state, pmap, boss_pkg, card_cache,
-                                                fresh_price=getattr(args, 'apply', False))
-        if err or not resolved:
-            resolution_failures += 1
-            print(f"[跳过] 商品 {it.nm_id}: {err}")
-            continue
-        resolved_items.append(resolved)
+    resolved_items, resolution_failures = resolve_publish_items(args, shelve_items, bulk=False)
 
     if not resolved_items:
         print("[错误] 没有可执行的有效上架任务（全部商品信息校验失败）。")

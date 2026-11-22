@@ -420,6 +420,7 @@ def run(args: Any) -> int:
         b, e = resolve_window(days=days, begin=getattr(args, "begin", ""),
                               end=getattr(args, "end", ""), date=getattr(args, "date", ""))
     except ValueError as err:
+        args.summary = str(err)
         print(f"[错误] {err}")
         return 1
 
@@ -446,6 +447,7 @@ def run(args: Any) -> int:
                     supply_states=supply_states, include_canceled=include_canceled,
                     limit=limit, max_pages=max_pages, with_cn=with_cn, interval=interval)
     except (RuntimeError, ValueError) as err:
+        args.summary = str(err)
         print(f"[错误] {err}")
         return 1
 
@@ -457,7 +459,9 @@ def run(args: Any) -> int:
 
     if not rows:
         print("\n该条件下没有命中的商品（检查 --shops/--days/--item-state）")
-        return 0
+        args.output = {'rows': 0, 'failed_count': len(r['errors'])}
+        args.summary = '有清单读取失败' if r['errors'] else '没有符合条件的配送记录'
+        return int(bool(r['errors']))
 
     print(f"\n[汇总] 清单 {len(supps)} 个 | 商品行 {len(rows)} 行 | "
           f"去重 WB商品码 {len({o['nm_id'] for o in rows if o['nm_id']})} 个 | "
@@ -491,4 +495,9 @@ def run(args: Any) -> int:
     detail_path, stat_path = write_csv(rows, by_cn)
     print(f"\n[日志] 明细 {len(rows)} 行 → {detail_path or '（未生成，见上方警告）'}")
     print(f"[日志] 按中文名统计 {len(by_cn)} 行 → {stat_path or '（未生成，见上方警告）'}")
+    args.output = {'rows': len(rows), 'failed_count': len(r['errors']),
+                   'artifacts': {kind: str(path) for kind, path in
+                                 (('detail', detail_path), ('summary', stat_path)) if path}}
+    args.summary = ('配送报表未完整生成' if not detail_path or not stat_path else
+                    '已导出配送报表，部分清单读取失败' if r['errors'] else '已导出配送报表')
     return 1 if r["errors"] or not detail_path or not stat_path else 0

@@ -107,3 +107,6 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--limit", type=int, default=0, help="每店最多拉取商品条数（0=不限）")
     p.add_argument("--out", default="", help="自定义导出文件路径（支持 .csv / .xlsx）")
     bind(p, 'sellerops.features.reports.ratings', 'run')
+
+    for parser in sub.choices.values():
+        parser.add_argument('--json', action='store_true', help='输出单个 JSON 对象')

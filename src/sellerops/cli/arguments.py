@@ -80,6 +80,8 @@ def add_publish_args(parser):
     parser.add_argument("--nm", default="", help="WB 商品码（逗号分隔多个，兼容命令行参数传参）")
     parser.add_argument("--vc", default="", help="完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）")
     parser.add_argument("--prefix", default="", help="4位前缀码（如 ABCD 或 BCS-ABCD）")
+    parser.add_argument("--sku", default="", help="商品价格表中的卖家 SKU，适用于本次输入商品")
+    parser.add_argument("--random-prefix", action="store_true", help="没有唯一登记前缀时，明确允许在预览时随机生成")
     parser.add_argument("--price", type=float, default=None, help="指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导")
     parser.add_argument("--dims", default="", help="自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）")
     parser.add_argument("--length", type=int, default=None, help="包装长 (cm)")

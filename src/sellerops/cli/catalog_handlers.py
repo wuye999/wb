@@ -41,6 +41,8 @@ def run_fetch(args):
         return 0
     if args.output['missing_shops']:
         args.next_action = '\u8bf7\u8fd0\u8425\u786e\u8ba4\u7f3a\u5931\u5e97\u94fa\u540e\u518d\u5f52\u6863'
+    elif args.output.get('errors'):
+        args.next_action = '根据失败店铺的原因核对权限或连接，确认后只同步受影响的店铺'
     args.summary = '\u540c\u6b65\u90e8\u5206\u5931\u8d25' if args.output.get('errors') else '\u5feb\u7167\u540c\u6b65\u5b8c\u6210'
     return int(bool(args.output.get('errors')))
 
@@ -74,5 +76,5 @@ def run_mapping_rename(args):
     return 0 if catalog_mapping_sync.set_vc_override(vc=getattr(args, "vc", ""), new_cn=getattr(args, "cn", ""), reason=getattr(args, "reason", "人工纠偏"), file_path=getattr(args, "file", "")) else 1
 
 def run_shops_mapping(args):
-    catalog_mapping_sync.sync_all_shops_mapping(shop_id=getattr(args, "shop_id", None), force=getattr(args, "force", False))
+    catalog_mapping_sync.sync_all_shops_mapping(shop_id=getattr(args, "shop_id", None))
     return 0

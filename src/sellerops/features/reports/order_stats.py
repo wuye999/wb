@@ -344,6 +344,7 @@ def run(args: Any) -> int:
                               end=getattr(args, "end", ""), date=getattr(args, "date", ""),
                               timezone=timezone)
     except ValueError as err:
+        args.summary = str(err)
         print(f"[错误] {err}")
         return 1
 
@@ -366,6 +367,7 @@ def run(args: Any) -> int:
                     interval=float(getattr(args, "interval", 0.3) or 0),
                     verbose=not getattr(args, "quiet", False))
     except (RuntimeError, ValueError) as err:
+        args.summary = str(err)
         print(f"[错误] {err}")
         return 1
 
@@ -376,7 +378,9 @@ def run(args: Any) -> int:
               + "、".join(p["label"] for p in failed))
     if not rows:
         print("\n窗口内没有命中任何订单行（检查 --shops/--days/--begin/--end）")
-        return 1 if len(failed) == len(r["per_shop"]) else 0
+        args.output = {'rows': 0, 'failed_shops': [shop['label'] for shop in failed]}
+        args.summary = '部分店铺订单读取失败' if failed else '该时间段内没有匹配订单'
+        return int(bool(failed))
 
     print(f"\n[汇总] 订单行 {len(rows)} 行｜去重订单号 {len({x['order_no'] for x in rows if x['order_no']})} 个"
           f"｜中文名 {len(by_cn)} 种｜去重供应商代码 {len({x['vc'] for x in rows if x['vc']})} 个")
@@ -413,9 +417,14 @@ def run(args: Any) -> int:
                           with_detail=not getattr(args, "no_detail", False),
                           detail_max_rows=common.to_int(getattr(args, "detail_max_rows", 0)))
     except ImportError as ex:
+        args.summary = '生成订单报表失败，请检查 openpyxl 依赖'
         print(f"[错误] 生成 xlsx 失败：{ex}（请用带 openpyxl 的 venv Python 运行）")
         return 1
     print(f"\n[xlsx] 汇总 {len(by_cn)} 行 / 供应商代码 {len(r['by_vc'])} 个 / "
           f"店铺 {len(r['by_shop'])} 家 / 明细 {len(rows)} 行 → "
           f"{path or '（未生成，见上方警告）'}")
+    args.output = {'rows': len(rows), 'failed_shops': [shop['label'] for shop in failed],
+                   'artifacts': {'workbook': str(path)} if path else {}}
+    args.summary = ('订单报表未生成' if not path else
+                    '已导出订单报表，部分店铺读取失败' if failed else '已导出订单报表')
     return 1 if failed or not path else 0

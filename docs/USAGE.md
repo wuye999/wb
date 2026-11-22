@@ -25,6 +25,8 @@ python run.py apply --plan P018 --json
 
 命令均在项目根目录执行，店铺 ID `1001`、商品码 `123456789` 和商品名仅为示例。批量商品命令要求明确指定店铺和商品范围。只读查询与履约任务的默认范围见对应命令。完整参数见 [CLI](CLI.md)，配置见 [CONFIGURATION](CONFIGURATION.md)。
 
+`doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report` 加 `--json` 后，标准输出始终是一条 JSON。进度和日志走 stderr；失败也会返回中文摘要和下一步提示。报表文件路径见 `data.artifacts`。
+
 ## 看懂读写边界
 
 | 操作类型 | 命令 | 执行行为 |
@@ -160,8 +162,8 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 ## 发布商品与跨店补齐
 
 ```powershell
-python run.py ops publish 123456789 --shops 1001 --price 59 --dims "10*20*30/0.5" --stock 20
-python run.py ops create-cards 123456789 --shops 1001 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20
+python run.py ops publish 123456789 --shops 1001 --sku SKU-1 --price 59 --dims "10*20*30/0.5" --stock 20 --json
+python run.py ops create-cards 123456789 --shops 1001 --sku SKU-1 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20 --json
 python run.py ops publish --file "examples/publish.example.json" --shops 1001
 python run.py ops replicate --shops 1001 --name "示例商品" --limit 1
 python run.py ops import "_scratch/foreign.xlsx" --shops 1001 --limit 1
@@ -169,7 +171,9 @@ python run.py ops import "_scratch/foreign.xlsx" --shops 1001 --limit 1
 
 这些示例生成固定计划单，经确认后用 `apply --plan` 提交。发布默认库存是 999。需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。默认 BCS 上架把初始库存随建卡或推送请求提交。
 
-`listing publish` 使用批量发布协议，平台按前缀生成 VC，不保证透传任意完整自定义 VC；需要完整 VC 建卡语义时使用 `listing create-cards`。`listing replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码取自选中的源店快照，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
+普通上架须确认价格表中的卖家 SKU。可指定 `--sku`，批量 JSON 每行可填 `sellerSku`。编码优先保留完整 `--vc`，其次沿用 `--prefix`，然后使用 SKU 在价格表中唯一登记的前缀。缺失或多人共用时补 `--prefix`，也可经运营确认加 `--random-prefix`。随机前缀在预览时生成，随 SKU、完整 VC 和编码来源一起保存。批量接口无法原样生成的完整 VC 改用 `ops create-cards` 预览。平台明确受理后本地保存完整 VC 的归属。升级前未提交的普通上架计划需要重新预览一次。
+
+`listing replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码取自选中的源店快照，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
 
 BCS 建卡已停用商品详情代理。`listing create-cards` 和 `listing replicate` 默认用 `card.json` 合成详情，生成一条尺码为 `0` 的规格。`listing create-cards --file` 的 JSON 商品项仍可通过 `extra.wb_detail.sizes` 提供规格，建卡只取第一条并写入目标 VC 和价格。`listing replicate` 使用合成规格，源商品的非零尺码及其他规格不会带入新卡。
 

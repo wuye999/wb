@@ -364,6 +364,7 @@ def run(args: Any) -> int:
         begin, end = resolve_window(days=getattr(args, "days", 7), begin=getattr(args, "begin", ""),
                                     end=getattr(args, "end", ""), date=getattr(args, "date", ""))
     except ValueError as e:
+        args.summary = str(e)
         print(f"[错误] {e}")
         return 1
 
@@ -385,6 +386,8 @@ def run(args: Any) -> int:
         r = collect_stats(begin, end, url=getattr(args, "url", ""), table=table,
                           by_prefix=by_prefix, with_cn=with_cn, shop_labels=labels)
     except (RuntimeError, ValueError) as e:
+        args.summary = '飞书订单登记读取失败'
+        args.next_action = '核对飞书连接、表名和读取权限'
         print(f"[错误] {str(e)[:300]}")
         return 1
 
@@ -400,6 +403,8 @@ def run(args: Any) -> int:
     rows = r["rows"]
     if not rows:
         print("\n该窗口内没有命中的登记记录（检查 --days/--begin/--end 或 --shops）")
+        args.summary = '该时间段内没有匹配的登记记录'
+        args.output = {'rows': 0}
         return 0
 
     print(f"\n  排名 | {'供应商代码' if not by_prefix else '前缀码'} | 商品中文名 | 单数 | 件数 | 涉及店铺")
@@ -417,4 +422,6 @@ def run(args: Any) -> int:
 
     path = write_csv(rows)
     print(f"\n[日志] 聚合 {len(rows)} 行 → {path}")
-    return 0
+    args.summary = '已导出供应商代码销量报表' if path else '销量报表未生成'
+    args.output = {'rows': len(rows), 'artifacts': {'csv': str(path)} if path else {}}
+    return int(not path)

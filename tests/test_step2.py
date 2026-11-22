@@ -199,12 +199,13 @@ class TestStep2(unittest.TestCase):
     def test_bulk_publish_apply_uses_frozen_warehouse_price_and_task_receipt(self):
         from sellerops.domain.models import PublishItem
         from sellerops.features.products import warehouse
-        from sellerops.features.publishing import bulk_publish
+        from sellerops.features.publishing import bulk_publish, publish_details
 
         self.populate()
-        item = PublishItem(101, price=59, vendor_code=A, prefix='BCS-AAAA',
-                           length=10, width=20, height=30, weight=.2, stock=0, target_shops=[1])
-        with patch.object(bulk_publish, 'resolve_publish_details', return_value=(item, None)), \
+        item = PublishItem(101, price=59, vendor_code='BCS-AAAA-101', prefix='BCS-AAAA',
+                           length=10, width=20, height=30, weight=.2, stock=0, target_shops=[1],
+                           extra={'seller_sku': 'S1', 'vc_source': 'registered_prefix'})
+        with patch.object(publish_details, 'resolve_publish_details', return_value=(item, None)), \
                 patch.object(bulk_publish.bcs, 'fetch_shop_list', return_value=[{'id': 1, 'name': 'shop'}]), \
                 patch.object(bulk_publish, 'resolve_warehouse', return_value=42), \
                 patch.object(bulk_publish, 'vc_exists_in_shop', return_value=False), \

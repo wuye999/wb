@@ -42,13 +42,13 @@ class ProductResult:
         except Exception as error:
             self.error = f"{type(error).__name__}：{error}" if isinstance(error, (ValueError, OSError, AuthenticationError)) else type(error).__name__
             print(f"[错误] {self.error}")
-        code = self.finish()
+        code, summary = self.finish(print_legacy=not getattr(args, 'json', False))
         args.outcome = {
+            **summary,
             'error': self.error,
             'receipts': [{'shop_id': r.shop_id, 'status': r.status, 'task_id': r.task_id,
                           'detail': r.detail, 'vc': r.item.get('vc'), 'nmId': r.item.get('nmID'),
                           'chrtId': r.item.get('chrtId')} for receipts in self.receipts.values() for r in receipts],
-            'artifacts': {key: str(value) for key, value in self.artifacts.items()},
         }
         return code
 
@@ -162,7 +162,7 @@ class ProductResult:
         bad = any(r.status in {"blocked", "failed", "unknown"} for r in receipts) or bool(range_error)
         return row, bad
 
-    def finish(self) -> int:
+    def finish(self, *, print_legacy: bool) -> tuple[int, dict]:
         results = [self._shop(sid) for sid in self.shops]
         receipts = [receipt for sid in self.shops for receipt in self.receipts[sid]]
         history = self.apply and self.action in {"price", "stock"} and not self.cancelled
@@ -184,10 +184,11 @@ class ProductResult:
             status = "no_match"
         else:
             status = "completed" if self.apply else "preview"
-        emit_summary(f"product {self.action}", "apply" if self.apply else "preview", status,
-                     self.shops, self.artifacts, channel=self.channel, fields=list(self.targets),
-                     targets=self.targets, submission_fields=self.submission_fields,
-                     units={"products": "product_card", **({"specs": "specification"} if self.action == "stock" else {})},
-                     per_shop=[row for row, _ in results],
-                     **({"error": self.error} if self.error else {}))
-        return 1 if bad else 0
+        summary = emit_summary(f"product {self.action}", "apply" if self.apply else "preview", status,
+                               self.shops, self.artifacts, print_legacy=print_legacy,
+                               channel=self.channel, fields=list(self.targets), targets=self.targets,
+                               submission_fields=self.submission_fields,
+                               units={"products": "product_card", **({"specs": "specification"} if self.action == "stock" else {})},
+                               per_shop=[row for row, _ in results],
+                               **({"error": self.error} if self.error else {}))
+        return int(bad), summary

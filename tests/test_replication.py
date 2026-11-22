@@ -114,7 +114,8 @@ class TestReplication(TestCase):
 
     def test_resolver_uses_supplied_metadata_and_preserves_explicit_zero(self):
         with patch.object(publish_details,'fetch_card_json',side_effect=AssertionError('unexpected read')):
-            resolved, err = publish_details.resolve_publish_details(item())
+            resolved, err = publish_details.resolve_publish_details(
+                item(), mapping_state={}, price_book=[{'sku': 'S1', 'cn': 'fixture', 'prefix': 'TEST', 'floor': 415}])
         self.assertIsNone(err)
         self.assertEqual(resolved.stock,0)
         self.assertEqual(resolved.price,415.25)

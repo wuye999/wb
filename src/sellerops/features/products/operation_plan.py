@@ -27,7 +27,7 @@ def preview(args: Namespace, prepare: Callable[[Namespace], int]) -> int:
     frozen = getattr(args, 'prepared', None)
     args.output = {'action': args.action, 'scope': frozen or [], 'result': getattr(args, 'outcome', {})}
     if not has_work(frozen):
-        args.summary = '没有可提交的商品'
+        args.summary = getattr(args, 'summary', '') or '没有可提交的商品'
         return answer
     action = args.action
     action_type = ('price' if action == 'review-price' else action.replace('-', '_')
@@ -45,6 +45,8 @@ def preview(args: Namespace, prepare: Callable[[Namespace], int]) -> int:
         db.save_plan(connection, plan_id, action_type, 'draft', plan_id, payload)
     args.plan_id = plan_id
     args.summary = f'已保存计划单 {plan_id}'
+    if answer:
+        args.summary += '，部分商品未通过检查'
     args.next_action = f'展示商品、店铺和目标值，运营确认后运行 apply --plan {plan_id}'
     print(f'计划单 {plan_id}。{args.next_action}')
     return answer
@@ -109,11 +111,16 @@ def apply(args: Namespace, execute: Callable[[str, Namespace], int]) -> int:
         document = json.loads(record['payload_json'])
         if document['route'] not in ACTIONS or not has_work(document['scope']):
             raise ValueError('计划单内容无效')
+        if document['route'] in {'publish', 'create-cards'}:
+            items = (row['item'] if document['route'] == 'publish' else row[0] for row in document['scope']['items'])
+            if any(not item['extra'].get('seller_sku') or not item['extra'].get('vc_source') for item in items):
+                raise ValueError('原上架计划缺少卖家 SKU 或编码来源，请用 ops 重新预览')
         connection.execute("UPDATE plans SET status='submitting', updated_at=? WHERE plan_id=? AND status='draft'",
                            (db.now(), plan_id))
     scope = document['scope']
     options = Namespace(**document['arguments'])
     options.apply, options.yes, options.frozen = True, True, scope
+    options.json = getattr(args, 'json', False)
     outcome, status, code = {}, 'partial', 1
     try:
         for sid in sorted(_scope_shops(scope)):
@@ -137,5 +144,8 @@ def apply(args: Namespace, execute: Callable[[str, Namespace], int]) -> int:
     args.summary = f'计划单 {plan_id} 已记录提交结果' if code == 0 else f'计划单 {plan_id} 未全部受理'
     if code:
         args.next_action = '先查看回执；提交中或结果未知的商品禁止自动重发'
+    if outcome.get('mapping_conflicts'):
+        args.summary = f'计划单 {plan_id} 已提交，部分已受理 VC 的归属有冲突'
+        args.next_action = '核对回执中的冲突 VC，并用 map 确认归属；不要重新上架'
     print(args.summary)
     return code

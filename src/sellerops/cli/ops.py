@@ -43,10 +43,13 @@ def execute_frozen(action: str, args) -> int:
     args.outcome = {k: result[k] for k in ('ok', 'skip', 'fail', 'csv')}
     args.outcome['items'] = [
         {'vc': row['vc'], 'targets': row['targets'],
-         'task_id': row.get('task_id') or ((row.get('response') or {}).get('data') or {}).get('taskId'),
+         'task_id': row.get('task_id'),
          'status': row.get('status') or ('accepted' if row['ok'] else 'unknown' if row.get('response') is None else 'failed')}
         for row in result.get('details', [])
     ]
+    conflicts = sorted({row['vc'] for row in result.get('details', []) if row.get('mapping_conflict')})
+    if conflicts:
+        args.outcome['mapping_conflicts'] = conflicts
     if result['fail'] and not result.get('details'):
         args.outcome['items'].append({'status': 'unknown'})
-    return int(bool(result['fail']))
+    return int(bool(result['fail'] or conflicts))

@@ -259,5 +259,7 @@ def sync_all_shops_mapping(shop_id: int | None = None) -> None:
 
 
 def run_export(args) -> int:
-    export_mapping(args.shop_id, args.out)
+    path = export_mapping(args.shop_id, args.out)
+    args.summary = '已导出商品归属报表'
+    args.output = {'artifacts': {'workbook': str(path.resolve())}}
     return 0

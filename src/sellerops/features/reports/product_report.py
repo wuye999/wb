@@ -341,9 +341,12 @@ def run(args: Any) -> int:
         error = f"生成报告失败（{type(exc).__name__}）"
         print(f"[错误] {error}")
     if report is None:
-        emit_summary("report products", "read", "failed",
+        args.output = emit_summary("report products", "read", "failed",
                      [int(sid) for sid in args.shops.split(",") if data.positive_id(sid.strip())], {},
+                     print_legacy=not getattr(args, 'json', False),
                      coverage_complete=False, issues=[vars(ReportIssue("商品报告", error))])
+        args.summary = error
+        args.next_action = '核对平台鉴权、所选店铺和导出路径'
         return 1
     issues = [*report.issues, *(screening.issues if screening is not None else [])]
     if error:
@@ -366,8 +369,9 @@ def run(args: Any) -> int:
         report.coverage.get(shop["id"], {}).get("orders") == "完整" for shop in report.shops)
     if not orders_complete and not report.orders:
         returns = dict.fromkeys(returns)
-    emit_summary("report products", "read", status, sorted(target_ids),
+    args.output = emit_summary("report products", "read", status, sorted(target_ids),
                  {"workbook": target} if not error else {},
+                 print_legacy=not getattr(args, 'json', False),
                  period={"orders_from": report.order_begin, "feedbacks_from": report.feedback_begin or None,
                          "sales_7_from": (data.timestamp(report.end) - timedelta(days=6)).date().isoformat(),
                          "sales_14_from": (data.timestamp(report.end) - timedelta(days=13)).date().isoformat(),
@@ -378,4 +382,7 @@ def run(args: Any) -> int:
                  publish_records_complete=report.publish_records_complete,
                  unavailable_accounts=report.unavailable_accounts, return_metrics=returns,
                  issues=[vars(issue) for issue in issues])
+    args.summary = error or ('已导出商品运营报告' if complete else '已导出商品运营报告，部分来源数据缺失')
+    if error or not complete:
+        args.next_action = '查看报表的数据覆盖说明和回执中的缺口，核对失败来源'
     return int(bool(error or not complete))

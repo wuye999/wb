@@ -15,10 +15,20 @@ from sellerops.persistence.price_book import floor_price
 from sellerops.settings import paths as config
 
 
-from sellerops.domain.vendor_codes import extract_vc_prefix
-
-
 DEFAULT_STOCK = 999
+
+
+def publish_codes(raw: str, nm_ids: list[int]) -> list[str | None]:
+    """把 --vc 的完整码、模板或列表对应到本次输入。"""
+    if not raw.strip():
+        return [None] * len(nm_ids)
+    if '{nm}' in raw and ',' not in raw:
+        return [raw.strip().replace('{nm}', str(nm)) for nm in nm_ids]
+    codes = [code.strip() for code in raw.split(',')]
+    if len(codes) != len(nm_ids) or not all(codes):
+        raise ValueError('--vc 的完整码数量必须与输入商品数相同，也可以使用含 {nm} 的模板')
+    return codes
+
 
 def parse_dims_str(s: str) -> Optional[Tuple[int, int, int, float]]:
     """解析自定义尺寸字符串 '长*宽*高/毛重'（例: 8*14*26/0.3 或 8x14x26/0.3），返回 (L, W, H, weight)。"""
@@ -72,7 +82,7 @@ def load_publish_catalog() -> Dict[str, Dict[str, Any]]:
         cols = price_book_columns(ws, config.current.price_book_xlsx, required=("cn", "sku", "dp"))
         i_cn, i_sku, i_dp = cols["cn"], cols["sku"], cols["dp"]
         i_dim, i_prefix = cols["dim"], cols["prefix"]
-        boss = {}
+        boss, duplicates = {}, set()
         for r in ws.iter_rows(min_row=2, values_only=True):
             def cell(i):
                 return r[i] if i is not None and i < len(r) else None
@@ -80,6 +90,8 @@ def load_publish_catalog() -> Dict[str, Dict[str, Any]]:
             cn = cell(i_cn)
             if cn:
                 cn = str(cn).strip()
+                if cn in boss:
+                    duplicates.add(cn)
                 boss[cn] = {
                     "sku": cell(i_sku),
                     "cn": cn,
@@ -87,7 +99,7 @@ def load_publish_catalog() -> Dict[str, Dict[str, Any]]:
                     "dims": str(cell(i_dim) or "").strip(),
                     "prefix": str(cell(i_prefix) or "").strip().upper(),
                 }
-        return boss
+        return {cn: row for cn, row in boss.items() if cn not in duplicates}
     finally:
         wb.close()
 
@@ -98,7 +110,7 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
       1. .json: List[dict] 结构或 List[nm] 数组
       2. .csv:
          - 订单登记/筛选非我店订单 CSV（含 '商品中文名' 与 '现在商品的nmId' / 'VC' 列），
-           自动关联商品价格表推导新 VC (BCS-{前缀}-{原尾段})、实际售价与包装尺寸；
+           保留源 VC 尾段，编码留给普通上架的共用规则决定；
          - 普通上架 CSV（含 nmId, price, vendorCode, cn 列）；
       3. .txt: 每行一个商品码
     返回: (file_items, raw_nms)
@@ -138,15 +150,10 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
         if not rows:
             return [], []
 
-        first_row = rows[0]
-        has_nm_col = any("nmId" in k or "nmid" in k.lower() or "商品码" in k for k in first_row.keys())
-        has_cn_col = any("中文名" in k or "品名" in k for k in first_row.keys())
-        has_vc_col = "VC" in first_row or "vendorCode" in first_row
-
-        if has_nm_col and (has_cn_col or has_vc_col):
+        if "现在商品的nmId" in rows[0]:
             # 自动关联商品价格表推导上架配置
             boss_data = load_publish_catalog()
-            for idx, r in enumerate(rows, 1):
+            for r in rows:
                 cn_key = next((k for k in r.keys() if "中文名" in k or "品名" in k), None)
                 nm_key = next((k for k in r.keys() if "nmId" in k or "nmid" in k.lower() or "商品码" in k), None)
                 vc_key = next((k for k in r.keys() if k in ("VC", "vendorCode")), None)
@@ -161,11 +168,7 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                     continue
 
                 b = boss_data.get(cn)
-                my_prefix = b["prefix"] if b else ""
-                if not my_prefix and orig_vc:
-                    my_prefix = extract_vc_prefix(orig_vc) or ""
-
-                # 提取原 VC 尾段并拼接新 VC: BCS-{前缀}-{原尾段}
+                # 订单登记的 VC 是源商品码；明确填写 vendorCode 时仍按目标完整码处理。
                 tail = ""
                 if orig_vc:
                     m = re.match(r"^BCS-[A-Za-z0-9]+-(.+)$", orig_vc)
@@ -173,14 +176,15 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                 if not tail:
                     tail = cur_nm
 
-                new_vc = f"BCS-{my_prefix}-{tail}" if my_prefix else orig_vc
-
                 dims_t = parse_dims_str(b["dims"]) if b else None
                 dp = floor_price(b["dp"]) if (b and b["dp"] is not None) else None
 
                 file_items.append({
                     "nmId": int(cur_nm),
-                    "vendorCode": new_vc,
+                    "vendorCode": r.get('vendorCode'),
+                    "prefix": r.get('prefix'),
+                    "sellerSku": r.get('sellerSku') or r.get('卖家SKU'),
+                    "source_tail": tail,
                     "price": dp,
                     "length": dims_t[0] if dims_t else None,
                     "width": dims_t[1] if dims_t else None,
@@ -200,7 +204,9 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                     file_items.append({
                         "nmId": int(nm_cand),
                         "price": float(r["price"]) if r.get("price") else None,
-                        "vendorCode": r.get("vendorCode") or r.get("vc"),
+                        "vendorCode": r.get("vendorCode") or r.get("vc") or r.get("VC"),
+                        "prefix": r.get("prefix"),
+                        "sellerSku": r.get("sellerSku") or r.get("卖家SKU"),
                         "cn": r.get("cn") or r.get("商品中文名", ""),
                     })
         return file_items, raw_nms
