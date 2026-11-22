@@ -7,6 +7,7 @@ build/
 dist/
 .pytest_cache/
 /.runtime/
+desktop.ini
 
 # 生产凭证、商业数据、快照、抓包、浏览器登录态和运行日志
 # data/ 整体保护，仅保留不含敏感信息的说明文件
