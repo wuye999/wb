@@ -6,7 +6,7 @@ Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需�
 
 可以对 AI 说“把 A 店和 B 店里中文名为旅行杯的商品库存改成 25”或“生成 A 店近 14 天的商品运营报告”。AI 用店铺列表定位 ID，按完整中文名匹配，输出命中链接、目标数量、受理结果和明细路径。有相似名称时，只有明确要求“名称包含”才采用包含筛选。
 
-WorkBuddy 先用 `doctor --json` 体检。首次配置时用 `sync` 获取快照，用 `map workbench --json` 生成看图归属工作台，再用 `map batch-set --file` 或 `catalog merge` 保存审核结果。使用 `ops` 预览商品操作，展示单号和影响范围，经运营确认后用 `apply --plan` 提交。完整流程见 [日常操作指南](docs/AI_GUIDE.md)。
+WorkBuddy 先用 `doctor --json` 体检。首次配置时用 `sync` 获取快照，用 `map workbench --json` 生成看图归属工作台，再用 `map batch-set --file` 或 `catalog merge` 保存审核结果。使用 `ops` 预览商品操作，展示单号和影响范围，经运营确认后用 `apply --plan` 提交。完整流程见 [日常操作指南](docs/AI_GUIDE.md)。本工具兼容各类支持调用本地命令行的 AI 客户端，文档默认以免费且满足日常运营需求的 WorkBuddy 为例。
 
 ## 从这里开始
 
