@@ -34,9 +34,8 @@ def run_daily_cmd(args) -> int:
         for step in steps:
             print('[dry-run]', subprocess.list2cmdline(step))
         return 0
-    log_dir = Path(config.current.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f'daily_{datetime.date.today():%Y%m%d}.log'
+    day = datetime.date.today()
+    log_path = config.daily_log_dir(day) / f'daily_{day:%Y%m%d}.log'
     env = os.environ.copy()
     package_root = str(Path(__file__).resolve().parents[3])
     env['PYTHONPATH'] = os.pathsep.join(filter(None, (package_root, env.get('PYTHONPATH'))))
@@ -45,6 +44,7 @@ def run_daily_cmd(args) -> int:
         result = subprocess.run(step, capture_output=True, text=True, encoding='utf-8',
                                 errors='replace', env=env, timeout=3600,
                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open('a', encoding='utf-8') as log:
             log.write(f'[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {step[-1]} exit={result.returncode}\n')
             log.write((result.stdout or '') + (result.stderr or ''))

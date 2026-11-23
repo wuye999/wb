@@ -137,7 +137,7 @@ def run(args):
                     "状态分类": r.get("orderStatusCategory"),
                 })
 
-        path = common.write_csv_preferred(config.current.log_dir, "订单查询_{ts}.csv",
+        path = common.write_csv_preferred(str(config.current.exports_dir), "订单查询_{ts}.csv",
                                           "orders_query_{ts}.csv", ts, _w)
         print(f"\n[日志] {path or '（未生成，见上方警告）'}")
     else:

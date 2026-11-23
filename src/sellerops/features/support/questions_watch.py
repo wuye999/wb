@@ -16,7 +16,6 @@ from sellerops.features.support import product_context
 import csv
 import datetime
 
-import os
 import time
 
 from sellerops.integrations.ai.client import LLMClient
@@ -197,10 +196,10 @@ def run(args):
         except Exception:
             pass
         shown = load_shown()
-        os.makedirs(config.current.log_dir, exist_ok=True)
-        front_log = open(os.path.join(
-            config.current.log_dir, f"questions_front_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
-            "a", encoding="utf-8")
+        now = datetime.datetime.now()
+        path = config.daily_log_dir(now) / f"questions_front_{now:%Y%m%d_%H%M%S}.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        front_log = path.open("a", encoding="utf-8")
         print(f"  日志: {front_log.name}")
         if args.once:
             try:
@@ -235,8 +234,9 @@ def run(args):
         pass
     replied = load_replied()
 
-    csv_path = os.path.join(config.current.log_dir, f"questions_watch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    os.makedirs(config.current.log_dir, exist_ok=True)
+    now = datetime.datetime.now()
+    csv_path = config.daily_log_dir(now) / f"questions_watch_{now:%Y%m%d_%H%M%S}.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     csv_file = open(csv_path, "w", newline="", encoding="utf-8-sig")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow(["时间", "店铺", "提问ID", "供应商编码", "买家问题", "AI回复", "结果"])

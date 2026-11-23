@@ -38,7 +38,7 @@ python run.py apply --plan P018 --json
 
 `sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，`missing_shops` 提示运营核对。经确认才运行 `shop archive`，需要恢复时运行 `shop restore`。
 
-`map workbench` 返回 `data.artifacts.html` 和各分类组数 `data.counts`。引导运营打开 HTML，按图片、店铺、完整 VC 核对归属，再导出 JSON。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
+`map workbench` 在 `exports/workbench/` 更新 HTML，返回 `data.artifacts.html` 和各分类组数 `data.counts`。引导运营打开 HTML，按图片、店铺、完整 VC 核对归属，再导出 JSON。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
 
 归属完成后用 `map check-mismatch --json` 生成货不对板大图画廊。打开 `data.artifacts.html`，按中文名看图并核对前缀冲突和非最低价倍数。价格检查覆盖各活跃店铺有现价的在架快照，允许各店采用不同的合理正整数倍。`data.counts` 给出商品总条数、中文名组数及异常条数。运营勾选并导出 JSON 或复制完整 VC 后，按确认的店铺和 VC 用 `ops trash` 预览下架计划。
 
@@ -103,14 +103,16 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 
 ## 根据什么汇报
 
-调用 `doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report` 时加 `--json`，把 stdout 整体解析为一条 UTF-8 JSON。统一字段为 `ok`、`summary`、`plan_id`、`data`、`next_action`。进度日志在 stderr。即使 `ok` 为假，也要查看 `data` 中已经保存的预览、部分回执或报表路径。
+调用 `doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report`、`task clean` 时加 `--json`，把 stdout 整体解析为一条 UTF-8 JSON。统一字段为 `ok`、`summary`、`plan_id`、`data`、`next_action`。进度日志在 stderr。即使 `ok` 为假，也要查看 `data` 中已经保存的预览、部分回执或报表路径。
 
 - 商品预览的实际目标见 `data.scope`。商品回执见 `data.receipt`，汇报时区分商品卡数、库存规格数和平台已返回的任务号。
 - 报表路径见 `data.artifacts`。`report products` 的期间、数据来源、覆盖和缺失分别见 `data.period`、`data.sources`、`data.coverage_complete`、`data.issues`。
 
 必须阅读本次日志中的成功、失败、跳过和人工待处理项；退出码 0 不能证明平台已最终生效。非零退出也可能已有部分提交，不能因此盲目重放整批。持续监听会记录本轮异常并继续，单轮 --once 遇到失败则退出。没有执行过的步骤不能声称完成；失败时说明停在匹配、预报、交运、登记还是其他具体阶段。
 
-商品批量操作默认按动作检查必要字段，已有本店商品缺少必要标识时可在提交前通过官方令牌定向补齐，仅用于内存计划；这不授权额外fetch/merge或切换写入通道。当前库存未知不会阻止设库存，旧包装尺寸缺失不会阻止设置新尺寸，WB只改折扣不需要原价。补齐后仍不能唯一确认的商品保留阻止项；必须查看并汇报 `data/logs/商品操作跳过_*.csv` 完整清单，不能只依据终端前30条或成功数量认为全量完成。
+商品批量操作默认按动作检查必要字段，已有本店商品缺少必要标识时可在提交前通过官方令牌定向补齐，仅用于内存计划；这不授权额外fetch/merge或切换写入通道。当前库存未知不会阻止设库存，旧包装尺寸缺失不会阻止设置新尺寸，WB只改折扣不需要原价。补齐后仍不能唯一确认的商品保留阻止项；必须查看并汇报 `data/logs/YYYY-MM-DD/商品操作跳过_*.csv` 完整清单，不能只依据终端前30条或成功数量认为全量完成。
+
+逐项回执与运行日志在 `data/logs/YYYY-MM-DD/`。报表默认在 `exports/`，发货 PDF 在 `exports/fbs_shipments/YYYYMMDD/`。清理先用 `task clean --json` 查看 `data.groups`，默认保留最近 20 天。运营明确要求清理时加 `--apply`。汇报被跳过的符号链接和目录联接。清理范围与保护项见 [使用指南](USAGE.md#定期清理本地文件)。
 
 发现 WB 卖家后台会话错误时停止该店操作，提示用户另行运行 `login wb`。看到候选店铺时只展示所需的名称和编号，由运营确认一对一绑定。WB Open API 令牌失效时，在 BCS 更新对应店的 `apiKey`。排查时只提供脱敏后的命令、错误和计数，不把整份 credentials.json、Cookie、抓包或浏览器资料输出到聊天或提交到 Git。见 [排错说明](TROUBLESHOOTING.md)。
 

@@ -1,4 +1,5 @@
 """Project-local data locations, independent of the process working directory."""
+from datetime import date, datetime
 import os
 import re
 from pathlib import Path
@@ -21,7 +22,7 @@ class DataPaths:
         self.exports_dir = root.parent / 'exports'
         self.products_dir = str(root / 'products')
         self.state_dir = str(root / 'state')
-        self.workbench_dir = str(root / 'workbench')
+        self.workbench_dir = str(self.exports_dir / 'workbench')
         self.log_dir = str(root / 'logs')
         self.shops_dir = str(root / 'shops')
         self.shops_archive_dir = str(root / 'shops/_archive')
@@ -34,10 +35,8 @@ class DataPaths:
         self.vc_known_json = str(root / 'state/vc_known.json')
         self.vc_override_json = str(root / 'state/vc_override.json')
         self.vc_excluded_json = str(root / 'state/vc_excluded.json')
-        self.result_csv = str(root / 'logs/ops_result.csv')
-        self.out_mapping_html = str(root / 'workbench/价格映射核对工作台.html')
-        self.out_mismatch_html = str(root / 'workbench/货不对板筛查工作台.html')
-        self.archive_dir = str(root / 'logs/archive')
+        self.out_mapping_html = str(Path(self.workbench_dir) / '价格映射核对工作台.html')
+        self.out_mismatch_html = str(Path(self.workbench_dir) / '货不对板筛查工作台.html')
         self.records_json = str(root / 'state/复制上架记录.json')
         self.questions_replied = str(root / 'state/questions_replied.json')
         self.questions_shown = str(root / 'state/questions_front_shown.json')
@@ -50,6 +49,11 @@ def configure(data_dir: str | Path | None = None) -> DataPaths:
     root = Path(data_dir or os.environ.get("SELLEROPS_DATA_DIR") or PROJECT_ROOT / "data")
     current = DataPaths(root.expanduser().resolve())
     return current
+
+
+def daily_log_dir(day: date | datetime | None = None, data: DataPaths | None = None) -> Path:
+    d = day or date.today()
+    return Path((data or current).log_dir) / f'{d:%Y-%m-%d}'
 
 
 def shop_json_path(shop_id: int | str) -> str:

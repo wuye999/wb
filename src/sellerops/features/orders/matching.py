@@ -198,7 +198,7 @@ def write_csv(recs):
                         "中文名": r["cn_name"], "系统匹配SKU": r["matched_sku"],
                         "期望SKU": r["expected_sku"], "备注": r["note"]})
 
-    return common.write_csv_preferred(config.current.log_dir, CSV_NAME_TPL, CSV_NAME_ALIAS,
+    return common.write_csv_preferred(str(config.current.exports_dir), CSV_NAME_TPL, CSV_NAME_ALIAS,
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 
 def report_no_sku(recs):
@@ -219,7 +219,7 @@ def report_no_sku(recs):
             w.writerow([r["order_id"], r["shop_bcs"] or r["shop"],
                         r["cn_name"], r["vc"], r["note"]])
 
-    path = common.write_csv_preferred(config.current.log_dir, "缺库存SKU订单_{ts}.csv",
+    path = common.write_csv_preferred(str(config.current.exports_dir), "缺库存SKU订单_{ts}.csv",
                                       "mabang_no_stock_sku_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
     if path:
@@ -248,7 +248,7 @@ def report_replace_fail(recs):
                         r["shop_bcs"] or r["shop"], r["cn_name"], r["vc"],
                         r["expected_sku"], r["matched_sku"], r["note"]])
 
-    path = common.write_csv_preferred(config.current.log_dir, "更换失败订单_{ts}.csv",
+    path = common.write_csv_preferred(str(config.current.exports_dir), "更换失败订单_{ts}.csv",
                                       "mabang_replace_fail_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
     if path:

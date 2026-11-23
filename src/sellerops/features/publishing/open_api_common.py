@@ -1,7 +1,6 @@
 """官方商品写入的范围选择、预览与提交日志。"""
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -69,10 +68,10 @@ class CardOperation:
 
 class OperationLog:
     def __init__(self, command: str, apply: bool) -> None:
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.path = Path(paths.current.log_dir) / f'{command}_{stamp}_{uuid4().hex[:8]}.json'
+        now = datetime.now()
+        self.path = paths.daily_log_dir(now) / f'{command}_{now:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}.json'
         self.document: dict[str, Any] = {'command': command, 'apply': apply,
-                                         'createdAt': datetime.now().isoformat(), 'items': []}
+                                         'createdAt': now.isoformat(), 'items': []}
 
     def add(self, shop_id: int, vc: str, status: str, **detail: Any) -> dict[str, Any]:
         row = dict(shopId=shop_id, vc=vc, status=status, **detail)
@@ -80,7 +79,7 @@ class OperationLog:
         return row
 
     def save(self) -> None:
-        atomic_dump_json(self.path, self.document)
+        atomic_dump_json(self.path, self.document, use_lock=False)
 
     def result_reference(self) -> str:
         return str(self.path)

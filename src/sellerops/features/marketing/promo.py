@@ -6,7 +6,6 @@ sellerops 促销活动自动报名（原 wb_promo_apply.py）
 """
 import csv
 import datetime
-import os
 import time
 
 from sellerops.settings import paths as config
@@ -138,9 +137,9 @@ def run(args):
           f"{'成功 ' + str(totals['applied']) if args.apply else '预览 ' + str(len(rows))}"
           f" | 已存在跳过 {totals['skipped']} | 失败 {totals['failed']} | 店铺异常 {shop_errors}")
     if rows:
-        os.makedirs(config.current.log_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(config.current.log_dir, f"报名结果_{ts}.csv")
+        now = datetime.datetime.now()
+        path = config.daily_log_dir(now) / f"报名结果_{now:%Y%m%d_%H%M%S}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=["店铺", "shopId", "活动名", "promoID", "periodID", "available", "结果"])
             w.writeheader()

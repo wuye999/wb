@@ -19,7 +19,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument('--wb-region', choices=['ru', 'cn'], default='ru', help='WB官方主机区域（默认ru；不自动跨域重试）')
     p.add_argument('--url', default='', help='飞书多维表格地址（默认feishu.base_url）')
     p.add_argument('--table', default='订单登记', help='飞书来源表（默认订单登记）')
-    p.add_argument('--out', default='', help='输出.xlsx路径（默认data/logs/商品运营报告_时间.xlsx）')
+    p.add_argument('--out', default='', help='输出.xlsx路径（默认exports/商品运营报告_时间.xlsx）')
     bind(p, 'sellerops.features.reports.product_report', 'run')
 
     p = sub.add_parser('vc-sales',
@@ -77,7 +77,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--no-cn", action="store_true", help="不解析商品中文名（供应商代码仍解析）")
     p.add_argument("--quiet", action="store_true", help="不打印逐页翻页进度")
     p.add_argument("--interval", type=float, default=0.3, help="翻页/店铺间请求间隔秒（默认 0.3）")
-    p.add_argument("--out", default="", help="自定义 xlsx 路径（默认 data/logs/订单动态统计_<时间戳>.xlsx）")
+    p.add_argument("--out", default="", help="自定义 xlsx 路径（默认 exports/订单动态统计_<时间戳>.xlsx）")
     p.add_argument("--no-detail", action="store_true", help="不输出「订单明细」Sheet（行数大时提速、减小文件）")
     p.add_argument("--detail-max-rows", type=int, default=0, dest="detail_max_rows",
                        help="「订单明细」Sheet 最多写 N 行（0=不限）")

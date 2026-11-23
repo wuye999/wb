@@ -386,7 +386,7 @@ def run(args: Any) -> int:
     # 导出文件
     out_opt = getattr(args, "out", "")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs(config.current.log_dir, exist_ok=True)
+    os.makedirs(str(config.current.exports_dir), exist_ok=True)
 
     if out_opt:
         if out_opt.lower().endswith(".xlsx"):
@@ -398,9 +398,9 @@ def run(args: Any) -> int:
             artifacts = {"csv": os.path.abspath(out_opt)}
             print(f"\n[报表已导出] CSV: {out_opt}")
     else:
-        # 默认同时导出 CSV 与 XLSX 到 data/logs/
-        csv_file = os.path.join(config.current.log_dir, f"ratings_{ts}.csv")
-        xlsx_file = os.path.join(config.current.log_dir, f"ratings_{ts}.xlsx")
+        # 默认同时导出 CSV 与 XLSX 到 exports/
+        csv_file = os.path.join(str(config.current.exports_dir), f"ratings_{ts}.csv")
+        xlsx_file = os.path.join(str(config.current.exports_dir), f"ratings_{ts}.xlsx")
         _export_csv(matched_items, csv_file)
         _export_excel(matched_items, xlsx_file)
         artifacts = {"workbook": xlsx_file, "csv": csv_file}

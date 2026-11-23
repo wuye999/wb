@@ -40,7 +40,7 @@ def write_forecast_csv(order_recs, batch_rows):
                         "批次重量": b.get("orderWeight", ""),
                         "上传货代": b.get("forecastLogisticsName", "")})
 
-    return common.write_csv_preferred(config.current.log_dir, "马帮预报批次_{ts}.csv",
+    return common.write_csv_preferred(str(config.current.exports_dir), "马帮预报批次_{ts}.csv",
                                       "mabang_forecast_batch_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 

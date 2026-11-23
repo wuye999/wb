@@ -9,19 +9,22 @@
 | `credentials.json` | BCS、WB、马帮、飞书和 AI 配置 | 用户及 [平台连接命令](CONFIGURATION.md#通过-workbuddy-连接平台) |
 | `商品价格表.xlsx` | 商品名、卖家 SKU、目标售价、包装、前缀、发货方式、马帮库存 SKU | 用户，是商品主数据 |
 | `sellerops.db` | 商品归属、各店商品快照、提交和续办记录 | 程序，按数据目录隔离 |
-| `state/` | 客服去重和发货群供货等业务状态 | 程序 |
-| `workbench/` | 本地 HTML 工作台 | `map workbench` 生成待认领工作台，`map check-mismatch` 生成已归属商品的大图画廊 |
-| `logs/` | 结果 CSV、报表和运行日志 | 各业务命令生成，按终端打印路径查看 |
+| `state/` | 客服去重、发货群供货等业务状态及改码进程锁 | 程序 |
+| `logs/YYYY-MM-DD/` | 运行日志和单次执行回执 | 各业务命令生成，按记录日期查找 |
 | `browser_profiles/<平台>/` | 固定 Chromium 的平台登录资料 | 本机专用浏览器，按数据目录隔离 |
 | `ai_test_qa.json` | 本地 AI 对照样例集 | 用户；格式见下文 |
 
-旧快照、归属池和映射 Excel 由 [旧数据迁移命令](MIGRATION.md#迁移旧商品数据) 一次性导入。通过 `report mapping` 从库导出总表或单店表，默认保存在项目的 `exports/`。
+`exports/` 与选定的数据目录同级。报表、查询导出和 AI 对照报告默认写入该目录，支持 `--out` 的命令可指定输出路径。`exports/workbench/` 保存待认领与货不对板两个 HTML 工作台，每种工作台覆盖写入最新一份。`exports/fbs_shipments/YYYYMMDD/` 按供货日期保存供货码和标签 PDF。
+
+商品操作逐项记录在当日的 `商品操作回执_*.csv`，旧的 `ops_result.csv` 追加写入和 `logs/archive/` 轮转已取消。可用 [task clean](USAGE.md#定期清理本地文件) 预览或清理过期日志和导出，其中 `exports/workbench/` 始终保留。
+
+旧快照、归属池和映射 Excel 由 [旧数据迁移命令](MIGRATION.md#迁移旧商品数据) 一次性导入。通过 `report mapping` 从库导出总表或单店表，默认保存在 `exports/`。
 
 普通用户可维护这些自己的数据。项目源码与说明文档按 [使用边界](../AGENTS.md) 保持只读，临时脚本放项目根目录的 `_scratch/`。
 
 固定 Chromium 程序安装在项目根目录的 `.runtime/browsers/`。`--data-dir` 选择登录资料和凭证的位置，各数据目录共用项目内的浏览器程序。安装步骤见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
 
-`report products` 在 `logs/` 生成商品运营工作簿，只读现有快照、归属和提交记录，不覆盖这些数据。BCS提供对应店铺官方令牌，无需新增凭证段；`--extra-bcs-stdin` 接收的临时账号仅驻留本轮内存，不增加凭证文件或额外店铺快照。报告按账号标注统计来源，链接缺口仅针对本机目标店；来源链接、UTC+8日期及未知数据约定见 [报告说明](PRODUCT_REPORT.md)。
+`report products` 在 `exports/` 生成商品运营工作簿，只读现有快照、归属和提交记录。BCS提供对应店铺官方令牌，无需新增凭证段；`--extra-bcs-stdin` 接收的临时账号仅驻留本轮内存，不增加凭证文件或额外店铺快照。报告按账号标注统计来源，链接缺口仅针对本机目标店；来源链接、UTC+8日期及未知数据约定见 [报告说明](PRODUCT_REPORT.md)。
 
 ## 商品价格表
 
@@ -85,7 +88,7 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 
 `catalog rename --file` 接受 `[{"vc":"BCS-TEST-123456789","cn":"新中文名"}]` 形式的 JSON，会更新数据库里的归属，没有 `--apply` 开关。
 
-`map check-mismatch` 和 `catalog check-mismatch` 写入 `workbench/货不对板筛查工作台.html`，数据来自已归属商品、商品价格表和活跃店铺的在架快照。画廊把勾选状态保存到浏览器 localStorage。导出的 JSON 数组每条包含 `vc`、`cn`、`title`、`shops`，复制按钮输出可用于 `product trash --vc` 或 `ops trash --vc` 的逗号分隔完整 VC。
+`map check-mismatch` 和 `catalog check-mismatch` 写入 `exports/workbench/货不对板筛查工作台.html`，数据来自已归属商品、商品价格表和活跃店铺的在架快照。画廊把勾选状态保存到浏览器 localStorage。导出的 JSON 数组每条包含 `vc`、`cn`、`title`、`shops`，复制按钮输出可用于 `product trash --vc` 或 `ops trash --vc` 的逗号分隔完整 VC。
 
 `publish/create-cards --file` 支持 `.txt`、`.json`、`.csv`。纯文本每行一个商品码。JSON 可为商品码数组或带 `nmId`（也识别 `sku` / `nm`）的对象数组。CSV 支持按订单登记的中文名补包装尺寸。售价可在批量文件的 `price` 字段或命令的 `--price` 中指定，缺少指定价格时使用本地快照价。见 [发布样例](../examples/publish.example.json)。
 

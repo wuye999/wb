@@ -2,7 +2,6 @@
 import csv
 import time
 from datetime import datetime
-from pathlib import Path
 
 from sellerops.domain.snapshot_values import bcs_keep_price, positive_id, quantity
 from sellerops.features.products.execution import submit_bcs_prices
@@ -62,7 +61,8 @@ def _write_csv(result: ProductResult, names: dict[int, str]) -> None:
                          f"{STATUS_LABELS[receipt.status]} {receipt.detail}".strip()])
     if not rows:
         return
-    output = Path(config.current.log_dir) / f"折扣修改_bcs_{datetime.now():%Y%m%d_%H%M%S_%f}.csv"
+    now = datetime.now()
+    output = config.daily_log_dir(now) / f"折扣修改_bcs_{now:%Y%m%d_%H%M%S_%f}.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)

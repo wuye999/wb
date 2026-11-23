@@ -351,7 +351,7 @@ def write_csv(agg_rows: Sequence[Dict[str, Any]]) -> str:
                 "涉及店铺": "、".join(r["shops"]),
             })
 
-    return common.write_csv_preferred(config.current.log_dir, "飞书订单按供应商代码统计_{ts}.csv",
+    return common.write_csv_preferred(str(config.current.exports_dir), "飞书订单按供应商代码统计_{ts}.csv",
                                       "feishu_vc_order_stats_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 

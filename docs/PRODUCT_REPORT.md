@@ -9,7 +9,7 @@
 ```powershell
 python run.py report products
 python run.py report products --shops 1001,1002 --wb-region cn
-python run.py report products --order-days 30 --feedback-days 365 --out data/logs/product_report.xlsx
+python run.py report products --order-days 30 --feedback-days 365 --out exports/product_report.xlsx
 python run.py report products --details
 ```
 
@@ -67,7 +67,7 @@ python run.py report products --shops 1001 --extra-bcs-stdin --wb-region cn
 
 空白数值代表未知或分母为零。仅完整采集且未发现时才可解释为零；部分数据的数字是已知部分。分页上限、重复页、缺少响应字段、认证失败、无唯一莫斯科仓、快照损坏或飞书数据异常都会保留错误，不冒充空清单。不同店及独立数据源可继续采集；完成后输出报告，任何错误使退出码为1。
 
-默认输出 `data/logs/商品运营报告_时间.xlsx`。它是用户商业数据，不应提交Git。仓库及人工凭证维护约束继续遵守 [配置](CONFIGURATION.md) 和 [AI指南](AI_GUIDE.md)。
+默认输出 `exports/商品运营报告_时间.xlsx`。它是用户商业数据，不应提交Git。仓库及人工凭证维护约束继续遵守 [配置](CONFIGURATION.md) 和 [AI指南](AI_GUIDE.md)。
 
 ## 官方接口
 

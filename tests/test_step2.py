@@ -178,7 +178,7 @@ class TestStep2(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(reply['data']['counts'], {'groups': 3, 'vcs': 5, 'prefix': 1, 'multiplier': 1, 'unmatched': 1})
         path = Path(reply['data']['artifacts']['html'])
-        self.assertEqual(path.parent, self.data / 'workbench')
+        self.assertEqual(path.parent, self.root / 'exports' / 'workbench')
         html = path.read_text(encoding='utf8')
         for text in ('前缀命中', '倍数参考', '待手动归属', '3 个 VC', '猫碗 · 最低价¥60 ×2',
                      'width:150px;height:150px', 'list="products"', '<dialog id="lightbox"',

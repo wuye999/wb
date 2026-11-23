@@ -185,9 +185,9 @@ def run(args):
 
     print(f"\n[汇总] 未处理提问 {totals['unanswered']} | 已回复 {totals['replied']} | 失败 {totals['failed']}")
     if rows:
-        os.makedirs(config.current.log_dir, exist_ok=True)
+        os.makedirs(str(config.current.exports_dir), exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(config.current.log_dir, f"买家提问_{ts}.csv")
+        path = os.path.join(str(config.current.exports_dir), f"买家提问_{ts}.csv")
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=["店铺", "shopId", "提问ID", "中文名", "商品标题",
                                               "品牌", "颜色", "价格", "商品描述", "商品特征", "供应商编码",

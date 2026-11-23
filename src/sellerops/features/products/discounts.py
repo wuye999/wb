@@ -1,7 +1,6 @@
 """WB 后台折扣计划与提交。"""
 import csv
 from datetime import datetime
-from pathlib import Path
 
 from sellerops.core.errors import AuthenticationError
 from sellerops.features.catalog.selection import load_state, resolve_filters
@@ -56,7 +55,8 @@ def _write_csv(result: ProductResult, names: dict[int, str]) -> None:
                          item.get("old_discount"), result.targets["discount"], r.status, r.task_id, r.message])
     if not rows:
         return
-    output = Path(config.current.log_dir) / f"折扣修改_wb_{datetime.now():%Y%m%d_%H%M%S_%f}.csv"
+    now = datetime.now()
+    output = config.daily_log_dir(now) / f"折扣修改_wb_{now:%Y%m%d_%H%M%S_%f}.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)

@@ -2,9 +2,9 @@
 from collections import Counter, defaultdict
 
 from sellerops.core.command_summary import emit_summary
-from sellerops.core.errors import AuthenticationError, StorageLockError
+from sellerops.core.errors import AuthenticationError
 from sellerops.domain.snapshot_values import positive_id
-from sellerops.persistence.product_results import ProductReceipt, append_product_history, write_product_receipts
+from sellerops.persistence.product_results import ProductReceipt, write_product_receipts
 from sellerops.settings import paths
 
 
@@ -165,14 +165,11 @@ class ProductResult:
     def finish(self, *, print_legacy: bool) -> tuple[int, dict]:
         results = [self._shop(sid) for sid in self.shops]
         receipts = [receipt for sid in self.shops for receipt in self.receipts[sid]]
-        history = self.apply and self.action in {"price", "stock"} and not self.cancelled
         try:
             path = write_product_receipts(paths.current, receipts)
             if path:
                 self.artifacts["receipts_csv"] = path
-            if history and (history_path := append_product_history(paths.current, receipts)):
-                self.artifacts["history_csv"] = history_path
-        except (OSError, StorageLockError) as error:
+        except OSError as error:
             self.error = f"无法保存回执：{error}"
             print(f"[错误] {self.error}")
         bad = bool(self.error or any(failed for _, failed in results))

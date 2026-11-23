@@ -26,7 +26,7 @@ class TestCommandFailures(unittest.TestCase):
 
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        context = patch.object(paths, 'current', paths.DataPaths(Path(directory.name)))
+        context = patch.object(paths, 'current', paths.DataPaths(Path(directory.name) / 'data'))
         context.start()
         self.addCleanup(context.stop)
         self.parser = build_parser()
@@ -127,6 +127,7 @@ class TestCommandFailures(unittest.TestCase):
             self.assertEqual(daily.run_daily_cmd(self.parser.parse_args(['task', 'run', 'morning', '--all-shops', '--apply'])), 1)
             run.assert_called_once()
             self.assertIn('enroll', run.call_args.args[0])
+            self.assertEqual(len(list(daily.config.daily_log_dir().glob('daily_*.log'))), 1)
 
     def test_read_reports_propagate_failed_shop_queries(self):
         from sellerops.features.support import complaints, chat_inspect
@@ -160,11 +161,12 @@ class TestCommandFailures(unittest.TestCase):
             qa = directory + '/qa.json'
             with open(qa, 'w', encoding='utf8') as file:
                 json.dump([{'question': 'fixture', 'product': {}}], file)
-            with patch.object(ai_reply_test.config.current, 'log_dir', directory), \
+            with patch.object(ai_reply_test.config.current, 'exports_dir', Path(directory)), \
                     patch.object(ai_reply_test.credentials, 'get', return_value=credential_fixture()), \
                     patch.object(ai_reply_test, 'LLMClient') as client:
                 client.return_value.generate_reply.return_value = None
                 self.assertEqual(ai_reply_test.run(SimpleNamespace(qa=qa)), 1)
+                self.assertEqual(len(list(Path(directory).glob('ai_reply_test_*.md'))), 1)
 
 
 class TestWatchFailures(unittest.TestCase):

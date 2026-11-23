@@ -47,13 +47,13 @@ class MismatchCheckTest(unittest.TestCase):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.addCleanup(paths.configure, paths.current.data_dir)
-        self.data = Path(temp.name)
+        self.data = Path(temp.name) / 'data'
         paths.configure(self.data)
 
     def read_gallery(self, result):
         html_path = Path(result['artifacts']['html'])
         self.assertEqual(html_path, Path(paths.current.out_mismatch_html))
-        self.assertTrue(html_path.is_relative_to(self.data))
+        self.assertEqual(html_path.parent, self.data.parent / 'exports' / 'workbench')
         page = html_path.read_text(encoding='utf-8')
         gallery = Gallery()
         gallery.feed(page)

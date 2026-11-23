@@ -14,7 +14,7 @@ from sellerops.features.marketing.promotion_types import WASTE_CSV_FIELDS
 
 def write_csv(rows: Sequence[Dict[str, Any]], kind: str = "gap") -> str:
     """写 CSV（utf-8-sig）；`kind` ∈ {'gap','waste','campaign'}；返回路径"""
-    os.makedirs(config.current.log_dir, exist_ok=True)
+    os.makedirs(str(config.current.exports_dir), exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
     if kind == "gap":
         name, fields = f"推广缺口_{ts}.csv", GAP_CSV_FIELDS
@@ -44,7 +44,7 @@ def write_csv(rows: Sequence[Dict[str, Any]], kind: str = "gap") -> str:
     else:
         raise ValueError(f"未知的 CSV 类型: {kind!r}")
 
-    path = os.path.join(config.current.log_dir, name)
+    path = os.path.join(str(config.current.exports_dir), name)
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()

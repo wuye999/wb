@@ -233,9 +233,9 @@ def run(args: Any) -> int:
         print(",".join(sorted(all_vcs)))
 
     if rows:
-        os.makedirs(config.current.log_dir, exist_ok=True)
+        os.makedirs(str(config.current.exports_dir), exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(config.current.log_dir, f"投诉单_{ts}.csv")
+        path = os.path.join(str(config.current.exports_dir), f"投诉单_{ts}.csv")
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             w.writeheader()

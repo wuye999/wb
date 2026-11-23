@@ -22,7 +22,7 @@ python run.py apply --plan P018 --json
 
 命令均在项目根目录执行，店铺 ID `1001`、商品码 `123456789` 和商品名仅为示例。批量商品命令要求明确指定店铺和商品范围。只读查询与履约任务的默认范围见对应命令。完整参数见 [CLI](CLI.md)，配置见 [CONFIGURATION](CONFIGURATION.md)。
 
-`doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report` 加 `--json` 后，标准输出始终是一条 JSON。进度和日志走 stderr；失败也会返回中文摘要和下一步提示。报表文件路径见 `data.artifacts`。
+`doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report`、`task clean` 加 `--json` 后，标准输出始终是一条 JSON。进度和日志走 stderr；失败也会返回中文摘要和下一步提示。报表文件路径见 `data.artifacts`。
 
 ## 看懂读写边界
 
@@ -64,7 +64,7 @@ python run.py report mapping --shop-id 1001
 python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品名"
 ```
 
-`map check-mismatch` 和 `catalog check-mismatch` 生成同一份 HTML。`--cn` 精确匹配中文名，`--begin`、`--end` 和 `--days` 按创建日期筛选。回执含 `data.artifacts.html` 和 `data.counts` 中的总条数、中文名组数及异常条数。
+`map check-mismatch` 和 `catalog check-mismatch` 在 `exports/workbench/` 生成同一份 HTML，每次覆盖上次结果。`--cn` 精确匹配中文名，`--begin`、`--end` 和 `--days` 按创建日期筛选。回执含 `data.artifacts.html` 和 `data.counts` 中的总条数、中文名组数及异常条数。
 
 画廊按中文名并排展示大图，异常组排在前面，并标记前缀冲突和非最低价倍数。逐店核对在架快照中的现价。各店可以采用不同的合理正整数倍，卡片会显示主店现价和匹配的倍数，例如「×2/×10」。若有店铺的现价偏离整数倍，标记会注明对应店铺。可以多选中文名，按 VC、中文名或俄文标题搜索，或切换「只看异常」「只看已勾选」。点击放大镜查看大图，点击卡片勾选货不对板，浏览器会保存勾选状态。WB 中尺寸图加载失败时依次尝试高清图、原链接。缺少主图链接时用 WB 商品码尝试加载首图。
 
@@ -138,11 +138,11 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 | 修改包装尺寸/毛重 | 本店 nmId，以及参数或价格表中的目标尺寸 | 不要求旧尺寸、规格或库存；缺 nmId 时定向补齐 |
 | 下架 | 本店 nmId、完整 chrtId 和已确认的莫斯科仓 ID | 不要求旧库存；先补齐必要标识，再提交全部规格清零，清零受理不完整时仍阻止下架 |
 
-`product price`、`product stock`、`product discount` 和 `report products` 在标准输出末尾附加一行 UTF-8 JSON。用 `artifacts` 定位本次实际生成的 CSV 或 Excel。商品计数按本店商品卡，库存另列规格计数。摘要区分完整预览、完整提交、已确认无待办、部分成功及失败，店铺范围未知时对应数量为 `null`。改价和库存的历史 `ops_result.csv` 沿用原表头。逐项回执区分已受理、明确失败、结果未知、已阻止和正常跳过，`--auto-review` 单列审核结果。
+`product price`、`product stock`、`product discount` 和 `report products` 在标准输出末尾附加一行 UTF-8 JSON。用 `artifacts` 定位本次实际生成的 CSV 或 Excel。商品计数按本店商品卡，库存另列规格计数。摘要区分完整预览、完整提交、已确认无待办、部分成功及失败，店铺范围未知时对应数量为 `null`。逐项回执保存在 `data/logs/YYYY-MM-DD/商品操作回执_*.csv`，区分已受理、明确失败、结果未知、已阻止和正常跳过，`--auto-review` 单列审核结果。
 
 定向补齐使用 BCS 保存的该店官方 apiKey 和中国区接口，只查询本地已有但必要字段不完整的商品；按完整 VC 精确匹配，核对已有 nmId，不从其他店借用标识。完整本地数据不额外查询商品；不自动全量扫描平台、不刷新本地快照、不触发 BCS 同步或映射合并，也不更换写入通道。该店官方鉴权失败会阻止整店提交。限流或网络读取失败时停止该店后续补齐，已具备必要字段的商品可继续。显式 BCS 保价写入（含独立折扣命令）要求每个规格价格可确认、全部相同，且商品级价格可精确到分提交。遇到异价、缺价或超精度时阻止该商品。
 
-按名称或 SKU 筛选使用库中已确认的归属；新快照中待确认的完整 VC 可以先在工作台核对。批量操作完整的跳过明细保存在 `data/logs/商品操作跳过_*.csv`。
+按名称或 SKU 筛选使用库中已确认的归属；新快照中待确认的完整 VC 可以先在工作台核对。批量操作完整的跳过明细保存在 `data/logs/YYYY-MM-DD/商品操作跳过_*.csv`。
 
 改价与设库存默认走 WB；`--channel bcs` 是另选的 BCS 通道。WB 网页会话失效时先用 `login wb` 恢复，不要让 AI 自动换通道提交同一批可能已被接受的操作。`product stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店莫斯科仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
 
@@ -258,7 +258,7 @@ python run.py order group-ship --shops 9352 --resume --apply
 
 默认预览，不创建供货。加 `--apply` 后建供货、加入全部订单、提交配送，再按本次供货号和订单 ID 取 WB 原码。加入每次最多 100 单，超过时分次加入同一个供货。订单的货物尺寸、跨境或 B2B 属性无法合并，或缺平台必填标识时，整组留待人工处理。
 
-供货名如 `20261111-103500_袁州1(9352)_黑丝假发_2单`，使用新加坡时间。PDF 用较短的文件名，例如 `袁州1(9352)_黑丝假发_2单_1234567_供货码.pdf` 和 `袁州1(9352)_黑丝假发_2单_1234567_标签.pdf`，数字编号对应 WB 供货 `WB-GI-1234567`。按供货创建日建文件夹，例如 `data/fbs_shipments/20261111/`，同一天所有店铺的 PDF 集中保存，续办沿用原供货日期。供货二维码是 58 × 40 mm 的一页，订单标签是 40 × 30 mm 的每单一页。两份文件都通过检查并保存后才记录为导出完成。
+供货名如 `20261111-103500_袁州1(9352)_黑丝假发_2单`，使用新加坡时间。PDF 用较短的文件名，例如 `袁州1(9352)_黑丝假发_2单_1234567_供货码.pdf` 和 `袁州1(9352)_黑丝假发_2单_1234567_标签.pdf`，数字编号对应 WB 供货 `WB-GI-1234567`。按供货创建日建文件夹，例如 `exports/fbs_shipments/20261111/`，同一天所有店铺的 PDF 集中保存，续办沿用原供货日期。供货二维码是 58 × 40 mm 的一页，订单标签是 40 × 30 mm 的每单一页。两份文件都通过检查并保存后才记录为导出完成。
 
 配送已受理但 PDF 未导出时，用 `--resume --apply` 按原供货号和文件名补取；只加 `--resume` 查看记录。部分加入失败或写入结果不明时，按 `data/state/WB_FBS发货群供货.json` 中的批次回执人工处理。两份 PDF 是配送后的业务产物，结束后不附加回读验证或同步。
 
@@ -268,7 +268,7 @@ python run.py order group-ship --shops 9352 --resume --apply
 
 ```powershell
 python run.py report products
-python run.py report products --shops 1001,1002 --feedback-days 365 --out data/logs/product_report.xlsx
+python run.py report products --shops 1001,1002 --feedback-days 365 --out exports/product_report.xlsx
 ```
 
 默认近30天退货、接口可取历史评价，按UTC+8日期计算。默认输出评分≤3.5且本店存在、高退货率≥30%且本店存在，以及排除已知风险且中文名在价格表的近7/14天出单清单；完整VC只显示一行，列存在/缺少/待确认店铺，不列商品链接。风险与缺口按VC最长数字段合并；加 `--details` 才追加原始证据表。目标店无快照或授权失败时标为未知，报告仍输出并返回非零；不要把本地缺口视为实时缺货。配置、工作表和完整口径见 [报告说明](PRODUCT_REPORT.md)。
@@ -283,7 +283,7 @@ python run.py support questions --shops 1001 --no-detail
 python run.py support chats --shops 1001 --limit 10 --no-detail
 ```
 
-报告一般写入 data/logs，部分命令支持 --out。`report orders` 默认时区为 America/Los_Angeles，统计窗口按该时区解释，不要直接当成本机当天；导出还区分订单创建时间/更新时间的口径。
+报告默认写入 `exports/`，部分命令支持 `--out`。`report orders` 默认时区为 America/Los_Angeles，统计窗口按该时区解释，不要直接当成本机当天；导出还区分订单创建时间/更新时间的口径。
 
 提问回复先确定店铺和提问 ID：
 
@@ -303,7 +303,7 @@ python run.py support ai-test --qa "examples/ai_test_qa.example.json"
 
 监听默认 front，只展示并记录已展示状态；back 会调用 LLM 生成草稿，仍需 --apply 才自动提交/发送。--apply 也会切换到后台模式。不加 --once 会持续轮询；停止用 Ctrl+C。`support watch-chats` 默认只处理最近 72 小时，--since-hours 0 会扩大到历史消息，不作为普通补跑参数。
 
-`support ai-test` 会联网调用 LLM 并写对照报告，不向买家发送；不要与 `scripts/check.py` 的离线测试混淆。
+`support ai-test` 会联网调用 LLM 并在 `exports/` 写对照报告，不向买家发送；不要与 `scripts/check.py` 的离线测试混淆。
 
 ## 每日任务与 Windows 计划任务
 
@@ -324,4 +324,15 @@ python run.py task schedule --remove --apply --yes
 
 schedule 注册 SellerOps_Morning（09:00）及 SellerOps_Check11/15/19（11:00、15:00、19:00），按运行电脑本地时间执行。自动任务包含 `--apply`，支持 `--shops` 固定指定店铺，也可用 `--all-shops` 覆盖相应步骤的全部可用店铺。每日折扣沿用 WB，显式传入策略目标 `--target 50`。
 
-注册时固定当前解释器、代码路径和数据路径；移动目录或换解释器后需重新注册，并清理不再使用的任务以免重复执行。daily 每步最多等待 1 小时，某步非零退出会停止后续步骤；日志在 data/logs/daily_日期.log。
+注册时固定当前解释器、代码路径和数据路径；移动目录或换解释器后需重新注册，并清理不再使用的任务以免重复执行。daily 每步最多等待 1 小时，某步非零退出会停止后续步骤；日志在 `data/logs/YYYY-MM-DD/daily_YYYYMMDD.log`。
+
+## 定期清理本地文件
+
+```powershell
+python run.py task clean --json
+python run.py task clean --days 30 --apply
+```
+
+`task clean` 默认预览，按目录报告待删除的文件数、空目录数、可释放 MB 和跳过的重解析点数。`--days` 为正整数，默认 20。加 `--apply` 后，删除修改时间早于该期限的文件及空的子目录，保留清理根目录。
+
+清理范围是当前数据目录的 `logs/`、同级 `exports/`，以及使用项目默认数据目录时的 `_scratch/`。整个 `exports/workbench/` 和 `_scratch/README.md` 始终保留。遇到符号链接或目录联接时跳过并提示人工确认。`--json` 结果的分目录统计在 `data.groups`。

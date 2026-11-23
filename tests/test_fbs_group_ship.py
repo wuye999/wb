@@ -50,7 +50,8 @@ class FBSWorkflowTests(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         tmp = stack.enter_context(TemporaryDirectory())
-        self.root = Path(tmp)
+        self.root = Path(tmp) / 'data'
+        self.root.mkdir()
         stack.enter_context(patch.object(paths, 'current', paths.DataPaths(self.root)))
         (self.root / 'credentials.json').write_text('{"wb":{"warehouse_keyword":"测试仓"}}', encoding='utf8')
         stack.enter_context(patch('sys.stdout', new_callable=StringIO))
@@ -75,11 +76,12 @@ class FBSWorkflowTests(unittest.TestCase):
         api.create_supply.assert_not_called()
         self.pdf.assert_not_called()
         self.assertFalse(fbs_group_ship.journal_path().exists())
-        report = next((self.root / 'logs').glob('*.json')).read_text(encoding='utf8')
+        day = datetime.now(fbs_group_ship.SINGAPORE)
+        report = next(paths.daily_log_dir(day).glob('*.json')).read_text(encoding='utf8')
         self.assertIn('"order_ids": [\n        1', report)
 
     def test_multiple_vcs_and_batches_share_a_supply_but_shops_do_not(self):
-        directory = self.root / 'fbs_shipments' / '20261111'
+        directory = self.root.parent / 'exports' / 'fbs_shipments' / '20261111'
         directory.mkdir(parents=True)
         existing = directory / 'earlier.pdf'
         existing.write_bytes(b'untouched')
@@ -187,7 +189,8 @@ class FBSContractTests(unittest.TestCase):
             record = {'name': name, 'supply_id': SUPPLY, 'shop_id': 9352, 'shop_name': SHOP.name,
                       'product_name': PRODUCT, 'order_ids': [1, 2]}
             qr, labels = pdf_paths(record)
-            self.assertEqual(qr.parent, Path(paths.current.data_dir) / 'fbs_shipments' / day)
+            exports = Path(paths.current.data_dir).parent / 'exports'
+            self.assertEqual(qr.parent, exports / 'fbs_shipments' / day)
             self.assertEqual(labels.parent, qr.parent)
             other_qr, _ = pdf_paths(dict(record, supply_id='WB-GI-1234568'))
             self.assertNotEqual(qr.name, other_qr.name)

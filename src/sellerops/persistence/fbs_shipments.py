@@ -41,7 +41,7 @@ def pdf_paths(record: dict) -> tuple[Path, Path]:
     if (_UNSAFE_NAME.search(name) or not re.match(r'^\d{8}-\d{6}_', name)
             or not re.fullmatch(r'WB-GI-[0-9]{1,20}', supply_id)):
         raise DataConsistencyError('供货日志中的文件名或供货号无效')
-    directory = Path(paths.current.data_dir) / 'fbs_shipments' / name[:8]
+    directory = Path(paths.current.exports_dir) / 'fbs_shipments' / name[:8]
     shop = _display(record['shop_name'], 16)
     product = _display(record['product_name'], 24)
     count = len(record['order_ids'])

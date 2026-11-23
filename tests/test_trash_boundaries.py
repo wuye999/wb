@@ -175,7 +175,6 @@ class TestTrashExecution(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         data = execution.config.DataPaths(Path(directory.name))
-        self.csv = Path(data.result_csv)
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(redirect_stdout(io.StringIO()))
@@ -207,10 +206,11 @@ class TestTrashExecution(unittest.TestCase):
         self.assertTrue(all(r['amount'] == 0 for r in submit.call_args.args[2]))
         self.assertEqual(self.move.call_args.args[1], [102])
         self.bcs.assert_not_called()
-        with self.csv.open(encoding='utf-8-sig', newline='') as f:
+        [receipt] = self.execution.config.daily_log_dir().glob('商品操作回执_*.csv')
+        with receipt.open(encoding='utf-8-sig', newline='') as f:
             rows = list(csv.DictReader(f))
-        self.assertTrue(any(r['ID(nmId/chrtId)'] == '101' and r['接口响应'].startswith('SKIP:')
-                            and 'fixture' in r['接口响应'] for r in rows))
+        self.assertTrue(any(r['商品或规格ID'] == '101' and r['状态'] == '已阻止'
+                            and 'fixture' in r['平台回执'] for r in rows))
 
     def test_failed_clearing_blocks_both_wb_and_bcs_trash_channels(self):
         for channel in ['wb', 'bcs']:

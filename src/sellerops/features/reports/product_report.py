@@ -334,7 +334,7 @@ def run(args: Any) -> int:
         report = collect(shops=args.shops, order_days=args.order_days, feedback_days=args.feedback_days,
                          region=args.wb_region, url=args.url, table=args.table,
                          extra_bcs_accounts=extra_bcs_accounts)
-        target = Path(output) if output else Path(paths.current.log_dir) / (
+        target = Path(output) if output else Path(paths.current.exports_dir) / (
             '商品运营报告_' + data.timestamp(report.generated_at).strftime('%Y%m%d_%H%M%S') + '.xlsx')
         screening = write_report(report, target, details=getattr(args, 'details', False))
     except Exception as exc:

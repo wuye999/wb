@@ -271,7 +271,9 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual([(r['shopId'], r['newVC'], r['status']) for r in rows], [(1, NEW, 'planned'), (2, NEW, 'planned')])
         for p, content in before.items():
             self.assertEqual(p.read_bytes(), content)
-        self.assertEqual({p for p in self.folder.rglob('*') if p.is_file() and 'logs' not in p.parts and p != Path(paths.current.database)}, set(before))
+        lock = Path(paths.current.state_dir) / f'{feature.COMMAND}.lock'
+        self.assertEqual({p for p in self.folder.rglob('*') if p.is_file() and p != Path(paths.current.database)},
+                         set(before) | {lock})
         for api in self.clients.values():
             api.update_cards.assert_not_called()
             api.warehouses.assert_not_called()
@@ -310,7 +312,8 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertNotIn('fixture-secret', self.output.getvalue() + logs)
         for path, content in before.items():
             self.assertEqual(path.read_bytes(), content)
-        self.assertFalse(Path(paths.current.state_dir).exists())
+        self.assertEqual(list(Path(paths.current.state_dir).iterdir()),
+                         [Path(paths.current.state_dir) / f'{feature.COMMAND}.lock'])
 
     def test_selected_shops_and_name_or_vc_limit_the_target_without_inference(self):
         self.assertEqual(self.cli('--shops', '2', '--name-contains', '示例', '--apply'), 0)

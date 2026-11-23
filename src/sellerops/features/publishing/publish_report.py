@@ -3,7 +3,6 @@
 import csv
 
 
-import os
 
 import unicodedata
 from datetime import datetime
@@ -17,12 +16,13 @@ from sellerops.settings import paths as config
 
 def create_publish_csv(prefix_name: str = "上架") -> Tuple[Any, Any, str]:
     """初始化上架 CSV 执行记录文件"""
-    os.makedirs(config.current.log_dir, exist_ok=True)
-    csv_path = os.path.join(config.current.log_dir, f"{prefix_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    now = datetime.now()
+    csv_path = config.daily_log_dir(now) / f"{prefix_name}_{now:%Y%m%d_%H%M%S}.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     csv_file = open(csv_path, "w", newline="", encoding="utf-8-sig")
     writer = csv.writer(csv_file)
     writer.writerow(["时间", "WB商品码", "vendorCode", "中文名", "价格", "包装长", "包装宽", "包装高", "毛重", "目标店", "库存", "结果", "原因"])
-    return csv_file, writer, csv_path
+    return csv_file, writer, str(csv_path)
 
 def _display_width(s: Any) -> int:
     """计算字符串终端显示列宽（全角/CJK 占 2 列，半角占 1 列）"""

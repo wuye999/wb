@@ -7,7 +7,7 @@ from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLim
 from sellerops.features.products.results import ProductResult
 from sellerops.features.products.trash_execution import clear_stock_for_trash
 from sellerops.integrations.bcs.client import client as bcs
-from sellerops.persistence.product_results import ProductReceipt, append_product_history, write_product_receipts
+from sellerops.persistence.product_results import ProductReceipt, write_product_receipts
 from sellerops.settings import credentials, paths as config
 
 PRICE_CHUNK = 300
@@ -130,7 +130,6 @@ def apply_trash(plans: list[dict], *, channel: str, chunk: int | None = None,
                     time.sleep(gap)
         time.sleep(SHOP_SLEEP)
     write_product_receipts(config.current, receipts)
-    append_product_history(config.current, receipts)
     if outcome is not None:
         outcome['receipts'] = [{'shop_id': r.shop_id, 'vc': r.item.get('vc'), 'nmId': r.item.get('nmID'),
                                 'status': r.status, 'task_id': r.task_id, 'detail': r.detail} for r in receipts]

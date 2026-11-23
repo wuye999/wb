@@ -3,7 +3,6 @@ from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
@@ -282,8 +281,8 @@ def run(args) -> int:
     for row in failures:
         if row.get('reason'):
             print(f"  [{row['stage']}] {row.get('name') or row.get('product_name') or row['shop_id']}｜{row['reason']}")
-    stamp = datetime.now(SINGAPORE).strftime('%Y%m%d_%H%M%S')
-    report = Path(paths.current.log_dir) / f'WB_FBS发货群_{stamp}_{uuid4().hex[:8]}.json'
+    now = datetime.now(SINGAPORE)
+    report = paths.daily_log_dir(now) / f'WB_FBS发货群_{now:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}.json'
     atomic_dump_json(report, {'apply': args.apply, 'resume': args.resume, 'results': results},
                      use_lock=False)
     print(f"完成 {sum(r['stage'] == 'complete' for r in results)} 组，"

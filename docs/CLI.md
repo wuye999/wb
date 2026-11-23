@@ -587,7 +587,7 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 - `--wb-region` WB官方主机区域（默认ru；不自动跨域重试）（ru / cn）
 - `--url` 飞书多维表格地址（默认feishu.base_url）
 - `--table` 飞书来源表（默认订单登记）
-- `--out` 输出.xlsx路径（默认data/logs/商品运营报告_时间.xlsx）
+- `--out` 输出.xlsx路径（默认exports/商品运营报告_时间.xlsx）
 - `--json` 输出单个 JSON 对象
 
 ## report vc-sales
@@ -648,7 +648,7 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 - `--no-cn` 不解析商品中文名（供应商代码仍解析）
 - `--quiet` 不打印逐页翻页进度
 - `--interval` 翻页/店铺间请求间隔秒（默认 0.3）
-- `--out` 自定义 xlsx 路径（默认 data/logs/订单动态统计_<时间戳>.xlsx）
+- `--out` 自定义 xlsx 路径（默认 exports/订单动态统计_<时间戳>.xlsx）
 - `--no-detail` 不输出「订单明细」Sheet（行数大时提速、减小文件）
 - `--detail-max-rows` 「订单明细」Sheet 最多写 N 行（0=不限）
 - `--no-local-filter` 不在本地按 created 复核时间窗（默认复核；越界行会显式告警）
@@ -781,6 +781,16 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--apply` 真正注册或删除任务
 - `--yes` 确认删除任务
 
+## task clean
+
+按保留天数清理日志、交付物和临时目录（默认预览）
+
+实现入口 [run](../src/sellerops/features/system/clean.py)
+
+- `--days` 保留最近 N 天，至少 1 天（默认 20）
+- `--apply` 删除过期文件和空子目录
+- `--json` 输出单个 JSON 对象
+
 ## map candidates
 
 查看待认领分组、唯一前缀和最低售价倍数参考
@@ -792,7 +802,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## map workbench
 
-生成带图待认领工作台（data/workbench/）
+生成带图待认领工作台（exports/workbench/）
 
 实现入口 [run_workbench](../src/sellerops/features/catalog/workbench.py)
 

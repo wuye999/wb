@@ -367,7 +367,7 @@ def delivery_goods(**kwargs) -> Dict[str, Any]:
 
 # ---------------- 输出 ----------------
 def write_csv(orders: Sequence[Dict[str, Any]], by_cn: Sequence[Dict[str, Any]]) -> Tuple[str, str]:
-    """明细 + 按中文名统计 → 两个 CSV（utf-8-sig，写 config.current.log_dir）；返回 (明细路径, 统计路径)。
+    """明细 + 按中文名统计 → 两个 CSV（utf-8-sig，写入 exports/）；返回 (明细路径, 统计路径)。
 
     走 `common.write_csv_preferred`：环境按文件名拦截（实测 2026-10-17：
     「配送中商品明细_*.csv」被拒）时自动回退 ASCII 别名，两者都失败返回 ""。
@@ -405,9 +405,9 @@ def write_csv(orders: Sequence[Dict[str, Any]], by_cn: Sequence[Dict[str, Any]])
             })
 
     detail_path = common.write_csv_preferred(
-        config.current.log_dir, "配送中商品明细_{ts}.csv", "fbs_delivery_detail_{ts}.csv", ts, _detail)
+        str(config.current.exports_dir), "配送中商品明细_{ts}.csv", "fbs_delivery_detail_{ts}.csv", ts, _detail)
     stat_path = common.write_csv_preferred(
-        config.current.log_dir, "配送中按中文名统计_{ts}.csv", "fbs_delivery_by_cn_{ts}.csv", ts, _stat)
+        str(config.current.exports_dir), "配送中按中文名统计_{ts}.csv", "fbs_delivery_by_cn_{ts}.csv", ts, _stat)
     return detail_path, stat_path
 
 

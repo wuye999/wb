@@ -6,7 +6,7 @@ sellerops 价格审核「应用新价格」（原「获取价格审核列表、�
 鉴权：WB cookie 会话三件套（wb_api.py）。
 """
 import csv
-import os
+from datetime import datetime
 import time
 
 from sellerops.settings import paths as config
@@ -204,9 +204,9 @@ def run(args):
           f"{'已应用新价格 ' + str(totals['applied']) if args.apply else '预览 ' + str(len(rows))}"
           f" | 失败 {totals['failed']} | 店铺异常 {shop_errors}")
     if rows:
-        os.makedirs(config.current.log_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(config.current.log_dir, f"价格审核_{ts}.csv")
+        now = datetime.now()
+        path = config.daily_log_dir(now) / f"价格审核_{now:%Y%m%d_%H%M%S}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=["店铺", "shopId", "id", "nmID", "vendorCode",
                                               "title", "oldPrice", "newPrice", "priceDiffPercent", "结果"])

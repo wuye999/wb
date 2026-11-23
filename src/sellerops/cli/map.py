@@ -10,7 +10,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument('--limit', type=int, default=20, help='最多返回的候选组数')
     bind(p, 'sellerops.features.catalog.vc_mapping', 'run_candidates')
 
-    p = sub.add_parser('workbench', help='生成带图待认领工作台（data/workbench/）')
+    p = sub.add_parser('workbench', help='生成带图待认领工作台（exports/workbench/）')
     bind(p, 'sellerops.features.catalog.workbench', 'run_workbench')
 
     p = sub.add_parser('batch-set', help='按完整 VC 导入工作台审核结果或批量确认')

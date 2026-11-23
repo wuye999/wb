@@ -3,7 +3,7 @@ from collections import Counter
 from sellerops.domain.snapshot_values import positive_id, stock_at, valid_sizes
 from sellerops.core.errors import AuthenticationError
 import csv
-import os
+from datetime import datetime
 import time
 
 from sellerops.integrations.bcs.client import client as bcs
@@ -301,9 +301,9 @@ def run(args):
               f"{'删除已受理 ' + str(totals['deleted']) if args.apply else '预览 ' + str(len(rows))}"
               f" | 失败 {totals['failed']}" + (f" | 归零已受理 {totals['zeroed']}" if tgt == "basket" else ""))
         if rows:
-            os.makedirs(config.current.log_dir, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(config.current.log_dir, f"{mode}清理_{ts}.csv")
+            now = datetime.now()
+            path = config.daily_log_dir(now) / f"{mode}清理_{now:%Y%m%d_%H%M%S}.csv"
+            path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.DictWriter(f, fieldnames=["店铺", "ID", "类型", "vendorCode", "结果"])
                 w.writeheader()

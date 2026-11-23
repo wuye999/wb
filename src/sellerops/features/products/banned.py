@@ -8,7 +8,6 @@ WB 平台会把违规/有问题的商品标记为「被阻止」（banned，flaw
 鉴权：WB cookie 三件套会话（wb_api.make_session），不需要 BCS。
 """
 import csv
-import os
 import time
 from datetime import datetime
 from functools import lru_cache
@@ -183,9 +182,9 @@ def run(args):
           f"{'下架已受理 ' + str(totals['moved']) if args.apply else '预览 ' + str(len(rows))}"
           f" | 失败 {totals['failed']} | 店铺异常 {shop_errors}")
     if rows:
-        os.makedirs(config.current.log_dir, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(config.current.log_dir, f"被阻止商品_{ts}.csv")
+        now = datetime.now()
+        path = config.daily_log_dir(now) / f"被阻止商品_{now:%Y%m%d_%H%M%S}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=["店铺", "ID", "类型", "vendorCode",
                                               "中文名", "标题", "阻止原因", "结果"])

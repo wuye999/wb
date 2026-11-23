@@ -212,7 +212,7 @@ def run(args: Any) -> int:
     log.document.update(version=1, selection=dict(vc=requested, name=args.name, name_contains=getattr(args, "name_contains", None), all=args.all))
     try:
         # 同一 data 下串行覆盖历史读取、完整避重、提交与回执，避免两进程分配同码。
-        with FileLock(Path(paths.current.log_dir) / COMMAND):
+        with FileLock(Path(paths.current.state_dir) / COMMAND):
             return _run(args, requested, log)
     except Exception as exc:
         log.add(0, '*', 'failed', reason=safe_reason(exc))
@@ -228,7 +228,7 @@ def apply_frozen(args: Any) -> int:
     log.document['version'] = 1
     planned = args.frozen['items']
     ids = sorted({row['shopId'] for row in planned})
-    with FileLock(Path(paths.current.log_dir) / COMMAND), ExitStack() as stack:
+    with FileLock(Path(paths.current.state_dir) / COMMAND), ExitStack() as stack:
         _, shops = select_accesses(','.join(map(str, ids)))
         history = load_attempts()
         completed = {(row.shop_id, row.nm_id) for row in history}

@@ -237,8 +237,8 @@ def _save_targets(out: str, ts: str) -> List[str]:
     """候选落盘路径：--out 优先；否则中文名 → ASCII 别名（环境按文件名拦截时回退）。"""
     if (out or "").strip():
         return [os.path.abspath(out.strip())]
-    return [os.path.join(config.current.log_dir, f"订单动态统计_{ts}.xlsx"),
-            os.path.join(config.current.log_dir, f"order_stats_{ts}.xlsx")]
+    return [os.path.join(str(config.current.exports_dir), f"订单动态统计_{ts}.xlsx"),
+            os.path.join(str(config.current.exports_dir), f"order_stats_{ts}.xlsx")]
 
 
 def write_xlsx(result: Dict[str, Any], out: str = "", with_detail: bool = True,

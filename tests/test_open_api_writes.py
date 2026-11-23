@@ -262,7 +262,8 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertEqual(self.creation(), 0)
         self.assertFalse(self.wrote)
         self.assertEqual(store.load_state()['items'], {})
-        logs = list(Path(paths.current.log_dir).glob('*.json'))
+        logs = list(paths.daily_log_dir().glob('*.json'))
+        self.assertFalse(list(Path(paths.current.log_dir).rglob('*.lock')))
         plan = json.loads(logs[0].read_text(encoding='utf8'))['items'][0]
         self.assertEqual(plan['stock'], 0)
         self.assertEqual(plan['warehouse']['id'], 42)
@@ -460,7 +461,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.assertFalse(self.wrote)
         api.save_media.side_effect = NetworkError('fixture-secret')
         self.assertEqual(self.cli(*args, '--apply'), 1)
-        logs = [json.loads(path.read_text(encoding='utf8')) for path in Path(paths.current.log_dir).glob('*.json')]
+        logs = [json.loads(path.read_text(encoding='utf8')) for path in paths.daily_log_dir().glob('*.json')]
         row = next(doc['items'][0] for doc in logs if doc['apply'])
         self.assertEqual(row['status'], 'partial')
         self.assertTrue(row['cardReceipt']['accepted'])

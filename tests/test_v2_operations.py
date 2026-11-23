@@ -218,8 +218,10 @@ class OperationalExamples(unittest.TestCase):
                                               "--amount", "25", "--apply"), 0)
         self.assertEqual([(c.args[1], c.args[2]) for c in post.call_args_list], [
             (30 + sid, [{"chrtId": sid * 1000 + n, "amount": 25} for n in (1, 2, 3)]) for sid in (1, 2)])
-        with Path(paths.current.result_csv).open(encoding="utf-8-sig") as stream:
+        [receipt] = paths.daily_log_dir().glob("商品操作回执_*.csv")
+        with receipt.open(encoding="utf-8-sig") as stream:
             self.assertEqual(len(list(csv.DictReader(stream))), 6)
+        self.assertFalse((Path(paths.current.log_dir) / "ops_result.csv").exists())
 
     def test_partial_response_keeps_chinese_receipts_and_stops_this_shops_batches(self):
         from sellerops.integrations.wildberries import stocks
@@ -234,7 +236,7 @@ class OperationalExamples(unittest.TestCase):
                                   "--apply", "--chunk", "1", "--interval", "0")
         self.assertEqual(rc, 1)
         self.assertEqual([call.args[1] for call in post.call_args_list], [31, 32, 32])
-        [file] = Path(paths.current.log_dir).glob("商品操作回执_*.csv")
+        [file] = paths.daily_log_dir().glob("商品操作回执_*.csv")
         with file.open(encoding="utf-8-sig") as stream:
             detail = list(csv.DictReader(stream))
         self.assertEqual([row["状态"] for row in detail], ["已阻止", "已阻止", "已受理", "结果未知"])
@@ -258,13 +260,14 @@ class OperationalExamples(unittest.TestCase):
         send.assert_not_called()
 
     def test_data_directories_isolate_warehouse_receipts_and_snapshot(self):
-        from sellerops.persistence.product_results import append_results
+        from sellerops.persistence.product_results import ProductReceipt, write_product_receipts
         first = paths.current
         self.assertEqual(warehouse.resolve_warehouse(1), 31)
-        append_results(first, [[1, 1, "stock", 0, "OK", "test"]])
+        receipt = write_product_receipts(first, [ProductReceipt(1, {"chrtId": 1}, "stock", 0, "accepted")])
         second = paths.configure(self.folder / "second")
         with patch.object(warehouse, "list_stores", return_value=[{"id": 81, "name": "莫斯科"}]):
             self.assertEqual(warehouse.resolve_warehouse(1), 81)
         self.assertIsNone(Snapshots.load_shop_rows(1))
-        self.assertFalse(Path(second.result_csv).exists())
-        self.assertTrue(Path(first.result_csv).exists())
+        self.assertFalse(Path(second.log_dir).exists())
+        self.assertEqual(receipt.parent, paths.daily_log_dir(data=first))
+        self.assertTrue(receipt.is_file())

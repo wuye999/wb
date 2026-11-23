@@ -6,10 +6,11 @@
 4. 未归属商品、折扣和库存有歧义时先核对。用完整 VC 确认商品，按本次动作和店铺取本店 `nmId`、`chrtId`。《商品价格表.xlsx》由运营维护，程序只读。商品有卖家 SKU 时用 SKU，空白时用唯一的产品中文名。
 5. 用户要求更新快照才单独运行 `sync`。发现 `missing_shops` 时先请运营确认，获准后用 `shop archive` 软归档。各店使用自己的快照和状态。
 6. 凭证、数据库和运行资料留在各自的 `data/`，临时工作放 `_scratch/`。日常运营将项目源码和配置视为只读。授权开发先备份数据，再跑 `python scripts/check.py`。CLI 参数改动后重新生成参考并跑 `python scripts/check_docs.py`。
+7. 报表、HTML 工作台和发货 PDF 从 `exports/` 获取，运行日志和本次回执从 `data/logs/YYYY-MM-DD/` 获取。定期清理先用 `task clean --json` 预览，运营明确要求清理时加 `--apply`。默认保留最近 20 天，保护 `exports/workbench/` 和 `_scratch/README.md`。
 
 ## 常用查询和导出
 
-- `map workbench` 生成带图待认领工作台，路径见 `data.artifacts.html`。`map candidates` 查询分组和参考候选，用 `map batch-set --file` 或 `catalog merge` 按完整 VC 导入运营确认的审核 JSON。
+- `map workbench` 在 `exports/workbench/` 生成带图待认领工作台，路径见 `data.artifacts.html`。`map candidates` 查询分组和参考候选，用 `map batch-set --file` 或 `catalog merge` 按完整 VC 导入运营确认的审核 JSON。
 - `report mapping` 导出映射总览，路径看 `data.artifacts.workbook`。单店表加 `--shop-id`，把示例里的 `1001` 换成 `shop list` 返回的店铺 ID。以下示例默认使用项目的 `data/`。
 
 ```powershell

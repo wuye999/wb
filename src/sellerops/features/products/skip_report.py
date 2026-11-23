@@ -27,9 +27,10 @@ class SkipTracker:
     def report(self, action_label: str, show_detail: bool = True) -> list[tuple[int, str, str]] | None:
         if not self.items:
             return
-        folder = Path(config.current.log_dir)
+        now = datetime.now()
+        folder = config.daily_log_dir(now)
         folder.mkdir(parents=True, exist_ok=True)
-        report = folder / f'商品操作跳过_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:8]}.csv'
+        report = folder / f'商品操作跳过_{now:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}.csv'
         with report.open('w', encoding='utf-8-sig', newline='') as stream:
             writer = csv.writer(stream)
             writer.writerow(['操作', '店铺', 'vendorCode', '原因'])

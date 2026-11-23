@@ -96,7 +96,7 @@ def delete_records(base_token, table_id, rids):
 
 
 def write_report(groups, to_delete):
-    """保留/删除明细 → data/logs/飞书订单登记去重_{ts}.csv（utf-8-sig）"""
+    """保留/删除明细 → exports/飞书订单登记去重_{ts}.csv（utf-8-sig）"""
     def _w(f):
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
@@ -107,7 +107,7 @@ def write_report(groups, to_delete):
                 w.writerow({"订单编号": g["order_id"], "日期": d, "record_id": rid,
                             "动作": "删除", "组内序号": i})
 
-    return common.write_csv_preferred(config.current.log_dir, "飞书订单登记去重_{ts}.csv",
+    return common.write_csv_preferred(str(config.current.exports_dir), "飞书订单登记去重_{ts}.csv",
                                       "feishu_order_register_dedup_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 

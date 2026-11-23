@@ -153,7 +153,7 @@ class TestProductOperationData(unittest.TestCase):
             plan = plans.plan_stock([VC, *(row['vendorCode'] for row in broken)], [1], {}, 0, resolver=resolver)[0]
         self.assertEqual([it['chrtId'] for it in plan['items']], [201])
         self.assertEqual(len(plan['blocked_items']), 40)
-        reports = list(Path(paths.current.log_dir).glob('商品操作跳过_*.csv'))
+        reports = list(paths.daily_log_dir().glob('商品操作跳过_*.csv'))
         self.assertEqual(len(reports), 1)
         with reports[0].open(encoding='utf-8-sig', newline='') as stream:
             rows = list(csv.DictReader(stream))

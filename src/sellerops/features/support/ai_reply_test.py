@@ -3,7 +3,7 @@ sellerops AI 客服本地样例对照生成（会联网调用 LLM）
 
 读 data/ai_test_qa.json（真人问答对照数据集），对每条真实买家提问调用 ai_reply
 生成 AI 回复，终端打印并把「商品 | 买家问题 | 人工客服回复 | AI 回复」写成
-Markdown 报告（data/logs/ai_reply_test_*.md），供肉眼审查、迭代调 prompt。
+Markdown 报告（exports/ai_reply_test_*.md），供肉眼审查、迭代调 prompt。
 
 不访问 WB、无需 WB cookie；使用数据集 product 字段构造信息并请求真实 LLM，不能当作离线单元测试。
 """
@@ -55,9 +55,9 @@ def run(args):
     with open(args.qa, encoding="utf-8") as f:
         cases = json.load(f)
 
-    os.makedirs(config.current.log_dir, exist_ok=True)
+    os.makedirs(str(config.current.exports_dir), exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
-    out = os.path.join(config.current.log_dir, f"ai_reply_test_{ts}.md")
+    out = os.path.join(str(config.current.exports_dir), f"ai_reply_test_{ts}.md")
     lines = [
         "# AI 客服回复对照测试",
         "",

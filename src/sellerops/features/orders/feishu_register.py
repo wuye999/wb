@@ -245,7 +245,7 @@ def write_csv(records, existing_ids):
                 "已写入" if r.get("_written") else "待写入")
             w.writerow(row)
 
-    return common.write_csv_preferred(config.current.log_dir, "飞书订单登记_{ts}.csv",
+    return common.write_csv_preferred(str(config.current.exports_dir), "飞书订单登记_{ts}.csv",
                                       "feishu_order_register_{ts}.csv",
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 

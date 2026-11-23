@@ -9,7 +9,6 @@ WB 平台会标记包装尺寸/重量偏差的商品为需验证（“检查包�
 鉴权：WB cookie 三件套会话（wb_api.make_session），只读，不写 BCS / 不移回收站。
 """
 import csv
-import os
 import time
 from datetime import datetime
 
@@ -169,10 +168,10 @@ def run(args):
         time.sleep(SHOP_SLEEP)
 
     if rows:
-        os.makedirs(config.current.log_dir, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        now = datetime.now()
         fname = "尺寸" if typ == "dims" else ("重量" if typ == "weight" else "尺寸重量")
-        path = os.path.join(config.current.log_dir, f"{fname}偏差待验证_{ts}.csv")
+        path = config.daily_log_dir(now) / f"{fname}偏差待验证_{now:%Y%m%d_%H%M%S}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=["店铺", "ID", "偏差类型", "vendorCode", "中文名", "标题", "原因"])
             w.writeheader()

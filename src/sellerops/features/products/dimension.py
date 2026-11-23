@@ -11,7 +11,6 @@ sellerops 批量修改尺寸（dimension）
 import csv
 from itertools import islice
 from math import isfinite
-import os
 import re
 import time
 from datetime import datetime
@@ -164,8 +163,9 @@ def run(args):
 
     ok, fail, results = apply_plans(plans)
 
-    csv_path = os.path.join(config.current.log_dir, f"尺寸修改_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    os.makedirs(config.current.log_dir, exist_ok=True)
+    now = datetime.now()
+    csv_path = config.daily_log_dir(now) / f"尺寸修改_{now:%Y%m%d_%H%M%S}.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["时间", "店铺", "vc", "中文名", "nmId", "长", "宽", "高", "毛重", "结果", "原因"])
