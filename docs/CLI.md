@@ -107,8 +107,8 @@
 - `--prefix` 商品价格表前缀码
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
-- `--apply` 真正执行（默认 dry-run）
-- `--yes` 跳过不可逆操作确认
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
+- `--yes` 兼容保留；确认计划单后，用 apply --plan 提交
 - `--price` 指定正整数价格
 - `--keep-price` 保持各规格原价，须同时指定折扣
 - `--discount` 折扣 0-100，配合 --price 或 --keep-price
@@ -120,7 +120,7 @@
 
 ## product stock
 
-改库存（默认 WB 原生在线接口；dry-run 默认，归零须 --yes）
+预览库存修改计划（默认 WB 原生在线接口，归零用 --amount 0）
 
 实现入口 [run_stock](../src/sellerops/cli/product.py)
 
@@ -134,8 +134,8 @@
 - `--prefix` 商品价格表前缀码
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
-- `--apply` 真正执行（默认 dry-run）
-- `--yes` 跳过不可逆操作确认
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
+- `--yes` 兼容保留；确认计划单后，用 apply --plan 提交
 - `--amount` 目标库存，归零传 0
 - `--chunk` 每批提交条数（≤1000，探针实测 1000 可行，默认 500）
 - `--interval` 批/店间请求间隔秒
@@ -159,8 +159,8 @@
 - `--prefix` 商品价格表前缀码
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
-- `--apply` 真正执行（默认 dry-run）
-- `--yes` 跳过不可逆操作确认
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
+- `--yes` 兼容保留；确认计划单后，用 apply --plan 提交
 - `--chunk` 每批移回收站条数（≤300，默认 300）
 - `--interval` 批间间隔秒
 - `--channel` 提交平台，默认 WB 后台（wb / bcs）
@@ -200,12 +200,12 @@
 
 ## product banned
 
-查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）
+查询被阻止的商品；下架用 ops trash 生成计划单
 
 实现入口 [run](../src/sellerops/features/products/banned.py)
 
 - 必选其一 --shops / --all-shops
-- `--apply` 真正执行（默认 dry-run）
+- `--apply` 兼容保留；下架用 ops trash 生成计划单，确认后用 apply --plan 提交
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--limit` 每店最多处理 N 条（0=不限）
@@ -242,7 +242,7 @@
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
 - `--channel` （wb / bcs）
-- `--apply` 提交修改（默认预览）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--target` 目标折扣，必填（0 至 100）
 - `--threshold` 仅修改平台当前折扣严格高于此值的商品
 - `--below` 也修改平台当前折扣严格低于此值的商品（WB）
@@ -251,12 +251,12 @@
 
 ## product review-price
 
-价格审核：查看并应用新价格（降价 30-49.9% 进审查的商品）
+预览价格审核计划（降价 30-49.9% 进审查的商品）
 
 实现入口 [run](../src/sellerops/features/products/price_review.py)
 
 - 必选其一 --shops / --all-shops
-- `--apply` 真正应用新价格（默认 dry-run）
+- `--apply` 兼容保留；确认价格审核计划单后，用 apply --plan 提交
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--limit` 每店最多审核 N 个（0=全部）
@@ -281,7 +281,7 @@
 - `--price-multiplier` 价格来源乘数，按分四舍五入（默认 1）
 - `--stock` 上架库存（默认999，可显式设为0）
 - `--limit` 最多处理 N 个 vc（0=不限）
-- `--apply` 真正执行（默认 dry-run）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--interval` 批次上架请求间隔秒
 - `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
 
@@ -292,7 +292,7 @@
 实现入口 [run](../src/sellerops/features/publishing/bulk_publish.py)
 
 - 必选其一 --shops / --all-shops
-- `nms` WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+- `nms` WB 商品码列表（支持空格或逗号分隔，如 123456789 123456790）
 - `--nm` WB 商品码（逗号分隔多个，兼容命令行参数传参）
 - `--vc` 完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
@@ -308,10 +308,10 @@
 - `--all-shops` 本动作的全部目标店铺
 - `--stock` 上架库存量（默认 999）
 - `--cn` 商品中文名（辅助匹配价格与包装规格）
-- `--file` 批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+- `--file` 批量上架文件路径（支持 .txt 每行一个商品码、.json 商品列表或 .csv 表格）
 - `--cn-stock` 按中文名指定库存（'中文名:库存,...'）
 - `--interval` 批次/商品请求间隔秒（默认 1.0）
-- `--apply` 真正调用平台接口执行（默认仅 dry-run 预览）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 
 ## listing create-cards
 
@@ -320,7 +320,7 @@
 实现入口 [run](../src/sellerops/features/publishing/card_publish.py)
 
 - 必选其一 --shops / --all-shops
-- `nms` WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+- `nms` WB 商品码列表（支持空格或逗号分隔，如 123456789 123456790）
 - `--nm` WB 商品码（逗号分隔多个，兼容命令行参数传参）
 - `--vc` 完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
@@ -336,10 +336,10 @@
 - `--all-shops` 本动作的全部目标店铺
 - `--stock` 上架库存量（默认 999）
 - `--cn` 商品中文名（辅助匹配价格与包装规格）
-- `--file` 批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+- `--file` 批量上架文件路径（支持 .txt 每行一个商品码、.json 商品列表或 .csv 表格）
 - `--cn-stock` 按中文名指定库存（'中文名:库存,...'）
 - `--interval` 批次/商品请求间隔秒（默认 1.0）
-- `--apply` 真正调用平台接口执行（默认仅 dry-run 预览）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 
 ## listing publish-openapi
 
@@ -360,7 +360,7 @@
 - `--resume` 按 --shops/--vc 续办已有记录，不重新建卡；沿用原图片和库存计划
 - `--wait-timeout` 等待完整商品/规格标识的总时限秒（默认1800，0=只查询一次，最多7200）
 - `--wait-interval` 标识查询轮次间隔秒（默认15，范围1..60；仍遵守接口限流）
-- `--apply` 执行完整上架或续办流程（默认仅预览，不等待、不写入）
+- `--apply` 兼容保留；确认上架或续办计划单后，用 apply --plan 提交
 
 ## listing normalize-vc
 
@@ -376,7 +376,7 @@ WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店�
 - `--all` 全部非回收站商品；无明确归属的项记录阻止原因
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
-- `--apply` 提交改码（默认预览）；保留历史防重放日志，不更新本地映射/快照
+- `--apply` 兼容保留；确认改码计划单后，用 apply --plan 提交
 
 ## listing sync-cards
 
@@ -386,7 +386,7 @@ WB Open API：按相同完整 VC 将源店商品内容同步到其他店
 
 - 必选其一 --vc / --nm / --all
 - 必选其一 --shops / --all-shops
-- `--source-shop` 修改后的源店 BCS 店铺 ID（例如袁州1店对应 ID）
+- `--source-shop` 修改后的源店 BCS 店铺 ID（例如示例店铺对应的 1001）
 - `--vc` 源店完整 VC，逗号分隔
 - `--nm` 源店 WB 商品码，逗号分隔
 - `--all` 源店全部非回收站商品
@@ -428,7 +428,7 @@ WB Open API：按相同完整 VC 将源店商品内容同步到其他店
 实现入口 [run](../src/sellerops/features/marketing/promo_gap.py)
 
 - `--mode` 审计方向：gap=该推没推(默认) / waste=该关的(在推广但本店单数<阈值) / both=两个都出（gap / waste / both）
-- `--shops` 限定店铺，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部已填 cookie 店铺）
+- `--shops` 限定店铺，逗号分隔，支持店铺ID或短名（如 1001 或 示例店铺；默认全部已填 cookie 店铺）
 - `--min` 单数阈值（默认 4）：gap=单数≥N；waste=单数<N
 - `--days` 近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）
 - `--date` 单天 YYYY-MM-DD（等价 --begin=--end）
@@ -600,7 +600,7 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 - `--date` 单天 YYYY-MM-DD（等价 --begin=--end）
 - `--begin` 区间开始 YYYY-MM-DD（单独给按单天处理）
 - `--end` 区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）
-- `--shops` 店铺过滤，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部）
+- `--shops` 店铺过滤，逗号分隔，支持店铺ID或短名（如 1001 或 示例店铺；默认全部）
 - `--top` 控制台只显示前 N 名（0=全部；CSV 始终写全量）
 - `--by-prefix` 按 vendorCode 的 4 位前缀码聚合（默认完整 vendorCode）
 - `--no-cn` 不补全商品中文名（表内已有的仍会显示）
@@ -758,13 +758,13 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## task run
 
-每日任务（morning=报名+改价 / adjust-discounts=只改价）
+每日任务（morning=促销报名+生成折扣计划 / adjust-discounts=只生成折扣计划）
 
 实现入口 [run_daily_cmd](../src/sellerops/features/system/daily.py)
 
 - 必选其一 --shops / --all-shops
 - `mode` （morning / adjust-discounts）
-- `--apply` 执行每日流程（默认预览）
+- `--apply` 运行每日流程（默认只列步骤）；折扣计划仍需确认后用 apply --plan 提交
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 
@@ -869,8 +869,8 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--prefix` 商品价格表前缀码
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
-- `--apply` 真正执行（默认 dry-run）
-- `--yes` 跳过不可逆操作确认
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
+- `--yes` 兼容保留；确认计划单后，用 apply --plan 提交
 - `--price` 指定正整数价格
 - `--keep-price` 保持各规格原价，须同时指定折扣
 - `--discount` 折扣 0-100，配合 --price 或 --keep-price
@@ -883,7 +883,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## ops stock
 
-改库存（默认 WB 原生在线接口；dry-run 默认，归零须 --yes）
+预览库存修改计划（默认 WB 原生在线接口，归零用 --amount 0）
 
 实现入口 [run_stock](../src/sellerops/cli/product.py)
 
@@ -897,8 +897,8 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--prefix` 商品价格表前缀码
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
-- `--apply` 真正执行（默认 dry-run）
-- `--yes` 跳过不可逆操作确认
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
+- `--yes` 兼容保留；确认计划单后，用 apply --plan 提交
 - `--amount` 目标库存，归零传 0
 - `--chunk` 每批提交条数（≤1000，探针实测 1000 可行，默认 500）
 - `--interval` 批/店间请求间隔秒
@@ -923,8 +923,8 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--prefix` 商品价格表前缀码
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
-- `--apply` 真正执行（默认 dry-run）
-- `--yes` 跳过不可逆操作确认
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
+- `--yes` 兼容保留；确认计划单后，用 apply --plan 提交
 - `--chunk` 每批移回收站条数（≤300，默认 300）
 - `--interval` 批间间隔秒
 - `--channel` 提交平台，默认 WB 后台（wb / bcs）
@@ -947,7 +947,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--vc` 完整 VC，多个用逗号分隔
 - `--all-products` 目标店铺全部在架商品，保留人工排除记录（全店折扣按平台清单）
 - `--channel` （wb / bcs）
-- `--apply` 提交修改（默认预览）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--target` 目标折扣，必填（0 至 100）
 - `--threshold` 仅修改平台当前折扣严格高于此值的商品
 - `--below` 也修改平台当前折扣严格低于此值的商品（WB）
@@ -957,12 +957,12 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## ops review-price
 
-价格审核：查看并应用新价格（降价 30-49.9% 进审查的商品）
+预览价格审核计划（降价 30-49.9% 进审查的商品）
 
 实现入口 [run](../src/sellerops/features/products/price_review.py)
 
 - 必选其一 --shops / --all-shops
-- `--apply` 真正应用新价格（默认 dry-run）
+- `--apply` 兼容保留；确认价格审核计划单后，用 apply --plan 提交
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--limit` 每店最多审核 N 个（0=全部）
@@ -988,7 +988,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--price-multiplier` 价格来源乘数，按分四舍五入（默认 1）
 - `--stock` 上架库存（默认999，可显式设为0）
 - `--limit` 最多处理 N 个 vc（0=不限）
-- `--apply` 真正执行（默认 dry-run）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--interval` 批次上架请求间隔秒
 - `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
 - `--json` 输出单个 JSON 对象
@@ -1000,7 +1000,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 实现入口 [run](../src/sellerops/features/publishing/bulk_publish.py)
 
 - 必选其一 --shops / --all-shops
-- `nms` WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+- `nms` WB 商品码列表（支持空格或逗号分隔，如 123456789 123456790）
 - `--nm` WB 商品码（逗号分隔多个，兼容命令行参数传参）
 - `--vc` 完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
@@ -1016,10 +1016,10 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--all-shops` 本动作的全部目标店铺
 - `--stock` 上架库存量（默认 999）
 - `--cn` 商品中文名（辅助匹配价格与包装规格）
-- `--file` 批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+- `--file` 批量上架文件路径（支持 .txt 每行一个商品码、.json 商品列表或 .csv 表格）
 - `--cn-stock` 按中文名指定库存（'中文名:库存,...'）
 - `--interval` 批次/商品请求间隔秒（默认 1.0）
-- `--apply` 真正调用平台接口执行（默认仅 dry-run 预览）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
 
 ## ops create-cards
@@ -1029,7 +1029,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 实现入口 [run](../src/sellerops/features/publishing/card_publish.py)
 
 - 必选其一 --shops / --all-shops
-- `nms` WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）
+- `nms` WB 商品码列表（支持空格或逗号分隔，如 123456789 123456790）
 - `--nm` WB 商品码（逗号分隔多个，兼容命令行参数传参）
 - `--vc` 完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
@@ -1045,10 +1045,10 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--all-shops` 本动作的全部目标店铺
 - `--stock` 上架库存量（默认 999）
 - `--cn` 商品中文名（辅助匹配价格与包装规格）
-- `--file` 批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）
+- `--file` 批量上架文件路径（支持 .txt 每行一个商品码、.json 商品列表或 .csv 表格）
 - `--cn-stock` 按中文名指定库存（'中文名:库存,...'）
 - `--interval` 批次/商品请求间隔秒（默认 1.0）
-- `--apply` 真正调用平台接口执行（默认仅 dry-run 预览）
+- `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
 
 ## ops publish-openapi
@@ -1070,7 +1070,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--resume` 按 --shops/--vc 续办已有记录，不重新建卡；沿用原图片和库存计划
 - `--wait-timeout` 等待完整商品/规格标识的总时限秒（默认1800，0=只查询一次，最多7200）
 - `--wait-interval` 标识查询轮次间隔秒（默认15，范围1..60；仍遵守接口限流）
-- `--apply` 执行完整上架或续办流程（默认仅预览，不等待、不写入）
+- `--apply` 兼容保留；确认上架或续办计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
 
 ## ops normalize-vc
@@ -1087,7 +1087,7 @@ WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店�
 - `--all` 全部非回收站商品；无明确归属的项记录阻止原因
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
-- `--apply` 提交改码（默认预览）；保留历史防重放日志，不更新本地映射/快照
+- `--apply` 兼容保留；确认改码计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
 
 ## apply

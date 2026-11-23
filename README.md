@@ -12,6 +12,7 @@ WorkBuddy 先用 `doctor --json` 体检。首次配置时用 `sync` 获取快照
 
 | 读者或任务 | 阅读入口 |
 | --- | --- |
+| 老板与电商运营（WorkBuddy 快速上手） | [用户使用手册](user-guide/README.md)：零代码功能速览、快速上手与日常话术速查 |
 | 第一次使用 | 本页安装与数据准备 → [配置](docs/CONFIGURATION.md) → [操作流程](docs/USAGE.md) |
 | 日常查询与运营 | [操作流程](docs/USAGE.md)、[命令参考](docs/CLI.md) |
 | 连接或更新平台凭证 | [WorkBuddy 平台连接](docs/CONFIGURATION.md#通过-workbuddy-连接平台) |
@@ -39,7 +40,7 @@ python -m venv .venv
 
 ## 更新已有环境
 
-从 1.0 升级时先看 [57 个旧命令的迁移对照及回退步骤](docs/MIGRATION.md)。
+从 1.0 升级时先看 [旧命令迁移对照及回退步骤](docs/MIGRATION.md)。
 
 已有用户可沿用原来的 `data/`、`.venv` 和有效的平台会话。更新后请按下文核对仓库和交运渠道配置。更新前先停止本项目的运行进程，在项目根目录执行：
 
@@ -76,7 +77,7 @@ wb/
 
 在商品价格表的「发货方式」列填写「马帮发货」「WB发货」或「不处理」。「马帮发货」须填写「马帮库存SKU」，其余两种方式让该列留空。详见 [商品价格表](docs/DATA.md#商品价格表)。
 
-默认 data 路径由项目位置确定，不随终端工作目录变化。只有需要单独存放数据时才使用 `--data-dir` 或 `SELLEROPS_DATA_DIR`；优先级为命令行、环境变量、项目根目录 data。全局参数放在子命令之前：
+默认 data 路径由项目位置确定，不随终端工作目录变化。只有需要单独存放数据时才使用 `--data-dir` 或 `SELLEROPS_DATA_DIR`。优先级为命令行、环境变量、项目根目录 data。`--data-dir` 可放在子命令前后。
 
 ```powershell
 python run.py --data-dir "D:\SellerData" shop list
@@ -89,24 +90,25 @@ python run.py --data-dir "D:\SellerData" shop list
 以下命令显示帮助或预览，不访问平台、不注册任务：
 
 ```powershell
-python run.py product price --help
+python run.py ops price --help
 python run.py task run morning --all-shops
 python run.py task schedule
 ```
 
-配置完成后可查询 BCS 店铺列表：
+`doctor` 检查本机环境与配置状态，只有加 `--check-online` 才联网探测会话。`shop list` 查询本地库中的店铺和快照状态。
 
 ```powershell
 python run.py doctor --json
+python run.py shop list --json
 ```
 
-默认体检只读取本机信息。需要检查现有会话时显式使用 `doctor --check-online --json`。已有价格表和快照时，按自己的店铺和商品生成操作预览：
+已有价格表和快照时，按自己的店铺和商品生成操作预览。
 
 ```powershell
 python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
 ```
 
-店铺 ID 和商品名都是占位示例。核对范围、数量、价格及授权后，再对相同范围显式提交：
+店铺 ID、商品名和计划单号均为占位示例。核对范围、数量和价格，经运营确认后，用本次预览的单号提交。
 
 ```powershell
 python run.py apply --plan P018
@@ -119,8 +121,8 @@ python run.py apply --plan P018
 - 凡涉及 WB 仓库的操作，仅使用各店铺按 `wb.warehouse_keyword` 确认的唯一仓库 ID。运营应配置经核实的莫斯科业务仓。全店或全部商品只扩大商品范围。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许莫斯科)。
 - 普通用户及其运营 AI 使用已有命令，维护自己的 data；源码、文档、依赖声明和项目配置保持只读，临时脚本与产物放 `_scratch/`。维护者及其明确授权的开发任务按开发指南修改项目。
 - WB/BCS 写入异步处理。提交并记录接口结果后结束，不进行写后查询验证，不附加同步、拉取或合并。需要更新数据时，由用户单独要求运行 `catalog fetch`。
-- `listing publish-openapi` 包含建卡、有限等待新商品/规格标识、图片与莫斯科仓库存提交；该标识轮询是上架必要步骤，图片/库存受理后不回读验证。超时可用同一命令的 `--resume` 续办，不重复建卡。
-- `--apply` 提交业务写入，部分操作还需 `--yes`；不同命令的确认机制不同。保留任务号与成功、失败、跳过明细，非零退出可能已有部分提交，不能盲目整批重试。
+- 官方上架超时后，可用 `ops publish-openapi --resume` 预览续办计划，确认后用 `apply --plan` 提交剩余阶段。
+- 商品计划类操作用 `ops` 预览、`apply --plan` 提交。其余写操作按各自命令规则使用 `--apply`，部分操作还需 `--yes`。非零退出时先核对本次回执和任务号。
 - Windows 任务记录注册时的解释器、代码和数据路径；移动项目或更换环境后需重新注册，并避免同一业务重复执行。
 
 ## 开发检查

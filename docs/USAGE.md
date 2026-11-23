@@ -18,26 +18,28 @@ python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
 python run.py apply --plan P018 --json
 ```
 
-`P018` 为示例，提交时用本次预览的单号。改价、折扣、库存、下架、上架、改码的旧命令也可用于预览，实际写请求通过 `apply --plan` 发送。每日折扣任务会生成待确认单号。
+`P018` 为示例，提交时用本次预览的单号。改价、价格审核、折扣、库存、下架、上架和改码首选 `ops` 预览，运营确认后用 `apply --plan` 提交。对应的 `product` 和 `listing` 子命令保留为兼容预览入口。
 
 命令均在项目根目录执行，店铺 ID `1001`、商品码 `123456789` 和商品名仅为示例。批量商品命令要求明确指定店铺和商品范围。只读查询与履约任务的默认范围见对应命令。完整参数见 [CLI](CLI.md)，配置见 [CONFIGURATION](CONFIGURATION.md)。
 
-`doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report`、`task clean` 加 `--json` 后，标准输出始终是一条 JSON。进度和日志走 stderr；失败也会返回中文摘要和下一步提示。报表文件路径见 `data.artifacts`。
+支持 `--json` 的命令会在 stdout 返回单条 UTF-8 JSON，进度和日志走 stderr。整体解析 stdout，按 `ok`、`summary`、`next_action` 了解结果。计划范围见 `data.scope`，单号见 `plan_id`，提交回执见 `data.receipt`，报表路径见 `data.artifacts`。未加 `--json` 时，部分兼容入口和 `report products` 会在普通输出末行附旧版 JSON 摘要，文件路径在该摘要的 `artifacts` 字段。
 
 ## 看懂读写边界
 
 | 操作类型 | 命令 | 执行行为 |
 | --- | --- | --- |
-| 不联网的帮助/任务预览 | 任意 `--help`、daily/schedule 不加 --apply | 显示定义，不执行平台业务任务 |
-| 平台查询与报表 | shops、product-report、orders、dims-check、promo-goods、promo-gap、feishu-vc-stats、fbs-delivery、order-stats、chats、appeals、ratings | 读取对应平台，通常生成本地输出；orders 默认先同步订单 |
-| 本地工作台与映射 | map workbench、map batch-set、map check-mismatch、catalog rename、report mapping | 使用本地库，按需生成 HTML 或 Excel |
-| 数据更新 | fetch | 默认走 BCS 快照（先同步再读 BASE 缓存）；显式 --source wb-openapi 才从 WB 官方接口完整采集商品、价格及莫斯科仓库存 |
-| 业务写入 | 商品改价、折扣、库存、下架、上架、改码 | 用 ops 预览并按单号 apply。清理、促销、履约、飞书和客服按各自命令提交。 |
-| 会话/AI | login、ai-test、客服监听 | 可能回写凭证/状态或调用 LLM；细节见下文 |
+| 本机检查与预览 | 任意 `--help`、`doctor`、不加 `--apply` 的 `task run` 和 `task schedule` | 检查本机或列出步骤。`doctor --check-online` 才联网探测 |
+| 本地查询、工作台与导出 | `shop list`、`map workbench`、`map check-mismatch`、`report mapping` | `shop list` 查本地店铺和快照状态，其他命令按需生成 HTML 或 Excel |
+| 本地归属 | `map batch-set`、`catalog merge`、`catalog rename` | 前两者导入审核 JSON，后者修正归属 |
+| 平台查询与报表 | `report products`、`order list`、`product check-dimensions`、`marketing ads`、`marketing audit`、`report vc-sales`、`report delivery`、`report orders`、`report ratings`、`support chats`、`support appeals` | 读取对应平台，按命令生成本地输出。`order list` 默认先同步订单 |
+| 商品快照更新 | `sync`、`catalog fetch` | 默认先同步 BCS 快照再读缓存，使用 `--source wb-openapi` 从 WB 官方接口采集商品、价格及莫斯科仓库存 |
+| 商品计划与提交 | `ops`、`apply --plan` | 先预览生成计划单，经运营确认后按单号提交 |
+| 其他写入与任务 | `marketing enroll`、`product dimensions`、`product clean`、`listing sync-cards`、履约、飞书和客服写命令、`task run`、`task schedule` | 按各命令规则使用 `--apply`。每日折扣只生成待确认计划 |
+| 会话与 AI | `login`、`support ai-test`、`support watch-questions`、`support watch-chats` | 按命令回写凭证或状态，或调用 LLM |
 
 所有 WB/BCS 写入提交并记录结果后结束，不做写后查询，不追加同步或映射表合并。终端中的“提交成功”不是即时最终状态证明。本地日志、接口错误和任务号是本次汇报依据。
 
-`listing publish-openapi` 的建卡受理后标识轮询是完成后续上架所需的业务步骤：仅查询待办完整 VC 的本店 nmID/chrtID 和生成条码，有时间与轮次上限；图片/库存提交后不查询最终结果。
+官方上架计划提交后，建卡受理后的标识轮询是完成后续上架所需的业务步骤。仅按待办完整 VC 查询本店 nmID/chrtID 并核对生成条码，有时间与轮次上限。图片和库存提交后结束。
 
 ## 当前运行约定
 
@@ -106,7 +108,7 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 
 商品范围与店铺范围各选一项。--shops 接受逗号分隔的明确 ID，--all-shops 表示该通道全部店铺。--name 是完整中文名，--name-contains 才是包含匹配。--all-products 代表全部商品。库存数量必须显式传入，含清零的 --amount 0。
 
-先看预览，确认后才执行相同范围的写入：
+先用 `ops` 预览生成计划，确认后用 `apply --plan` 提交对应单号。
 
 ```powershell
 python run.py ops price --shops 1001 --name "示例商品" --price 55
@@ -116,17 +118,18 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 
 | 用户意图 | WorkBuddy 首选命令 | 修改字段 |
 | --- | --- | --- |
-| 指定价格 | `product price --price P` | 价格 |
-| 同时指定价格与折扣 | `product price --price P --discount D` | 价格、折扣 |
-| 保持原价并设折扣 | `product price --keep-price --discount D` | 折扣 |
-| 只设折扣 | `product discount --target D` | 折扣 |
-| 设置库存 | `product stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
+| 指定价格 | `ops price --price P` | 价格 |
+| 同时指定价格与折扣 | `ops price --price P --discount D` | 价格、折扣 |
+| 保持原价并设折扣 | `ops price --keep-price --discount D` | 折扣 |
+| 只设折扣 | `ops discount --target D` | 折扣 |
+| 设置库存 | `ops stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
+| 审核新价格 | `ops review-price` | 待审核价格 |
 
-三项命令默认使用 WB 卖家后台。每条命令都需加店铺范围与商品范围。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
+`ops price`、`ops discount` 和 `ops stock` 默认使用 WB 卖家后台，需指定店铺与商品范围。`ops review-price` 用 `--shops` 或 `--all-shops` 指定要查询待审核商品的店铺。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
 
-`product price` 和 `ops price` 必须选择正整数 `--price`，或使用 `--keep-price` 搭配折扣。BCS 可用 `--channel bcs --club-discount D` 搭配任一价格意图。
+`ops price` 必须选择正整数 `--price`，或使用 `--keep-price` 搭配折扣。BCS 可用 `--channel bcs --club-discount D` 搭配任一价格意图。
 
-`product stock` 默认使用本地映射及快照中可确认归属的商品筛选供应商代码，并从本地商品快照解析规格 ID（`--resolve snapshot`）。库存归零直接将目标规格设为 0，不需要先联网读取当前库存，即使本地库存未知或已为 0 也照常提交。缺少必要标识时按下表定向补齐；仍无法确认仓库或完整规格的商品会被阻止，预览和执行均以非零状态报告。仓库 ID 仍需逐店确认，更新商品快照使用独立的 `catalog fetch`。
+`ops stock` 默认使用本地映射及快照中可确认归属的商品筛选供应商代码，并从本地商品快照解析规格 ID（`--resolve snapshot`）。库存归零直接将目标规格设为 0，不需要先联网读取当前库存，即使本地库存未知或已为 0 也照常提交。缺少必要标识时按下表定向补齐；仍无法确认仓库或完整规格的商品会被阻止，预览和执行均以非零状态报告。仓库 ID 仍需逐店确认，更新商品快照使用独立的 `catalog fetch`。
 
 各类操作只依赖真正需要的字段：
 
@@ -134,19 +137,19 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 | --- | --- | --- |
 | 设置库存 | 本店完整、归属唯一的 chrtId，以及已确认的莫斯科仓 ID | 不要求旧库存、现价、图片或包装尺寸；规格标识缺失时定向查询本店商品卡 |
 | 普通改价 | 本店 nmId 和 `--price` 指定的目标价 | 缺 nmId 时定向补齐 |
-| WB `product price --keep-price --discount` / 不限原折扣的 `product discount` | 本店 nmId 和目标折扣 | 仅提交折扣，不传价格；缺现价、规格或旧折扣不阻止操作。按原折扣阈值筛选时，每轮通过 WB 官方价格接口读取本店商品当前值 |
+| WB `ops price --keep-price --discount` / 不限原折扣的 `ops discount` | 本店 nmId 和目标折扣 | 仅提交折扣，不传价格；缺现价、规格或旧折扣不阻止操作。按原折扣阈值筛选时，预览通过 WB 官方价格接口读取本店商品当前值 |
 | 修改包装尺寸/毛重 | 本店 nmId，以及参数或价格表中的目标尺寸 | 不要求旧尺寸、规格或库存；缺 nmId 时定向补齐 |
 | 下架 | 本店 nmId、完整 chrtId 和已确认的莫斯科仓 ID | 不要求旧库存；先补齐必要标识，再提交全部规格清零，清零受理不完整时仍阻止下架 |
 
-`product price`、`product stock`、`product discount` 和 `report products` 在标准输出末尾附加一行 UTF-8 JSON。用 `artifacts` 定位本次实际生成的 CSV 或 Excel。商品计数按本店商品卡，库存另列规格计数。摘要区分完整预览、完整提交、已确认无待办、部分成功及失败，店铺范围未知时对应数量为 `null`。逐项回执保存在 `data/logs/YYYY-MM-DD/商品操作回执_*.csv`，区分已受理、明确失败、结果未知、已阻止和正常跳过，`--auto-review` 单列审核结果。
+商品计数按本店商品卡，库存另列规格计数。摘要区分完整预览、完整提交、已确认无待办、部分成功及失败，店铺范围未知时对应数量为 `null`。按回执路径打开本次逐项明细，默认在 `data/logs/YYYY-MM-DD/商品操作回执_*.csv`。明细区分已受理、明确失败、结果未知、已阻止和正常跳过，`--auto-review` 单列审核结果。
 
 定向补齐使用 BCS 保存的该店官方 apiKey 和中国区接口，只查询本地已有但必要字段不完整的商品；按完整 VC 精确匹配，核对已有 nmId，不从其他店借用标识。完整本地数据不额外查询商品；不自动全量扫描平台、不刷新本地快照、不触发 BCS 同步或映射合并，也不更换写入通道。该店官方鉴权失败会阻止整店提交。限流或网络读取失败时停止该店后续补齐，已具备必要字段的商品可继续。显式 BCS 保价写入（含独立折扣命令）要求每个规格价格可确认、全部相同，且商品级价格可精确到分提交。遇到异价、缺价或超精度时阻止该商品。
 
 按名称或 SKU 筛选使用库中已确认的归属；新快照中待确认的完整 VC 可以先在工作台核对。批量操作完整的跳过明细保存在 `data/logs/YYYY-MM-DD/商品操作跳过_*.csv`。
 
-改价与设库存默认走 WB；`--channel bcs` 是另选的 BCS 通道。WB 网页会话失效时先用 `login wb` 恢复，不要让 AI 自动换通道提交同一批可能已被接受的操作。`product stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店莫斯科仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
+改价与设库存默认走 WB；`--channel bcs` 是另选的 BCS 通道。WB 网页会话失效时先用 `login wb` 恢复，不要让 AI 自动换通道提交同一批可能已被接受的操作。`ops stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店莫斯科仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
 
-计划在预览和执行前均阻止目标价低于或等于已知原价一半的商品。规格 ID 同时被本店不同卡认领时，库存与下架清零均阻止涉及的目标卡，即使另一张卡未被选中。明确需要审核新价格时，可单独预览/执行 `product review-price`；用户明确要求整合审核时才使用支持它的 `--auto-review`。
+计划阻止目标价低于或等于已知原价一半的商品。规格 ID 同时被本店不同卡认领时，库存与下架清零均阻止涉及的目标卡，即使另一张卡未被选中。需要审核新价格时，用 `ops review-price` 预览，确认后用 `apply --plan` 提交。用户明确要求整合审核时才使用支持它的 `--auto-review`。
 
 ## 发布商品与跨店补齐
 
@@ -161,9 +164,9 @@ python run.py ops replicate --shops 1001 --name "示例商品" --limit 1
 
 普通上架须确认价格表中的商品。有卖家 SKU 时可指定 `--sku`，批量 JSON 每行可填 `sellerSku`。没有 SKU 时可用唯一的产品中文名 `--cn`。编码优先保留完整 `--vc`，其次沿用 `--prefix`，然后使用已确认商品在价格表中唯一登记的前缀。缺失或多人共用时补 `--prefix`，也可经运营确认加 `--random-prefix`。随机前缀在预览时生成，随商品键、完整 VC 和编码来源一起保存。批量接口无法原样生成的完整 VC 改用 `ops create-cards` 预览。平台明确受理后本地保存完整 VC 的归属。升级前未提交的普通上架计划需要重新预览一次。
 
-`listing replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码取自选中的源店快照，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
+`ops replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码取自选中的源店快照，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
 
-BCS 建卡已停用商品详情代理。`listing create-cards` 和 `listing replicate` 默认用 `card.json` 合成详情，生成一条尺码为 `0` 的规格。`listing create-cards --file` 的 JSON 商品项仍可通过 `extra.wb_detail.sizes` 提供规格，建卡只取第一条并写入目标 VC 和价格。`listing replicate` 使用合成规格，源商品的非零尺码及其他规格不会带入新卡。
+BCS 建卡已停用商品详情代理。`ops create-cards` 和 `ops replicate` 默认用 `card.json` 合成详情，生成一条尺码为 `0` 的规格。`ops create-cards --file` 的 JSON 商品项仍可通过 `extra.wb_detail.sizes` 提供规格，建卡只取第一条并写入目标 VC 和价格。`ops replicate` 使用合成规格，源商品的非零尺码及其他规格不会带入新卡。
 
 复制上架可分别限定源店与目标店，并按商品价格表的「最低售价」定价：
 
@@ -173,7 +176,7 @@ python run.py ops replicate --source-shops 1001,1002 --shops 1003 --price-source
 
 示例生成计划单，经确认后用 `apply --plan` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认 1。`minimum` 必须匹配唯一的同中文名最低售价。金额按分四舍五入，库存默认 999，显式 0 保留为 0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，仅解析目标店莫斯科仓；任一目标仓缺失时阻止该商品组，提交后记录受理响应并结束。
 
-备用官方上架与跨店内容更新使用 `listing publish-openapi`、`listing sync-cards`，详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。原有 BCS 上架默认入口保留。上架支持自有源店与任意 WB 商品码，统一完成建卡、有限标识等待、图片/莫斯科库存提交；超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再用新单号续办。内容同步按完整 VC 匹配本店商品码，单独使用其 `--apply`。
+备用官方上架使用 `ops publish-openapi` 预览，经确认用 `apply --plan` 提交。支持自有源店与任意 WB 商品码，依次完成建卡、有限标识等待、图片和莫斯科库存提交。超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再确认并提交新单。跨店内容更新使用 `listing sync-cards`，按完整 VC 匹配本店商品码，用该命令的 `--apply` 提交。详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。
 
 历史随机 VC 前缀使用 `ops normalize-vc --shops 1001 --name "示例商品"` 生成计划单。写入只改前缀不一致的商品，保留原尾部；店铺或回收站资料不完整先停止。详见 [VC 前缀规范化](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。
 
@@ -188,11 +191,11 @@ python run.py product banned --shops 1001 --limit 10
 python run.py product clean --target draft --shops 1001 --limit 10
 ```
 
-- 自定义尺寸沿用显式商品范围。省略 `--dims` 时使用每个完整 VC 对应价格表行的包装尺寸。
-- `ops trash` 从本地快照读取商品和全部规格 ID，先清莫斯科仓库存，再移回收站；无需先单独运行 stock，也不全量查询远端商品或库存。无法确认唯一可用的莫斯科仓库时阻止该店；商品 ID 或任一规格 ID 缺失时阻止该商品，不只清部分规格后下架。
-- 清库存失败或受理回执不完整时，受影响商品不会移回收站，其他正常商品继续；命令返回非零状态，日志记录被阻止原因。预览发现不完整计划也返回非零状态。收到清零受理回执后直接进入回收站提交，不进行写后查询验证。`product trash --channel bcs` 同样遵守清库存前提，是独立 BCS 通道，不作为 WB 失败后的自动兜底。
+- `product dimensions` 沿用显式商品范围，确认后加 `--apply`。省略 `--dims` 时使用每个完整 VC 对应价格表行的包装尺寸。
+- `ops trash` 从本地快照读取商品和全部规格 ID 生成计划。经确认用 `apply --plan` 提交，由计划先清本店莫斯科仓库存，再移回收站。无法确认唯一可用的莫斯科仓时阻止该店，商品 ID 或任一规格 ID 缺失时阻止该商品。
+- 清库存失败或受理回执不完整时，受影响商品不会移回收站，其他正常商品继续；命令返回非零状态，日志记录被阻止原因。预览发现不完整计划也返回非零状态。收到清零受理回执后直接进入回收站提交，不进行写后查询验证。`ops trash --channel bcs` 同样遵守清库存前提，是独立 BCS 通道，不作为 WB 失败后的自动兜底。
 - `product banned` 可列出被阻止的商品。要下架时用清单中的完整 VC 生成 `ops trash` 计划并确认单号。
-- `product clean` 以 --target 选择草稿箱、回收站或两者。预览和删除使用同一份受 --limit 约束的清单，提交须 --apply --yes。回收站需要归零时通过 BCS 提交本店莫斯科仓对应规格，归零已受理后才通过 WB 删除。结果依据按商品 ID 返回的受理回执。
+- `product clean` 用 `--target` 选择草稿箱、回收站或两者。预览和执行会分别重新读取清单，`--limit` 只限制本次数量。删除须加 `--apply --yes`。回收站需要归零时通过 BCS 提交本店莫斯科仓对应规格，归零受理后才通过 WB 删除。结果依据按商品 ID 返回的受理回执。
 
 这些操作不能仅凭“有 dry-run”就扩大范围或自动确认。
 
@@ -203,7 +206,7 @@ python run.py ops discount --shops 1001 --name "示例商品" --target 50
 python run.py ops discount --shops 1001 --threshold 55 --below 40 --target 50 --all-products
 python run.py ops discount --channel bcs --shops 1001 --threshold 50 --target 50 --all-products
 python run.py marketing enroll --shops 1001
-python run.py product review-price --shops 1001
+python run.py ops review-price --shops 1001
 python run.py marketing ads --shops 1001
 python run.py marketing audit --shops 1001 --mode both --days 7
 ```
@@ -245,20 +248,20 @@ python run.py order register --scope all --date 2026-10-01
 
 ### WB 发货群供货与 PDF
 
-`order group-ship` 单独查询 BCS 配置店铺的 WB FBS 新增订单。逐店按完整 VC 匹配商品价格表，在本店已配置的 WB 仓库中为「WB发货」商品组建供货。同店同名合为一个供货。已确认商品中文名但发货方式留空或无效的订单会列为阻止项。
+`order group-ship` 单独查询 BCS 配置店铺的 WB FBS 新增订单。逐店按完整 VC 匹配商品价格表，在本店已确认的莫斯科仓内为「WB发货」商品组建供货。同店同名合为一个供货。目标仓订单未认领或发货方式留空、无效时列为阻止项。店铺无法确认唯一可用仓库时停止该店，「WB发货」订单缺少可确认的仓库 ID 时阻止该单，明确属于其他仓库的订单跳过。
 
 马帮把 WB 发货订单记录为 `GROUP_SHIPPING`，跳过库存匹配更换、预报和交运。飞书仍按订单编号登记，「库存SKU」留空。空 SKU 在马帮库存日统计中计入无 SKU 订单。
 
 ```powershell
 python run.py order group-ship
-python run.py order group-ship --shops 9352 --name 黑丝假发
-python run.py order group-ship --shops 9352 --name 黑丝假发 --apply
-python run.py order group-ship --shops 9352 --resume --apply
+python run.py order group-ship --shops 1001 --name "示例商品"
+python run.py order group-ship --shops 1001 --name "示例商品" --apply
+python run.py order group-ship --shops 1001 --resume --apply
 ```
 
-默认预览，不创建供货。加 `--apply` 后建供货、加入全部订单、提交配送，再按本次供货号和订单 ID 取 WB 原码。加入每次最多 100 单，超过时分次加入同一个供货。订单的货物尺寸、跨境或 B2B 属性无法合并，或缺平台必填标识时，整组留待人工处理。
+预览会在 `data/logs/YYYY-MM-DD/` 写入 JSON 明细，路径见终端输出。加 `--apply` 后才建供货、加入全部订单、提交配送，再按本次供货号和订单 ID 取 WB 原码。加入每次最多 100 单，超过时分次加入同一个供货。订单的货物尺寸、跨境或 B2B 属性无法合并，或缺平台必填标识时，整组留待人工处理。
 
-供货名如 `20261111-103500_袁州1(9352)_黑丝假发_2单`，使用新加坡时间。PDF 用较短的文件名，例如 `袁州1(9352)_黑丝假发_2单_1234567_供货码.pdf` 和 `袁州1(9352)_黑丝假发_2单_1234567_标签.pdf`，数字编号对应 WB 供货 `WB-GI-1234567`。按供货创建日建文件夹，例如 `exports/fbs_shipments/20261111/`，同一天所有店铺的 PDF 集中保存，续办沿用原供货日期。供货二维码是 58 × 40 mm 的一页，订单标签是 40 × 30 mm 的每单一页。两份文件都通过检查并保存后才记录为导出完成。
+供货名如 `20261111-103500_示例店铺(1001)_示例商品_2单`，使用新加坡时间。PDF 用较短的文件名，例如 `示例店铺(1001)_示例商品_2单_1234567_供货码.pdf` 和 `示例店铺(1001)_示例商品_2单_1234567_标签.pdf`，数字编号对应 WB 供货 `WB-GI-1234567`。按供货创建日建文件夹，例如 `exports/fbs_shipments/20261111/`，同一天所有店铺的 PDF 集中保存，续办沿用原供货日期。供货二维码是 58 × 40 mm 的一页，订单标签是 40 × 30 mm 的每单一页。两份文件都通过检查并保存后才记录为导出完成。
 
 配送已受理但 PDF 未导出时，用 `--resume --apply` 按原供货号和文件名补取；只加 `--resume` 查看记录。部分加入失败或写入结果不明时，按 `data/state/WB_FBS发货群供货.json` 中的批次回执人工处理。两份 PDF 是配送后的业务产物，结束后不附加回读验证或同步。
 
@@ -313,18 +316,19 @@ python run.py task run adjust-discounts --all-shops
 python run.py task schedule
 ```
 
-morning 执行促销报名和折扣调整，adjust-discounts 只执行折扣调整。`task run adjust-discounts --all-shops --apply` 会写平台。daily 预览只打印步骤，用户授权后可以使用：
+`task run` 默认只打印步骤。`task run adjust-discounts --apply` 生成待确认折扣计划单。`task run morning --apply` 提交促销报名，报名步骤成功后生成待确认折扣计划单。折扣单号见本次日志，经运营确认后用 `apply --plan` 提交。
 
 ```powershell
 python run.py task run morning --shops 1001 --apply
+python run.py task run adjust-discounts --shops 1001 --apply
 python run.py task schedule --all-shops --apply
 python run.py task schedule --shops 1001,1002 --apply
 python run.py task schedule --remove --apply --yes
 ```
 
-schedule 注册 SellerOps_Morning（09:00）及 SellerOps_Check11/15/19（11:00、15:00、19:00），按运行电脑本地时间执行。自动任务包含 `--apply`，支持 `--shops` 固定指定店铺，也可用 `--all-shops` 覆盖相应步骤的全部可用店铺。每日折扣沿用 WB，显式传入策略目标 `--target 50`。
+`task schedule` 注册 SellerOps_Morning（09:00）及 SellerOps_Check11/15/19（11:00、15:00、19:00），按运行电脑本地时间执行。Windows 计划任务沿用 `task run --apply` 的行为，早间任务提交促销报名，四项任务的折扣步骤都只生成待确认计划。可用 `--shops` 指定店铺或用 `--all-shops` 覆盖各步骤的可用店铺。每日折扣沿用 WB，目标为 `--target 50`。
 
-注册时固定当前解释器、代码路径和数据路径；移动目录或换解释器后需重新注册，并清理不再使用的任务以免重复执行。daily 每步最多等待 1 小时，某步非零退出会停止后续步骤；日志在 `data/logs/YYYY-MM-DD/daily_YYYYMMDD.log`。
+注册时固定当前解释器、代码路径和数据路径；移动目录或换解释器后需重新注册，并清理不再使用的任务以免重复执行。`task run` 每步最多等待 1 小时，某步非零退出会停止后续步骤。日志在 `data/logs/YYYY-MM-DD/daily_YYYYMMDD.log`。
 
 ## 定期清理本地文件
 

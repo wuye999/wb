@@ -16,7 +16,7 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     p.add_argument('--channel', choices=['wb', 'bcs'], default='wb', help='WB 支持设置批次，BCS 使用固定批次；俱乐部折扣仅 BCS 支持')
     bind(p, 'sellerops.cli.product', 'run_price')
 
-    p = sub.add_parser('stock', help="改库存（默认 WB 原生在线接口；dry-run 默认，归零须 --yes）")
+    p = sub.add_parser('stock', help="预览库存修改计划（默认 WB 原生在线接口，归零用 --amount 0）")
     add_ops_args(p, with_stock=True)
     p.add_argument("--chunk", type=int, default=500, help="每批提交条数（≤1000，探针实测 1000 可行，默认 500）")
     p.add_argument("--interval", type=float, default=0.3, help="批/店间请求间隔秒")
@@ -52,8 +52,8 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
         p.add_argument("--limit", type=int, default=0, help="每店最多查询 N 条（0=不限）")
         bind(p, 'sellerops.features.products.dims_check', 'run')
 
-        p = sub.add_parser('banned', help="查询并删除被阻止的商品（dry-run 默认，--apply 移到回收站）")
-        p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+        p = sub.add_parser('banned', help="查询被阻止的商品；下架用 ops trash 生成计划单")
+        p.add_argument("--apply", action="store_true", help="兼容保留；下架用 ops trash 生成计划单，确认后用 apply --plan 提交")
         add_shop_scope(p)
         p.add_argument("--limit", type=int, default=0, help="每店最多处理 N 条（0=不限）")
         p.add_argument("--yes", action="store_true", help="跳过不可逆确认（移到回收站）")
@@ -75,8 +75,8 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     add_discount_args(p)
     bind(p, 'sellerops.cli.product', 'run_discount')
 
-    p = sub.add_parser('review-price', help="价格审核：查看并应用新价格（降价 30-49.9%% 进审查的商品）")
-    p.add_argument("--apply", action="store_true", help="真正应用新价格（默认 dry-run）")
+    p = sub.add_parser('review-price', help="预览价格审核计划（降价 30-49.9%% 进审查的商品）")
+    p.add_argument("--apply", action="store_true", help="兼容保留；确认价格审核计划单后，用 apply --plan 提交")
     add_shop_scope(p)
     p.add_argument("--limit", type=int, default=0, help="每店最多审核 N 个（0=全部）")
     bind(p, 'sellerops.features.products.price_review', 'run')

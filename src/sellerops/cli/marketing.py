@@ -25,7 +25,7 @@ def register(sub: argparse._SubParsersAction) -> None:
                            help="只读：推广 × 销量双向错配审计（gap=该推没推 / waste=在推但没销量该关）")
     p.add_argument("--mode", choices=["gap", "waste", "both"], default="gap",
                        help="审计方向：gap=该推没推(默认) / waste=该关的(在推广但本店单数<阈值) / both=两个都出")
-    p.add_argument("--shops", default="", help="限定店铺，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部已填 cookie 店铺）")
+    p.add_argument("--shops", default="", help="限定店铺，逗号分隔，支持店铺ID或短名（如 1001 或 示例店铺；默认全部已填 cookie 店铺）")
     p.add_argument("--min", type=int, default=4, help="单数阈值（默认 4）：gap=单数≥N；waste=单数<N")
     p.add_argument("--days", type=int, default=7, help="近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）")
     p.add_argument("--date", default="", help="单天 YYYY-MM-DD（等价 --begin=--end）")

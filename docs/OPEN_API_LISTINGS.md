@@ -1,6 +1,6 @@
 # WB Open API 上架、内容更新与 VC 规范化
 
-`listing publish`、`listing create-cards` 和 `listing replicate` 使用 BCS 通道。新增命令须显式调用，不替代默认接口，也不在 BCS 或 WB 失败后自动换通道重放。上架和改码默认生成计划单，经确认后用 `apply --plan` 提交。内容同步沿用自己的预览和提交入口。
+`ops publish`、`ops create-cards` 和 `ops replicate` 使用 BCS 通道。官方上架与改码分别用 `ops publish-openapi` 和 `ops normalize-vc`。这些命令生成计划单，经确认后用 `apply --plan` 提交。跨店内容同步用 `listing sync-cards` 预览，经确认后用该命令的 `--apply` 提交。
 
 ## 配置与执行边界
 
@@ -8,7 +8,7 @@
 
 上架需要 Content 读写权限，以及 Marketplace 的仓库读取/库存写入权限。跨店内容更新只需要 Content；不修改价格或库存，不枚举仓库。令牌类型会影响限额，低限额基础令牌可能受到 429 限制，当前不自动长时间等待或重试写入。
 
-商品模板、类目和仓库读取先于建卡写入；建卡受理后只允许为完成后续上架而有限查询待办完整 VC 的新商品/规格标识。全部标识查询结束后提交就绪商品的图片与库存，记录受理结果并结束，不查询最终生效结果、不触发 BCS 同步、不运行 fetch/merge。读取失败不能当成空店。各店独立失败，其他已准备好的店可继续；某店提交失败后，该店后续商品不再发送。HTTP 成功只代表已受理，不能证明最终生效。
+商品模板、类目和仓库读取先于建卡写入；建卡受理后只允许为完成后续上架而有限查询待办完整 VC 的新商品/规格标识。全部标识查询结束后提交就绪商品的图片与库存，记录受理结果并结束。读取失败不能当成空店。各店独立失败，其他已准备好的店可继续；某店提交失败后，该店后续商品不再发送。HTTP 成功只代表已受理，不能证明最终生效。
 
 ## 备用上架：自有源店
 
@@ -37,7 +37,7 @@ python run.py ops publish-openapi --file "examples/publish-openapi.example.json"
 
 公开详情按俄文属性名关联目标类目的官方 charcID；数值属性仅接受明确的数值及匹配单位，不猜测混合文本。无法获得必需属性时阻止提交，按错误中的属性名补齐文件。标题不会自动截断。公开详情不保证包含完整服装尺码表，默认只建无尺码规格 `techSize=0`；有尺码商品必须在输入文件的 `card.sizes` 中显式列出全部规格，不能把默认值当作原商品完整规格。
 
-JSON 文件是非空对象数组，每项为 `nmId`、`vendorCode`、`product price`，可用 `card` 对象覆盖官方字段，例如 `title`、`description`、`dimensions`、`characteristics`、`sizes`、`documents`。`card` 仍是源模板，提交前会剥离源标识和条码。属性 ID 和证书须对应实际类目与商品；样例中的 ID、描述和金额只是语法示例。每项可指定整数 `product price`，否则使用 CLI 的 `--price`。可将文件放在自己的 `data/` 或 `_scratch/`。
+JSON 文件是非空对象数组，每项提供 `nmId`、`vendorCode`，并可用 `card` 对象覆盖官方字段，例如 `title`、`description`、`dimensions`、`characteristics`、`sizes`、`documents`。`card` 仍是源模板，提交前会剥离源标识和条码。属性 ID 和证书须对应实际类目与商品。样例中的 ID、描述和金额仅供演示。每项可指定整数 `price`，否则使用 CLI 的 `--price`。可将文件放在自己的 `data/` 或 `_scratch/`。
 
 ## 合并上架、有限等待与续办
 
@@ -51,7 +51,7 @@ python run.py ops publish-openapi --source-shop 1001 --shops 1002 --vc "BCS-TEST
 
 取得本店 nmID 后还要等待完整 chrtID 和本次生成的全部规格条码。模糊搜索命中的其他 VC 不使用；未知条码、类目冲突或重复标识阻止提交。某些商品超时，其他就绪商品仍可完成后续提交，但整轮返回非零，不能把建卡受理算成完整上架成功。读取错误或401/403/429停止该店；其他店可继续。图片/库存接口若仍因平台服务延迟而拒绝，不盲目重试写入，保留实际阶段和错误。
 
-超时或中断后，按保存的原计划续办，不需要重新获取源商品详情：
+超时或中断后，按已保存的阶段记录预览续办。确认新计划单后，用 `apply --plan` 提交。
 
 ```powershell
 python run.py ops publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789"
@@ -60,7 +60,7 @@ python run.py ops publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789
 
 `--resume` 仅使用 `--shops/--vc` 选择已受理记录，不接受新的来源、文件、价格、包装或库存参数；沿用原图片与库存计划。续办再次确认莫斯科仓名称和 `id` 与原记录一致，再查询本店完整标识并提交剩余阶段。图片和库存分别记录受理回执；已受理阶段不重复提交。图片成功后库存失败也会保留图片受理记录，并返回非零状态。重新执行原建卡命令，遇到本通道已受理记录也只续办，已完成记录跳过，不重复建卡。
 
-旧命令 `publish-openapi-finish` 已合并到 `listing publish-openapi --resume`；已有 version=1 阶段记录可直接使用，无需迁移或清空。
+旧版 JSON 阶段记录须先用 `migrate-legacy` 迁入 SQLite，才能用于续办。见 [旧数据迁移](MIGRATION.md#迁移旧商品数据)。
 
 建卡或任一后续写入处于 `submitting/unknown` 时，禁止自动重放；需要维护者依据原回执或用户另行授权的诊断处理记录，不能通过清空状态重试。条码准备阶段失败但尚未提交建卡可按原范围重新执行。记录与共用上架去重文件的作用见 [数据契约](DATA.md#关键状态文件)。
 
@@ -70,11 +70,11 @@ python run.py ops publish-openapi --resume --shops 1002 --vc "BCS-TEST-123456789
 
 ```powershell
 python run.py listing sync-cards --source-shop 1001 --vc "BCS-TEST-123456789" --shops 1002,1003
-python run.py listing sync-cards --source-shop 1001 --nm 123456789 --fields title,description,dimensions --apply --shops 1001
+python run.py listing sync-cards --source-shop 1001 --nm 123456789 --fields title,description,dimensions --apply --shops 1002
 python run.py listing sync-cards --source-shop 1001 --all --shops 1002 --limit 10
 ```
 
-`--source-shop` 填袁州1店对应的 BCS ID；不按店名模糊猜测。`--vc/--nm/--all` 三选一。省略 `--shops` 时目标是 BCS 中除源店外的全部店；显式目标不能包含源店。`--limit` 限制源商品数量。目标缺少同 VC 时跳过，不新建、不恢复回收站商品；类目不同、VC/标识重复或关键字段缺失则报失败。
+`--source-shop` 填源店的 BCS ID，例如示例店铺的 `1001`。`--vc/--nm/--all` 三选一。用 `--shops` 指定目标店，或用 `--all-shops` 选择 BCS 中除源店外的全部店。显式目标不能包含源店。`--limit` 限制源商品数量。目标缺少同 VC 时跳过，不新建、不恢复回收站商品；类目不同、VC/标识重复或关键字段缺失则报失败。
 
 默认字段为 `title,description,brand,dimensions,characteristics,photos`，分别是标题、说明、品牌、包装尺寸/重量、属性和图片。`--fields` 是完整选择列表，不是追加列表；可显式选择下列额外字段：
 
@@ -93,13 +93,13 @@ python run.py listing sync-cards --source-shop 1001 --all --shops 1002 --limit 1
 
 ## 历史 VC 前缀规范化
 
-`listing normalize-vc` 将历史随机四位前缀改为商品价格表中对应商品的「vendorCode前缀码」。`--vc`、`--name`、`--all` 必须且只能选择一个；`--vc` 使用完整旧 VC（逗号分隔），`--name` 按已确认中文名包含匹配。省略 `--shops` 时目标为 BCS 中的全部店铺。
+`ops normalize-vc` 将历史随机四位前缀改为商品价格表中对应商品的「vendorCode前缀码」。`--vc`、`--name`、`--name-contains`、`--all` 四选一。`--vc` 使用完整旧 VC（逗号分隔），`--name` 精确匹配已确认中文名，`--name-contains` 用于包含筛选。用 `--shops` 指定店铺，或用 `--all-shops` 覆盖 BCS 中的全部店铺。
 
 ```powershell
 python run.py ops normalize-vc --shops 1001,1002 --name "示例商品"
 python run.py ops normalize-vc --shops 1001 --vc "BCS-RAND-123456789"
 python run.py ops normalize-vc --all --shops 1001
-python run.py ops normalize-vc --shops 1001,1002 --name "示例商品"
+python run.py ops normalize-vc --shops 1001,1002 --name-contains "示例"
 ```
 
 先用 `ops normalize-vc` 预览，经确认后用 `apply --plan` 提交。仅需 Content 读写权限，使用 BCS 保存的各店 apiKey 和中国区主机；不要求后台 Cookie，不枚举或操作仓库。
@@ -110,12 +110,12 @@ python run.py ops normalize-vc --shops 1001,1002 --name "示例商品"
 
 所有店铺的商品与回收站列表完整读取后才分配、提交；任一店令牌无效、分页或标识异常，整轮不发送写请求。读取结果只驻留本轮内存，不保存快照。各店使用自己的商品卡和全部规格标识、条码、证书构建完整覆盖请求，保留原标题和包装数值，不因为旧标题较长、旧包装为零而在本地改写它们；缺图片、价格、库存或包装字段不阻止改码。平台仍可能拒绝现有内容，按实际受理回执记录，不宣称最终生效。
 
-预览和提交都会由命令自动读取完整商品卡，无需准备私有 `api/` 文档或临时预读文件，也不需要先运行 fetch。当前没有完整预读数据的导出、缓存复用或店间并发参数，既有 fetch 的精简快照不能替代完整卡片。官方无证书时可能省略可选 `documents.items`：仅在返回明确的布尔 `excludeDocuments` 且没有未知字段时按空列表保留该设置；已有证书完整保留，null、类型错误或含义不明的数据继续阻止。
+预览会自动读取完整商品卡并保存到计划中，提交使用该计划的载荷，无需事先运行 `catalog fetch`。官方无证书时可能省略可选 `documents.items`。仅在返回明确的布尔 `excludeDocuments` 且没有未知字段时按空列表保留该设置；已有证书完整保留，null、类型错误或含义不明的数据继续阻止。
 
 每批最多100张卡，并按实际 JSON 编码控制10MB请求上限。某店提交异常时，该批记为未知、停止该店后续批次，其他店继续使用已分配的新码。写入前持久化 `submitting`，成功记 `accepted`，异常记 `unknown`；中断留下的 `submitting` 同样阻止重放。后续运行不能因为重新追加序号而绕过这些记录；尚未发送的其他店沿用原来已分配的新码及避重序号。历史目标码被无关商品占用、前缀或原尾部与当前计划不一致时阻止该项，交维护者另行处理。
 
 预览、逐店商品明细与提交阶段写入 `sellerops.db` 的 `plans`。已受理、结果未知或提交中的记录继续阻止自动重放。
 
-本功能仅提交远端改码并留日志，不建立旧新码兼容，不修改价格表、映射、快照、归属或其他状态文件。历史订单与旧记录的衔接由用户另行维护。提交后直接结束，不查询最终结果，不附加同步、fetch 或 merge。
+本功能仅提交远端改码并留日志，不建立旧新码兼容，不修改价格表、映射、快照、归属或其他状态文件。历史订单与旧记录的衔接由用户另行维护。提交后直接结束。
 
 协议核对日期：2026-11-02，合并流程更新于2026-11-03。字段与异步限制依据 [WB 官方中国区商品接口](https://dev.wildberries.cn/openapi/item-management)，工作流概览见 [官方调用顺序](https://dev.wildberries.cn/cases/135/the-wb-api-call-map)。本项目只保留完成后续上架所需的新标识轮询，图片/库存提交后不查询最终结果。

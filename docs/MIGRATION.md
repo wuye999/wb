@@ -15,9 +15,9 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 
 首次配置依次运行 `sync` 和 `map workbench`，看图归属后用 `map batch-set --file` 或 `catalog merge` 导入导出的审核 JSON。旧单店审核请用新工作台检查并重新导出。已归属商品的映射异常和货不对板筛查统一使用 `map check-mismatch` 的大图画廊。
 
-以下对照覆盖 1.0 的全部 57 个入口。新命令前加 `python run.py`。
+以下对照列出 1.0 命令的迁移入口。新命令前加 `python run.py`。
 
-商品写入需要指定店铺和商品。全店使用 `--all-shops`，全部商品使用 `--all-products`。原中文名包含筛选迁为 `--name-contains`。设置库存必须显式提供数量。BCS 通道仅由操作者显式选择。
+商品计划按命令要求指定店铺和商品。支持全店或全部商品的命令见各自帮助。原中文名包含筛选迁为 `--name-contains`。设置库存必须显式提供数量。BCS 通道仅由操作者显式选择。
 
 | 原入口 | 2.0 入口 |
 | --- | --- |
@@ -31,25 +31,26 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | `merge` | `catalog merge 审核结果.json` |
 | `mapping-rename` | `catalog rename` |
 | `shops-mapping` | `catalog shop-mappings` |
-| `price` | `product price --price P` |
-| `price-bcs` | `product price --channel bcs --price P` |
-| `stock` | `product stock` |
-| `stock-bcs` | `product stock --channel bcs` |
-| `trash` | `product trash` |
-| `trash-bcs` | `product trash --channel bcs` |
-| `dimension` | `product dimensions` |
+| `price` | `ops price --price P` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `price-bcs` | `ops price --channel bcs --price P` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `stock` | `ops stock --amount N` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `stock-bcs` | `ops stock --channel bcs --amount N` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `trash` | `ops trash` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `trash-bcs` | `ops trash --channel bcs` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `dimension` | `product dimensions` 预览，确认后加 `--apply` |
 | `dims-check` | `product check-dimensions` |
-| `banned` | `product banned` |
-| `clean` | `product clean` |
-| `discount` | `product discount` |
-| `discount-bcs` | `product discount --channel bcs` |
-| `price-review` | `product review-price` |
-| `publish` | `listing publish` |
-| `create-cards` | `listing create-cards` |
-| `replicate` | `listing replicate` |
-| `publish-openapi` | `listing publish-openapi` |
-| `normalize-vc-openapi` | `listing normalize-vc` |
-| `sync-cards-openapi` | `listing sync-cards` |
+| `banned` | `product banned` 查询。下架用 `ops trash` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `clean` | `product clean` 预览，确认后加 `--apply --yes` |
+| `discount` | `ops discount --target D` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `discount-bcs` | `ops discount --channel bcs --target D --all-products` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `price-review` | `ops review-price` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `publish` | `ops publish` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `create-cards` | `ops create-cards` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `replicate` | `ops replicate` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `publish-openapi` | `ops publish-openapi` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `publish-openapi-finish` | 先迁移旧版阶段记录，再用 `ops publish-openapi --resume` 预览生成新单，确认后用 `apply --plan` 提交 |
+| `normalize-vc-openapi` | `ops normalize-vc` 预览生成计划单，确认后用 `apply --plan` 提交 |
+| `sync-cards-openapi` | `listing sync-cards` 预览，确认后加 `--apply` |
 | `promo-apply` | `marketing enroll` |
 | `promo-goods` | `marketing ads` |
 | `promo-gap` | `marketing audit` |
@@ -73,7 +74,7 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | `chats` | `support chats` |
 | `appeals` | `support appeals` |
 | `ai-test` | `support ai-test` |
-| `daily` | `task run`；原 check 模式改为 adjust-discounts |
+| `daily` | `task run`。原 check 模式改为 `adjust-discounts`，折扣步骤只生成待确认计划 |
 | `schedule` | `task schedule` |
 | `login` | `login` |
 | `warehouse-clear` | 移除。成都仓永久删除不属于店铺运营范围。 |
@@ -91,7 +92,7 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 
 | 旧用法 | 当前用法 |
 | --- | --- |
-| 手动运行 `product discount` 并依赖默认目标 50 | 显式指定 `product discount --target 50`，或填写用户指定的 0 至 100 |
-| 改价并设折扣 | `product price --price P --discount D` |
+| 手动运行 `product discount` 并依赖默认目标 50 | 用 `ops discount --target 50` 预览，或填写用户指定的 0 至 100。确认后用 `apply --plan` 提交 |
+| 改价并设折扣 | 用 `ops price --price P --discount D` 预览，确认后用 `apply --plan` 提交 |
 
-只改折扣可用 `product price --keep-price --discount D` 或 `product discount --target D`。三项日常命令默认 WB，计划任务支持 `--shops` 并继续显式传入目标折扣 50。库存用 `--amount` 指定数量。自动化可从三项商品命令及 `report products` 的标准输出末行读取 `schema_version=1` JSON，既有数据目录可直接沿用。
+只改折扣可用 `ops price --keep-price --discount D` 或 `ops discount --target D` 预览，确认后用 `apply --plan` 提交。库存用 `--amount` 指定数量。每日折扣任务默认走 WB，支持 `--shops`，按目标折扣 50 生成待确认单。自动化使用 `ops`、`apply` 和 `report products` 的 `--json`，分别读取 `data.scope`、`data.receipt` 和 `data.artifacts`。旧命令末行摘要属于兼容输出。

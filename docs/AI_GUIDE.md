@@ -34,7 +34,7 @@ python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
 python run.py apply --plan P018 --json
 ```
 
-默认体检仅检查本机 Python、SQLite、依赖、凭证文件、主表表头、快照时间和待认领数。加 `--check-online` 才用已有凭证只读探测，登录由用户显式发起。
+`doctor` 默认只检查本机 Python、SQLite、依赖、凭证文件是否存在、价格表表头、快照时间和待认领数，不联网。加 `--check-online` 才用已有凭证做联网只读探测。即使退出码为 0，也要核对 `data` 中价格表、凭证和其他分项的结果。
 
 `sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，`missing_shops` 提示运营核对。经确认才运行 `shop archive`，需要恢复时运行 `shop restore`。
 
@@ -42,32 +42,33 @@ python run.py apply --plan P018 --json
 
 归属完成后用 `map check-mismatch --json` 生成货不对板大图画廊。打开 `data.artifacts.html`，按中文名看图并核对前缀冲突和非最低价倍数。价格检查覆盖各活跃店铺有现价的在架快照，允许各店采用不同的合理正整数倍。`data.counts` 给出商品总条数、中文名组数及异常条数。运营勾选并导出 JSON 或复制完整 VC 后，按确认的店铺和 VC 用 `ops trash` 预览下架计划。
 
-商品写入先预览固定计划单。展示店铺、商品、规格、目标值与受阻明细，运营确认后提交单号。提交中和结果未知的单号停止重发；已受理上架需要补图片或库存时，用 `ops publish-openapi --resume` 确认原记录并生成续办单。其他业务命令按各自流程执行。
+商品计划类操作先用 `ops` 预览，展示店铺、商品、规格、目标值与受阻明细，运营确认后用 `apply --plan` 提交。提交中和结果未知的单号停止重发。已受理上架需要补图片或库存时，用 `ops publish-openapi --resume` 生成续办单，再按新单确认提交。其余写操作按各自命令规则使用 `--apply`。
 
 ## 选择与执行命令
 
 | 用户意图 | 入口与注意事项 |
 | --- | --- |
-| 中文名改价、设折扣、设库存、下架 | 先用 `shop list --name` 确认唯一店铺 ID。`product price`、`product discount`、`product stock`、`product trash` 需要显式店铺及商品范围。`--name` 精确匹配，`--name-contains` 用于用户明确要求包含的任务。库存必须给数量。 |
+| 中文名改价、设折扣、设库存、下架 | 先用 `shop list --name` 从本地库确认唯一店铺 ID。`ops price`、`ops discount`、`ops stock`、`ops trash` 需要显式店铺及商品范围。`--name` 精确匹配，`--name-contains` 用于用户明确要求包含的任务。库存必须给数量。 |
 | 商品综合报告 | `report products`。低评分、高退货率、近 7/14 天出单和链接缺口见 [报告说明](PRODUCT_REPORT.md)。 |
-| 修改快照或映射 | 用户明确要求更新时用 sync。归属用 map 查看候选、确认或排除。 |
+| 更新快照或映射 | 用户明确要求更新时用 `sync`。归属用 `map` 查看候选、确认或排除。 |
 | 筛查货不对板 | `map check-mismatch --json`。可按 `--cn` 精确限定中文名，按 `--begin`、`--end` 或 `--days` 限定创建日期。 |
-| 发布、复制及官方上架 | `listing replicate`、`listing publish` 或 `listing create-cards`。官方通道使用 `listing publish-openapi`，按原记录续办。 |
+| 发布、复制及官方上架 | `ops replicate`、`ops publish` 或 `ops create-cards`。官方通道使用 `ops publish-openapi`，按原记录续办。 |
 | 处理新订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
 | 汇报修改结果 | 核对店铺、商品与规格数、受理任务号、阻止原因和完整明细路径。预览与提交沿用同样的目标。 |
 
 | 用户意图 | WorkBuddy 首选命令 | 修改字段 |
 | --- | --- | --- |
-| 指定价格 | `product price --price P` | 价格 |
-| 同时指定价格与折扣 | `product price --price P --discount D` | 价格、折扣 |
-| 保持原价并设折扣 | `product price --keep-price --discount D` | 折扣 |
-| 只设折扣 | `product discount --target D` | 折扣 |
-| 设置库存 | `product stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
+| 指定价格 | `ops price --price P` | 价格 |
+| 同时指定价格与折扣 | `ops price --price P --discount D` | 价格、折扣 |
+| 保持原价并设折扣 | `ops price --keep-price --discount D` | 折扣 |
+| 只设折扣 | `ops discount --target D` | 折扣 |
+| 设置库存 | `ops stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
+| 审核新价格 | `ops review-price` | 待审核价格 |
 
-上表中的命令均需指定店铺范围与商品范围。完整中文名选中归属明确的全部同名链接。点名 SKU 时用 `--sku`，无法确认归属的链接列入阻止。库存必须显式给数量，归零用 `--amount 0`。改价、改库存、设折扣默认走 WB。回收站清理需要归零时先通过 BCS 提交本店莫斯科仓规格，再通过 WB 删除已确认的卡。默认 BCS 上架将初始库存随建卡或推送提交。
+改价、设折扣和设库存需指定店铺与商品范围，默认走 WB。价格审核按所选店铺查询待审核商品。完整中文名选中归属明确的全部同名链接。点名 SKU 时用 `--sku`，无法确认归属的链接列入阻止。库存必须显式给数量，归零用 `--amount 0`。回收站清理需要归零时先通过 BCS 提交本店莫斯科仓规格，再通过 WB 删除已确认的卡。默认 BCS 上架将初始库存随建卡或推送提交。
 
-只设指定商品折扣用 `--target`。有 `--threshold` 或 `--below` 时，以每次提交或预览之前取得的本店当前折扣判断。全店折扣分页未完成的店铺不得提交。计划任务支持 `--shops`，内置每日折扣走 WB 并传 `--target 50`。
+只设指定商品折扣用 `--target`。有 `--threshold` 或 `--below` 时，预览按本店当前折扣固定范围。全店折扣分页未完成的店铺不得提交。计划任务支持 `--shops`，内置每日折扣走 WB，用 `--target 50` 生成待确认计划单。
 
 用户要求为商品报告临时引入其他BCS账号时，使用 `report products --extra-bcs-stdin`，将本次提供的完整fetch文本通过子进程标准输入管道以UTF-8传入并关闭输入流；多个fetch块依次传入。不要将秘密拼进命令行、环境变量或保存到临时脚本/抓包文件，不替换本机凭证。解析只提取认证，不执行原fetch。`--shops`只筛本机目标，临时账号的全部店铺补充统计且不进入链接缺口目标；飞书仍读取本机一份来源。查看报告中的账号来源及失败明细，凭证失效不启用浏览器续期。详见 [报告说明](PRODUCT_REPORT.md#临时引入其他bcs账号)。
 
@@ -77,17 +78,17 @@ python run.py apply --plan P018 --json
 
 普通上架先确认卖家 SKU 或唯一产品中文名，再展示完整 VC 和编码来源。手工指定完整 VC 时保留原码，批量接口无法透传时用 `ops create-cards`。无唯一登记前缀时请运营指定前缀，或明确同意使用 `--random-prefix`，再生成计划单。
 
-复制上架使用 `listing replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分；默认库存999，显式0不替换。默认商品清单与查重读取本地快照和提交记录，缺快照不当作空店；快照滞后时结合已受理的下架/上架回执处理范围。回收站已有卡不会自动恢复，需先区分恢复与新建；不把 BCS 缓存命中直接视为实时状态。整批详情和目标莫斯科仓必须在首个写请求前准备好。
+复制上架使用 `ops replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分；默认库存999，显式0不替换。默认商品清单与查重读取本地快照和提交记录，缺快照不当作空店；快照滞后时结合已受理的下架/上架回执处理范围。回收站已有卡不会自动恢复，需先区分恢复与新建；不把 BCS 缓存命中直接视为实时状态。整批详情和目标莫斯科仓必须在首个写请求前准备好。
 
 使用已有帮助解决语法问题，不通过执行写入命令“试参数”。dry-run 可以联网和生成本地记录；`login`、`map batch-set`、`catalog rename`、`catalog merge` 等本地写操作不受 --apply 控制。
 
-库存归零与移回收站默认依据本地映射和商品快照定位商品/规格，不为每次操作全量读取远端商品或库存。仓库确认是独立的小范围读取；需要更新快照时按用户要求独立运行 `catalog fetch`。`product trash` 已包含先清库存步骤，无需先另跑 stock；任一规格缺失或清零受理失败时阻止该商品，其他完整商品可继续，非零退出和日志中的被阻止项必须如实汇报。
+库存归零与移回收站默认依据本地映射和商品快照定位商品与规格，不为每次操作全量读取远端商品或库存。仓库确认是独立的小范围读取；需要更新快照时按用户要求独立运行 `catalog fetch`。`ops trash` 生成的计划包含先清库存步骤，任一规格缺失或清零受理失败时阻止该商品。其他完整商品可继续，非零退出和日志中的被阻止项必须如实汇报。
 
 用户已经明确授权执行的操作，可按现有命令要求完成，不人为增加反复确认。`--yes` 只表示跳过命令自带确认，不能替代任务授权，也不能保证每个破坏性操作都需要这个参数。
 
 `catalog fetch` 的默认 BCS 快照来源会先触发 WB → BCS 同步（加 `--no-sync` 才跳过并直接读上次同步结果），再按 BASE 读取该店缓存；同步失败不中止本次拉取，按原流程打印警示后继续读旧缓存。显式 `--source wb-openapi` 才改用官方接口，该来源不使用 WB 后台 Cookie；缺 apiKey、401/403、限流或读取失败时保留旧快照并报告失败，不自动改回 `--source bcs`，官方令牌应在 BCS 对应店铺更新。两种来源都不补零缺失的价格或库存，分页不完整不能宣称已完成全量快照。
 
-BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 VC 去重；只在非空业务值一致且存在完整原行时保留该整行。快照数量和单店表均按去重结果统计，零值不视为空。标识或业务值冲突时不能手工随意删行、按最新时间覆盖或把失败当空店继续 merge；按 [数据契约](DATA.md#映射快照与标识) 处理。旧快照不会因代码升级自动清理，离线整理前先备份。
+BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 VC 去重；只在非空业务值一致且存在完整原行时保留该整行。快照数量和单店表均按去重结果统计，零值不视为空。标识或业务值冲突时不能手工随意删行、按最新时间覆盖或把失败当空店处理。按 [数据契约](DATA.md#映射快照与标识) 处理，离线整理旧快照前先备份。
 
 ## 写操作结束规则
 
@@ -95,7 +96,7 @@ BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 
 
 WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗时较长。提交并记录本次返回后立即结束：
 
-- 不新增结果验证型写后查询，不补 fetch，不补 merge，不触发全量同步。`listing publish-openapi` 为后续图片/库存取得本店 nmID/chrtID 而进行的有限 VC/条码轮询属于必要上架步骤；取得标识后提交剩余写入，不能扩展成最终结果验证。
+- 提交后不追加结果验证、快照更新或审核导入。官方上架按 VC 有限轮询本店 nmID/chrtID 并核对条码，取得标识后提交剩余的图片和库存。
 - 不把“本地快照仍是旧值”当作失败，也不因此反复提交。
 - 不用 WB 通道超时或会话异常作为自动改走 BCS 通道重放同一批的理由。
 - 允许并保留业务必需的两阶段请求确认、用户明确要求的价格审核、马帮交运前预报等待。这些不是额外结果验证。
@@ -105,6 +106,8 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 
 调用 `doctor`、`sync`、`shop`、`map`、`ops`、`apply`、`report`、`task clean` 时加 `--json`，把 stdout 整体解析为一条 UTF-8 JSON。统一字段为 `ok`、`summary`、`plan_id`、`data`、`next_action`。进度日志在 stderr。即使 `ok` 为假，也要查看 `data` 中已经保存的预览、部分回执或报表路径。
 
+未加 `--json` 时，部分兼容入口和 `report products` 仍在普通输出末行附旧版 JSON 摘要。自动化首选支持 `--json` 的入口。
+
 - 商品预览的实际目标见 `data.scope`。商品回执见 `data.receipt`，汇报时区分商品卡数、库存规格数和平台已返回的任务号。
 - 报表路径见 `data.artifacts`。`report products` 的期间、数据来源、覆盖和缺失分别见 `data.period`、`data.sources`、`data.coverage_complete`、`data.issues`。
 
@@ -112,15 +115,15 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 
 商品批量操作默认按动作检查必要字段，已有本店商品缺少必要标识时可在提交前通过官方令牌定向补齐，仅用于内存计划；这不授权额外fetch/merge或切换写入通道。当前库存未知不会阻止设库存，旧包装尺寸缺失不会阻止设置新尺寸，WB只改折扣不需要原价。补齐后仍不能唯一确认的商品保留阻止项；必须查看并汇报 `data/logs/YYYY-MM-DD/商品操作跳过_*.csv` 完整清单，不能只依据终端前30条或成功数量认为全量完成。
 
-逐项回执与运行日志在 `data/logs/YYYY-MM-DD/`。报表默认在 `exports/`，发货 PDF 在 `exports/fbs_shipments/YYYYMMDD/`。清理先用 `task clean --json` 查看 `data.groups`，默认保留最近 20 天。运营明确要求清理时加 `--apply`。汇报被跳过的符号链接和目录联接。清理范围与保护项见 [使用指南](USAGE.md#定期清理本地文件)。
+按本次回执或终端输出的路径打开逐项明细、报表和日志。默认日志在 `data/logs/YYYY-MM-DD/`，报表在 `exports/`，发货 PDF 在 `exports/fbs_shipments/YYYYMMDD/`。清理先用 `task clean --json` 查看 `data.groups`，默认保留最近 20 天。运营明确要求清理时加 `--apply`。汇报被跳过的符号链接和目录联接。清理范围与保护项见 [使用指南](USAGE.md#定期清理本地文件)。
 
 发现 WB 卖家后台会话错误时停止该店操作，提示用户另行运行 `login wb`。看到候选店铺时只展示所需的名称和编号，由运营确认一对一绑定。WB Open API 令牌失效时，在 BCS 更新对应店的 `apiKey`。排查时只提供脱敏后的命令、错误和计数，不把整份 credentials.json、Cookie、抓包或浏览器资料输出到聊天或提交到 Git。见 [排错说明](TROUBLESHOOTING.md)。
 
 ## 常见禁止误用
 
 - 每日折扣任务生成计划单。需要更改折扣时，仍由运营确认单号。
-- 手动 daily 使用本次命令的店铺范围。注册的计划任务使用注册时传入的 `--shops` 或 `--all-shops`。
+- 手动 `task run` 使用本次命令的店铺范围。注册的计划任务使用注册时传入的 `--shops` 或 `--all-shops`。
 - 把 --mode back 当成已发送：它只生成草稿，发送还需 --apply。
-- 把 ai-test 当成离线测试：它会调用真实 LLM。
+- 把 `support ai-test` 当成离线测试：它会调用真实 LLM。
 - 清空 state 来“重置重跑”：可能丢失去重、纠偏和提交记录。
 - 用新数据覆盖用户的生产 data，或在代码更新时把本地数据打包公开。

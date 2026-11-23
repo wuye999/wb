@@ -28,7 +28,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--date", default="", help="单天 YYYY-MM-DD（等价 --begin=--end）")
     p.add_argument("--begin", default="", help="区间开始 YYYY-MM-DD（单独给按单天处理）")
     p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）")
-    p.add_argument("--shops", default="", help="店铺过滤，逗号分隔，支持店铺ID或短名（如 9352 或 袁州1；默认全部）")
+    p.add_argument("--shops", default="", help="店铺过滤，逗号分隔，支持店铺ID或短名（如 1001 或 示例店铺；默认全部）")
     p.add_argument("--top", type=int, default=0, help="控制台只显示前 N 名（0=全部；CSV 始终写全量）")
     p.add_argument("--by-prefix", action="store_true", help="按 vendorCode 的 4 位前缀码聚合（默认完整 vendorCode）")
     p.add_argument("--no-cn", action="store_true", help="不补全商品中文名（表内已有的仍会显示）")

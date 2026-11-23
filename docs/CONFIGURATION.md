@@ -8,17 +8,19 @@
 
 | 功能 | 主要前置条件 |
 | --- | --- |
-| 帮助、daily/schedule 默认预览 | Python 与基础依赖，不读取平台凭证 |
-| shops、orders、BCS 来源 fetch、BCS 通道写入 | BCS 凭证；本地表格/快照由具体用例决定 |
-| fetch 显式 Open API 来源（`--source wb-openapi`） | BCS 凭证和 BCS 各店保存的官方 apiKey，具备 Content、Prices and Discounts、Marketplace 权限；不要求后台 Cookie |
-| publish-openapi、sync-cards-openapi | BCS 保存的各店官方 apiKey；Content 读写权限，上架另需 Marketplace 仓库读取/库存写入权限；固定中国区，不要求后台 Cookie，见 [专门说明](OPEN_API_LISTINGS.md) |
-| fbs-group-ship-openapi | BCS 保存的各店中国区 Marketplace apiKey，执行需供货写权限及 PDF 可选依赖；使用本地商品映射和价格表 |
-| price、stock、trash、折扣、促销、客服、WB 报表 | 对应 WB 店铺完整 Cookie 三件套；涉及商品匹配时还需本地数据 |
-| 上架、跨店复制、BCS 库存/下架中的仓库解析 | BCS 与对应店铺 WB 凭证，以及本地价格/映射/快照；默认仓库解析走 WB |
-| mabang-orders、mabang-forecast、mabang-process | 马帮凭证与店铺映射、本地商品/库存 SKU 映射；取消单过滤还可能读取 WB |
-| 飞书登记、库存表、飞书统计、promo-gap | 可用的 lark-cli 用户身份、表格权限和目标表；其中登记/库存还需马帮相关配置 |
-| AI 草稿与 ai-test | LLM key、完整请求端点和模型；自动发送还需 WB 凭证及显式 --apply |
-| WB 网页会话维护 | 显式运行 `login wb`，使用本机专用浏览器 |
+| `--help`、`task run` 和 `task schedule` 默认预览 | Python 与基础依赖，无需平台凭证 |
+| `shop list` | 本地库中的店铺和快照状态，无需平台凭证 |
+| `order list`、默认来源的 `sync` 和 `catalog fetch`、`ops` 的 BCS 通道 | BCS 凭证，按用例准备本地表格和快照 |
+| `sync`、`catalog fetch` 的 `--source wb-openapi` | BCS 凭证和 BCS 各店保存的官方 apiKey，具备 Content、Prices and Discounts、Marketplace 读取权限 |
+| `ops publish-openapi`、`ops normalize-vc`、`listing sync-cards` | BCS 保存的各店中国区官方 apiKey，具备 Content 读写权限。上架另需 Marketplace 仓库读取和库存写入权限。见 [专门说明](OPEN_API_LISTINGS.md) |
+| `order group-ship` | BCS 保存的各店中国区 Marketplace apiKey、本地商品映射及价格表。提交供货需要写权限，导出 PDF 需要可选依赖 |
+| `ops price`、`ops stock`、`ops trash`、`ops discount`、`ops review-price` 的默认 WB 通道，`marketing enroll`、WB 后台客服和报表 | 对应 WB 店铺完整 Cookie 三件套，商品匹配还需本地数据 |
+| `ops publish`、`ops create-cards`、`ops replicate`、BCS 库存和下架的仓库解析 | BCS 与对应店铺 WB 凭证，以及本地价格、归属和快照。默认仓库解析走 WB |
+| `order match`、`order forecast`、`order process` | 马帮凭证、店铺映射、本地商品和库存 SKU 映射。取消单过滤可能读取 WB |
+| `order register`、`order deduplicate`、`order stock-register`、`order stock-days`、`report vc-sales`、`marketing audit` | 已登录的 lark-cli 用户、目标表和对应权限。登记与库存操作还需马帮配置，推广审计还需店铺快照和推广信息 |
+| `report products` | BCS 各店官方 apiKey、本地快照和商品归属，以及可读飞书订单登记表的 lark-cli 用户 |
+| `support ai-test`、客服草稿 | LLM key、完整请求端点和模型。自动发送还需 WB 凭证与显式 `--apply` |
+| `login bcs`、`login mabang`、`login wb` | 浏览器连接使用本机专用浏览器。BCS、马帮须先在本机配置对应登录名 |
 
 表中是主要依赖。dry-run 也可能调用这些平台的读取接口，不能等同离线检查。
 
@@ -40,7 +42,7 @@ python run.py login wb
 python run.py login wb --resume
 ```
 
-BCS、马帮优先使用本机已配置的账号密码。需要人工登录或验证时，工具会打开对应官网。WB 先检查专用浏览器原有会话，需要登录时由用户在官网输入手机号和验证码。登录成功后正常关窗，工具重新打开后台并检查业务凭证。`--resume` 只检查已保存的浏览器登录态。如果关窗重开无法恢复完整凭证，可用 `--keep-open`，在浏览器内登录后等候连接结果。登录账号、验证码和密钥内容留在本机，WorkBuddy 只转述结果与下一步。
+BCS、马帮分别需要先在本机配置 `bcs.login.username` 和 `mabang.login.username`，使用浏览器连接时也需要。配置了密码时优先用本机账号密码，人工登录或验证在官网完成。WB 先检查专用浏览器原有会话，需要登录时由用户在官网输入手机号和验证码。登录成功后正常关窗，工具重新打开后台并检查业务凭证。`login <平台> --resume` 使用已保存的浏览器会话，连接成功时仍可更新本机凭证。如果关窗重开无法恢复完整凭证，可用 `--keep-open`，在浏览器内登录后等候连接结果。登录账号、验证码和密钥内容留在本机，WorkBuddy 只转述结果与下一步。
 
 WB 直连时每次页面连接最多等待 3 分钟，恢复店铺列表最多等待 4 分钟，页面接通后人工登录最多等待 20 分钟。后台明确跳回 WB 官网登录页时会进入人工登录流程。BCS 和马帮的人工登录窗口最多等待 10 分钟。已登录但 WB 恢复超时，可运行 `login wb --resume` 检查原浏览器资料。
 
@@ -48,7 +50,7 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 更新项目后可直接使用已有的 `credentials.json` 和仍有效的会话。平台连接通过独立的 `login` 命令完成。业务命令认证失败时停止相应操作，已提交请求按原业务回执处理。
 
-`listing publish-openapi --apply` 在建卡受理后允许按待办完整 VC 有限查询本店 nmID/chrtID，核对生成条码后上传图片和莫斯科库存。默认等待上限1800秒、轮询间隔15秒；超时保留记录，用 `listing publish-openapi --resume` 续办。此轮询不写本地商品快照，不触发 BCS 同步，也不在图片/库存提交后验证结果。其余写入的提交后结束约定保持不变。
+官方上架用 `ops publish-openapi` 生成计划单，确认后用 `apply --plan` 提交。建卡受理后按待办完整 VC 有限查询本店 nmID/chrtID，核对生成条码后提交图片和莫斯科库存。默认等待上限 1800 秒、轮询间隔 15 秒。超时保留阶段记录，用 `ops publish-openapi --resume` 生成新单，经确认后再用 `apply --plan` 提交。
 
 ## 仓库范围：仅允许莫斯科
 
@@ -76,13 +78,13 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 在自己的 `data/credentials.json` 填写 `bcs.login` 后运行 `python run.py login bcs`。遇到滑块、设备验证或网关校验时，按提示在专用浏览器完成验证。程序使用默认 BCS 服务地址，在保存三项会话字段前核对账号归属。
 
-配置自动续期后，本机会话缺少 token 或 limit_key、收到 HTTP 401 或 BCS 业务码 401 时，会尝试密码登录。已发出的只读请求在续期成功后最多重试一次，已发出的业务写请求（含商品同步提交）保留原结果。权限拒绝与网关错误需要单独排查。缺少账号密码的旧配置仍可使用原会话字段。`shop list` 查询的是 BCS 店铺列表，WB 卖家后台 Cookie 有独立的更新流程。
+配置自动续期后，本机会话缺少 token 或 limit_key、收到 HTTP 401 或 BCS 业务码 401 时，会尝试密码登录。已发出的只读请求在续期成功后最多重试一次，已发出的业务写请求（含商品同步提交）保留原结果。权限拒绝与网关错误需要单独排查。缺少账号密码的旧配置仍可使用原会话字段。`shop list` 查询本地店铺与快照状态。WB 卖家后台 Cookie 有独立的更新流程。
 
 店铺原始响应的 `apiKey` 是该店 **WB Open API** 令牌，不能填到 `bcs.token` 或 `wb.authorizev3`。现有 `fetch_shop_list()` 只返回 id/name；显式 `--source wb-openapi` 的商品快照、只读报告和 Open API 商品写入通过内部 `fetch_open_api_shops()` 分页读取对应店铺的官方令牌，不输出或保存密钥副本，也无需新增凭证段。
 
 库存、改价、尺寸、下架及定向折扣操作在本地必要字段不足时，也可在提交前用此令牌按本店完整VC/商品ID只读补齐；完整数据不额外查询商品，补齐不更新快照或映射，不改变这些命令原有的WB网页/BCS写入通道。官方令牌失效在BCS更新，网页写入的 Cookie 失效时用 `login wb` 恢复，不能互相替代或自动换通道。
 
-显式 `--source wb-openapi` 使用中国区 `.cn` 官方主机。个人令牌可用于自有程序及本地软件，快照只需要 Content、Prices and Discounts、Marketplace 的读取权限；基础令牌的类别可用性与限额不同，不能只凭令牌字符串判断。401/403 时检查 BCS 对应店铺 apiKey 是否有效及权限是否齐全，更新后重新执行独立 fetch；不改用 Cookie、浏览器或旧缓存。429 会结束该店采集并保留旧快照，稍后再按原范围重试。默认的 BCS 快照来源走 BCS 同步与 BASE 缓存，不需要这些官方令牌。
+显式 `--source wb-openapi` 使用中国区 `.cn` 官方主机。个人令牌可用于自有程序及本地软件，快照只需要 Content、Prices and Discounts、Marketplace 的读取权限；基础令牌的类别可用性与限额不同，不能只凭令牌字符串判断。401/403 时检查 BCS 对应店铺 apiKey 是否有效及权限是否齐全，更新后重新执行独立的 `sync` 或 `catalog fetch`。429 会结束该店采集并保留旧快照，稍后再按原范围重试。默认的 BCS 快照来源走 BCS 同步与 BASE 缓存，不需要这些官方令牌。
 
 `report products` 要求 BCS 已保存各店有效的官方令牌，并具有 Analytics、Feedbacks and Questions、Marketplace 类别权限。默认使用 `.ru` 官方主机，需使用中国区主机时显式传 `--wb-region cn`；不自动切换主机或改走后台 Cookie。常规限额以个人、服务或带密钥基础令牌为前提，低限额基础令牌可能触发429；限流或401/403时该阶段停止并记录未知，不启动浏览器。飞书仍使用已登录的 lark-cli。[报告说明](PRODUCT_REPORT.md)
 

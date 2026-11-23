@@ -18,7 +18,11 @@ from sellerops.cli.main import build_parser, extract_data_dir, leaf_commands
 REQUIRED = (
     'CONFIGURATION.md', 'DATA.md', 'USAGE.md', 'AI_GUIDE.md',
     'DEVELOPMENT.md', 'TROUBLESHOOTING.md', 'CLI.md',
-    'PRODUCT_REPORT.md',
+    'PRODUCT_REPORT.md', 'MIGRATION.md', 'OPEN_API_LISTINGS.md',
+)
+IMAGE_LINK = re.compile(
+    r'!\[[^\]\n]*\]\([ \t]*(?:<([^>\n]+)>|((?:[^()\s]|\([^()\n]*\))+))'
+    r"""(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*\)"""
 )
 
 
@@ -46,9 +50,11 @@ def run() -> int:
             errors.append('Missing documentation: docs/' + name)
     documents = [ROOT / 'README.md', ROOT / 'AGENTS.md', ROOT / 'data/README.md',
                  ROOT / '_scratch/README.md', *sorted((ROOT / 'docs').rglob('*.md'))]
+    if (ROOT / 'user-guide').is_dir():
+        documents.extend(sorted((ROOT / 'user-guide').rglob('*.md')))
     parser = build_parser()
     commands = dict(leaf_commands(parser))
-    links = examples = 0
+    links = images = examples = 0
     for document in documents:
         text = document.read_text(encoding='utf8')
         label = document.relative_to(ROOT)
@@ -64,6 +70,14 @@ def run() -> int:
             elif anchor and resolved.suffix == '.md':
                 if unquote(anchor) not in headings(resolved.read_text(encoding='utf8')):
                     errors.append(f'{label}: missing heading anchor {target}')
+        for match in IMAGE_LINK.finditer(text):
+            target = match.group(1) or match.group(2)
+            if re.match(r'(?:[a-zA-Z][\w+.-]*:|//)', target):
+                continue
+            file_part = re.split(r'[?#]', target, maxsplit=1)[0]
+            images += 1
+            if not (document.parent / unquote(file_part)).is_file():
+                errors.append(f'{label}: missing image target {target}')
         for block in re.finditer(r'^```([^\n]*)\n(.*?)^```\s*$', text, flags=re.M | re.S):
             language, body = block.group(1).strip().lower(), block.group(2)
             if language == 'json':
@@ -169,7 +183,7 @@ def run() -> int:
     if errors:
         print('\n'.join(errors))
         return 1
-    print(f'Documentation: {len(documents)} files, {links} local links, {examples} CLI examples, '
+    print(f'Documentation: {len(documents)} files, {links} local links, {images} local images, {examples} CLI examples, '
           f'{len(commands)} command references: OK')
     print(f'Source documentation: {source_examples} concrete command/import examples: OK')
     print('Examples were parsed only; no business handlers, credentials or platform APIs were used.')

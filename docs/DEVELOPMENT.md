@@ -16,7 +16,7 @@
 
 显式的备用官方上架与跨店内容更新见 [Open API 商品写入](OPEN_API_LISTINGS.md)。[content_api](../src/sellerops/integrations/wildberries/content_api.py) 独立声明新增读写端点，保持只读 `WBOpenAPI` 白名单不变；[open_api_payloads](../src/sellerops/features/publishing/open_api_payloads.py) 负责完整覆盖更新与标识保留，[open_api_sources](../src/sellerops/features/publishing/open_api_sources.py) 负责公开商品的类目属性映射，[open_api_publish](../src/sellerops/features/publishing/open_api_publish.py) 编排完整上架，[open_api_finish](../src/sellerops/features/publishing/open_api_finish.py) 负责有限标识轮询、后续提交与续办，[open_api_sync](../src/sellerops/features/publishing/open_api_sync.py) 编排跨店更新。阶段状态由 [持久化模块](../src/sellerops/persistence/open_api_publish.py) 保存到本地库，以现有进程锁串行化上架请求。写请求不重试，条码、建卡与媒体/库存分别记录，预览不生成条码或等待；离线边界覆盖见 [test_open_api_writes](../tests/test_open_api_writes.py) 与 [有限等待测试](../tests/test_open_api_publish_wait.py)。
 
-`listing normalize-vc` 的编排在 [vc_normalization](../src/sellerops/features/publishing/vc_normalization.py)，[纯规则](../src/sellerops/domain/vc_normalization.py) 处理明确归属和跨店一致的避重分配，只替换四位前缀并保留原尾部，冲突时追加正整数序号，[专用载荷](../src/sellerops/features/publishing/vc_normalization_payloads.py) 保留现值并按实际 ASCII JSON 字节分批。[只读输入与历史](../src/sellerops/persistence/vc_normalization.py) 按表头加载所需字段，拒绝歧义、吞错和随机前缀兜底；同一数据目录的 FileLock 覆盖全轮，提交前保存 submitting 到 SQLite，历史记录固定新码并阻止同店同卡重放。读取不完整整轮零提交，写后不查询；不建立别名或修改现有归属/快照/状态。边界见 [离线改码测试](../tests/test_vc_normalization.py)。
+`ops normalize-vc` 的编排在 [vc_normalization](../src/sellerops/features/publishing/vc_normalization.py)，[纯规则](../src/sellerops/domain/vc_normalization.py) 处理明确归属和跨店一致的避重分配，只替换四位前缀并保留原尾部，冲突时追加正整数序号，[专用载荷](../src/sellerops/features/publishing/vc_normalization_payloads.py) 保留现值并按实际 ASCII JSON 字节分批。[只读输入与历史](../src/sellerops/persistence/vc_normalization.py) 按表头加载所需字段，拒绝歧义、吞错和随机前缀兜底；同一数据目录的 FileLock 覆盖全轮，提交前保存 submitting 到 SQLite，历史记录固定新码并阻止同店同卡重放。读取不完整整轮零提交，写后不查询；不建立别名或修改现有归属/快照/状态。边界见 [离线改码测试](../tests/test_vc_normalization.py)。
 
 ## 当前必须保留的运行约定
 
@@ -29,7 +29,9 @@
 
 ### 已有实现与约束的差异
 
-[仓库解析器](../src/sellerops/features/products/warehouse.py) 只接受唯一、可用且名称匹配莫斯科的仓库，不回退其他地区仓。[库存与下架计划](../src/sellerops/features/products/plans.py) 优先使用本地快照，CLI通过 [定向字段解析器](../src/sellerops/features/products/product_data.py) 在提交前补齐已有商品缺失的必要标识；仍缺少已确认仓库或完整规格的商品写入 `blocked_items`，预览和执行均返回非零状态，同店其他完整商品可以继续。[下架前清库存](../src/sellerops/features/products/trash_execution.py) 按商品核对全部规格的受理回执，任一规格失败、缺失、重复或回执不一致时，阻止该商品移回收站；失败商品按商品卡计数，不按失败规格重复累加。
+仓库解析器检查配置关键词能否唯一命中，以及命中仓库是否可用。仓库是否属于莫斯科仍由运营按店铺核实。见 [仓库解析器](../src/sellerops/features/products/warehouse.py)。
+
+[库存与下架计划](../src/sellerops/features/products/plans.py) 优先使用本地快照，通过 [定向字段解析器](../src/sellerops/features/products/product_data.py) 在预览时补齐已有商品缺失的必要标识。仍缺少已确认仓库或完整规格的商品写入 `blocked_items`，预览和执行均返回非零状态，同店其他完整商品可以继续。[下架前清库存](../src/sellerops/features/products/trash_execution.py) 按商品核对全部规格的受理回执，任一规格失败、缺失、重复或回执不一致时，阻止该商品移回收站。失败商品按商品卡计数。
 
 库存查询必须传入本店已确认的仓库 ID。仓库选择使用 domain.warehouses；回收站按商品 ID 提交，逐卡记录回执。
 
@@ -43,7 +45,7 @@
 
 ## 目录与调用路径
 
-命令在 cli 里按组注册，argparse 解析请求。一次库存修改从 cli/product.py 进入 features/products/stocks.py，先按本次店铺读取商品归属和快照，再生成全部规格的莫斯科仓计划，最后按平台通道提交和记录回执。
+`ops` 商品预览经 `cli.main` 调用计划模块生成并保存计划单。以库存为例，`cli.product` 调用 `features.products.stocks`，按店铺读取商品归属和快照，确定本店莫斯科仓和全部目标规格。确认后的 `apply --plan` 经 `cli.ops` 执行已冻结的计划，按选定平台通道提交并记录回执。
 
 | 目录 | 职责 |
 | --- | --- |
@@ -74,6 +76,8 @@
 
 **商品主数据**由只读价格表、SQLite 中的归属与店铺快照组成。归属统一通过 `db.resolve_vc()` 查询，审核导入和纠偏只写库，报表按需导出。
 
+打开旧 SQLite 库时，持久化层会自动补齐缺失的 `products.shipping_mode` 列。
+
 `catalog fetch` 默认走 BCS 快照：`features.catalog.products.fetch_all` 先通过 `sync_shops_parallel` 同步 WB → BCS，再逐店 `bcs.fetch_shop_products(filter=BASE)` 读取缓存并原子保存，`--no-sync` 跳过同步直接读取上次结果。显式 `--source wb-openapi` 时改用 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存；`features.catalog.snapshot_open_api` 负责唯一莫斯科仓确认及旧快照字段转换，`products` 负责原子保存、统计和多店失败汇总。令牌仅在内存中使用，不写入快照或状态。新增接口继续沿用只读端点白名单，禁止将库存 POST 读取改成 PUT/DELETE，也不在失败后自动换区域、Cookie 或缓存。
 
 显式 Open API 来源的全店采集使用有界线程池，默认4店并发，`--parallel` 可调整（1为串行）。BCS店铺密钥只在主线程读取一次，任务内各自创建并关闭 `WBOpenAPI` 会话，不共享限流计时或仓库 ID；店内分页、批次和重试规则不变。主线程按完成结果原子保存各店快照、输出进度并汇总状态，状态列表仍按原店铺顺序保存。单店失败及本地保存失败不取消其他店铺，最终返回非零；不把并发扩展到默认 BCS 流程。并发边界、跨店隔离及失败保护使用屏障同步的离线替身验证，不依赖真实接口或耗时对比。
@@ -90,11 +94,11 @@ BCS 重复商品由 [domain.bcs_products](../src/sellerops/domain/bcs_products.p
 
 计划中的可提交、阻止和正常跳过由预览和写入共用。价格下限与规格归属冲突在计划阶段判定，规格检查包含该店全快照和定向补齐结果。BCS 保价共用 `bcs_keep_price`，保留所有规格同一且可以按金额精度原样提交的价格。显式价格审核单独记录。默认 BCS 上架的初始库存随原写请求，回收站清理必要清零经 BCS 后再由 WB 删除。
 
-`ProductResult` 汇总高频商品操作的逐店计划和回执。七个 WorkBuddy 命令族的 `--json` 在 CLI 统一输出一条 JSON，进度走 stderr，错误也返回摘要和下一步。商品回执沿用 CSV 表头，未知数量为 `null`，部分成功保留任务号。旧命令的非 JSON 模式仍可输出原摘要，供已有脚本使用。参见 [离线合同测试](../tests/test_step3.py)。
+`ProductResult` 汇总高频商品操作的逐店计划和回执。支持 `--json` 的命令由 CLI 统一输出一条 UTF-8 JSON，进度走 stderr，错误也返回摘要和下一步。商品回执沿用 CSV 表头，未知数量为 `null`，部分成功保留任务号。部分入口未加 `--json` 时仍输出原末行摘要，供已有脚本使用。参见 [离线合同测试](../tests/test_step3.py)。
 
 普通上架用同一个 SKU 决定编码。预览生成完整 VC 后把 SKU 和编码来源写入计划载荷。BCS 明确受理时，提交查重回执与新归属在同一个本地事务记录，保留已有人工归属。批量接口无法生成原样完整 VC 时需改用建卡入口。
 
-`listing publish-openapi` 在建卡受理后允许插入有限的待办 VC 标识轮询，取得本店 nmID/chrtID 并核对本次生成条码后才提交图片和莫斯科库存。默认总等待1800秒、轮次间隔15秒，按完整 VC 使用 `cards(vendor_code=...)` 搜索并在本地精确匹配；分页、时间、轮数均有边界。超时返回非零并保留受理状态，可用同命令 `--resume` 续办；所有标识读取结束后才提交就绪项的媒体/库存，此后不回读。其他写命令不增加此例外。
+官方上架计划在建卡受理后执行有限的待办 VC 标识轮询，取得本店 nmID/chrtID 并核对本次生成条码后才提交图片和莫斯科库存。默认总等待 1800 秒、轮次间隔 15 秒，按完整 VC 使用 `cards(vendor_code=...)` 搜索并在本地精确匹配，分页、时间和轮数均有边界。超时返回非零并保留受理状态。用 `ops publish-openapi --resume` 预览续办，确认后用 `apply --plan` 提交新单。所有标识读取结束后才提交就绪项的媒体和库存。
 
 **履约**：本地 VC→中文名→库存 SKU → 马帮匹配 → 预报与上传 → 有限轮询成功/失败/历史状态 → 成功部分交运 → 配置飞书时登记。失败与未完成的批次不绕过等待直接交运。
 
@@ -132,7 +136,7 @@ BCS [认证模块](../src/sellerops/integrations/bcs/auth.py) 处理密码登录
 
 ## 写操作与同步
 
-- 商品改价、折扣、库存、下架、上架和改码通过 ops 保存明确范围，再由 apply --plan 使用冻结载荷提交。其余业务的确认和预览按对应命令执行。
+- 商品改价、价格审核、折扣、库存、下架、上架和改码通过 `ops` 保存明确范围，再由 `apply --plan` 使用冻结载荷提交。其余业务的确认和预览按对应命令执行。
 - WB 修改异步生效，无法通过即时查询判断最终结果；BCS 修改也异步，且需先同步再查询，耗时较长。因此不进行写后验证：写命令提交并记录接口结果后结束，不附加查询验证、同步、拉取或映射表合并。写命令不提供 `--verify`、`--no-verify` 或串联写后同步的 `--sync` 开关。
 - 首次配置使用 `sync` 更新快照，再用 `map workbench` 看图归属，最后用 `map batch-set --file` 或 `catalog merge` 导入审核结果。HTML 和 `map candidates` 共用待认领分组。报表使用 `report mapping`。快照更新仍需用户另行明确要求。
 - `map check-mismatch` 和 `catalog check-mismatch` 共用 `mismatch_check.py`，从已归属商品和活跃店铺快照生成大图画廊。价格标记逐店复用待认领的最低售价正整数倍匹配，容差为绝对差不超过 1 或相对偏差不超过 2%。最低售价或现价缺失时跳过相应比较。筛查测试使用隔离数据目录，覆盖不同倍数共存、单店现价偏离、前缀冲突、图片降级、筛选和 JSON 回执。

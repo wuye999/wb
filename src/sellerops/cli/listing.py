@@ -19,7 +19,7 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     p.add_argument("--price-multiplier", type=float, default=1.0, help="价格来源乘数，按分四舍五入（默认 1）")
     p.add_argument("--stock", type=int, default=999, help="上架库存（默认999，可显式设为0）")
     p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
+    p.add_argument("--apply", action="store_true", help="兼容保留；确认预览生成的计划单后，用 apply --plan 提交")
 
 
     p.add_argument("--interval", type=float, default=1.0, help="批次上架请求间隔秒")
@@ -48,7 +48,7 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     p.add_argument('--resume', action='store_true', help='按 --shops/--vc 续办已有记录，不重新建卡；沿用原图片和库存计划')
     p.add_argument('--wait-timeout', type=float, default=1800, help='等待完整商品/规格标识的总时限秒（默认1800，0=只查询一次，最多7200）')
     p.add_argument('--wait-interval', type=float, default=15, help='标识查询轮次间隔秒（默认15，范围1..60；仍遵守接口限流）')
-    p.add_argument('--apply', action='store_true', help='执行完整上架或续办流程（默认仅预览，不等待、不写入）')
+    p.add_argument('--apply', action='store_true', help='兼容保留；确认上架或续办计划单后，用 apply --plan 提交')
     bind(p, 'sellerops.features.publishing.open_api_publish', 'run')
 
     p = sub.add_parser('normalize-vc', help='WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店一致序号')
@@ -58,14 +58,14 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     selection.add_argument('--name-contains', type=nonempty, help='中文商品名包含指定文字')
     selection.add_argument('--all', action='store_true', help='全部非回收站商品；无明确归属的项记录阻止原因')
     add_shop_scope(p)
-    p.add_argument('--apply', action='store_true', help='提交改码（默认预览）；保留历史防重放日志，不更新本地映射/快照')
+    p.add_argument('--apply', action='store_true', help='兼容保留；确认改码计划单后，用 apply --plan 提交')
     bind(p, 'sellerops.features.publishing.vc_normalization', 'run')
 
     if planned_only:
         return
 
     p = sub.add_parser('sync-cards', help='WB Open API：按相同完整 VC 将源店商品内容同步到其他店')
-    p.add_argument('--source-shop', type=int, required=True, help='修改后的源店 BCS 店铺 ID（例如袁州1店对应 ID）')
+    p.add_argument('--source-shop', type=int, required=True, help='修改后的源店 BCS 店铺 ID（例如示例店铺对应的 1001）')
     selection = p.add_mutually_exclusive_group(required=True)
     selection.add_argument('--vc', default='', help='源店完整 VC，逗号分隔')
     selection.add_argument('--nm', default='', help='源店 WB 商品码，逗号分隔')

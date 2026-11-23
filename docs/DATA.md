@@ -14,9 +14,9 @@
 | `browser_profiles/<平台>/` | 固定 Chromium 的平台登录资料 | 本机专用浏览器，按数据目录隔离 |
 | `ai_test_qa.json` | 本地 AI 对照样例集 | 用户；格式见下文 |
 
-`exports/` 与选定的数据目录同级。报表、查询导出和 AI 对照报告默认写入该目录，支持 `--out` 的命令可指定输出路径。`exports/workbench/` 保存待认领与货不对板两个 HTML 工作台，每种工作台覆盖写入最新一份。`exports/fbs_shipments/YYYYMMDD/` 按供货日期保存供货码和标签 PDF。
+`exports/` 与选定的数据目录同级。不同数据目录若共用父目录，也会共用导出目录。报表、查询导出和 AI 对照报告默认写入该目录，支持 `--out` 的命令可指定输出路径。`exports/workbench/` 保存待认领与货不对板两个 HTML 工作台，每种工作台覆盖写入最新一份。`exports/fbs_shipments/YYYYMMDD/` 按供货日期保存供货码和标签 PDF。
 
-商品操作逐项记录在当日的 `商品操作回执_*.csv`，旧的 `ops_result.csv` 追加写入和 `logs/archive/` 轮转已取消。可用 [task clean](USAGE.md#定期清理本地文件) 预览或清理过期日志和导出，其中 `exports/workbench/` 始终保留。
+商品操作逐项记录在当日的 `商品操作回执_*.csv`，旧的 `ops_result.csv` 追加写入和 `logs/archive/` 轮转已取消。可用 `task clean` 预览或清理过期日志和导出，包括到期的发货 PDF。`exports/workbench/` 始终保留。见 [清理规则](USAGE.md#定期清理本地文件)。
 
 旧快照、归属池和映射 Excel 由 [旧数据迁移命令](MIGRATION.md#迁移旧商品数据) 一次性导入。通过 `report mapping` 从库导出总表或单店表，默认保存在 `exports/`。
 
@@ -88,9 +88,9 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 
 `catalog rename --file` 接受 `[{"vc":"BCS-TEST-123456789","cn":"新中文名"}]` 形式的 JSON，会更新数据库里的归属，没有 `--apply` 开关。
 
-`map check-mismatch` 和 `catalog check-mismatch` 写入 `exports/workbench/货不对板筛查工作台.html`，数据来自已归属商品、商品价格表和活跃店铺的在架快照。画廊把勾选状态保存到浏览器 localStorage。导出的 JSON 数组每条包含 `vc`、`cn`、`title`、`shops`，复制按钮输出可用于 `product trash --vc` 或 `ops trash --vc` 的逗号分隔完整 VC。
+`map check-mismatch` 和 `catalog check-mismatch` 写入 `exports/workbench/货不对板筛查工作台.html`，数据来自已归属商品、商品价格表和活跃店铺的在架快照。画廊把勾选状态保存到浏览器 localStorage。导出的 JSON 数组每条包含 `vc`、`cn`、`title`、`shops`，复制按钮输出可用于 `ops trash --vc` 预览的逗号分隔完整 VC。
 
-`publish/create-cards --file` 支持 `.txt`、`.json`、`.csv`。纯文本每行一个商品码。JSON 可为商品码数组或带 `nmId`（也识别 `sku` / `nm`）的对象数组。CSV 支持按订单登记的中文名补包装尺寸。售价可在批量文件的 `price` 字段或命令的 `--price` 中指定，缺少指定价格时使用本地快照价。见 [发布样例](../examples/publish.example.json)。
+`ops publish --file` 和 `ops create-cards --file` 支持 `.txt`、`.json`、`.csv`。纯文本每行一个商品码。JSON 可为商品码数组或带 `nmId`（也识别 `sku` / `nm`）的对象数组。CSV 支持按订单登记的中文名补包装尺寸。售价可在批量文件的 `price` 字段或命令的 `--price` 中指定，缺少指定价格时使用本地快照价。见 [发布样例](../examples/publish.example.json)。
 
 ## 飞书业务表
 

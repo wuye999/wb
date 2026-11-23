@@ -15,9 +15,9 @@ def _positive_days(value: str) -> int:
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser('run', help="每日任务（morning=报名+改价 / adjust-discounts=只改价）")
+    p = sub.add_parser('run', help="每日任务（morning=促销报名+生成折扣计划 / adjust-discounts=只生成折扣计划）")
     p.add_argument("mode", choices=["morning", "adjust-discounts"])
-    p.add_argument("--apply", action="store_true", help="执行每日流程（默认预览）")
+    p.add_argument("--apply", action="store_true", help="运行每日流程（默认只列步骤）；折扣计划仍需确认后用 apply --plan 提交")
     add_shop_scope(p)
     bind(p, 'sellerops.features.system.daily', 'run_daily_cmd')
 

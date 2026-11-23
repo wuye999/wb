@@ -47,8 +47,8 @@ def add_ops_args(p: argparse.ArgumentParser, *, with_price: bool = False, with_s
         None（原地修改 parser）。
     """
     add_product_scope(p)
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
-    p.add_argument("--yes", action="store_true", help="跳过不可逆操作确认")
+    p.add_argument("--apply", action="store_true", help="兼容保留；确认预览生成的计划单后，用 apply --plan 提交")
+    p.add_argument("--yes", action="store_true", help="兼容保留；确认计划单后，用 apply --plan 提交")
 
     if with_price:
         intent = p.add_mutually_exclusive_group()
@@ -65,7 +65,7 @@ def add_ops_args(p: argparse.ArgumentParser, *, with_price: bool = False, with_s
 def add_discount_args(parser):
     add_product_scope(parser)
     parser.add_argument("--channel", choices=["wb", "bcs"], default="wb")
-    parser.add_argument("--apply", action="store_true", help="提交修改（默认预览）")
+    parser.add_argument("--apply", action="store_true", help="兼容保留；确认预览生成的计划单后，用 apply --plan 提交")
     parser.add_argument("--target", type=int, required=True, help="目标折扣，必填（0 至 100）")
     parser.add_argument("--threshold", type=int, help="仅修改平台当前折扣严格高于此值的商品")
     parser.add_argument("--below", type=int, default=-1, help="也修改平台当前折扣严格低于此值的商品（WB）")
@@ -74,7 +74,7 @@ def add_discount_args(parser):
 
 
 def add_publish_args(parser):
-    parser.add_argument("nms", nargs="*", help="WB 商品码列表（支持空格或逗号分隔，如 248364237 388854754）")
+    parser.add_argument("nms", nargs="*", help="WB 商品码列表（支持空格或逗号分隔，如 123456789 123456790）")
     parser.add_argument("--nm", default="", help="WB 商品码（逗号分隔多个，兼容命令行参数传参）")
     parser.add_argument("--vc", default="", help="完整 vendorCode（指定单个商品完整 VC；多商品时可用模版如 BCS-TAG-{nm} 或逗号分隔）")
     parser.add_argument("--prefix", default="", help="4位前缀码（如 ABCD 或 BCS-ABCD）")
@@ -89,7 +89,7 @@ def add_publish_args(parser):
     add_shop_scope(parser)
     parser.add_argument("--stock", type=int, default=999, help="上架库存量（默认 999）")
     parser.add_argument("--cn", default="", help="商品中文名（辅助匹配价格与包装规格）")
-    parser.add_argument("--file", default="", help="批量上架文件路径（支持 .txt 每行一个商品码，或 .json 商品列表）")
+    parser.add_argument("--file", default="", help="批量上架文件路径（支持 .txt 每行一个商品码、.json 商品列表或 .csv 表格）")
     parser.add_argument("--cn-stock", default="", help="按中文名指定库存（'中文名:库存,...'）")
     parser.add_argument("--interval", type=float, default=1.0, help="批次/商品请求间隔秒（默认 1.0）")
-    parser.add_argument("--apply", action="store_true", help="真正调用平台接口执行（默认仅 dry-run 预览）")
+    parser.add_argument("--apply", action="store_true", help="兼容保留；确认预览生成的计划单后，用 apply --plan 提交")
