@@ -22,14 +22,14 @@
 
 报告默认筛选由 [product_report_screening](../src/sellerops/features/reports/product_report_screening.py) 纯计算：最长数字段合并风险，完整VC去重输出，当前本店快照判断缺口并区分未知/回收站/已有提交。名称输入由 [report_catalog](../src/sellerops/persistence/report_catalog.py) 按表头仅读取价格表商品名、当前映射VC及中文名，不依赖价格公式、图片或库存。`--details` 才展开原证据；[离线筛选测试](../tests/test_product_report_screening.py) 覆盖边界、加权、跨店标识与缺口。
 
-- 所有仓库操作默认且仅使用该店铺的莫斯科仓库 ID，包括读取、修改库存、清零、下架前清库存、回收站归零、上架和临时脚本。全店/全部商品不扩大仓库范围；不能回退到成都或其他俄语地区仓。名称和 ID 无法确认时中止该店操作。
-- WB 仓库列表的 `id` 才是库存使用的仓库标识，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对；马帮仓库 ID 属于另一套体系，也须核实为莫斯科业务仓。
+- 所有 WB 仓库操作仅使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓），包括库存读取、修改和清零、下架前清库存、回收站归零、上架和临时脚本。全店或全部商品只扩大商品范围。未配置、匹配不到、匹配多个或无法核实仓库名称和 ID 时中止该店操作，不得猜测、跨店复用 ID 或回退至未配置的仓库。
+- 库存使用 WB 仓库列表的 `id`，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对。马帮库存使用在马帮账户中单独核实并配置的 `mabang.warehouse_id`。
 - 浏览器登录由用户显式发起 `login`，业务命令不启动浏览器。平台登录和续期见 [配置说明](CONFIGURATION.md#通过-workbuddy-连接平台)。
 - 这些是现行操作约定，不能因重组代码、压缩文档或删除历史记录而丢失。将来变更运行方案时，必须同步修改 AGENTS、配置、操作指南及生成参考，不能只改某一处说明。
 
 ### 已有实现与约束的差异
 
-仓库解析器检查配置关键词能否唯一命中，以及命中仓库是否可用。仓库是否属于莫斯科仍由运营按店铺核实。见 [仓库解析器](../src/sellerops/features/products/warehouse.py)。
+仓库解析器检查配置关键词能否唯一命中，以及命中仓库是否可用。运营逐店核实命中的仓库是否为该店的默认业务仓。见 [仓库解析器](../src/sellerops/features/products/warehouse.py)。
 
 [库存与下架计划](../src/sellerops/features/products/plans.py) 优先使用本地快照，通过 [定向字段解析器](../src/sellerops/features/products/product_data.py) 在预览时补齐已有商品缺失的必要标识。仍缺少已确认仓库或完整规格的商品写入 `blocked_items`，预览和执行均返回非零状态，同店其他完整商品可以继续。[下架前清库存](../src/sellerops/features/products/trash_execution.py) 按商品核对全部规格的受理回执，任一规格失败、缺失、重复或回执不一致时，阻止该商品移回收站。失败商品按商品卡计数。
 
@@ -45,7 +45,7 @@
 
 ## 目录与调用路径
 
-`ops` 商品预览经 `cli.main` 调用计划模块生成并保存计划单。以库存为例，`cli.product` 调用 `features.products.stocks`，按店铺读取商品归属和快照，确定本店莫斯科仓和全部目标规格。确认后的 `apply --plan` 经 `cli.ops` 执行已冻结的计划，按选定平台通道提交并记录回执。
+`ops` 商品预览经 `cli.main` 调用计划模块生成并保存计划单。以库存为例，`cli.product` 调用 `features.products.stocks`，按店铺读取商品归属和快照，确定本店默认业务仓和全部目标规格。确认后的 `apply --plan` 经 `cli.ops` 执行已冻结的计划，按选定平台通道提交并记录回执。
 
 | 目录 | 职责 |
 | --- | --- |
@@ -78,7 +78,7 @@
 
 打开旧 SQLite 库时，持久化层会自动补齐缺失的 `products.shipping_mode` 列。
 
-`catalog fetch` 默认走 BCS 快照：`features.catalog.products.fetch_all` 先通过 `sync_shops_parallel` 同步 WB → BCS，再逐店 `bcs.fetch_shop_products(filter=BASE)` 读取缓存并原子保存，`--no-sync` 跳过同步直接读取上次结果。显式 `--source wb-openapi` 时改用 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存；`features.catalog.snapshot_open_api` 负责唯一莫斯科仓确认及旧快照字段转换，`products` 负责原子保存、统计和多店失败汇总。令牌仅在内存中使用，不写入快照或状态。新增接口继续沿用只读端点白名单，禁止将库存 POST 读取改成 PUT/DELETE，也不在失败后自动换区域、Cookie 或缓存。
+`catalog fetch` 默认走 BCS 快照：`features.catalog.products.fetch_all` 先通过 `sync_shops_parallel` 同步 WB → BCS，再逐店 `bcs.fetch_shop_products(filter=BASE)` 读取缓存并原子保存，`--no-sync` 跳过同步直接读取上次结果。显式 `--source wb-openapi` 时改用 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存；`features.catalog.snapshot_open_api` 负责确认各店唯一可用的默认业务仓及转换旧快照字段，`products` 负责原子保存、统计和多店失败汇总。令牌仅在内存中使用，不写入快照或状态。新增接口继续沿用只读端点白名单，禁止将库存 POST 读取改成 PUT/DELETE，也不在失败后自动换区域、Cookie 或缓存。
 
 显式 Open API 来源的全店采集使用有界线程池，默认4店并发，`--parallel` 可调整（1为串行）。BCS店铺密钥只在主线程读取一次，任务内各自创建并关闭 `WBOpenAPI` 会话，不共享限流计时或仓库 ID；店内分页、批次和重试规则不变。主线程按完成结果原子保存各店快照、输出进度并汇总状态，状态列表仍按原店铺顺序保存。单店失败及本地保存失败不取消其他店铺，最终返回非零；不把并发扩展到默认 BCS 流程。并发边界、跨店隔离及失败保护使用屏障同步的离线替身验证，不依赖真实接口或耗时对比。
 
@@ -98,7 +98,7 @@ BCS 重复商品由 [domain.bcs_products](../src/sellerops/domain/bcs_products.p
 
 普通上架用同一个 SKU 决定编码。预览生成完整 VC 后把 SKU 和编码来源写入计划载荷。BCS 明确受理时，提交查重回执与新归属在同一个本地事务记录，保留已有人工归属。批量接口无法生成原样完整 VC 时需改用建卡入口。
 
-官方上架计划在建卡受理后执行有限的待办 VC 标识轮询，取得本店 nmID/chrtID 并核对本次生成条码后才提交图片和莫斯科库存。默认总等待 1800 秒、轮次间隔 15 秒，按完整 VC 使用 `cards(vendor_code=...)` 搜索并在本地精确匹配，分页、时间和轮数均有边界。超时返回非零并保留受理状态。用 `ops publish-openapi --resume` 预览续办，确认后用 `apply --plan` 提交新单。所有标识读取结束后才提交就绪项的媒体和库存。
+官方上架计划在建卡受理后执行有限的待办 VC 标识轮询，取得本店 nmID/chrtID 并核对本次生成条码后才提交图片和本店默认业务仓库存。默认总等待 1800 秒、轮次间隔 15 秒，按完整 VC 使用 `cards(vendor_code=...)` 搜索并在本地精确匹配，分页、时间和轮数均有边界。超时返回非零并保留受理状态。用 `ops publish-openapi --resume` 预览续办，确认后用 `apply --plan` 提交新单。所有标识读取结束后才提交就绪项的媒体和库存。
 
 **履约**：本地 VC→中文名→库存 SKU → 马帮匹配 → 预报与上传 → 有限轮询成功/失败/历史状态 → 成功部分交运 → 配置飞书时登记。失败与未完成的批次不绕过等待直接交运。
 

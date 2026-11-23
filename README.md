@@ -12,7 +12,7 @@ WorkBuddy 先用 `doctor --json` 体检。首次配置时用 `sync` 获取快照
 
 | 读者或任务 | 阅读入口 |
 | --- | --- |
-| 老板与电商运营（WorkBuddy 快速上手） | [用户使用手册](user-guide/README.md)：零代码功能速览、快速上手与日常话术速查 |
+| 团队管理与电商运营（WorkBuddy 快速上手） | [用户使用手册](user-guide/README.md)：零代码功能速览、快速上手与日常话术速查 |
 | 第一次使用 | 本页安装与数据准备 → [配置](docs/CONFIGURATION.md) → [操作流程](docs/USAGE.md) |
 | 日常查询与运营 | [操作流程](docs/USAGE.md)、[命令参考](docs/CLI.md) |
 | 连接或更新平台凭证 | [WorkBuddy 平台连接](docs/CONFIGURATION.md#通过-workbuddy-连接平台) |
@@ -118,7 +118,7 @@ python run.py apply --plan P018
 
 ## 日常使用边界
 
-- 凡涉及 WB 仓库的操作，仅使用各店铺按 `wb.warehouse_keyword` 确认的唯一仓库 ID。运营应配置经核实的莫斯科业务仓。全店或全部商品只扩大商品范围。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许莫斯科)。
+- 凡涉及 WB 仓库的操作，仅使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓）。未配置、匹配不到或匹配多个时中止该店操作。不得猜测仓库、跨店复用 ID 或回退至未配置的仓库。全店或全部商品只扩大商品范围。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许配置的本店默认业务仓)。
 - 普通用户及其运营 AI 使用已有命令，维护自己的 data；源码、文档、依赖声明和项目配置保持只读，临时脚本与产物放 `_scratch/`。维护者及其明确授权的开发任务按开发指南修改项目。
 - WB/BCS 写入异步处理。提交并记录接口结果后结束，不进行写后查询验证，不附加同步、拉取或合并。需要更新数据时，由用户单独要求运行 `catalog fetch`。
 - 官方上架超时后，可用 `ops publish-openapi --resume` 预览续办计划，确认后用 `apply --plan` 提交剩余阶段。

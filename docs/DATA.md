@@ -51,11 +51,11 @@
 - `nmId` / `nmID`：WB 商品码。同一商品在不同店铺可能有不同码，不能把主店码直接当作所有店铺的码。
 - `chrtId`：库存规格标识，库存修改依赖它，不能用 nmId 替代。
 - 马帮库存 SKU：价格表中登记的库存编码，用于马帮商品匹配。
-- 当前凡涉及仓库的操作仅允许该店的莫斯科仓库 ID，不跨店复用，不回退成都或其他地区仓。WB 仓库列表取响应 `id`；同一响应中的 `warehouseId` 是另一套 office 标识，开发时不要互换。原始快照中即使含其他仓库，也不代表这些 ID 获得操作授权。
+- WB 仓库操作仅使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓）。未配置、匹配不到或匹配多个时中止该店操作，不猜测、不跨店复用 ID、不回退至未配置的仓库。业务请求使用仓库列表的 `id`，office 字段 `warehouseId` 不得代用。若原始快照含有其他仓库 ID，仍按配置核实本店默认业务仓。
 
 快照在库内保留原有 `shopId`、`total`、`rows` 等字段。每家店的最新成功快照与失败原因单独保存，缺快照和已确认的空店是两种情况。
 
-默认 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存，去重后整店写入 SQLite。显式 `--source wb-openapi` 使用 WB 官方中国区接口，保存来源、时间、本店莫斯科仓及缺失统计。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店莫斯科仓。库存缺失使用空列表，价格缺失使用 null，保留合法零值。
+默认 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存，去重后整店写入 SQLite。显式 `--source wb-openapi` 使用 WB 官方中国区接口，保存来源、时间、本店默认业务仓及缺失统计。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店默认业务仓。库存缺失使用空列表，价格缺失使用 null，保留合法零值。
 
 BCS 商品响应先按原始行数核对接口 total，确认完整后才按本店 nmId 和完整 VC 去重。忽略 BCS 记录元信息 `id/createTime/updateTime/createBy/updateBy` 的差异；其余非空字段必须一致，且必须存在一条包含全部已知业务值的完整原行。例如一行有币种/折扣、另一行这些字段为空时保留前者；不跨行拼接，0 和 false 都是有效值。业务值完全一致的完整行再按 BCS updateTime、id 选择代表。同 VC 对应不同或缺失 nmId、同 nmId 对应不同或缺失 VC、在架/回收站状态冲突、非空字段冲突或没有完整原行时，读取失败并保留旧快照。终端报告原始行数和移除条数；快照 `total/fetchedCount` 及同步状态中的店铺 total 均为去重后行数。直接读取 BCS 商品列表的业务也使用去重结果。单店表生成沿用同一规则，避免旧快照重复行进入 Excel。
 
@@ -69,7 +69,7 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 
 | 文件 | 含义 |
 | --- | --- |
-| `state/WB_FBS发货群供货.json` | 店铺、莫斯科仓、订单 ID、供货与阶段回执，保留原记录以阻止重复提交 |
+| `state/WB_FBS发货群供货.json` | 店铺、本店默认业务仓、订单 ID、供货与阶段回执，保留原记录以阻止重复提交 |
 | `state/questions_replied.json` / `questions_front_shown.json` | 提问已回复与前台已展示集合 |
 | `state/chat_replied.json` / `chat_front_shown.json` | 聊天已回复与前台已展示状态 |
 
