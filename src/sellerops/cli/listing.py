@@ -26,20 +26,6 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
     bind(p, 'sellerops.features.publishing.replicate', 'run')
 
-    p = sub.add_parser('import', help="他人映射表导入上架：他人有我方无的商品（按真实 WB商品码 匹配）上架到我的店铺")
-    p.add_argument("xlsx", help="他人映射表 xlsx 路径（同项目「映射总表」格式）")
-    names = p.add_mutually_exclusive_group()
-    names.add_argument("--name", type=nonempty, help="外部表中的完整中文商品名")
-    names.add_argument("--name-contains", type=nonempty, help="外部表商品名包含指定文字")
-    add_shop_scope(p)
-    p.add_argument("--limit", type=int, default=0, help="最多处理 N 个商品（0=不限）")
-    p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run）")
-
-
-    p.add_argument("--interval", type=float, default=1.0, help="批次上架请求间隔秒")
-    p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
-    bind(p, 'sellerops.features.publishing.import_publish', 'run')
-
     p = sub.add_parser('publish', help="批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）")
     add_publish_args(p)
     bind(p, 'sellerops.features.publishing.bulk_publish', 'run')

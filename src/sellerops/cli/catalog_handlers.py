@@ -1,5 +1,3 @@
-from sellerops.features.catalog import mapping as catalog_mapping
-from sellerops.features.catalog import mapping_check as catalog_mapping_check
 from sellerops.features.catalog import mapping_sync as catalog_mapping_sync
 from sellerops.features.catalog import mismatch_check as catalog_mismatch_check
 from sellerops.features.catalog import products as catalog_products
@@ -47,29 +45,10 @@ def run_fetch(args):
     return int(bool(args.output.get('errors')))
 
 
-def run_mapping(args):
-    catalog_mapping.run_mapping(main_shop_only=getattr(args, "main_shop_only", False))
-    return 0
-
-def run_mapping_import(args):
-    catalog_mapping_sync.import_mapping(args.file)
-    return 0
-
-def run_mapping_check(args):
-    catalog_mapping_check.run(tol=getattr(args, "tol", 5))
-    return 0
-
 def run_mismatch_check(args):
-    catalog_mismatch_check.run(cn=getattr(args, "cn", ""), begin=getattr(args, "begin", ""), end=getattr(args, "end", ""), days=getattr(args, "days", 0))
-    return 0
-
-def run_review(args=None):
-    catalog_mapping_sync.run_review()
-    return 0
-
-def run_merge(args=None):
-    file_path = getattr(args, "file", None) if args else None
-    catalog_mapping_sync.merge(file_path)
+    args.output = catalog_mismatch_check.run(cn=args.cn, begin=args.begin, end=args.end, days=args.days)
+    args.summary = '已生成货不对板筛查工作台'
+    args.next_action = '打开 HTML 看图核对，勾选后导出或复制完整 VC'
     return 0
 
 def run_mapping_rename(args):

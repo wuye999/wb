@@ -291,4 +291,13 @@ class TestMabangAuth(unittest.TestCase):
                 patch.object(forecast, 'form_request', side_effect=MabangAuthError('需要验证')):
             with self.assertRaises(MabangAuthError):
                 forecast.get_handover_channel_value(
-                    {'handover_channel_id': 'fixture', 'handover_channel_value': 'fallback'}, 'order')
+                    {'handover_keyword': '测试渠道', 'handover_channel_id': 'fixture',
+                     'handover_channel_value': 'fallback'}, 'order')
+
+    def test_handover_without_keyword_requires_an_explicit_value(self):
+        with patch.object(forecast, 'form_request') as request:
+            with self.assertRaisesRegex(ValueError, r'data/credentials\.json.*mabang\.handover_keyword'):
+                forecast.get_handover_channel_value({'handover_keyword': ' ', 'handover_channel_id': '1'}, 'order')
+            self.assertEqual(forecast.get_handover_channel_value({'handover_channel_value': '1_2_渠道_3'}, 'order'),
+                             '1_2_渠道_3')
+        request.assert_not_called()

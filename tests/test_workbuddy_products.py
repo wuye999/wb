@@ -17,7 +17,7 @@ from operation_fixture import run_business_cli as main
 from sellerops.core.errors import AuthenticationError, PlatformApiError
 from sellerops.core.files import atomic_dump_json
 from sellerops.domain.product_reports import ProductReport, ReportIssue
-from sellerops.features.catalog import mapping_sync, products
+from sellerops.features.catalog import products, vc_mapping
 from sellerops.features.products import price_review, product_data, warehouse
 from sellerops.features.reports import product_report
 from sellerops.features.system import daily
@@ -49,7 +49,7 @@ class TestWorkBuddyProducts(unittest.TestCase):
         self.folder = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         paths.configure(self.folder)
         self.shop_config = {sid: {"shopId": sid, "shopName": f"店{sid}"} for sid in (1, 2)}
-        cred = Mock(shops=list(self.shop_config.values()), root_version="fixture")
+        cred = Mock(shops=list(self.shop_config.values()), root_version="fixture", wb_warehouse_keyword="莫斯科")
         cred.wb_shop.side_effect = self.shop_config.get
         stack.enter_context(patch.object(wb.credentials, "get", return_value=cred))
         stack.enter_context(patch.object(wb, "make_session",
@@ -58,15 +58,15 @@ class TestWorkBuddyProducts(unittest.TestCase):
             {"id": 10 + sid, "name": "莫斯科", "warehouseId": 999}, {"id": 99, "name": "成都"}]))
         stack.enter_context(patch.object(wb.time, "sleep"))
         fetch = stack.enter_context(patch.object(products, "fetch_all"))
-        merge = stack.enter_context(patch.object(mapping_sync, "merge"))
+        review = stack.enter_context(patch.object(vc_mapping, "run_batch_set"))
         sync = stack.enter_context(patch.object(bcs, "sync_shops_parallel"))
         self.addCleanup(fetch.assert_not_called)
-        self.addCleanup(merge.assert_not_called)
+        self.addCleanup(review.assert_not_called)
         self.addCleanup(sync.assert_not_called)
         book = openpyxl.Workbook()
         sheet = book.active
         sheet.title = "Sheet1"
-        sheet.append(["卖家SKU", "产品中文名", "实际售价", "尺寸", "vendorCode前缀码"])
+        sheet.append(["卖家SKU", "产品中文名", "最低售价", "尺寸", "vendorCode前缀码"])
         sheet.append(["A", "旅行杯", 60, "1*2*3/0.5", "AAAA"])
         sheet.append(["B", "旅行杯", 90, "4*5*6/0.7", "BBBB"])
         book.save(paths.current.price_book_xlsx)
@@ -96,20 +96,20 @@ class TestWorkBuddyProducts(unittest.TestCase):
             self.assertTrue(Path(value).is_file(), value)
         return rc, summary
 
-    def test_sku_and_exact_name_keep_their_price_rows_through_all_callers(self):
+    def test_sku_and_exact_name_select_the_expected_products(self):
         with patch.object(wb, "request", return_value=accepted()) as send:
-            rc, result = self.command("product", "price", "--shops", "1", "--sku", "B", "--apply")
+            rc, result = self.command("product", "price", "--shops", "1", "--sku", "B", "--price", "91", "--apply")
             self.assertEqual((rc, result["fields"]), (0, ["price"]))
             [row] = send.call_args.kwargs["json"]["data"]
-            self.assertEqual(row, {"nmID": 102, "vendorCode": B, "currencyIsoCode": "CNY", "price": 90})
+            self.assertEqual(row, {"nmID": 102, "vendorCode": B, "currencyIsoCode": "CNY", "price": 91})
             self.assertEqual(send.call_count, 2)
             self.assertEqual(result["per_shop"][0]["task_ids"], ["700"])
-            self.assertEqual(result["per_shop"][0]["planned_price"], {"min": 90, "max": 90})
-            rc, result = self.command("product", "price", "--shops", "1", "--name", "旅行杯", "--apply")
+            self.assertEqual(result["per_shop"][0]["planned_price"], {"min": 91, "max": 91})
+            rc, result = self.command("product", "price", "--shops", "1", "--name", "旅行杯", "--price", "93", "--apply")
             self.assertEqual(rc, 0)
-            self.assertEqual(result["per_shop"][0]["planned_price"], {"min": 60, "max": 90})
+            self.assertEqual(result["per_shop"][0]["planned_price"], {"min": 93, "max": 93})
             self.assertEqual({row["nmID"]: row["price"] for row in send.call_args.kwargs["json"]["data"]},
-                             {101: 60, 102: 90})
+                             {101: 93, 102: 93})
         with patch.object(wb_stock, "post_stocks", return_value={"error": False}) as stock:
             rc, result = self.command("product", "stock", "--shops", "1", "--name", "旅行杯",
                                       "--amount", "25", "--apply")
@@ -126,14 +126,15 @@ class TestWorkBuddyProducts(unittest.TestCase):
         self.save(1, self.row(A, 101, (201,)), self.row(B, 102, (202,)),
                   self.row(AMBIGUOUS, 103, (203,)))
         with patch.object(wb, "request", return_value=accepted()) as send:
-            rc, result = self.command("product", "price", "--shops", "1", "--sku", "B", "--apply")
+            rc, result = self.command("product", "price", "--shops", "1", "--sku", "B", "--price", "90", "--apply")
         self.assertEqual((rc, result["status"]), (0, "completed"))
         self.assertEqual([r["nmID"] for r in send.call_args.kwargs["json"]["data"]], [102])
 
     def test_field_intents_validate_before_data_and_bcs_keeps_exact_supported_price(self):
         cases = [("price", "--keep-price"), ("price", "--discount", "0"),
                  ("price", "--channel", "bcs", "--club-discount", "10"),
-                 ("price", "--price", "80", "--from-price-book"), ("discount",),
+                 ("price", "--price", "80", "--keep-price"), ("price", "--price", "0"),
+                 ("price", "--price", "80.5"), ("discount",),
                  ("discount", "--target", "-1"), ("discount", "--target", "50", "--chunk", "301")]
         for action, *options in cases:
             for apply in ([], ["--apply"]):
@@ -294,7 +295,8 @@ class TestWorkBuddyProducts(unittest.TestCase):
         with patch.object(wb, "request", return_value=accepted()), \
                 patch.object(price_review, "fetch_all_quarantine", return_value=[{"nmID": 101, "id": 9, "newPrice": 60}]), \
                 patch.object(price_review, "apply_prices", return_value={"error": True, "errorText": "rejected"}) as apply:
-            rc, summary = self.command("product", "price", "--shops", "1", "--sku", "A", "--auto-review", "--apply")
+            rc, summary = self.command("product", "price", "--shops", "1", "--sku", "A",
+                                       "--price", "60", "--auto-review", "--apply")
         self.assertEqual((rc, summary["status"]), (1, "partial"))
         apply.assert_called_once()
         self.assertEqual(apply.call_args.args[1], [9])
@@ -338,27 +340,12 @@ class TestWorkBuddyProducts(unittest.TestCase):
         self.assertEqual(result["per_shop"][0]["products"]["blocked"], 2)
         self.assertEqual([c.args[0].shop_id for c in send.call_args_list], [2, 2])
 
-    def test_from_price_book_requires_valid_row_and_report_cannot_supply_old_price(self):
+    def test_explicit_price_works_when_minimum_price_is_empty(self):
         book = openpyxl.load_workbook(paths.current.price_book_xlsx)
         book.active["C3"] = None
         book.save(paths.current.price_book_xlsx)
         book.close()
-        history = openpyxl.Workbook()
-        history.active.title = "映射总表"
-        history.active.append(["产品中文名", "完整VC", "实际售价"])
-        from sellerops.persistence.headers import COL_CN, COL_VC
-        history.active["A1"] = COL_CN
-        history.active["B1"] = COL_VC
-        history.active.append(["旅行杯", B, 85])
-        history.save(paths.current.mapping_xlsx)
-        history.close()
         args = ("product", "price", "--shops", "1", "--sku", "B", "--apply")
-        with patch.object(wb, "request", return_value=accepted()) as send:
-            rc, result = self.command(*args, "--from-price-book", "--discount", "10")
-            self.assertEqual((rc, result["per_shop"][0]["products"]["blocked"]), (1, 1))
-            send.assert_not_called()
-            self.assertEqual(self.command(*args)[0], 1)
-            send.assert_not_called()
         with patch.object(wb, "request", return_value=accepted()) as send:
             self.assertEqual(self.command(*args, "--price", "90", "--discount", "10")[0], 0)
             self.assertEqual(send.call_args.kwargs["json"]["data"][0],

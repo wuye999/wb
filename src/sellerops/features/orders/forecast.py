@@ -253,8 +253,7 @@ def run_forecast(args, *, failed_ids=(), group_shipping_ids=(), matched_ids=None
         for r in target:
             r["_step_handover"] = r["_step_handover"] or "跳过-已选择"
     else:
-        print(f"[④ 交运] 对 {len(to_handover)} 个未选择交运方式的订单设置 "
-              f"「{cred.get('handover_keyword') or '七库海外仓'}」...")
+        print(f"[④ 交运] 正在为 {len(to_handover)} 个未选择交运方式的订单设置渠道...")
         try:
             channel_value = get_handover_channel_value(cred, to_handover[0]["order_id"])
             print(f"  交运渠道值: {channel_value}")

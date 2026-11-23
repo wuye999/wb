@@ -1,6 +1,6 @@
 # WB Open API 上架、内容更新与 VC 规范化
 
-`listing publish`、`listing create-cards`、`listing replicate`、`listing import` 保持原 BCS 通道。新增命令须显式调用，不替代默认接口，也不在 BCS 或 WB 失败后自动换通道重放。上架和改码默认生成计划单，经确认后用 `apply --plan` 提交。内容同步沿用自己的预览和提交入口。
+`listing publish`、`listing create-cards` 和 `listing replicate` 使用 BCS 通道。新增命令须显式调用，不替代默认接口，也不在 BCS 或 WB 失败后自动换通道重放。上架和改码默认生成计划单，经确认后用 `apply --plan` 提交。内容同步沿用自己的预览和提交入口。
 
 ## 配置与执行边界
 

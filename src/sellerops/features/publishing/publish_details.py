@@ -78,14 +78,13 @@ def resolve_publish_details(
     mapping_state: Optional[Dict[str, Any]] = None,
     price_book: Optional[List[dict]] = None,
     card_cache: Optional[Dict[int, Any]] = None,
-    *, fresh_price: bool = False,
-    generated: dict | None = None,
+    *, generated: dict | None = None,
 ) -> Tuple[Optional[PublishItem], Optional[str]]:
     """
     智能补全上架商品缺失字段：
     1. 校验 nm_id
     2. 中文名自动补全（若空则查本地映射表）
-    3. 价格自动补全（指定价格 > 映射表在架价/快照价 > 价格表实际售价 floor）
+    3. 价格自动补全（指定价格 > 本地快照价）
     4. 使用显式完整 VC、指定前缀、卖家 SKU 的唯一登记前缀或明确允许的随机前缀
     5. 尺寸重量自动补全（显式传入 > 价格映射表 > 价格表 > card.json 包装组）
     6. 标题与图片提取（从 card.json 获取并组装）
@@ -99,7 +98,7 @@ def resolve_publish_details(
     if mapping_state is None:
         mapping_state, _ = MappingRepository.load_mapping_state()
     if price_book is None:
-        price_book = MappingRepository.load_price_book(require_price=False, fresh=fresh_price)
+        price_book = MappingRepository.load_price_book(require_price=False)
 
     # 优先使用完整 VC 和源卡的已确认归属。
     vc = (item.vendor_code or '').strip()
@@ -149,8 +148,6 @@ def resolve_publish_details(
     price = item.price
     if price is None or price <= 0:
         price = first_price(source_card) if source_card is not None else None
-        if not price:
-            price = product['floor']
     if price is None or not math.isfinite(price) or price <= 0:
         return None, f"商品 {nm_id} 价格缺失且无法从映射表自动匹配，请通过 --price 指定"
 

@@ -13,7 +13,7 @@
 
 ## 当前仓库与凭证约定
 
-- 凡涉及仓库的操作，默认且仅允许目标店铺的莫斯科仓库 ID。全店、全部商品、库存清零或下架请求都不代表可以操作全仓；读取库存、生成计划和临时脚本也要限定莫斯科。
+- 凡涉及 WB 仓库的操作，仅允许使用按 `wb.warehouse_keyword` 为目标店铺确认的仓库 ID。运营应配置经核实的莫斯科业务仓。全店或全部商品只扩大商品范围。
 - 先用仓库列表核对该店莫斯科仓库名称和 `id`，不要把 office 字段 `warehouseId` 当作库存仓库 ID，不跨店复制 ID。找不到莫斯科或无法确认时中止；不回退其他俄语地区仓，不操作成都。已有预览或底层结果出现其他仓库 ID 时不得提交。
 - 用户明确要求连接时运行 `login wb`、`login bcs` 或 `login mabang`。缺少专用浏览器时，按 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台) 在同一 Python 环境完成一次安装。WB 遇到 401/403 先停止该店，日常业务命令不自行启动浏览器。
 - WB 直连时，页面连接上限 3 分钟，店铺列表恢复上限 4 分钟，人工登录上限 20 分钟。保持命令运行，由用户按窗口提示完成验证，然后等待连接结果。已登录但恢复超时时，可用 `login wb --resume` 检查专用浏览器会话。
@@ -21,11 +21,15 @@
 
 ## 首次体检与计划单
 
+首次配置时，请运营在 `data/credentials.json` 中填写 `wb.warehouse_keyword`（例如「莫斯科」或具体仓库全名）和 `mabang.handover_keyword`（例如「七库海外仓」）。已明确配置 `mabang.handover_channel_value` 时可将交运关键词留空。
+
 ```powershell
 python run.py doctor --json
 python run.py doctor --check-online --json
 python run.py sync --all --json
-python run.py map candidates --limit 20 --json
+python run.py map workbench --json
+python run.py map batch-set --file "_scratch/待认领审核.json" --json
+python run.py map check-mismatch --json
 python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
 python run.py apply --plan P018 --json
 ```
@@ -34,7 +38,9 @@ python run.py apply --plan P018 --json
 
 `sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，`missing_shops` 提示运营核对。经确认才运行 `shop archive`，需要恢复时运行 `shop restore`。
 
-`map candidates` 的前缀、价格和同源结果供确认。按完整 VC 和卖家 SKU 或唯一产品中文名确认归属，使用 `map batch-set`，或者使用 `map export-pending` 及 `map import-excel` 完成同样的确认。原归属 HTML 工作台在新人实测通过前可继续使用。
+`map workbench` 返回 `data.artifacts.html` 和各分类组数 `data.counts`。引导运营打开 HTML，按图片、店铺、完整 VC 核对归属，再导出 JSON。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
+
+归属完成后用 `map check-mismatch --json` 生成货不对板大图画廊。打开 `data.artifacts.html`，按中文名看图并核对前缀冲突和非最低价倍数。价格检查覆盖各活跃店铺有现价的在架快照，允许各店采用不同的合理正整数倍。`data.counts` 给出商品总条数、中文名组数及异常条数。运营勾选并导出 JSON 或复制完整 VC 后，按确认的店铺和 VC 用 `ops trash` 预览下架计划。
 
 商品写入先预览固定计划单。展示店铺、商品、规格、目标值与受阻明细，运营确认后提交单号。提交中和结果未知的单号停止重发；已受理上架需要补图片或库存时，用 `ops publish-openapi --resume` 确认原记录并生成续办单。其他业务命令按各自流程执行。
 
@@ -45,17 +51,17 @@ python run.py apply --plan P018 --json
 | 中文名改价、设折扣、设库存、下架 | 先用 `shop list --name` 确认唯一店铺 ID。`product price`、`product discount`、`product stock`、`product trash` 需要显式店铺及商品范围。`--name` 精确匹配，`--name-contains` 用于用户明确要求包含的任务。库存必须给数量。 |
 | 商品综合报告 | `report products`。低评分、高退货率、近 7/14 天出单和链接缺口见 [报告说明](PRODUCT_REPORT.md)。 |
 | 修改快照或映射 | 用户明确要求更新时用 sync。归属用 map 查看候选、确认或排除。 |
-| 导入、复制及官方上架 | `listing import`、`listing replicate`、`listing publish` 或 `listing create-cards`。官方通道使用 `listing publish-openapi`，按原记录续办。 |
+| 筛查货不对板 | `map check-mismatch --json`。可按 `--cn` 精确限定中文名，按 `--begin`、`--end` 或 `--days` 限定创建日期。 |
+| 发布、复制及官方上架 | `listing replicate`、`listing publish` 或 `listing create-cards`。官方通道使用 `listing publish-openapi`，按原记录续办。 |
 | 处理新订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
 | 汇报修改结果 | 核对店铺、商品与规格数、受理任务号、阻止原因和完整明细路径。预览与提交沿用同样的目标。 |
 
 | 用户意图 | WorkBuddy 首选命令 | 修改字段 |
 | --- | --- | --- |
-| 按表改价 | `product price` | 对应价格表行的实际售价，向下取整 |
 | 指定价格 | `product price --price P` | 价格 |
 | 同时指定价格与折扣 | `product price --price P --discount D` | 价格、折扣 |
-| 按表改价并设折扣 | `product price --from-price-book --discount D` | 对应价格表行的价格、折扣 |
+| 保持原价并设折扣 | `product price --keep-price --discount D` | 折扣 |
 | 只设折扣 | `product discount --target D` | 折扣 |
 | 设置库存 | `product stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
 
@@ -73,7 +79,7 @@ python run.py apply --plan P018 --json
 
 复制上架使用 `listing replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分；默认库存999，显式0不替换。默认商品清单与查重读取本地快照和提交记录，缺快照不当作空店；快照滞后时结合已受理的下架/上架回执处理范围。回收站已有卡不会自动恢复，需先区分恢复与新建；不把 BCS 缓存命中直接视为实时状态。整批详情和目标莫斯科仓必须在首个写请求前准备好。
 
-使用已有帮助解决语法问题，不通过执行写入命令“试参数”。dry-run 可以联网和生成本地记录；`login`、`catalog rename`、`catalog merge` 等本地写操作不受 --apply 控制。
+使用已有帮助解决语法问题，不通过执行写入命令“试参数”。dry-run 可以联网和生成本地记录；`login`、`map batch-set`、`catalog rename`、`catalog merge` 等本地写操作不受 --apply 控制。
 
 库存归零与移回收站默认依据本地映射和商品快照定位商品/规格，不为每次操作全量读取远端商品或库存。仓库确认是独立的小范围读取；需要更新快照时按用户要求独立运行 `catalog fetch`。`product trash` 已包含先清库存步骤，无需先另跑 stock；任一规格缺失或清零受理失败时阻止该商品，其他完整商品可继续，非零退出和日志中的被阻止项必须如实汇报。
 

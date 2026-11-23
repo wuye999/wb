@@ -36,8 +36,6 @@ class DataPaths:
         self.vc_excluded_json = str(root / 'state/vc_excluded.json')
         self.result_csv = str(root / 'logs/ops_result.csv')
         self.out_mapping_html = str(root / 'workbench/价格映射核对工作台.html')
-        self.out_review_html = str(root / 'workbench/多店铺待审核.html')
-        self.out_mapping_check_html = str(root / 'workbench/映射表核查工作台.html')
         self.out_mismatch_html = str(root / 'workbench/货不对板筛查工作台.html')
         self.archive_dir = str(root / 'logs/archive')
         self.records_json = str(root / 'state/复制上架记录.json')

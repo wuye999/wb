@@ -175,7 +175,9 @@ class MabangUploadInterrupted(MabangAuthError):
 
 def discover_handover_channel(cred):
     """从 order.list 页面内嵌渠道数组动态发现交运渠道（按 handover_keyword 匹配）"""
-    keyword = cred.get("handover_keyword") or "七库海外仓"
+    keyword = (cred.get("handover_keyword") or "").strip()
+    if not keyword:
+        return None
     kw_esc = keyword.encode("unicode_escape").decode("latin-1")
     r = form_request(cred, WWW_BASE, 'order.list', read_only=True, method='GET',
                      params={"Order_orderStatus": "2"}, timeout=120)
@@ -192,7 +194,12 @@ def discover_handover_channel(cred):
 
 def get_handover_channel_value(cred, sample_order_id):
     """解析交运渠道完整值"""
-    keyword = cred.get("handover_keyword") or "七库海外仓"
+    keyword = (cred.get("handover_keyword") or "").strip()
+    fallback = (cred.get("handover_channel_value") or "").strip()
+    if not keyword:
+        if fallback:
+            return fallback
+        raise ValueError("请在 data/credentials.json 中配置 mabang.handover_keyword")
     v = discover_handover_channel(cred)
     if v:
         return v
@@ -215,7 +222,6 @@ def get_handover_channel_value(cred, sample_order_id):
             raise
         except Exception as e:
             print(f"  [提示] getReportingInformation 失败({str(e)[:60]})，转配置兜底...")
-    fallback = cred.get("handover_channel_value") or ""
     if fallback:
         print(f"  [警告] 动态发现失败，回退配置值 {fallback}")
         return fallback

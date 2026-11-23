@@ -1,418 +1,285 @@
-"""
-sellerops HTML 工作台渲染（合并原 build_mapping / sync_shops / gen_unmapped_check 三处重复模板）
-
-职责：把「核对工作台」的 HTML/CSS/JS 统一集中到这里，去重。
-只做渲染，不碰数据；数据由 mapping.py / mapping_sync.py 提供。
-"""
+"""生成带图的本地待认领工作台。"""
 import json
 from html import escape
+from pathlib import Path
 
-from sellerops.settings import paths as config
-from sellerops.features.catalog import keywords
-# ---------------- 卡片 / 分组片段 ----------------
-def _cand_html(c):
-    """候选单元格（图/俄文名/vc/价格/命中数）"""
-    img = escape(c["img"])
-    return (f'<div class="cand" data-vc="{escape(c["vc"])}" data-title="{escape(c["title"])}" '
-            f'data-price="{c["price"]}">'
-            f'<img src="{img}" loading="lazy" onerror="this.style.opacity=.12">'
-            f'<div class="ci"><div class="tt">{escape(c["title"][:80])}</div>'
-            f'<div class="vc">{escape(c["vc"])} · ¥{c["price"]}</div>'
-            f'<div class="hit">关键词命中 {c["hit"]}</div></div></div>')
+from sellerops.features.catalog.mismatch_check import _image_cell
+from sellerops.features.catalog.vc_mapping import pending_groups
+from sellerops.persistence.mappings import MappingRepository
+from sellerops.settings import paths
 
 
-def _conflict_group_html(g):
-    """同价冲突组（多商品价格表商品共享候选池 + 归属列勾选）"""
-    bosses = g["bosses"]
-    head = " / ".join(f'<b>{escape(b["cn"])}</b>(¥{b["dp"]})' for b in bosses)
-    cands = sorted(g["cands"], key=lambda c: -c["hit"])
-    rows = []
-    for c in cands:
-        checkboxes = "".join(
-            f'<td class="own"><label><input type="checkbox" data-boss="{b["idx"]}" data-vc="{escape(c["vc"])}" class="gpick">'
-            f'<span>{b["idx"]}</span></label></td>'
-            for b in bosses)
-        cls = "missrow" if c["hit"] == 0 else ""
-        rows.append(f'<tr class="{cls}">{checkboxes}<td class="candtd">{_cand_html(c)}</td></tr>')
-    miss_n = sum(1 for c in cands if c["hit"] == 0)
+CATEGORIES = {'prefix': '前缀命中', 'multiplier': '倍数参考', 'unmatched': '待手动归属'}
+
+
+def _money(price: int | float) -> str:
+    return '¥' + str(price).removesuffix('.0')
+
+
+def _card(group: dict, labels: dict[str, str]) -> str:
+    items = group['items']
+    photo = next((item for item in items if item['image_url']),
+                 next((item for item in items if item['nm_id']), items[0]))
+    image = _image_cell({'img': photo['image_url'], 'nm_id': photo['nm_id']})
+    if photo['image_url'] or photo['nm_id']:
+        image = ("<button class='picture' aria-label='查看商品大图' "
+                 "onclick='showBig(this.querySelector(\"img\"))'>"
+                 f"{image}</button>")
+    title = escape(str(photo['title'] or items[0]['title']))
+    prices = ' / '.join(_money(p) for p in sorted({i['price'] for i in items if i['price'] is not None}))
+    shops = {s['shop_id']: s['shop_name'] or s['shop_id'] for item in items for s in item['shops']}
+    shop_text = escape('、'.join(shops.values()))
+    vcs = group['vcs']
+    prefix = group['prefix_candidate']
+    price_candidates = {}
+    for item in items:
+        for candidate in item['price_candidates']:
+            price_candidates.setdefault(candidate['sku'], candidate)
+    quick = []
+    if prefix:
+        quick.append(price_candidates.pop(prefix['sku'], prefix))
+    quick.extend(list(price_candidates.values())[:5 - len(quick)])
+    buttons = []
+    for candidate in quick:
+        label = labels[candidate['sku']]
+        if candidate['minimum_price'] is not None:
+            label += ' · 最低价' + _money(candidate['minimum_price'])
+        if 'multiplier' in candidate:
+            label += f" ×{candidate['multiplier']}"
+        buttons.append(f'<button class="suggestion" data-sku="{escape(candidate["sku"])}">{escape(label)}</button>')
+    search = ' '.join([*vcs, prices, *(p['cn'] for p in quick)])
+    category = group['category']
     return f'''
-<div class="grp conflict" id="boss-{bosses[0]["idx"]}">
-  <div class="ghead">⚠ 同价冲突组（floor={g["floor"]}）：{head}
-    <span class="cnt">{len(cands)} 个候选（其中 {miss_n} 个无关键词命中）</span></div>
-  <div class="hint">候选池共享：在候选行勾选归属到对应商品价格表商品（多选=同款多变体；无关键词命中的候选默认半透明，可点顶部按钮切换显示）</div>
-  <table class="gtable">
-    <thead><tr>{"".join(f'<th>{b["idx"]}. {escape(b["cn"])}<br>¥{b["dp"]}</th>' for b in bosses)}<th>店铺候选（图/俄文名/vendorCode/价格）</th></tr></thead>
-    {"".join(rows)}
-  </table>
-</div>'''
-
-
-def _single_group_html(g):
-    """普通商品卡片（候选勾选，命中>0 主区 + 命中=0 折叠）"""
-    b = g["bosses"][0]
-    cands = sorted(g["cands"], key=lambda c: -c["hit"])
-    hit_cands = [c for c in cands if c["hit"] > 0]
-    miss_cands = [c for c in cands if c["hit"] == 0]
-    pick_html = "".join(
-        f'<label class="pickw"><input type="checkbox" class="spick" data-vc="{escape(c["vc"])}" '
-        f'data-title="{escape(c["title"])}" data-price="{c["price"]}">{_cand_html(c)}</label>'
-        for c in hit_cands)
-    miss_html = ""
-    if miss_cands:
-        miss_html = ('<details class="missbox"><summary>无关键词命中的候选（%d 个，多为不同类商品，谨慎）</summary><div class="misswrap">%s</div></details>'
-                     % (len(miss_cands),
-                        "".join(f'<label class="pickw"><input type="checkbox" class="spick" data-vc="{escape(c["vc"])}" data-title="{escape(c["title"])}" data-price="{c["price"]}">{_cand_html(c)}</label>'
-                                for c in miss_cands)))
-    pick_state = ('<span class="ok">候选唯一（关键词命中 1 个）</span>' if len(hit_cands) == 1 else "")
-    return f'''
-<div class="grp single" id="boss-{b["idx"]}">
-  <div class="ghead"><span class="idx">#{b["idx"]}</span> <b>{escape(b["cn"])}</b>
-    <span class="sku">{escape(b["sku"])}</span> <span class="dp">实际售价 ¥{b["dp"]}</span>
-    <span class="kw">关键词: {escape(", ".join(keywords.keywords_for(b["cn"])) or "无")}</span>
-    <span class="picked"></span> {pick_state}</div>
-  {miss_html}
-  <div class="pickrow">{pick_html}</div>
-</div>'''
-
-
-def _todo_group_html(b):
-    """待核查（无候选手工填 vc）"""
-    return f'''
-<div class="grp todo" id="boss-{b["idx"]}">
-  <div class="ghead">⚠ 待核查 #{b["idx"]} <b>{escape(b["cn"])}</b> <span class="sku">{escape(b["sku"])}</span>
-    <span class="dp">实际售价 ¥{b["dp"]}</span></div>
-  <div class="hint">店铺中无价格 {b["floor"]}/{b["floor"] + 1} 元的商品 → 可能未上架/价格特殊/漏配。
-     若你已知对应 vendorCode，可在此填写（逗号分隔）：</div>
-  <input class="manual" placeholder="BCS-XXXX-123456789, BCS-YYYY-987654321">
-</div>'''
-
-
-def _boss_opts_html(boss):
-    """商品价格表商品下拉选项（vc 卡片归属用）"""
-    return [f'<option value="{escape(b["sku"])}|{escape(b["cn"])}|{b["dp"]}">'
-            f'#{b["idx"]} {escape(b["cn"])} · {escape(b["sku"])} · ¥{b["dp"]}</option>'
-            for b in boss]
-
-
-def _review_card_html(i, x, boss_opts):
-    """未归属 vc 卡片（下半区/多店铺待审核共用）：图/名/vc/价格/店铺 + 归属下拉"""
-    shops_badge = " ".join(f'<span class="shop">店{s}</span>' for s in x["shops"])
-    img = escape(x.get("img") or "")
-    return f'''
-<div class="card" data-vc="{escape(x["vc"])}" data-title="{escape(x["title"])}" data-price="{x["price"]}"
-     data-shops="{",".join(map(str, x["shops"]))}">
-  <div class="hd">
-    <span class="idx">#{i}</span>
-    <img class="pimg" src="{img}" loading="lazy" onerror="this.style.display='none'">
-    <div class="info">
-      <div class="tt">{escape(x["title"])}</div>
-      <div class="vc">{escape(x["vc"])} · ¥{x["price"]} · {shops_badge}</div>
+<article class="card" data-vcs="{escape(json.dumps(vcs, ensure_ascii=False))}"
+         data-category="{category}" data-prefix="{escape(prefix['sku'] if prefix else '')}"
+         data-search="{escape(search)}">
+  <div>{image}</div>
+  <div class="details">
+    <div><strong class="price">{prices or '现价未知'}</strong> <span class="category">{CATEGORIES[category]}</span></div>
+    <div>店铺 {shop_text}</div>
+    <details class="vcs"><summary>{len(vcs)} 个 VC · {escape(vcs[0])}</summary>
+      <ul>{''.join(f'<li>{escape(vc)}</li>' for vc in vcs)}</ul>
+    </details>
+    <div class="actions">{''.join(buttons)}</div>
+    <div class="actions">
+      <input class="product" type="search" list="products" aria-label="按中文名选择归属" placeholder="搜索并选择中文名">
+      <button class="exclude">非货盘（排除）</button>
+      <button class="undo" hidden>撤销</button>
+      <output class="choice" aria-live="polite"></output>
     </div>
+    <div class="ru" title="{title}">{title}</div>
   </div>
-  <div class="op">
-    <select class="assign" onchange="refresh()">
-      <option value="" selected>— 待定（默认）—</option>
-      <option value="EXCLUDE|非货盘商品|">🚫 非货盘商品（排除，不映射）</option>
-      {"".join(boss_opts)}
+</article>'''
+
+
+def render_html(groups: list[dict], products: list[dict]) -> str:
+    options = []
+    labels = {}
+    for product in sorted(products, key=lambda item: (item['cn'], item['sku'])):
+        cn, sku = product['cn'], product['sku']
+        label = cn if product['name_unique'] else f'{cn}（{sku}）'
+        labels[sku] = label
+        options.append(f'<option data-sku="{escape(sku)}" data-cn="{escape(cn)}" value="{escape(label)}"></option>')
+    return (_HEAD + '<datalist id="products">' + ''.join(options) + '</datalist>'
+            + ''.join(_card(group, labels) for group in groups) + _END)
+
+
+def run_workbench(args) -> int:
+    products = MappingRepository.load_price_book(require_price=False)
+    groups = pending_groups(products=products)
+    output = Path(paths.current.out_mapping_html)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(render_html(groups, products), encoding='utf-8')
+    counts = {key: sum(group['category'] == key for group in groups) for key in CATEGORIES}
+    counts.update(groups=len(groups), vcs=sum(len(group['vcs']) for group in groups))
+    args.output = {'artifacts': {'html': str(output)}, 'counts': counts}
+    args.summary = f'已生成 {counts["groups"]} 组待认领商品工作台'
+    args.next_action = '打开 HTML 看图归属，导出 JSON 后用 map batch-set --file 保存'
+    print(f'{args.summary}：{output}')
+    return 0
+
+
+_HEAD = '''<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>待认领商品工作台</title>
+<style>
+body{margin:0;background:#f4f6fa;color:#182336;font:15px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+[hidden]{display:none!important}
+header{position:sticky;top:0;z-index:1;background:#fff;border-bottom:1px solid #d7deea}
+header>div,main{max-width:1100px;margin:auto;padding:12px 20px}
+h1{font-size:21px;margin:0}.bar,.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+button,input,select{font:inherit;border:1px solid #bbc8db;border-radius:6px;padding:5px 9px;background:#fff;color:inherit}
+button{cursor:pointer}button[aria-pressed=true],#export{background:#23499e;border-color:#23499e;color:#fff}
+.card{display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;background:#fff;border:1px solid #d7deea;
+      border-radius:10px;margin:0 0 10px;padding:12px;overflow-wrap:anywhere}
+.picture{padding:0;border:0;background:transparent;cursor:zoom-in}
+.thumb,.image-unavailable{display:grid;place-items:center;width:150px;height:150px;object-fit:contain;
+      border-radius:8px;background:#f0f3f8;color:#526078}
+.category,.choice{font-size:13px;color:#425370}
+.price{font-size:22px;margin-right:8px}
+.suggestion{background:#e8f1ff;border-color:#b3caf4;color:#154083;font-weight:600}
+.exclude{color:#923529}.product{width:min(100%,235px)}
+.vcs{font:13px/1.5 ui-monospace,monospace;color:#425370}.vcs summary{cursor:pointer}.vcs ul{margin:4px 0}
+.ru{color:#607089;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+dialog{border:0;border-radius:10px;padding:12px;text-align:right}dialog::backdrop{background:#000c}
+dialog img{display:block;max-width:88vw;max-height:82vh;margin-top:8px;object-fit:contain}
+@media(max-width:540px){.card{grid-template-columns:1fr}}
+</style>
+<script>
+function nextProductImage(img) {
+  const remaining = JSON.parse(img.dataset.fallback);
+  const next = remaining.shift();
+  img.dataset.fallback = JSON.stringify(remaining);
+  if (next) img.src = next;
+  else {
+    img.hidden = true;
+    img.nextElementSibling.hidden = false;
+  }
+}
+function showBig(thumb) {
+  if (thumb.hidden) return;
+  const box = document.getElementById('lightbox');
+  const image = box.querySelector('img');
+  const sources = [...new Set([thumb.dataset.big, ...JSON.parse(thumb.dataset.fallback), thumb.src])];
+  image.hidden = false;
+  image.nextElementSibling.hidden = true;
+  image.dataset.fallback = JSON.stringify(sources.slice(1));
+  image.src = sources[0];
+  box.showModal();
+}
+</script>
+</head>
+<body>
+<header><div>
+  <h1>待认领商品工作台</h1>
+  <div><span id="stats" role="status"></span> <span id="storage-status" role="status"></span></div>
+  <div class="bar" id="filters">
+    <button data-filter="all">全部</button>
+    <button data-filter="prefix">前缀命中</button>
+    <button data-filter="multiplier">倍数参考</button>
+    <button data-filter="unmatched">待手动归属</button>
+    <select id="status" aria-label="处理状态">
+      <option value="all">全部处理状态</option><option value="done">已处理</option><option value="todo">未处理</option>
     </select>
+    <input type="search" id="search" aria-label="搜索 VC、中文名或价格" placeholder="搜索 VC、中文名或价格">
   </div>
-</div>'''
+  <div class="bar">
+    <button id="accept-prefix">一键采纳全部前缀建议</button>
+    <button id="export">导出审核结果 JSON</button>
+  </div>
+</div></header>
+<main>
+'''
 
 
-# ---------------- 旧版工作台（main_shop_only：仅主店） ----------------
-def render_html(conflict_groups, single_groups, todo):
-    conflict_html = [_conflict_group_html(g) for g in conflict_groups]
-    single_html = [_single_group_html(g) for g in single_groups]
-    todo_html = [_todo_group_html(b) for b in todo]
-
-    html = '''<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8"><title>价格映射核对工作台（主店）</title>
-<style>
-body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f0f2f5;color:#2c3e50}
-.bar{position:sticky;top:0;background:#fff;padding:10px 16px;border-bottom:2px solid #3498db;z-index:9;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.bar b{color:#e74c3c}button{padding:6px 16px;cursor:pointer;border-radius:6px;border:1px solid #3498db;background:#3498db;color:#fff}
-button.ghost{background:#fff;color:#3498db}
-.wrap{padding:16px}
-.grp{background:#fff;border:1px solid #ddd;border-radius:8px;margin:12px 0;padding:10px 14px}
-.ghead{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
-.ghead b{font-size:15px}.idx{color:#7f8c8d;font-weight:bold}.sku{color:#2980b9}.dp{color:#e74c3c;font-weight:bold}
-.kw{color:#95a5a6;font-size:12px}.cnt{color:#7f8c8d;font-size:12px}.hint{color:#8e44ad;font-size:12px;margin:4px 0}
-.ok{color:#27ae60;font-size:12px}.picked{color:#27ae60;font-weight:bold}
-.conflict .ghead{background:#fdf2e9;border-left:4px solid #e67e22;padding:4px 8px;border-radius:4px}
-.todo .ghead{background:#fdedec;border-left:4px solid #c0392b;padding:4px 8px;border-radius:4px}
-.gtable{border-collapse:collapse;width:100%}.gtable th{background:#f8f9fa;font-size:12px;padding:6px;border:1px solid #ddd}
-.gtable td{border:1px solid #eee;vertical-align:top}.gtable .own{text-align:center;width:70px;font-size:12px}
-.gtable .own label{display:block;padding:4px;cursor:pointer}
-.gtable .own input:checked+span{color:#27ae60;font-weight:bold}
-.missrow{opacity:.45}.missrow:hover{opacity:1}
-.candtd{width:380px}.cand{display:flex;gap:8px;align-items:center;padding:4px}
-.cand img{width:52px;height:52px;object-fit:contain;border-radius:4px;background:#fafafa;border:1px solid #eee}
-.cand .ci{font-size:12px;line-height:1.4}.cand .vc{color:#7f8c8d}.cand .hit{color:#27ae60;font-size:11px}
-.pickrow{display:flex;flex-wrap:wrap;gap:8px}
-.pickw{display:flex;gap:6px;align-items:flex-start;border:1px solid #eee;border-radius:8px;padding:6px;cursor:pointer;width:300px}
-.pickw:has(input:checked){outline:2px solid #27ae60;background:#f0fff4}
-.pickw img{width:52px;height:52px;object-fit:contain;background:#fafafa;border-radius:4px}
-.pickw .cand{flex:1}.misswrap{display:flex;flex-wrap:wrap;gap:8px}
-.missbox summary{color:#95a5a6;cursor:pointer;font-size:12px;margin:6px 0}
-.manual{width:60%;padding:6px;border:1px solid #ccc;border-radius:4px}
-#out{width:100%;height:140px;font-family:Consolas,monospace;margin-top:8px}
-</style></head>
-<body>
-<div class="bar">
-  <b>价格映射核对工作台</b> <span>主店 · 商品价格表商品 <b id="total"></b> 个 · 已归属 <b id="picked"></b> 个</span>
-  <button onclick="exportJson()">导出核对结果 JSON</button>
-  <button class="ghost" onclick="clearAll()">清空</button>
-  <button class="ghost" onclick="toggleMiss()">显示/隐藏无关键词命中候选</button>
-</div>
-<div class="wrap">
-<div class="hint" style="color:#2c3e50">操作：每个商品勾选<b>实际对应的店铺商品</b>（看图片/俄文名/价格确认，可多选=同款多变体）。同价冲突组勾选候选归属到对应商品价格表商品。核对完点「导出核对结果 JSON」→ 把内容发给我，我生成映射表 xlsx。</div>
-<h3>一、待核查（店铺中找不到对应价格，需人工排查）</h3>
-TODO_PLACEHOLDER
-<h3>二、同价冲突组（候选池共享，人工图片区分归属）</h3>
-CONFLICT_PLACEHOLDER
-<h3>三、普通商品（候选通常唯一，勾选确认）</h3>
-SINGLE_PLACEHOLDER
-<hr><h3>导出结果：</h3><textarea id="out" placeholder="点上方按钮导出"></textarea>
-</div>
+_END = '''<p id="empty" hidden>没有符合条件的待认领商品。</p>
+</main>
+<dialog id="lightbox" aria-label="商品大图">
+  <form method="dialog"><button>关闭</button></form>
+  <img alt="商品大图" onerror="nextProductImage(this)">
+  <span class="image-unavailable" hidden>图片暂不可用</span>
+</dialog>
 <script>
-const data = DATA_JSON;
-document.getElementById('total').textContent = data.bossCount;
-function refresh(){
-  data.bosses.forEach(b => {
-    let c = 0;
-    document.querySelectorAll('.spick:checked').forEach(i => {
-      const card = i.closest('.grp'); if (card && card.id === 'boss-' + b.idx) c++; });
-    document.querySelectorAll('.gpick:checked').forEach(i => { if (+i.dataset.boss === b.idx) c++; });
-    const el = document.querySelector('#boss-' + b.idx + ' .picked');
-    if (el) el.textContent = c ? '已归属 ' + c + ' 个' : '';
-  });
-  document.querySelector('#picked').textContent =
-    document.querySelectorAll('.spick:checked').length + document.querySelectorAll('.gpick:checked').length;
-}
-document.querySelectorAll('.spick,.gpick').forEach(i => i.addEventListener('change', refresh));
-function exportJson(){
-  const byIdx = {};
-  data.bosses.forEach(b => byIdx[b.idx] = {idx: b.idx, sku: b.sku, cn: b.cn, dp: b.dp, vcs: []});
-  document.querySelectorAll('.spick:checked').forEach(i => {
-    const card = i.closest('.grp'); const m = card ? card.id.match(/^boss-(\\d+)$/) : null;
-    const b = m ? byIdx[+m[1]] : null;
-    if (b && i.dataset.vc && !b.vcs.includes(i.dataset.vc)) b.vcs.push(i.dataset.vc);
-  });
-  document.querySelectorAll('.gpick:checked').forEach(i => {
-    const b = byIdx[+i.dataset.boss];
-    if (b && i.dataset.vc && !b.vcs.includes(i.dataset.vc)) b.vcs.push(i.dataset.vc);
-  });
-  document.querySelectorAll('.manual').forEach(inp => {
-    const card = inp.closest('.grp'); const m = card ? card.id.match(/^boss-(\\d+)$/) : null;
-    const b = m ? byIdx[+m[1]] : null;
-    if (b && inp.value.trim()) {
-      inp.value.split(/[,，\\s]+/).forEach(v => { v = v.trim(); if (v && !b.vcs.includes(v)) b.vcs.push(v); });
-    }
-  });
-  const out = data.bosses.map(b => ({idx: b.idx, sku: b.sku, cn: b.cn, doublePrice: b.dp, vendorCodes: byIdx[b.idx].vcs}));
-  const text = JSON.stringify(out, null, 2);
-  document.getElementById('out').value = text;
-  downloadJson(text, '核对结果.json');
-}
-function downloadJson(text, filename){
-  const blob = new Blob([text], {type: 'application/json;charset=utf-8'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  alert('已下载 ' + filename + '（同时显示在上方文本框）');
-}
-function clearAll(){ document.querySelectorAll('.spick:checked,.gpick:checked').forEach(i=>i.checked=false); refresh(); }
-function toggleMiss(){ document.querySelectorAll('.missrow').forEach(r=>r.style.display = r.style.display==='none'?'':'none'); }
-refresh();
-</script></body></html>'''
+const cards = [...document.querySelectorAll('.card')];
+const filters = [...document.querySelectorAll('button[data-filter]')];
+const options = [...document.querySelectorAll('#products option')];
+const products = new Map(options.map(option => [option.dataset.sku, option]));
+const byLabel = new Map(options.map(option => [option.value, option.dataset.sku]));
+const status = document.getElementById('status');
+const search = document.getElementById('search');
+const storageKey = 'sellerops-vc-workbench:' + location.pathname;
+let choices = {};
+let filter = 'all';
+const storageWarning = () => document.getElementById('storage-status').textContent = '浏览器无法保存本次进度';
+try { choices = JSON.parse(localStorage.getItem(storageKey)) || {}; }
+catch { storageWarning(); }
 
-    data_json = {
-        "bossCount": len([b for g in conflict_groups + single_groups for b in g["bosses"]]) + len(todo),
-        "bosses": [{"idx": b["idx"], "sku": b["sku"], "cn": b["cn"], "dp": b["dp"]}
-                   for g in conflict_groups + single_groups for b in g["bosses"]] +
-                  [{"idx": b["idx"], "sku": b["sku"], "cn": b["cn"], "dp": b["dp"]} for b in todo],
-    }
-    html = html.replace("TODO_PLACEHOLDER", "\n".join(todo_html) if todo_html else '<div class="hint">无</div>')
-    html = html.replace("CONFLICT_PLACEHOLDER", "\n".join(conflict_html) if conflict_html else '<div class="hint">无</div>')
-    html = html.replace("SINGLE_PLACEHOLDER", "\n".join(single_html) if single_html else '<div class="hint">无</div>')
-    html = html.replace("DATA_JSON", json.dumps(data_json, ensure_ascii=False))
-    _write(config.current.out_mapping_html, html)
-    return len(conflict_groups), len(single_groups), len(todo)
-
-
-# ---------------- 统一核对工作台（全部活跃店铺并集，一页两区） ----------------
-def render_unified_html(conflict_groups, single_groups, todo, normal_items, shops_meta, stats=None):
-    stats = stats or {}
-    conflict_html = [_conflict_group_html(g) for g in conflict_groups]
-    single_html = [_single_group_html(g) for g in single_groups]
-    todo_html = [_todo_group_html(b) for b in todo]
-    boss_opts = _boss_opts_html([b for g in conflict_groups + single_groups for b in g["bosses"]] + todo)
-    cards_html = [_review_card_html(i, x, boss_opts) for i, x in enumerate(normal_items, 1)]
-
-    shop_ids = stats.get("shops") or [s.get("id") for s in (shops_meta or [])]
-    shops_txt = ",".join(map(str, shop_ids)) or "全部店铺"
-    shop_n = len(shop_ids)
-    html = '''<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8"><title>价格映射核对工作台（[[SHOPSN]] 店统一）</title>
-<style>
-body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#f0f2f5;color:#2c3e50}
-.bar{position:sticky;top:0;background:#fff;padding:10px 16px;border-bottom:2px solid #3498db;z-index:9;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.bar b{color:#e74c3c}button{padding:6px 16px;cursor:pointer;border-radius:6px;border:1px solid #3498db;background:#3498db;color:#fff}
-button.ghost{background:#fff;color:#3498db}
-.wrap{padding:16px}
-.grp{background:#fff;border:1px solid #ddd;border-radius:8px;margin:12px 0;padding:10px 14px}
-.ghead{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
-.ghead b{font-size:15px}.idx{color:#7f8c8d;font-weight:bold}.sku{color:#2980b9}.dp{color:#e74c3c;font-weight:bold}
-.kw{color:#95a5a6;font-size:12px}.cnt{color:#7f8c8d;font-size:12px}.hint{color:#8e44ad;font-size:12px;margin:4px 0}
-.ok{color:#27ae60;font-size:12px}.picked{color:#27ae60;font-weight:bold}
-.conflict .ghead{background:#fdf2e9;border-left:4px solid #e67e22;padding:4px 8px;border-radius:4px}
-.todo .ghead{background:#fdedec;border-left:4px solid #c0392b;padding:4px 8px;border-radius:4px}
-.gtable{border-collapse:collapse;width:100%}.gtable th{background:#f8f9fa;font-size:12px;padding:6px;border:1px solid #ddd}
-.gtable td{border:1px solid #eee;vertical-align:top}.gtable .own{text-align:center;width:70px;font-size:12px}
-.gtable .own label{display:block;padding:4px;cursor:pointer}
-.gtable .own input:checked+span{color:#27ae60;font-weight:bold}
-.missrow{opacity:.45}.missrow:hover{opacity:1}
-.candtd{width:380px}.cand{display:flex;gap:8px;align-items:center;padding:4px}
-.cand img{width:52px;height:52px;object-fit:contain;border-radius:4px;background:#fafafa;border:1px solid #eee}
-.cand .ci{font-size:12px;line-height:1.4}.cand .vc{color:#7f8c8d}.cand .hit{color:#27ae60;font-size:11px}
-.pickrow{display:flex;flex-wrap:wrap;gap:8px}
-.pickw{display:flex;gap:6px;align-items:flex-start;border:1px solid #eee;border-radius:8px;padding:6px;cursor:pointer;width:300px}
-.pickw:has(input:checked){outline:2px solid #27ae60;background:#f0fff4}
-.pickw img{width:52px;height:52px;object-fit:contain;background:#fafafa;border-radius:4px}
-.pickw .cand{flex:1}.misswrap{display:flex;flex-wrap:wrap;gap:8px}
-.missbox summary{color:#95a5a6;cursor:pointer;font-size:12px;margin:6px 0}
-.manual{width:60%;padding:6px;border:1px solid #ccc;border-radius:4px}
-.card{background:#fff;border:1px solid #ddd;border-radius:8px;margin:10px 0;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px}
-.card.excluded{opacity:.5;background:#f8f8f8}
-.card .hd{display:flex;gap:10px;align-items:center;flex:1;min-width:0}
-.card .hd .pimg{width:64px;height:64px;object-fit:contain;border-radius:6px;border:1px solid #eee;background:#fafafa}
-.card .info{min-width:0}.card .tt{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:720px}
-.card .vc{color:#7f8c8d;font-size:12px;margin-top:2px}
-.card .shop{display:inline-block;background:#eee;border-radius:4px;padding:0 5px;margin-left:4px;font-size:11px}
-.card .op select{min-width:300px;padding:6px;border:1px solid #ccc;border-radius:4px}
-#out{width:100%;height:160px;font-family:Consolas,monospace;margin-top:8px}
-.stats{color:#7f8c8d;font-size:13px}
-</style></head>
-<body>
-<div class="bar">
-  <b>价格映射核对工作台（[[SHOPSN]] 店统一｜店铺 [[SHOPS]]）</b>
-  <span class="stats">店铺 [[SHOPS]] · 商品价格表商品 <b id="total"></b> · 候选池 <b>[[CAND]]</b> · 已归属 <b id="picked"></b>
-    | 未归属新 vc <b>[[NORMAL]]</b> · 已映射 <b id="mapped"></b> · 已排除 <b id="excl"></b></span>
-  <button onclick="exportJson()">导出核对结果 JSON</button>
-  <button class="ghost" onclick="clearAll()">清空</button>
-  <button class="ghost" onclick="toggleMiss()">显示/隐藏无关键词命中候选</button>
-</div>
-<div class="wrap">
-<div class="hint" style="color:#2c3e50">
-  <b>本工作台一次覆盖 [[SHOPSN]] 店全部在架商品（按 vendorCode 去重），核对一次、合并一次即可。</b><br>
-  上半区（一~三）：每个商品价格表商品勾选<b>实际对应的店铺候选</b>（看图片/俄文名/价格，可多选=同款多变体）；待核查可手工填 vendorCode。<br>
-  下半区（四）：[[SHOPSN]] 店在架但<b>价格未匹配到任何商品价格表商品</b>的 vendorCode——请为每个选择归属商品价格表商品（补录）或 🚫 非货盘（排除）。<br>
-  核对完点「导出核对结果 JSON」→ 内容保存为 <b>统一审核.json</b> 发我 → <code>python -m sellerops catalog merge 统一审核.json</code> 即完成。
-</div>
-<h3>一、待核查（价格带无候选，可手工填 vendorCode）</h3>
-TODO_PLACEHOLDER
-<h3>二、同价冲突组（候选池共享，人工图片区分归属）</h3>
-CONFLICT_PLACEHOLDER
-<h3>三、普通商品（候选通常唯一，勾选确认）</h3>
-SINGLE_PLACEHOLDER
-<h3>四、未归属新 vendorCode（[[NORMAL]] 个，价格未匹配任何商品价格表商品）</h3>
-CARDS_PLACEHOLDER
-<hr><h3>导出结果（vc 中心格式，merge 直接消费）：</h3><textarea id="out" placeholder="点上方按钮导出"></textarea>
-</div>
-<script>
-const data = DATA_JSON;
-document.getElementById('total').textContent = data.bossCount;
-function refresh(){
-  data.bosses.forEach(b => {
-    let c = 0;
-    document.querySelectorAll('.spick:checked').forEach(i => {
-      const card = i.closest('.grp'); if (card && card.id === 'boss-' + b.idx) c++; });
-    document.querySelectorAll('.gpick:checked').forEach(i => { if (+i.dataset.boss === b.idx) c++; });
-    const el = document.querySelector('#boss-' + b.idx + ' .picked');
-    if (el) el.textContent = c ? '已归属 ' + c + ' 个' : '';
-  });
-  let m = 0, e = 0;
-  document.querySelectorAll('.card').forEach(cd => {
-    const v = cd.querySelector('select').value;
-    const isEx = v.startsWith('EXCLUDE');
-    cd.classList.toggle('excluded', isEx);
-    if (isEx) e++; else if (v) m++;
-  });
-  document.getElementById('picked').textContent =
-    document.querySelectorAll('.spick:checked').length + document.querySelectorAll('.gpick:checked').length;
-  document.getElementById('mapped').textContent = m;
-  document.getElementById('excl').textContent = e;
+function choiceFor(card) {
+  const choice = choices[card.dataset.vcs];
+  return choice?.action === 'exclude' || products.has(choice?.sku) ? choice : null;
 }
-document.querySelectorAll('.spick,.gpick,.assign').forEach(i => i.addEventListener('change', refresh));
-function exportJson(){
-  const out = [], seen = new Set(), byIdx = {};
-  data.bosses.forEach(b => byIdx[b.idx] = b);
-  const push = (vc, act, b) => {
-    if (!vc || seen.has(vc)) return;
-    seen.add(vc);
-    if (act === 'mapped') out.push({vc, action: 'mapped', bossSku: b.sku, bossCn: b.cn, bossDp: b.dp});
-    else out.push({vc, action: act});
+function setChoice(card, choice) {
+  if (choice) choices[card.dataset.vcs] = choice;
+  else delete choices[card.dataset.vcs];
+  const product = products.get(choice?.sku);
+  card.querySelector('.product').value = product?.value || '';
+  card.querySelector('.choice').textContent = product ? '已归属：' + product.value : choice ? '已排除' : '';
+  card.querySelector('.undo').hidden = !choice;
+}
+function refresh() {
+  let done = 0, shown = 0;
+  const counts = {all: cards.length, prefix: 0, multiplier: 0, unmatched: 0};
+  const terms = search.value.trim().toLowerCase().split(/\\s+/);
+  for (const card of cards) {
+    const choice = choiceFor(card);
+    const category = card.dataset.category;
+    const label = products.get(choice?.sku)?.value || '';
+    const haystack = (card.dataset.search + ' ' + label).toLowerCase();
+    counts[category]++;
+    if (choice) done++;
+    card.hidden = (filter !== 'all' && filter !== category)
+      || (status.value !== 'all' && (status.value === 'done') !== Boolean(choice))
+      || !terms.every(term => haystack.includes(term));
+    if (!card.hidden) shown++;
+  }
+  for (const button of filters) {
+    button.textContent = button.dataset.label + ' ' + counts[button.dataset.filter];
+    button.setAttribute('aria-pressed', button.dataset.filter === filter);
+  }
+  document.getElementById('stats').textContent = '共 ' + cards.length + ' 组 · 已处理 ' + done + ' · 未处理 ' + (cards.length - done) + ' · 当前显示 ' + shown;
+  document.getElementById('empty').hidden = shown > 0;
+}
+function save() {
+  try { localStorage.setItem(storageKey, JSON.stringify(choices)); }
+  catch { storageWarning(); }
+  refresh();
+}
+for (const button of filters) {
+  button.dataset.label = button.textContent;
+  button.onclick = () => { filter = button.dataset.filter; refresh(); };
+}
+for (const card of cards) {
+  setChoice(card, choiceFor(card));
+  const input = card.querySelector('.product');
+  input.onchange = () => {
+    const sku = byLabel.get(input.value.trim());
+    if (sku) { setChoice(card, {action: 'map', sku}); save(); }
+    else setChoice(card, choiceFor(card));
   };
-  document.querySelectorAll('.spick:checked').forEach(i => {
-    const card = i.closest('.grp'); const m = card ? card.id.match(/^boss-(\\d+)$/) : null;
-    if (m) push(i.dataset.vc, 'mapped', byIdx[+m[1]]);
-  });
-  document.querySelectorAll('.gpick:checked').forEach(i => push(i.dataset.vc, 'mapped', byIdx[+i.dataset.boss]));
-  document.querySelectorAll('.manual').forEach(inp => {
-    const card = inp.closest('.grp'); const m = card ? card.id.match(/^boss-(\\d+)$/) : null;
-    if (!m) return;
-    inp.value.split(/[,，\\s]+/).forEach(v => { v = v.trim(); if (v) push(v, 'mapped', byIdx[+m[1]]); });
-  });
-  document.querySelectorAll('.card').forEach(cd => {
-    const v = cd.querySelector('select').value;
-    if (!v) { push(cd.dataset.vc, 'pending'); return; }
-    if (v.startsWith('EXCLUDE')) { push(cd.dataset.vc, 'exclude'); return; }
-    const [sku, cn, dp] = v.split('|');
-    push(cd.dataset.vc, 'mapped', {sku, cn, dp});
-  });
-  const text = JSON.stringify(out, null, 2);
-  document.getElementById('out').value = text;
-  downloadJson(text, '统一审核.json');
+  for (const button of card.querySelectorAll('.suggestion')) {
+    button.onclick = () => { setChoice(card, {action: 'map', sku: button.dataset.sku}); save(); };
+  }
+  card.querySelector('.exclude').onclick = () => { setChoice(card, {action: 'exclude'}); save(); };
+  card.querySelector('.undo').onclick = () => { setChoice(card, null); save(); };
 }
-function downloadJson(text, filename){
-  const blob = new Blob([text], {type: 'application/json;charset=utf-8'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  alert('已下载 ' + filename + '（同时显示在上方文本框）');
-}
-function clearAll(){ document.querySelectorAll('.spick:checked,.gpick:checked').forEach(i=>i.checked=false);
-  document.querySelectorAll('.card select').forEach(s=>s.value=''); refresh(); }
-function toggleMiss(){ document.querySelectorAll('.missrow').forEach(r=>r.style.display = r.style.display==='none'?'':'none'); }
+status.onchange = refresh;
+search.oninput = refresh;
+document.getElementById('accept-prefix').onclick = () => {
+  for (const card of cards) {
+    if (card.dataset.prefix && !choiceFor(card)) setChoice(card, {action: 'map', sku: card.dataset.prefix});
+  }
+  save();
+};
+document.getElementById('export').onclick = () => {
+  const results = cards.flatMap(card => {
+    const choice = choiceFor(card);
+    if (!choice) return [];
+    const product = products.get(choice.sku);
+    return JSON.parse(card.dataset.vcs).map(vc => product
+      ? {vc, action: 'map', sku: choice.sku, cn: product.dataset.cn}
+      : {vc, action: 'exclude'});
+  });
+  const url = URL.createObjectURL(new Blob([JSON.stringify(results, null, 2)], {type: 'application/json'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = '待认领审核.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
 refresh();
-</script></body></html>'''
-    html = html.replace("TODO_PLACEHOLDER", "\n".join(todo_html) if todo_html else '<div class="hint">无</div>')
-    html = html.replace("CONFLICT_PLACEHOLDER", "\n".join(conflict_html) if conflict_html else '<div class="hint">无</div>')
-    html = html.replace("SINGLE_PLACEHOLDER", "\n".join(single_html) if single_html else '<div class="hint">无</div>')
-    html = html.replace("CARDS_PLACEHOLDER", "\n".join(cards_html) if cards_html else '<div class="hint">无</div>')
-    html = html.replace("[[SHOPS]]", shops_txt).replace("[[SHOPSN]]", str(shop_n)).replace("[[CAND]]", str(stats.get("cand", 0)))\
-               .replace("[[NORMAL]]", str(stats.get("normal", 0)))
-    data_json = {
-        "bossCount": len([b for g in conflict_groups + single_groups for b in g["bosses"]]) + len(todo),
-        "bosses": [{"idx": b["idx"], "sku": b["sku"], "cn": b["cn"], "dp": b["dp"]}
-                   for g in conflict_groups + single_groups for b in g["bosses"]] +
-                  [{"idx": b["idx"], "sku": b["sku"], "cn": b["cn"], "dp": b["dp"]} for b in todo],
-    }
-    html = html.replace("DATA_JSON", json.dumps(data_json, ensure_ascii=False))
-    _write(config.current.out_mapping_html, html)
-    return len(conflict_groups), len(single_groups), len(todo), len(normal_items)
-
-
-def _write(path, html):
-    import os
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
+</script>
+</body>
+</html>
+'''

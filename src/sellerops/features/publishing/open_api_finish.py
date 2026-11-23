@@ -5,11 +5,12 @@ from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from typing import Any
 
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 from sellerops.features.publishing.open_api_common import OperationLog, safe_reason, select_accesses, split_values
 from sellerops.features.publishing.open_api_payloads import card_index, positive_id, sizes, media_urls
 from sellerops.integrations.wildberries.content_api import WBContentAPI
 from sellerops.persistence import open_api_publish as store
+from sellerops.settings import credentials
 
 
 @dataclass
@@ -47,7 +48,7 @@ def can_continue(entry: dict[str, Any]) -> bool:
 def _assets(continuation: PublishContinuation, card: dict[str, Any] | None) -> _ReadyAssets:
     entry = continuation.entry
     if entry['warehouse'] != continuation.warehouse:
-        raise ValueError('莫斯科仓名称或 id 与建卡准备记录不一致')
+        raise ValueError('已配置的 WB 仓库名称或 id 与建卡准备记录不一致')
     if card is None:
         raise _CardPending('尚未生成该完整 VC 的商品卡')
     if positive_id(card.get('subjectID')) != positive_id(entry['card']['subjectID']):
@@ -103,7 +104,7 @@ def _submit(ready: list[_ReadyAssets], state: dict[str, Any], log: OperationLog)
                 stages[name] = {'status': 'accepted', 'receipt': receipt}
                 store.save_state(state)
             entry['status'] = 'finished'
-            row.update(status='accepted', reason='建卡、图片与莫斯科仓库存均已受理')
+            row.update(status='accepted', reason='建卡、图片与已配置的 WB 仓库库存均已受理')
         except Exception as exc:
             stopped.add(sid)
             for stage in stages.values():
@@ -213,7 +214,7 @@ def resume(args: Any) -> int:
                 continue
             try:
                 api = stack.enter_context(closing(WBContentAPI(shop.api_key)))
-                warehouse = moscow_warehouse(api.warehouses())
+                warehouse = select_warehouse(api.warehouses(), credentials.get().wb_warehouse_keyword)
             except Exception as exc:
                 log.add(shop.id, '*', 'failed', reason=safe_reason(exc))
                 continue

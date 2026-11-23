@@ -1,7 +1,7 @@
-"""从本店 WB 后台获取仓库清单，按本次运行缓存已确认的莫斯科仓 id。"""
+"""从本店 WB 后台获取仓库清单，按本次运行缓存已配置仓库的 id。"""
 from typing import Any, Dict, List, Optional
 
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 from sellerops.core import utils as common
 from sellerops.settings import paths as config
 from sellerops.settings import credentials
@@ -38,17 +38,15 @@ def list_stores(sid: int) -> List[Dict[str, Any]]:
 
 
 def resolve_warehouse(sid: int) -> Optional[int]:
-    """确认该店唯一可用的莫斯科仓库 ID；仅成功结果按店缓存。"""
+    """确认本店已配置的 WB 仓库 ID；仅成功结果按店缓存。"""
     sid = int(sid)
     cache = warehouse_ids(config.current)
     if sid in cache:
         return cache[sid]
-    stores = list_stores(sid)
-    if not stores:
-        return None
-
+    keyword = credentials.get().wb_warehouse_keyword
+    stores = list_stores(sid) if keyword else []
     try:
-        warehouse_id = moscow_warehouse(stores)["id"]
+        warehouse_id = select_warehouse(stores, keyword)["id"]
     except ValueError as error:
         print(f"[阻止] 店{sid}：{error}")
         return None

@@ -3,7 +3,7 @@ sellerops 商品链接评分与买家评价查询 (ratings)
 
 通过 WB 卖家后台官方「内容分析 - 商品评分与评价」接口查询各店铺在架商品的评分、
 评价数及各星级分布，并与权威商品价格表（data/商品价格表.xlsx）级联匹配，
-导出包含 BCS编号、wb编号、中文名、售价、尺寸、前缀码等维度的统计报表。
+导出包含 BCS编号、wb编号、中文名、最低售价、尺寸、前缀码等维度的统计报表。
 
 用法：
     python -m sellerops report ratings [--shops 9352] [--rating 1] [--one-star] [--max-rating 2] [--out path.xlsx]
@@ -37,7 +37,7 @@ REPORT_HEADERS = [
     "wb编号",
     "wb编号来源",
     "产品中文名",
-    "售价",
+    "最低售价",
     "尺寸",
     "vendorCode前缀码",
     "来源的店铺",
@@ -339,7 +339,7 @@ def run(args: Any) -> int:
                     five_star=five_s,
                     is_shadowed=is_shadowed,
                     cn_name=p_info.get("cn") or "",
-                    price=p_info.get("dp"),  # 售价取价格表实际售价（原始值，不取整）
+                    price=p_info.get("minimum_price"),
                     dimensions=p_info.get("dim") or "",
                     prefix=p_info.get("prefix") or "",
                     source_wb="商品评分API",
@@ -373,7 +373,7 @@ def run(args: Any) -> int:
 
     # 控制台预览前 10 条
     print("\n[预览前 10 条结果]")
-    print(f"{'BCS编号':<22} | {'wb编号':<12} | {'产品中文名':<18} | {'售价':<6} | {'评分':<5} | {'总评':<5} | {'1星':<4} | {'店铺':<6}")
+    print(f"{'BCS编号':<22} | {'wb编号':<12} | {'产品中文名':<18} | {'最低售价':<6} | {'评分':<5} | {'总评':<5} | {'1星':<4} | {'店铺':<6}")
     print("-" * 90)
     for it in matched_items[:10]:
         price_str = str(it.price) if it.price is not None else "-"

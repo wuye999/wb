@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import tempfile
 from threading import Barrier, Lock
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 import unittest
 from unittest.mock import Mock, patch
 
@@ -178,15 +178,22 @@ class TestSnapshotNormalization(unittest.TestCase):
             with self.assertRaises(PlatformApiError):
                 snapshot.normalize_rows(1, [card()], p, st, WAREHOUSE)
 
-    def test_only_unique_active_moscow_id_is_used(self):
-        self.assertEqual(moscow_warehouse([
-            {'id': 9, 'name': '成都仓库'}, dict(WAREHOUSE, warehouseId=777, officeId=888),
-        ])['id'], 42)
-        for values in ([], [{'id': 9, 'name': '成都仓库'}],
-                       [{'name': '莫斯科仓库', 'warehouseId': 777}],
-                       [dict(WAREHOUSE, isProcessing=True)], [WAREHOUSE, dict(WAREHOUSE, id=43)]):
+    def test_warehouse_keyword_selects_unique_active_id_and_lists_available_names(self):
+        chosen = {'id': 9, 'name': '成都仓库'}
+        deleting = {'id': 10, 'name': '成都二仓', 'isDeleting': True}
+        rows = [dict(chosen, warehouseId=777), WAREHOUSE, deleting]
+        self.assertEqual(select_warehouse(rows, '成都'), chosen)
+        with self.assertRaisesRegex(ValueError, r'data/credentials\.json.*wb\.warehouse_keyword'):
+            select_warehouse(rows, '  ')
+        for keyword in ('仓库', '不存在'):
+            with self.subTest(keyword=keyword), self.assertRaises(ValueError) as error:
+                select_warehouse(rows, keyword)
+            self.assertIn('当前可用仓库：成都仓库、莫斯科仓库', str(error.exception))
+            self.assertIn('更具体的 wb.warehouse_keyword', str(error.exception))
+            self.assertNotIn(deleting['name'], str(error.exception))
+        for row in ({'name': chosen['name'], 'warehouseId': 777}, dict(chosen, isProcessing=True)):
             with self.assertRaises(ValueError):
-                moscow_warehouse(values)
+                select_warehouse([row], '成都')
 
     def test_collect_closes_session_on_failure_and_never_queries_other_stores(self):
         api = Mock()
@@ -194,7 +201,8 @@ class TestSnapshotNormalization(unittest.TestCase):
         api.cards.return_value = [card()]
         api.prices.return_value = [price()]
         api.stocks.return_value = []
-        with patch.object(snapshot, 'WBOpenAPI', return_value=api) as factory:
+        with patch.object(snapshot.credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科')), \
+                patch.object(snapshot, 'WBOpenAPI', return_value=api) as factory:
             rows, metadata = snapshot.collect_shop(OpenAPIShop(1, '店1', 'secret'))
             self.assertEqual(len(rows), 1)
             factory.assert_called_once_with('secret', region='cn')
@@ -203,7 +211,8 @@ class TestSnapshotNormalization(unittest.TestCase):
             api.close.assert_called_once()
         api.reset_mock()
         api.warehouses.return_value = [{'id': 99, 'name': '成都仓库'}]
-        with patch.object(snapshot, 'WBOpenAPI', return_value=api), self.assertRaises(ValueError):
+        with patch.object(snapshot.credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科')), \
+                patch.object(snapshot, 'WBOpenAPI', return_value=api), self.assertRaises(ValueError):
             snapshot.collect_shop(OpenAPIShop(1, '店1', 'secret'))
         api.cards.assert_not_called()
         api.stocks.assert_not_called()
@@ -218,7 +227,8 @@ class TestSnapshotNormalization(unittest.TestCase):
             api.prices.return_value = [dict(price(nm=100 + sid), sizes=[{'sizeID': sid, 'price': sid}])]
             api.stocks.return_value = [{'chrtId': sid, 'amount': sid - 1}]
             clients[f'key-{sid}'] = api
-        with patch.object(snapshot, 'WBOpenAPI', side_effect=lambda key, **kwargs: clients[key]):
+        with patch.object(snapshot.credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科')), \
+                patch.object(snapshot, 'WBOpenAPI', side_effect=lambda key, **kwargs: clients[key]):
             first, _ = snapshot.collect_shop(OpenAPIShop(1, '甲', 'key-1'))
             second, _ = snapshot.collect_shop(OpenAPIShop(2, '乙', 'key-2'))
         self.assertEqual(first[0]['vendorCode'], second[0]['vendorCode'])
@@ -237,6 +247,7 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
         self.addCleanup(paths.configure, previous)
         self.data = Path(folder.name)
         paths.configure(self.data)
+        (self.data / 'credentials.json').write_text(json.dumps({'wb': {'warehouse_keyword': '莫斯科'}}), encoding='utf8')
         stack = ExitStack()
         self.addCleanup(stack.close)
         self.output = io.StringIO()
@@ -456,12 +467,12 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
         vc = self.row['vendorCode']
         book = Workbook()
         book.active.title = 'Sheet1'
-        book.active.append(['卖家SKU', '产品中文名', '实际售价', 'vendorCode前缀码'])
+        book.active.append(['卖家SKU', '产品中文名', '最低售价', 'vendorCode前缀码'])
         book.active.append(['SKU1', '测试商品', 10, 'TEST'])
         book.save(paths.current.price_book_xlsx)
         book.close()
-        atomic_dump_json(paths.current.vc_known_json, {vc: {'cn': '测试商品', 'dp': 10},
-                                              'old-vc': {'cn': '历史商品', 'dp': 20}})
+        atomic_dump_json(paths.current.vc_known_json, {vc: {'cn': '测试商品', 'minimum_price': 10},
+                                              'old-vc': {'cn': '历史商品', 'minimum_price': 20}})
         atomic_dump_json(paths.current.vc_override_json, {})
         atomic_dump_json(paths.current.vc_excluded_json, {})
         atomic_dump_json(paths.current.status_json, {'shops': [{'id': 1, 'name': '店1'}], 'errors': []})

@@ -61,6 +61,11 @@ class TestMissingSnapshotValues(unittest.TestCase):
             self.assertIsNone(first_price(row([size(price=value)])))
 
     def test_stock_plan_reports_unknown_instead_of_zero_and_never_sums_duplicates(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        context = patch.object(paths, 'current', paths.DataPaths(Path(directory.name)))
+        context.start()
+        self.addCleanup(context.stop)
         for raw_size in (size(amount=None), size(amount=''), size(amount=False),
                          dict(size(), stockList=[{'warehouseId': 99, 'amount': 0}]),
                          dict(size(), stockList=[{'warehouseId': 42, 'amount': 0}] * 2)):
@@ -163,7 +168,7 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
             bcs_rows = [primary] if primary['price'] is not None else []
             coverage = {VC: {1: {'stock': '', 'price': first_price(raw_primary), 'nmId': 101},
                              2: {'stock': 0, 'price': 20, 'nmId': 202}}}
-            build_xlsx([], [{'cn': '商品', 'dp': 10, 'vendorCodes': [VC]}], bcs_rows,
+            build_xlsx([], [{'cn': '商品', 'minimum_price': 10, 'vendorCodes': [VC]}], bcs_rows,
                        shop_coverage=coverage, shops_meta=[{'id': 1, 'name': '主店'}, {'id': 2, 'name': '其他店'}],
                        main_sid=1, load_boss_fn=lambda: [], out_path=self.data / 'report.xlsx')
             book = load_workbook(self.data / 'report.xlsx', read_only=True, data_only=True)
@@ -180,19 +185,18 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
         data = row_for({'cn': '商品'}, VC, {'_stock': 0}, stock_summary_fn=lambda value: '999')
         self.assertEqual(data[6], 0)
 
-    def test_price_union_handles_absent_status_and_excludes_spec_placeholder_zero(self):
-        from sellerops.features.catalog import mapping, mapping_check
+    def test_mismatch_prices_preserve_real_zero_and_ignore_spec_placeholder_zero(self):
+        from sellerops.features.catalog import mapping, mismatch_check
         good = dict(row([size()]), vendorCode='REAL-ZERO', nmId=102)
         fraction = dict(row([size(price=.5)]), vendorCode='FRACTION', nmId=103)
-        snapshot(1, [row([size(None)]), good, fraction])
-        with patch.object(mapping, 'main_shop', return_value=1):
-            union, shops = mapping.load_shops_union()
-            main_rows = mapping.load_bcs()
-        self.assertEqual([shop['id'] for shop in shops], [1])
-        self.assertEqual(set(union), {'REAL-ZERO', 'FRACTION'})
-        self.assertEqual(union['REAL-ZERO']['price'], 0)
-        self.assertEqual({item['vc']: item['price'] for item in main_rows}, {'REAL-ZERO': 0, 'FRACTION': .5})
-        self.assertEqual(mapping_check.load_union_prices(), {'REAL-ZERO': {1: 0}, 'FRACTION': {1: .5}})
+        rows = [row([size(None)]), good, fraction]
+        snapshot(1, rows)
+        write_book([('SKU1', '示例商品', 10)])
+        map_vcs({item['vendorCode']: 'SKU1' for item in rows})
+        self.assertEqual({item['vc']: item['price'] for item in mapping.priced_rows(rows)},
+                         {'REAL-ZERO': 0, 'FRACTION': .5})
+        self.assertEqual({item['vc']: item['price'] for item in mismatch_check.load_mapping_rows()},
+                         {VC: None, 'REAL-ZERO': 0, 'FRACTION': .5})
 
 
 if __name__ == '__main__':

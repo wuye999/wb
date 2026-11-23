@@ -6,7 +6,7 @@ from collections import defaultdict
 import openpyxl
 from sellerops.domain.snapshot_values import stock_values
 from sellerops.settings import paths as config
-from sellerops.persistence.headers import COL_ACTUAL_PRICE
+from sellerops.persistence.headers import COL_MIN_PRICE
 from sellerops.persistence.headers import COL_CN
 from sellerops.persistence.headers import COL_H
 from sellerops.persistence.headers import COL_IMG
@@ -30,27 +30,27 @@ def stock_summary(r):
 def detail_headers(main_sid=None):
     """映射总表 16 列（13 主数据 + 创建时间/更新时间/WB商品码） + 店铺覆盖列
 
-    第 3 列（C 列）为价格列 = `COL_ACTUAL_PRICE`（实际售价）；`row_for()` 写第 3 个元素，
+    第 3 列（C 列）为最低售价，`row_for()` 写第 3 个元素，
     两处必须保持一致（读取端按列名定位，不依赖位置）。
     """
     sid = main_sid if main_sid is not None else (config.MAIN_SHOP or "")
 
     return [
-        COL_CN, COL_VC, COL_ACTUAL_PRICE, f'店铺{sid}价格(CNY)', '折扣%', 'club折扣%',
+        COL_CN, COL_VC, COL_MIN_PRICE, f'店铺{sid}价格(CNY)', '折扣%', 'club折扣%',
         '库存', COL_TITLE, COL_IMG, COL_L, COL_W, COL_H, COL_WT,
         '创建时间', '更新时间', COL_NM,
     ]
 
 def row_for(item, vc, c, match="", status="", stock_summary_fn=None):
-    """生成一行映射数据（16 列）。item 的售价键兼容 doublePrice（核对JSON）与 dp（补充条目）"""
-    dp = item.get("doublePrice", item.get("dp"))
+    """生成一行映射数据（16 列）。"""
+    minimum_price = item.get("minimum_price")
     if c is None:
-        return [item.get("cn"), vc, dp, "", "", "", "", "", "", "", "", "", "", "", "", ""]
+        return [item.get("cn"), vc, minimum_price, "", "", "", "", "", "", "", "", "", "", "", "", ""]
     stock_val = c.get("_stock")
     if stock_val is None and stock_summary_fn:
         stock_val = stock_summary_fn(c)
     return [
-        item.get("cn"), vc, dp, c.get("price"),
+        item.get("cn"), vc, minimum_price, c.get("price"),
         c.get("discount"), c.get("clubDiscount"), stock_val if stock_val is not None else "",
         c.get("title"), c.get("repImg") or "",
         c.get("dimensionsLength"), c.get("dimensionsWidth"), c.get("dimensionsHeight"),
@@ -144,7 +144,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
                     ws1.cell(ws1.max_row, NMID_COL).hyperlink = \
                         f"https://www.wildberries.ru/catalog/{c['nmId']}/detail.aspx?targetUrl=GP"
     for item in extra_entries:
-        status = "已补录售价" if item.get("dp") is not None else "待补填售价"
+        status = "已补录最低售价" if item.get("minimum_price") is not None else "待补填最低售价"
         for vc in item.get("vendorCodes") or []:
             c = enrich(vc, bcs_by_vc.get(vc))
             cov = ";".join(str(sid) for sid in sorted(shop_coverage.get(vc, {}).keys())) if vc else ""
@@ -181,7 +181,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
             reason = "已人工标记为非货盘商品（排除，不参与映射）"
         else:
             reason = "店铺在架但未映射 → 漏配商品候选或非货盘商品，需人工核对"
-        row = row_for({"sku": "", "cn": "（未映射）", "doublePrice": None}, c["vc"], c, "", reason, stock_summary_fn=stock_summary_fn)
+        row = row_for({"sku": "", "cn": "（未映射）"}, c["vc"], c, "", reason, stock_summary_fn=stock_summary_fn)
         ws3.append(row + [reason])
         ws3.cell(ws3.max_row, IMG_COL).hyperlink = c.get("repImg") or ""
     for i, w in enumerate(SIMPLE_WIDTHS + [40], 1):
@@ -203,7 +203,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
 
     # Sheet4 待核查清单
     ws4 = wb.create_sheet("待核查清单")
-    ws4.append(["商品SKU", COL_CN, COL_ACTUAL_PRICE, "问题说明"])
+    ws4.append(["商品SKU", COL_CN, COL_MIN_PRICE, "问题说明"])
     picked_cn = set()
     for item in list(result_list) + list(extra_entries):
         if item.get("vendorCodes"):
@@ -211,12 +211,12 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     boss = load_boss_fn()
     for b in boss:
         if b["cn"] not in picked_cn:
-            ws4.append([b["sku"], b["cn"], b["dp"],
+            ws4.append([b["sku"], b["cn"], b["minimum_price"],
                         "商品价格表有该商品但映射表无归属 vendorCode → 需人工核对补录（可能未上架/价格特殊/漏配）"])
     for item in extra_entries:
-        if item.get("dp") is None:
-            note = (item.get("note", "") or "") + " → 需补填实际售价并确认型号分组"
-            ws4.append([item.get("sku"), item.get("cn"), item.get("dp"), note])
+        if item.get("minimum_price") is None:
+            note = (item.get("note", "") or "") + " → 需补填最低售价并确认型号分组"
+            ws4.append([item.get("sku"), item.get("cn"), None, note])
     for i, w in enumerate([14, 30, 10, 70], 1):
         ws4.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
@@ -224,7 +224,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     ws5 = wb.create_sheet("店铺全量商品")
     ws5.append(headers + ["已在映射表"])
     for c in sorted(bcs, key=lambda c: c["price"]):
-        row = row_for({"sku": "", "cn": "（店铺商品）", "doublePrice": None}, c["vc"], c, "", "", stock_summary_fn=stock_summary_fn)
+        row = row_for({"sku": "", "cn": "（店铺商品）"}, c["vc"], c, "", "", stock_summary_fn=stock_summary_fn)
         row.append("是" if c["vc"] in picked else "")
         ws5.append(row)
         ws5.cell(ws5.max_row, IMG_COL).hyperlink = c.get("repImg") or ""

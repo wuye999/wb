@@ -120,6 +120,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
     def fixture(self, accounts=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(patch.object(credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科')))
         stack.enter_context(patch.object(workflow, 'load_report_catalog', return_value=ReportCatalog({'测试商品'}, {VC: '测试商品'})))
         self.local = stack.enter_context(patch.object(workflow.bcs, 'fetch_open_api_shops', return_value=[
             OpenAPIShop(11, '店甲', 'official-11'), OpenAPIShop(12, '店乙', 'official-12')]))

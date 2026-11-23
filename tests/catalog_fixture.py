@@ -11,7 +11,7 @@ from sellerops.persistence.snapshots import ProductSnapshotRepository, save_snap
 from sellerops.settings import paths
 
 
-def write_book(rows, headers=('卖家SKU', '产品中文名', '实际售价', 'vendorCode前缀码', '马帮库存SKU', '发货方式')):
+def write_book(rows, headers=('卖家SKU', '产品中文名', '最低售价', 'vendorCode前缀码', '马帮库存SKU', '发货方式')):
     book = Workbook()
     sheet = book.active
     sheet.title = 'Sheet1'

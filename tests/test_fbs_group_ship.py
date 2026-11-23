@@ -38,7 +38,7 @@ def order(order_id, **changes):
 
 def fake_api(orders):
     api = Mock(spec=WBFBSAPI)
-    api.warehouses.return_value = [{'id': 567, 'warehouseId': 999, 'name': '莫斯科仓库'}]
+    api.warehouses.return_value = [{'id': 567, 'warehouseId': 999, 'name': '测试仓库'}]
     api.new_orders.return_value = orders
     api.create_supply.return_value = SUPPLY
     api.stickers.side_effect = lambda ids, **kwargs: {order_id: b'label' for order_id in ids}
@@ -52,6 +52,7 @@ class FBSWorkflowTests(unittest.TestCase):
         tmp = stack.enter_context(TemporaryDirectory())
         self.root = Path(tmp)
         stack.enter_context(patch.object(paths, 'current', paths.DataPaths(self.root)))
+        (self.root / 'credentials.json').write_text('{"wb":{"warehouse_keyword":"测试仓"}}', encoding='utf8')
         stack.enter_context(patch('sys.stdout', new_callable=StringIO))
         stack.enter_context(patch.object(fbs_group_ship, '_catalog', return_value=CATALOG))
         self.access = stack.enter_context(patch.object(fbs_group_ship, 'select_accesses',
@@ -66,7 +67,7 @@ class FBSWorkflowTests(unittest.TestCase):
     def journal(self):
         return load_journal(fbs_group_ship.journal_path())
 
-    def test_preview_filters_moscow_and_never_submits(self):
+    def test_preview_filters_configured_warehouse_and_never_submits(self):
         api = self.api.return_value = fake_api([
             order(1), order(2, warehouseId=999), order(3, article='BCS-OTHER-A'),
         ])

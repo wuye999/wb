@@ -130,7 +130,7 @@ class TestBCSDuplicateWorkflow(unittest.TestCase):
         self.assertIn('移除1条重复记录', self.output.getvalue())
         book = Workbook()
         book.active.title = 'Sheet1'
-        book.active.append(['卖家SKU', '产品中文名', '实际售价', 'vendorCode前缀码'])
+        book.active.append(['卖家SKU', '产品中文名', '最低售价', 'vendorCode前缀码'])
         book.active.append(['SKU1', '商品', 10, 'TEST'])
         book.save(paths.current.price_book_xlsx)
         book.close()

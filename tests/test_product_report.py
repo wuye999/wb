@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
@@ -219,14 +219,14 @@ class TestReportRules(unittest.TestCase):
         self.assertEqual(data.register_row(raw)['nm_id'], '')
 
     def test_only_unique_moscow_id_and_no_office_id(self):
-        selected = moscow_warehouse([{'name': '成都仓', 'id': 9},
-                                         {'name': '莫斯科仓库', 'id': 42, 'officeId': 999}])
+        selected = select_warehouse([{'name': '成都仓', 'id': 9},
+                                     {'name': '莫斯科仓库', 'id': 42, 'officeId': 999}], '莫斯科')
         self.assertEqual(selected['id'], 42)
         for rows in ([{'name': '成都仓', 'id': 9}],
                      [{'name': '莫斯科仓库', 'officeId': 999}],
                      [{'name': '莫斯科一', 'id': 1}, {'name': '莫斯科二', 'id': 2}]):
             with self.assertRaises(ValueError):
-                moscow_warehouse(rows)
+                select_warehouse(rows, '莫斯科')
 
     def test_feishu_markdown_links_preserve_original_and_extract_actual_url(self):
         for label in ('商品详情', data.product_url(101)):
@@ -268,6 +268,7 @@ class TestReportWorkflow(unittest.TestCase):
     def fixture(self, *, missing=False, api_error=False, bad_warehouse=False, records=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(patch.object(workflow.credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科')))
         stack.enter_context(patch.object(workflow, 'load_report_catalog', return_value=ReportCatalog({'测试商品'}, {VC: '测试商品'})))
         accesses = [OpenAPIShop(11, '店甲', 'secret-a'), OpenAPIShop(12, '店乙', 'secret-b')]
         stack.enter_context(patch.object(workflow.bcs, 'fetch_open_api_shops', return_value=accesses))

@@ -22,8 +22,8 @@ class TestRegression(unittest.TestCase):
         self.addCleanup(paths.configure, paths.current.data_dir)
         with tempfile.TemporaryDirectory() as tmp:
             paths.configure(tmp)
-            write_book([('TESTSKU-6161', 'S-1', '=D2*2', 10, '测试商品', ' 马帮发货 ')],
-                       ('马帮库存SKU', '卖家SKU', '实际售价', '最低售价', '产品中文名', '发货方式'))
+            write_book([('TESTSKU-6161', 'S-1', 10, '测试商品', ' 马帮发货 ')],
+                       ('马帮库存SKU', '卖家SKU', '最低售价', '产品中文名', '发货方式'))
             map_vcs({'BCS-AAAA-123': 'S-1'})
             names, stock, modes = matching.load_local_mapping()
             self.assertEqual(names, {'BCS-AAAA-123': '测试商品'})

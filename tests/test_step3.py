@@ -54,7 +54,7 @@ class Step3Tests(unittest.TestCase):
 
     def preview(self, action, nm, *args):
         return self.cli('ops', action, str(nm), '--shops', '1,2', '--dims', '2*3*4/0.5',
-                        '--stock', '0', *args)
+                        '--price', '59', '--stock', '0', *args)
 
     def item_from_plan(self, action, plan_id):
         with db.connect() as conn:
@@ -149,7 +149,7 @@ class Step3Tests(unittest.TestCase):
         bulk, card = self.patch_publish()
         file = self.root / 'publish.json'
         file.write_text(json.dumps([{'nmId': 101, 'sellerSku': 'S1'}]), encoding='utf8')
-        args = ('ops', 'create-cards', '--shops', '1', '--dims', '2*3*4/0.5', '--file', str(file))
+        args = ('ops', 'create-cards', '--shops', '1', '--price', '59', '--dims', '2*3*4/0.5', '--file', str(file))
         code, draft, _ = self.cli(*args, '--vc', 'Exact-{nm}', '--random-prefix')
         self.assertEqual(code, 0, draft)
         self.assertEqual(self.item_from_plan('create-cards', draft['plan_id'])['vendor_code'], 'Exact-101')
@@ -231,7 +231,7 @@ class Step3Tests(unittest.TestCase):
     def test_all_seven_families_emit_one_json_for_success_and_invalid_parameters(self):
         actions = [('doctor',), ('sync', '--all', '--no-sync'), ('shop', 'list'),
                    ('map', 'candidates'), ('ops', 'publish', '121', '--sku', 'S1', '--shops', '1,2',
-                                           '--dims', '2*3*4/0.5'),
+                                           '--price', '59', '--dims', '2*3*4/0.5'),
                    ('report', 'mapping')]
         self.patch_publish()
         with patch.object(products.bcs, 'fetch_shop_list', return_value=[{'id': 1, 'name': '店1'}, {'id': 2, 'name': '店2'}]), \

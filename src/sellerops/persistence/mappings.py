@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Callable
 
 from sellerops.persistence import db
-from sellerops.persistence.price_book import floor_price, read_price_book
+from sellerops.persistence.price_book import price_book_columns, read_price_book
 from sellerops.settings import paths
 
 
@@ -20,11 +20,11 @@ def save_products(connection, rows: list[dict], stat) -> None:
         connection.execute('ALTER TABLE products ADD COLUMN name_unique INTEGER')
     connection.execute('DELETE FROM products')
     connection.executemany("""
-        INSERT INTO products (sku, cn, actual_price, minimum_price, image_url, dimensions, prefix,
+        INSERT INTO products (sku, cn, minimum_price, image_url, dimensions, prefix,
                               stock_sku, shipping_mode, book_mtime_ns, book_size, refreshed_at, name_unique)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
-        (r['sku'], r['cn'], r['dp'], r['minimum_price'], r['img'],
+        (r['sku'], r['cn'], r['minimum_price'], r['img'],
          None if r['dimensions'] is None else str(r['dimensions']), r['prefix'], r['stock_sku'], r['shipping_mode'],
          stat.st_mtime_ns, stat.st_size, stamp, r['name_unique']) for r in products
     ])
@@ -32,9 +32,9 @@ def save_products(connection, rows: list[dict], stat) -> None:
 
 def _cached_products(connection) -> list[dict]:
     uniqueness = 'name_unique' if _has_name_uniqueness(connection) else 'COUNT(*) OVER (PARTITION BY cn) = 1'
-    return [{**dict(row), 'floor': floor_price(row['dp']), 'idx': index}
+    return [{**dict(row), 'idx': index}
             for index, row in enumerate(connection.execute(f"""
-                SELECT sku, cn, actual_price AS dp, minimum_price, image_url AS img,
+                SELECT sku, cn, minimum_price, image_url AS img,
                        dimensions, prefix, stock_sku, shipping_mode, {uniqueness} AS name_unique
                   FROM products ORDER BY rowid
             """), start=1)]
@@ -56,10 +56,18 @@ class MappingRepository:
                 if (cached is not None and tuple(cached)[:2] == (stat.st_mtime_ns, stat.st_size)
                         and cached['shipping_mode'] is not None
                         and _has_name_uniqueness(connection)):
-                    # 即使 mtime 未变，提交前也检查用户是否能读取当前工作簿。
                     if fresh:
                         with book.open('rb'):
                             pass
+                    # 缓存可能来自仅要求中文名的读取。
+                    if require_price:
+                        from openpyxl import load_workbook
+
+                        workbook = load_workbook(book, read_only=True)
+                        try:
+                            price_book_columns(workbook['Sheet1'], str(book))
+                        finally:
+                            workbook.close()
                     return _cached_products(connection)
             rows = read_price_book(str(book), require_price=require_price)
             with db.connect(write=True) as connection:

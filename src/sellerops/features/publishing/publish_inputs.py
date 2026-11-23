@@ -11,7 +11,6 @@ from typing import Dict, Any, List, Optional, Tuple
 
 
 from sellerops.persistence.price_book import price_book_columns
-from sellerops.persistence.price_book import floor_price
 from sellerops.settings import paths as config
 
 
@@ -71,18 +70,17 @@ def stock_for(cn: str, overrides: Optional[Dict[str, int]] = None, default: int 
         return overrides[cn]
     return default
 
-def load_publish_catalog() -> Dict[str, Dict[str, Any]]:
-    """加载商品价格表，返回 {cn: {sku, cn, dp, dims, prefix}}"""
+def load_publish_dimensions() -> Dict[str, str]:
+    """按唯一中文名加载商品价格表的包装尺寸。"""
     import openpyxl
     if not os.path.exists(config.current.price_book_xlsx):
         return {}
     wb = openpyxl.load_workbook(config.current.price_book_xlsx, data_only=True)
     try:
         ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.active
-        cols = price_book_columns(ws, config.current.price_book_xlsx)
-        i_cn, i_sku, i_dp = cols["cn"], cols["sku"], cols["dp"]
-        i_dim, i_prefix = cols["dim"], cols["prefix"]
-        boss, duplicates = {}, set()
+        cols = price_book_columns(ws, config.current.price_book_xlsx, required=("cn",))
+        i_cn, i_dim = cols["cn"], cols["dim"]
+        dimensions, duplicates = {}, set()
         for r in ws.iter_rows(min_row=2, values_only=True):
             def cell(i):
                 return r[i] if i is not None and i < len(r) else None
@@ -90,16 +88,10 @@ def load_publish_catalog() -> Dict[str, Dict[str, Any]]:
             cn = cell(i_cn)
             if cn:
                 cn = str(cn).strip()
-                if cn in boss:
+                if cn in dimensions:
                     duplicates.add(cn)
-                boss[cn] = {
-                    "sku": cell(i_sku),
-                    "cn": cn,
-                    "dp": cell(i_dp),
-                    "dims": str(cell(i_dim) or "").strip(),
-                    "prefix": str(cell(i_prefix) or "").strip().upper(),
-                }
-        return {cn: row for cn, row in boss.items() if cn not in duplicates}
+                dimensions[cn] = str(cell(i_dim) or "").strip()
+        return {cn: dims for cn, dims in dimensions.items() if cn not in duplicates}
     finally:
         wb.close()
 
@@ -151,8 +143,7 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
             return [], []
 
         if "现在商品的nmId" in rows[0]:
-            # 自动关联商品价格表推导上架配置
-            boss_data = load_publish_catalog()
+            dimensions = load_publish_dimensions()
             for r in rows:
                 cn_key = next((k for k in r.keys() if "中文名" in k or "品名" in k), None)
                 nm_key = next((k for k in r.keys() if "nmId" in k or "nmid" in k.lower() or "商品码" in k), None)
@@ -167,7 +158,6 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                 if not cur_nm or not cur_nm.isdigit():
                     continue
 
-                b = boss_data.get(cn)
                 # 订单登记的 VC 是源商品码；明确填写 vendorCode 时仍按目标完整码处理。
                 tail = ""
                 if orig_vc:
@@ -176,8 +166,7 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                 if not tail:
                     tail = cur_nm
 
-                dims_t = parse_dims_str(b["dims"]) if b else None
-                dp = floor_price(b["dp"]) if (b and b["dp"] is not None) else None
+                dims_t = parse_dims_str(dimensions.get(cn, ""))
 
                 file_items.append({
                     "nmId": int(cur_nm),
@@ -185,7 +174,7 @@ def load_publish_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                     "prefix": r.get('prefix'),
                     "sellerSku": r.get('sellerSku') or r.get('卖家SKU'),
                     "source_tail": tail,
-                    "price": dp,
+                    "price": float(r["price"]) if r.get("price") else None,
                     "length": dims_t[0] if dims_t else None,
                     "width": dims_t[1] if dims_t else None,
                     "height": dims_t[2] if dims_t else None,

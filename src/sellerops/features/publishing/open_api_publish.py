@@ -1,9 +1,9 @@
-"""备用官方上架：建卡、有限等待标识、图片和莫斯科仓库存，保留阶段续办。"""
+"""备用官方上架：建卡、有限等待标识、图片和已配置仓库库存，保留阶段续办。"""
 import copy
 from contextlib import ExitStack, closing
 from typing import Any
 
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 from sellerops.features.publishing.open_api_common import (
     OperationLog, safe_reason, select_accesses, select_cards,
 )
@@ -20,6 +20,7 @@ from sellerops.features.publishing.open_api_finish import (
 from sellerops.integrations.wildberries.content_api import WBContentAPI
 from sellerops.persistence import db
 from sellerops.persistence import open_api_publish as store
+from sellerops.settings import credentials
 
 
 def run(args: Any) -> int:
@@ -72,7 +73,7 @@ def run(args: Any) -> int:
             try:
                 api = stack.enter_context(closing(WBContentAPI(shop.api_key)))
                 clients[shop.id] = api
-                warehouse = moscow_warehouse(api.warehouses())
+                warehouse = select_warehouse(api.warehouses(), credentials.get().wb_warehouse_keyword)
                 warehouses[shop.id] = warehouse
                 existing = card_index(api.cards())
                 trash = card_index(api.trash_cards())
@@ -216,7 +217,7 @@ def apply_frozen(args) -> int:
         clients, warehouses, prepared, continuations = {}, {}, {}, []
         for shop in targets:
             api = stack.enter_context(closing(WBContentAPI(shop.api_key)))
-            warehouse = moscow_warehouse(api.warehouses())
+            warehouse = select_warehouse(api.warehouses(), credentials.get().wb_warehouse_keyword)
             clients[shop.id], warehouses[shop.id] = api, warehouse
         for entry in frozen['create']:
             sid, vc = entry['shopId'], entry['vc']

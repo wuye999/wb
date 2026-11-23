@@ -9,15 +9,14 @@
 
 ## 常用查询和导出
 
-- `map candidates` 查看待认领候选，`map export-pending` 导出六列待确认清单。路径看 `data.file`，行数看 `data.rows`。填好后用 `map import-excel` 导回。
+- `map workbench` 生成带图待认领工作台，路径见 `data.artifacts.html`。`map candidates` 查询分组和参考候选，用 `map batch-set --file` 或 `catalog merge` 按完整 VC 导入运营确认的审核 JSON。
 - `report mapping` 导出映射总览，路径看 `data.artifacts.workbook`。单店表加 `--shop-id`，把示例里的 `1001` 换成 `shop list` 返回的店铺 ID。以下示例默认使用项目的 `data/`。
 
 ```powershell
 python run.py doctor --json
 python run.py shop list --json
+python run.py map workbench --json
 python run.py map candidates --limit 20 --json
-python run.py map export-pending --json
-python run.py map import-excel "exports/待确认商品.xlsx" --json
 python run.py report mapping --json
 python run.py report mapping --shop-id 1001 --json
 ```

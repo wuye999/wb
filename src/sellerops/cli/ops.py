@@ -38,7 +38,7 @@ def execute_frozen(action: str, args) -> int:
         return apply_frozen(args)
     from sellerops.features.publishing import bulk_publish, card_publish
 
-    executor = bulk_publish if action in {'publish', 'import'} else card_publish
+    executor = bulk_publish if action == 'publish' else card_publish
     result = executor.execute_publish([], apply=True, interval=args.interval, frozen=args.frozen)
     args.outcome = {k: result[k] for k in ('ok', 'skip', 'fail', 'csv')}
     args.outcome['items'] = [

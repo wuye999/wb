@@ -26,8 +26,8 @@ def fetch_product_info(nm_id, vc="", own=None):
         sp = row.get("shop_price")
         if sp not in (None, ""):
             price_v = float(sp)
-        elif row.get("dp") is not None:
-            price_v = float(row["dp"])
+        elif row.get("minimum_price") is not None:
+            price_v = float(row["minimum_price"])
         if price_v is not None:
             disc = common.to_int(row.get("discount")) if row.get("discount") not in (None, "") else 0
             if disc:

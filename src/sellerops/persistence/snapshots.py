@@ -5,7 +5,7 @@ from typing import Any
 
 from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.domain.snapshot_values import first_price, positive_id, stock_at, valid_sizes
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 from sellerops.persistence import db
 
 
@@ -50,8 +50,9 @@ def save_snapshot(connection: sqlite3.Connection, shop_id: int, document: dict,
     warehouse = document.get('warehouse')
     warehouse_id = None
     if source == 'wb-openapi' and isinstance(warehouse, dict):
+        # 快照库存按采集时已确认的仓库入库。
         try:
-            warehouse_id = moscow_warehouse([warehouse])['id']
+            warehouse_id = select_warehouse([warehouse], str(warehouse.get('name') or ''))['id']
         except ValueError:
             pass
     items = []

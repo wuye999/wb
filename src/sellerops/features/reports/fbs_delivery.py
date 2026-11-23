@@ -187,7 +187,7 @@ def load_cn_stock_sku() -> Dict[str, str]:
     """
     out: Dict[str, str] = {}
     try:
-        for it in MappingRepository.load_price_book():
+        for it in MappingRepository.load_price_book(require_price=False):
             cn = (it.get("cn") or "").strip()
             if cn and cn not in out:
                 out[cn] = (it.get("stock_sku") or "").strip()

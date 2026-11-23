@@ -9,7 +9,7 @@ from typing import Any
 from sellerops.core.command_summary import emit_summary
 from sellerops.core.errors import AuthenticationError, RateLimitError
 from sellerops.domain.product_reports import ProductReport, ReportIssue
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 from sellerops.features.reports import product_report_data as data
 from sellerops.features.publishing.publish_records import load_records
 from sellerops.integrations.bcs.capture import MAX_CAPTURE_CHARS, parse_sessions
@@ -83,10 +83,10 @@ def _shop(report: ProductReport, access: Any, start: datetime, end: datetime,
     api = None
     try:
         api = WBOpenAPI(access.api_key, report.region)
-        warehouse = moscow_warehouse(api.warehouses())
+        warehouse = select_warehouse(api.warehouses(), credentials.get().wb_warehouse_keyword)
         cover.update(warehouse_id=warehouse['id'], warehouse_name=warehouse['name'])
     except Exception as exc:
-        _failure(report, '仓库与授权', '未能确认莫斯科仓及授权，停止该店远端采集', exc, sid)
+        _failure(report, '仓库与授权', '未能确认已配置的 WB 仓库及授权，停止该店远端采集', exc, sid)
         if api is not None:
             api.close()
         return

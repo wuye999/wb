@@ -2,6 +2,8 @@
 
 配置由 [路径模块](../src/sellerops/settings/paths.py)、[凭证访问器](../src/sellerops/settings/credentials.py) 和各平台集成读取。常驻凭证只放自己的 `data/credentials.json`，不要贴入源码、文档或公开提交。商品报告的临时BCS账号按下文通过标准输入传入，仅留在本次进程内存。可参考 [空值配置样例](../examples/credentials.example.json)，其中示例店铺和空字段不能直接用于生产。
 
+首次配置时，在 `data/credentials.json` 中填写 `wb.warehouse_keyword`（例如「莫斯科」或具体仓库全名）和 `mabang.handover_keyword`（例如「七库海外仓」）。如已明确填写 `mabang.handover_channel_value`，可直接使用该渠道值并将交运关键词留空。
+
 ## 功能需要哪些配置
 
 | 功能 | 主要前置条件 |
@@ -50,14 +52,14 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 ## 仓库范围：仅允许莫斯科
 
-当前所有涉及仓库的读取和修改，**默认且仅允许使用目标店铺的莫斯科仓库 ID**。这适用于库存查询/修改/清零、下架前清库存、回收站归零、发布上架、跨店复制，以及 AI 临时脚本。「全部商品」「全店」只扩大商品范围，不扩大到全仓；成都仓库及其他俄语地区仓当前都不操作。
+运营应将 `wb.warehouse_keyword` 填为能在各目标店铺唯一匹配莫斯科业务仓的名称或关键词。库存查询、修改和清零，下架前清库存，回收站归零，发布上架和跨店复制均使用本店匹配的仓库 ID。「全部商品」「全店」只扩大商品范围。
 
 - 通过 WB 仓库列表确认该店的「莫斯科」仓库，业务请求使用响应行的 `id`。同一行的 `warehouseId` 是另一套 office 标识，不能互换。
 - 每家店单独确认 ID；不能把某家店的莫斯科 ID 复制给其他店，也不能取列表第一条代替名称核对。仓库枚举只用于识别目标，不代表其他仓库获得操作授权。
-- 找不到莫斯科仓、名称与 ID 不匹配或无法核实时，中止该店操作，不回退到成都或其他俄罗斯地区仓，不临时更改默认仓库配置。
+- 关键词为空、匹配不到、匹配多个或匹配到的仓库无法使用时，中止该店操作。匹配不到或匹配多个时，根据报错所列仓库名称核对并填写更具体的 `wb.warehouse_keyword`。
 - 临时脚本和底层调用也要先校验 ID，库存读取传入莫斯科 `store_id` / `warehouse_id`，写入前再次核对计划中的仓库 ID。马帮的 `mabang.warehouse_id` 属于马帮自己的标识体系，当前也须核实为莫斯科业务仓，不能套用 WB ID。
 
-这是现行操作约束，并非所有底层 API 都已经自动强制校验。当前业务仓库解析器只接受唯一可用的莫斯科仓，不回退其他地区；某些底层库存读取未传 store_id 时仍可返回多仓，调用方必须核对并限定莫斯科。开发要求和私有协议资料入口见 [开发指南](DEVELOPMENT.md#当前必须保留的运行约定)。
+业务仓库解析器按名称包含关系匹配，排除正在删除的仓库，并检查唯一命中的仓库是否正在处理及其 ID 是否有效。底层库存调用也必须传入核对过的仓库 ID。开发要求和私有协议资料入口见 [开发指南](DEVELOPMENT.md#当前必须保留的运行约定)。
 
 ## BCS：bcs
 
@@ -122,8 +124,8 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 | `api_key` | api 域 key；也可从 www_cookie 的指定登录 Cookie 中提取 |
 | `login` | 本地登录配置，包括 `username`、`password`、`timezone`、`headers`、`auto_refresh` 和可选的 `passport_sso` |
 | `cookie_jar` / `auth_updated_at` | 程序维护的分域 Cookie 状态和最近认证更新时间；已有的四个凭证字段仍保留 |
-| `handover_keyword` | 用于匹配交运物流渠道的关键词；核对自己账户的渠道 |
-| `handover_channel_id` / `handover_channel_value` | 渠道识别及配置回退值，按自己账户保留/设置 |
+| `handover_keyword` | 交运渠道名称的匹配关键词，例如「七库海外仓」。未直接配置渠道值时必填 |
+| `handover_channel_id` / `handover_channel_value` | 按账户设置渠道识别 ID 和完整渠道值。交运关键词为空时直接使用已配置的完整渠道值 |
 | `upload_timeout_seconds` | 预报等待超时，缺省 900 秒；CLI 可覆盖 |
 | `upload_poll_interval` | 预报状态轮询间隔，缺省 20 秒；CLI 可覆盖 |
 

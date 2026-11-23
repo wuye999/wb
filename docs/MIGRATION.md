@@ -13,6 +13,8 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 
 迁移只读旧资料并写入同一目录的 `sellerops.db`。遇到损坏文件或快照标识冲突，整次导入回滚。已有内容的库拒绝被旧文件覆盖。导出 Excel 使用 `report mapping`。
 
+首次配置依次运行 `sync` 和 `map workbench`，看图归属后用 `map batch-set --file` 或 `catalog merge` 导入导出的审核 JSON。旧单店审核请用新工作台检查并重新导出。已归属商品的映射异常和货不对板筛查统一使用 `map check-mismatch` 的大图画廊。
+
 以下对照覆盖 1.0 的全部 57 个入口。新命令前加 `python run.py`。
 
 商品写入需要指定店铺和商品。全店使用 `--all-shops`，全部商品使用 `--all-products`。原中文名包含筛选迁为 `--name-contains`。设置库存必须显式提供数量。BCS 通道仅由操作者显式选择。
@@ -21,16 +23,16 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | --- | --- |
 | `shops` | `shop list` |
 | `fetch` | `catalog fetch` |
-| `mapping` | `catalog mapping` |
-| `mapping-import` | `catalog import-mapping` |
-| `mapping-check` | `catalog check-mapping` |
-| `mismatch-check` | `catalog check-mismatch` |
-| `review` | `catalog review` |
-| `merge` | `catalog merge` |
+| `mapping` | `map workbench` 或 `catalog mapping` |
+| `mapping-import` | `map batch-set --file 审核结果.json`（使用新工作台导出的文件） |
+| `mapping-check` | `map check-mismatch` |
+| `mismatch-check` | `map check-mismatch` 或 `catalog check-mismatch` |
+| `review` | `map workbench` |
+| `merge` | `catalog merge 审核结果.json` |
 | `mapping-rename` | `catalog rename` |
 | `shops-mapping` | `catalog shop-mappings` |
-| `price` | `product price` |
-| `price-bcs` | `product price --channel bcs` |
+| `price` | `product price --price P` |
+| `price-bcs` | `product price --channel bcs --price P` |
 | `stock` | `product stock` |
 | `stock-bcs` | `product stock --channel bcs` |
 | `trash` | `product trash` |
@@ -45,7 +47,6 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | `publish` | `listing publish` |
 | `create-cards` | `listing create-cards` |
 | `replicate` | `listing replicate` |
-| `import-publish` | `listing import` |
 | `publish-openapi` | `listing publish-openapi` |
 | `normalize-vc-openapi` | `listing normalize-vc` |
 | `sync-cards-openapi` | `listing sync-cards` |
@@ -84,8 +85,6 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 3. 人工恢复原有授权任务。`task schedule --all-shops --apply` 注册原时间的四项全店任务。原先只操作特定店铺的任务用 `task schedule --shops 1001,1002 --apply` 按原范围恢复（ID 为示例）。
 4. 回退时先停用新任务，恢复上一版程序、解释器和任务定义。保留最新的提交记录、客服去重和上架续办状态。已提交的运营操作不随程序回退撤销。
 
-外部表上架旧参数 `--cn` 按包含匹配。迁移到 `listing import --name-contains` 可沿用原筛选；`--name` 只匹配完整名称。
-
 客服监听恢复时沿用原店铺和间隔。查看使用默认展示模式，起草使用 `--mode back`，发送使用 `--mode back --apply`。旧监听单独使用 `--apply` 也代表后台发送。前台展示与发送不能同时选择。
 
 ## WorkBuddy 商品命令迁移
@@ -93,6 +92,6 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | 旧用法 | 当前用法 |
 | --- | --- |
 | 手动运行 `product discount` 并依赖默认目标 50 | 显式指定 `product discount --target 50`，或填写用户指定的 0 至 100 |
-| `product price --discount D` 同时按价格表改价 | 显式指定 `product price --from-price-book --discount D`，只改折扣用 `product discount --target D` |
+| 改价并设折扣 | `product price --price P --discount D` |
 
-原有 `product price --keep-price --discount D` 可继续使用。三项日常命令默认 WB，计划任务支持 `--shops` 并继续显式传入目标折扣 50。库存用 `--amount` 指定数量。自动化可从三项商品命令及 `report products` 的标准输出末行读取 `schema_version=1` JSON，既有数据目录可直接沿用。
+只改折扣可用 `product price --keep-price --discount D` 或 `product discount --target D`。三项日常命令默认 WB，计划任务支持 `--shops` 并继续显式传入目标折扣 50。库存用 `--amount` 指定数量。自动化可从三项商品命令及 `report products` 的标准输出末行读取 `schema_version=1` JSON，既有数据目录可直接沿用。

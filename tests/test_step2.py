@@ -10,11 +10,10 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import Mock, patch
 
-from openpyxl import load_workbook
-
 from catalog_fixture import document, snapshot, write_book
 from sellerops.cli.main import main
 from sellerops.features.catalog import products
+from sellerops.features.catalog.vc_mapping import multiplier_candidates
 from sellerops.features.products import operation_plan
 from sellerops.features.system import doctor
 from sellerops.integrations.wildberries import client as wb
@@ -49,7 +48,8 @@ class TestStep2(unittest.TestCase):
 
     def populate(self):
         write_book([('S1', '旅行杯', 38, 'AAAA', 'STOCK1'), ('S2', '旅行杯', 39, 'BBBB', 'STOCK2')])
-        snapshot(1, [row(A, 101, 1001), row(B, 102, 1002), row(C, 103, 1003)], fetchedAt='2026-01-01')
+        other = dict(row(C, 103, 1003), repImg='https://example.invalid/b.png')
+        snapshot(1, [row(A, 101, 1001), row(B, 102, 1002), other], fetchedAt='2026-01-01')
         snapshot(2, [row(A, 201, 2001)], fetchedAt='2026-01-02')
 
     def confirm(self, *rows):
@@ -108,12 +108,15 @@ class TestStep2(unittest.TestCase):
         self.assertEqual(self.cli('shop', 'restore', '--shop-id', '2')[0], 0)
         self.assertEqual(document(2), before)
 
-    def test_candidate_group_batch_is_atomic_and_excel_is_six_columns(self):
+    def test_candidate_group_and_batch_confirmation_are_atomic(self):
         self.populate()
         _, reply, _ = self.cli('map', 'candidates', '--limit', '1')
         [group] = reply['data']['groups']
         self.assertCountEqual(group['vcs'], [A, B])
-        self.assertEqual(len(next(i for i in group['items'] if i['vc'] == A)['shops']), 2)
+        item = next(i for i in group['items'] if i['vc'] == A)
+        self.assertEqual(len(item['shops']), 2)
+        self.assertEqual(item['prefix_candidate']['minimum_price'], 38)
+        self.assertEqual((item['category'], item['nm_id']), ('prefix', 101))
         self.assertEqual(self.confirm({'vc': A, 'action': 'map', 'sku': 'S1'},
                                       {'vc': B, 'action': 'map', 'cn': '旅行杯'})[0], 1)
         self.assertEqual(db.resolve_vc(A)['status'], 'pending')
@@ -122,19 +125,96 @@ class TestStep2(unittest.TestCase):
         self.assertEqual(db.resolve_vc(A)['source'], 'prefix')
         self.assertTrue(db.listing_blocked(C, 2))
         self.assertFalse(db.listing_blocked(C, 1))
-        file = self.root / 'pending.xlsx'
-        self.assertEqual(self.cli('map', 'export-pending', '--out', str(file))[0], 0)
-        book = load_workbook(file)
-        sheet = book.active
-        self.assertEqual(sheet.max_column, 6)
-        for cells in list(sheet.rows)[1:]:
-            if cells[0].value == B:
-                cells[5].value = '排除'
-        book.save(file)
-        book.close()
-        self.assertEqual(self.cli('map', 'import-excel', str(file))[0], 0)
+        self.assertEqual(self.confirm({'vc': B, 'action': 'exclude'})[0], 0)
         self.assertEqual(db.resolve_vc(B)['status'], 'excluded')
         self.assertEqual(db.resolve_vc(C)['status'], 'pending')
+
+    def test_minimum_price_multiplier_candidates(self):
+        product = {'sku': 'CAT', 'cn': '猫碗', 'minimum_price': 60}
+        for price, multiplier, diff in [(60, 1, 0), (120, 2, 0), (600, 10, 0), (420, 7, 0),
+                                        (59.4, 1, .6), (61, 1, 1), (122.4, 2, 2.4)]:
+            with self.subTest(price=price):
+                self.assertEqual(multiplier_candidates(price, [product]), [
+                    {**product, 'multiplier': multiplier, 'expected_price': 60 * multiplier, 'diff': diff}
+                ])
+        for price in (None, 0, -60, 20, 75, 122.41):
+            with self.subTest(price=price):
+                self.assertEqual(multiplier_candidates(price, [product]), [])
+        self.assertEqual(multiplier_candidates(60, [{**product, 'minimum_price': v} for v in (None, 0, -5)]), [])
+        products = [{**product, 'sku': sku, 'minimum_price': price}
+                    for sku, price in [('C', 60), ('B', 60), ('A', 60), ('D', 30), ('E', 20), ('F', 12)]]
+        self.assertEqual([item['sku'] for item in multiplier_candidates(60, products)], ['A', 'B', 'C', 'D', 'E'])
+        self.assertEqual([item['sku'] for item in multiplier_candidates(60, [
+            {**product, 'sku': 'LOW', 'minimum_price': 59},
+            {**product, 'sku': 'HIGH', 'minimum_price': 61}
+        ])], ['HIGH', 'LOW'])
+
+    def test_workbench_groups_source_and_image_and_filters_snapshot_scope(self):
+        img = 'https://basket-01.wbbasket.ru/vol1/part123/123456/images/tm/1.webp'
+        same_image = 'BCS-DIFF-x/234567-1'
+        manual = 'BCS-DIFF-x/345678-1'
+        archived = 'BCS-ARCH-x/456789-1'
+        trashed = 'BCS-TRSH-x/567890-1'
+        write_book([('CAT', '猫碗', 60, 'AAAA', ''), ('CUP', '水杯', 90, 'BBBB', '')])
+        prefix = dict(row(A, 101, 1001), repImg='', title='Кошачья миска <test>')
+        bridge = dict(row(B, 102, 1002), repImg=img)
+        shared = dict(row(same_image, 103, 1003), repImg=img, title='Другое название')
+        multiplier = dict(row(C, 123456, 1004), repImg='', sizeList=[{'chrtId': 1004, 'price': 120}])
+        unmatched = dict(row(manual, 0, 1005), repImg='')
+        snapshot(1, [prefix, bridge, shared, multiplier, unmatched,
+                     dict(row(trashed, 105, 1006), trashedAt='2026-01-01')])
+        snapshot(2, [prefix])
+        snapshot(3, [row(archived, 106, 1007)])
+        self.assertEqual(self.cli('shop', 'archive', '--shop-id', '3')[0], 0)
+
+        _, reply, _ = self.cli('map', 'candidates')
+        first, second, third = reply['data']['groups']
+        self.assertCountEqual(first['vcs'], [A, B, same_image])
+        self.assertEqual([group['category'] for group in (first, second, third)], ['prefix', 'multiplier', 'unmatched'])
+        self.assertEqual(second['items'][0]['price_candidates'][0]['multiplier'], 2)
+        self.assertEqual(third['items'][0]['price_candidates'], [])
+
+        code, reply, err = self.cli('map', 'workbench')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(reply['data']['counts'], {'groups': 3, 'vcs': 5, 'prefix': 1, 'multiplier': 1, 'unmatched': 1})
+        path = Path(reply['data']['artifacts']['html'])
+        self.assertEqual(path.parent, self.data / 'workbench')
+        html = path.read_text(encoding='utf8')
+        for text in ('前缀命中', '倍数参考', '待手动归属', '3 个 VC', '猫碗 · 最低价¥60 ×2',
+                     'width:150px;height:150px', 'list="products"', '<dialog id="lightbox"',
+                     'localStorage.setItem', '导出审核结果 JSON', '已处理', '未处理',
+                     img.replace('/tm/', '/c246x328/'), img.replace('/tm/', '/big/'), img,
+                     f'{wb.basket_base(123456)}/images/c246x328/1.webp'):
+            self.assertIn(text, html)
+        self.assertNotIn(archived, html)
+        self.assertNotIn(trashed, html)
+        self.assertEqual(self.cli('catalog', 'mapping')[1]['data'], reply['data'])
+        self.assertEqual(path.read_text(encoding='utf8'), html)
+
+        review = self.root / '待认领审核.json'
+        review.write_text(json.dumps([
+            *({'vc': vc, 'action': 'map', 'sku': 'CAT', 'cn': '猫碗'} for vc in first['vcs']),
+            {'vc': manual, 'action': 'exclude'}
+        ], ensure_ascii=False), encoding='utf-8')
+        code, result, err = self.cli('map', 'batch-set', '--file', str(review))
+        self.assertEqual(code, 0, err)
+        self.assertCountEqual(result['data']['updated_vcs'], [A, B, same_image, manual])
+        code, result, err = self.cli('catalog', 'merge', str(review))
+        self.assertEqual(code, 0, err)
+        self.assertCountEqual(result['data']['updated_vcs'], [A, B, same_image, manual])
+        self.assertEqual({db.resolve_vc(vc)['sku'] for vc in first['vcs']}, {'CAT'})
+        self.assertEqual(db.resolve_vc(manual)['status'], 'excluded')
+        self.assertEqual(db.resolve_vc(C)['status'], 'pending')
+
+    def test_group_with_conflicting_prefixes_has_no_bulk_suggestion(self):
+        other = 'BCS-BBBB-source/123456-9'
+        write_book([('CAT', '猫碗', 60, 'AAAA', ''), ('CUP', '水杯', 90, 'BBBB', '')])
+        snapshot(1, [row(A, 101, 1001), row(other, 102, 1002)])
+        _, reply, _ = self.cli('map', 'candidates')
+        [group] = reply['data']['groups']
+        self.assertEqual([item['category'] for item in group['items']], ['prefix', 'prefix'])
+        self.assertIsNone(group['prefix_candidate'])
+        self.assertEqual(group['category'], 'unmatched')
 
     def preview_price(self):
         self.populate()
@@ -203,16 +283,24 @@ class TestStep2(unittest.TestCase):
                 self.assertEqual(self.cli('apply', '--plan', draft['plan_id'])[0], 0)
             self.assertEqual(events, [('zero', 42, 1001), ('trash', [101])])
 
-    def test_changed_workbook_price_stops_an_old_book_price_plan(self):
-        self.populate()
-        self.assertEqual(self.confirm({'vc': A, 'action': 'map', 'sku': 'S1'})[0], 0)
-        code, reply, error = self.cli('ops', 'price', '--shops', '1', '--sku', 'S1')
-        self.assertEqual(code, 0, error)
-        write_book([('S1', 'fixture', 88, 'AAAA', '')])
-        with patch.object(wb, 'request') as send:
-            rc, applied, _ = self.cli('apply', '--plan', reply['plan_id'])
-        self.assertEqual((rc, applied['data']['status']), (1, 'partial'))
-        send.assert_not_called()
+    def test_price_requires_an_explicit_target_or_keep_price_with_discount(self):
+        for command in ('product', 'ops'):
+            for options in ((), ('--discount', '0'), ('--keep-price',),
+                            ('--channel', 'bcs', '--club-discount', '10')):
+                with self.subTest(command=command, options=options):
+                    arguments = (command, 'price', '--shops', '1', '--vc', A, *options)
+                    if command == 'ops':
+                        code, reply, _ = self.cli(*arguments)
+                        self.assertIsNone(reply['plan_id'])
+                        message = reply['summary']
+                    else:
+                        with redirect_stderr(io.StringIO()) as errors:
+                            code = main(['--data-dir', str(self.data), *arguments])
+                        message = errors.getvalue()
+                    self.assertEqual(code, 1)
+                    self.assertIn('必须使用 --price 指定目标价', message)
+                    self.assertIn('--keep-price', message)
+        self.assertFalse(self.data.exists())
 
     def test_bulk_publish_apply_uses_frozen_warehouse_price_and_task_receipt(self):
         from sellerops.domain.models import PublishItem

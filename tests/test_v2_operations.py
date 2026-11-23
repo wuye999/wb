@@ -171,14 +171,14 @@ class OperationalExamples(unittest.TestCase):
         book = openpyxl.Workbook()
         sheet = book.active
         sheet.title = "Sheet1"
-        sheet.append(["卖家SKU", "产品中文名", "实际售价", "vendorCode前缀码"])
+        sheet.append(["卖家SKU", "产品中文名", "最低售价", "vendorCode前缀码"])
         sheet.append(["CUP", "旅行杯", 129, "AAAA"])
         sheet.append(["COVER", "旅行杯套", 20, "BBBB"])
         book.save(paths.current.price_book_xlsx)
         book.close()
         self.shops = [{"shopId": sid, "shopName": f"模拟{sid}", "authorizev3": "test",
                        "wb_seller_lk": str(sid)} for sid in (1, 2)]
-        cred = Mock(shops=self.shops, root_version="offline")
+        cred = Mock(shops=self.shops, root_version="offline", wb_warehouse_keyword="莫斯科")
         cred.wb_shop.side_effect = lambda sid: self.shops[sid - 1]
         self.stack.enter_context(patch.object(wb.credentials, "get", return_value=cred))
         self.stack.enter_context(patch.object(warehouse, "list_stores",

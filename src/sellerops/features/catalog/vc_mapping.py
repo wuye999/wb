@@ -1,21 +1,49 @@
-"""商品认领、推荐及六列 Excel 审核。"""
+"""待认领商品分类和完整 VC 批量确认。"""
 import json
 import sys
 from collections import defaultdict
+from decimal import Decimal
 from pathlib import Path
 
 from sellerops.domain.snapshot_values import first_price, positive_id
 from sellerops.domain.vendor_codes import extract_vc_prefix
 from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
-from sellerops.settings import paths
 
 
-HEADERS = ('完整 VC', '出现店铺', '缩略图或链接', '平台标题与规格', 'AI 建议中文名', '运营最终确认')
+def multiplier_candidates(price: int | float | None, products: list[dict]) -> list[dict]:
+    """返回最接近现价的前五个最低售价倍数参考。"""
+    if price is None:
+        return []
+    current = Decimal(str(price))
+    if not current.is_finite() or current <= 0:
+        return []
+    hits = []
+    for product in products:
+        if product['minimum_price'] is None:
+            continue
+        minimum = Decimal(str(product['minimum_price']))
+        if not minimum.is_finite() or minimum <= 0:
+            continue
+        multiplier = round(current / minimum)
+        if multiplier < 1:
+            continue
+        expected = minimum * multiplier
+        diff = abs(current - expected)
+        rel = diff / expected
+        if diff <= 1 or rel <= Decimal('0.02'):
+            hits.append((rel, diff, multiplier, product, expected))
+    hits.sort(key=lambda hit: (*hit[:3], hit[3]['sku']))
+    return [
+        {**candidate(product), 'multiplier': multiplier,
+         'expected_price': float(expected), 'diff': float(diff)}
+        for _, diff, multiplier, product, expected in hits[:5]
+    ]
 
 
-def pending_groups(limit: int | None = None) -> list[dict]:
-    products = MappingRepository.load_price_book(require_price=False)
+def pending_groups(limit: int | None = None, *, products: list[dict] | None = None) -> list[dict]:
+    if products is None:
+        products = MappingRepository.load_price_book(require_price=False)
     by_prefix = defaultdict(list)
     for product in products:
         if product['prefix']:
@@ -33,37 +61,66 @@ def pending_groups(limit: int | None = None) -> list[dict]:
         vc = row['vc']
         if db.resolve_vc(vc, entries)['status'] != 'pending':
             continue
+        raw = json.loads(row['row_json'])
+        image = raw.get('repImg')
+        image = image.strip() if isinstance(image, str) else ''
+        nm_id = positive_id(raw.get('nmId'))
+        price = first_price(raw)
         if vc not in pending:
-            raw = json.loads(row['row_json'])
             prefix = extract_vc_prefix(vc)
             matches = by_prefix.get(prefix, [])
-            price = first_price(raw)
-            ranked = sorted((p for p in products if p['dp'] is not None and price is not None),
-                            key=lambda p: (abs(p['dp'] - price), p['sku']))[:3]
             sizes = [size for size in raw.get('sizeList') or [] if isinstance(size, dict)]
             pending[vc] = {'vc': vc, 'source_code': (entries.get(vc) or {}).get('source_code') or db.source_code(vc),
-                           'title': raw.get('title') or '', 'image_url': raw.get('repImg') or '',
+                           'title': raw.get('title') or '', 'image_url': image, 'nm_id': nm_id,
                            'price': price, 'size_count': len(sizes),
                            'sizes': [size.get('techSize') or size.get('name') or size.get('chrtId') for size in sizes],
-                           'shops': [], 'prefix_candidate': candidate(matches[0]) if len(matches) == 1 else None,
-                           'price_candidates': [candidate(product) for product in ranked]}
-        pending[vc]['shops'].append({'shop_id': row['shop_id'], 'shop_name': row['shop_name']})
-    groups: dict[tuple, list[dict]] = {}
+                           'shops': [], 'prefix_candidate': candidate(matches[0]) if len(matches) == 1 else None}
+        item = pending[vc]
+        item['image_url'] = item['image_url'] or image
+        item['nm_id'] = item['nm_id'] or nm_id
+        if item['price'] is None:
+            item['price'] = price
+        item['shops'].append({'shop_id': row['shop_id'], 'shop_name': row['shop_name']})
+
+    parents = {vc: vc for vc in pending}
+    by_identity = {}
+    by_price = {}
+
+    def root(vc: str) -> str:
+        while parents[vc] != vc:
+            parents[vc] = parents[parents[vc]]
+            vc = parents[vc]
+        return vc
+
+    for vc, item in pending.items():
+        price = item['price']
+        if price not in by_price:
+            by_price[price] = multiplier_candidates(price, products)
+        prices = by_price[price]
+        item['price_candidates'] = prices
+        item['category'] = 'prefix' if item['prefix_candidate'] else 'multiplier' if prices else 'unmatched'
+        for field in ('source_code', 'image_url'):
+            if value := item[field]:
+                other = by_identity.setdefault((field, value), vc)
+                parents[root(vc)] = root(other)
+
+    by_group = defaultdict(list)
     for item in pending.values():
-        if item['source_code']:
-            key = ('source', item['source_code'])
-        elif item['title'] and item['image_url']:
-            key = ('content', item['title'], item['image_url'])
-        else:
-            key = ('vc', item['vc'])
-        groups.setdefault(key, []).append(item)
-    order = sorted(groups.values(), key=lambda items: (not any(i['prefix_candidate'] for i in items), items[0]['vc']))
-    return [{'source_code': items[0]['source_code'], 'vcs': [item['vc'] for item in items], 'items': items}
-            for items in order[:limit]]
+        by_group[root(item['vc'])].append(item)
+    groups = []
+    for items in by_group.values():
+        prefixes = {p['sku']: p for item in items if (p := item['prefix_candidate'])}
+        prefix = next(iter(prefixes.values())) if len(prefixes) == 1 else None
+        category = ('prefix' if prefix else
+                    'multiplier' if any(item['price_candidates'] for item in items) else 'unmatched')
+        groups.append({'source_code': items[0]['source_code'], 'vcs': [item['vc'] for item in items],
+                       'items': items, 'category': category, 'prefix_candidate': prefix})
+    order = {'prefix': 0, 'multiplier': 1, 'unmatched': 2}
+    return sorted(groups, key=lambda group: (order[group['category']], group['vcs'][0]))[:limit]
 
 
 def candidate(product: dict) -> dict:
-    return {'sku': product['sku'], 'cn': product['cn'], 'price': product['dp']}
+    return {'sku': product['sku'], 'cn': product['cn'], 'minimum_price': product['minimum_price']}
 
 
 def update_mappings(rows: list[dict]) -> list[str]:
@@ -85,7 +142,7 @@ def update_mappings(rows: list[dict]) -> list[str]:
             old = entries[vc]
             note = str(row.get('note') or '')
             action = row.get('action')
-            if action in ('map', 'rebind'):
+            if action in ('map', 'mapped', 'rebind'):
                 sku = str(row.get('sku') or '').strip()
                 name = str(row.get('cn') or '').strip()
                 matches = [p for p in products if p['sku'] == sku and (not name or p['cn'] == name)]
@@ -136,69 +193,8 @@ def run_candidates(args) -> int:
 
 def run_batch_set(args) -> int:
     text = Path(args.file).read_text(encoding='utf-8-sig') if args.file else sys.stdin.read()
-    document = json.loads(text)
-    items = document.get('items') if isinstance(document, dict) else document
-    return show_updates(args, update_mappings(items))
-
-
-def show_updates(args, vcs: list[str]) -> int:
+    vcs = update_mappings(json.loads(text))
     args.output = {'updated_vcs': vcs}
     args.summary = f'已保存 {len(vcs)} 条商品确认'
     print(args.summary)
     return 0
-
-
-def run_export(args) -> int:
-    from openpyxl import Workbook
-    from sellerops.features.catalog.mapping_sync import _export_destination
-
-    file = _export_destination('待确认商品.xlsx', args.out)
-    book = Workbook()
-    sheet = book.active
-    sheet.title = '待确认商品'
-    sheet.append(HEADERS)
-    for group in pending_groups():
-        for item in group['items']:
-            suggestion = item['prefix_candidate'] or next(iter(item['price_candidates']), {})
-            shops = '、'.join(s['shop_name'] for s in item['shops'])
-            summary = f"{item['title']}（{item['size_count']} 个规格）"
-            sheet.append((item['vc'], shops, item['image_url'], summary, suggestion.get('cn', ''), None))
-            for cell in sheet[sheet.max_row][:5]:
-                if isinstance(cell.value, str):
-                    cell.data_type = 's'
-    sheet.freeze_panes = 'B2'
-    sheet.auto_filter.ref = sheet.dimensions
-    for letter, width in zip('ABCDEF', (28, 24, 36, 58, 24, 24)):
-        sheet.column_dimensions[letter].width = width
-    try:
-        book.save(file)
-    finally:
-        book.close()
-    args.output = {'file': str(file), 'rows': sheet.max_row - 1}
-    args.summary = '已导出待确认商品'
-    print(file)
-    return 0
-
-
-def run_import(args) -> int:
-    from openpyxl import load_workbook
-
-    book = load_workbook(args.file, read_only=True, data_only=False)
-    rows = []
-    try:
-        sheet = book['待确认商品']
-        header = next(sheet.values, ())
-        if tuple(header) != HEADERS:
-            raise ValueError('请使用 map export-pending 导出的六列表')
-        for index, row in enumerate(sheet.iter_rows(min_row=2), start=2):
-            vc, final = row[0], row[5]
-            if final.value is None or not str(final.value).strip():
-                continue
-            if final.data_type == 'f' or vc.data_type == 'f' or not vc.value:
-                raise ValueError(f'第 {index} 行的完整 VC 或最终确认无效')
-            value = str(final.value).strip()
-            rows.append({'vc': str(vc.value), 'action': 'exclude' if value == '排除' else 'map',
-                         'sku': value})
-    finally:
-        book.close()
-    return show_updates(args, update_mappings(rows) if rows else [])

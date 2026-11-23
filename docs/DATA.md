@@ -10,7 +10,7 @@
 | `商品价格表.xlsx` | 商品名、卖家 SKU、目标售价、包装、前缀、发货方式、马帮库存 SKU | 用户，是商品主数据 |
 | `sellerops.db` | 商品归属、各店商品快照、提交和续办记录 | 程序，按数据目录隔离 |
 | `state/` | 客服去重和发货群供货等业务状态 | 程序 |
-| `workbench/` | 本地 HTML 工作台 | mapping、review、核查命令生成 |
+| `workbench/` | 本地 HTML 工作台 | `map workbench` 生成待认领工作台，`map check-mismatch` 生成已归属商品的大图画廊 |
 | `logs/` | 结果 CSV、报表和运行日志 | 各业务命令生成，按终端打印路径查看 |
 | `browser_profiles/<平台>/` | 固定 Chromium 的平台登录资料 | 本机专用浏览器，按数据目录隔离 |
 | `ai_test_qa.json` | 本地 AI 对照样例集 | 用户；格式见下文 |
@@ -25,23 +25,20 @@
 
 ## 商品价格表
 
-主要读取点使用工作表名 `Sheet1`，第 1 行是表头；不要随意改工作表名。列按表头名定位，允许调整顺序。通用商品读取至少要求「产品中文名」「实际售价」。卖家 SKU 可留空，留空时需要该中文名在全表唯一。
+商品价格表使用工作表名 `Sheet1`，第 1 行是表头。列按名称定位，允许调整顺序。读取价格时要求「产品中文名」「最低售价」两个表头。只读取归属、尺寸或物流资料时要求「产品中文名」。卖家 SKU 可留空，此时中文名须在全表唯一。
 
 | 表头 | 用途/格式 |
 | --- | --- |
 | 卖家SKU | 可选。填写时作为商品键，保持稳定 |
 | 产品中文名 | 中文商品名，匹配价格、尺寸和发货配置 |
-| 实际售价 | 数值或可解析公式；店铺整数价通常取向下取整 |
 | 产品图片 | 图片信息，部分工作台/报表使用 |
 | 尺寸 | `长*宽*高/毛重`，例如 `10*20*30/0.5`；尺寸 cm、重量 kg |
-| 最低售价 | 本地价格/包装相关业务参考列，不是所有命令的目标价 |
+| 最低售价 | 数值或公式，用于价格参考及明确选用该价格来源的跨店复制 |
 | vendorCode前缀码 | 4 位商品前缀，如 `TEST`，用于识别同一产品 |
 | 发货方式 | 填写「马帮发货」「WB发货」或「不处理」 |
 | 马帮库存SKU | 「马帮发货」须填写实际马帮库存编码，其他方式留空 |
 
-「实际售价」只认此列名，不要使用「双倍售价」等其他表头，否则可能报错或告警并留空。
-
-公式解析支持有限的单元格引用、四则运算、括号、数字及 ROUND 外壳，复杂 Excel 函数会回退到文件内保存的计算缓存。openpyxl 不会替你重新计算 Excel：修改复杂公式后，需用表格软件重算并保存。仍取不到结果的商品会告警或跳过，不应随意补零继续改价。
+公式解析支持有限的单元格引用、四则运算、括号、数字及 ROUND 外壳。直接求值失败时打印告警并读取 Excel 保存的计算缓存。缓存也缺失时，最低售价留空。修改复杂公式后，需用表格软件重新计算并保存。
 
 实现：[表头定义](../src/sellerops/persistence/headers.py)、[价格读取](../src/sellerops/persistence/price_book.py)、[映射仓储](../src/sellerops/persistence/mappings.py)。
 
@@ -77,13 +74,20 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 
 ## 工作台与批量输入
 
-HTML 工作台在浏览器中人工核对后导出 JSON，再传给对应导入命令。默认 `catalog mapping` 和 `catalog review` 导出的 VC 中心审核结果交给 `catalog merge 文件.json`；单店格式工作台结果用 `catalog import-mapping`。两种导入协议不同，不要混用或随意重写导出字段。
+首次同步快照后，用 `map workbench` 生成带图待认领工作台。`catalog mapping` 生成相同文件。工作台用浏览器 localStorage 保存进度，导出时将已处理的组展开为每个完整 VC 一条记录的 JSON 数组。`map batch-set --file` 和 `catalog merge` 接受同一份审核文件。归属动作也识别 `mapped`。
+
+```json
+[
+  {"vc": "BCS-TEST-123456789", "action": "map", "sku": "SKU-1", "cn": "示例商品"},
+  {"vc": "BCS-TEST-987654321", "action": "exclude"}
+]
+```
 
 `catalog rename --file` 接受 `[{"vc":"BCS-TEST-123456789","cn":"新中文名"}]` 形式的 JSON，会更新数据库里的归属，没有 `--apply` 开关。
 
-`publish/create-cards --file` 支持 `.txt`、`.json`、`.csv`。纯文本每行一个商品码；JSON 可为商品码数组或带 `nmId`（也识别 `sku` / `nm`）的对象数组，参考 [发布样例](../examples/publish.example.json)。CSV 既有普通解析，也有根据中文名/VC 联动价格表推导的分支；带 `nmId` 与 VC/中文名列时可能采用价格表中的价格与尺寸，不要假设 CSV 的 price 总能覆盖主数据。明确覆盖参数时优先使用 JSON 并检查预览。
+`map check-mismatch` 和 `catalog check-mismatch` 写入 `workbench/货不对板筛查工作台.html`，数据来自已归属商品、商品价格表和活跃店铺的在架快照。画廊把勾选状态保存到浏览器 localStorage。导出的 JSON 数组每条包含 `vc`、`cn`、`title`、`shops`，复制按钮输出可用于 `product trash --vc` 或 `ops trash --vc` 的逗号分隔完整 VC。
 
-`listing import` 则读取另一份 Excel 映射表，按自己的商品价格表与目标店铺做差集；不是上述批量文件的同一种输入。
+`publish/create-cards --file` 支持 `.txt`、`.json`、`.csv`。纯文本每行一个商品码。JSON 可为商品码数组或带 `nmId`（也识别 `sku` / `nm`）的对象数组。CSV 支持按订单登记的中文名补包装尺寸。售价可在批量文件的 `price` 字段或命令的 `--price` 中指定，缺少指定价格时使用本地快照价。见 [发布样例](../examples/publish.example.json)。
 
 ## 飞书业务表
 

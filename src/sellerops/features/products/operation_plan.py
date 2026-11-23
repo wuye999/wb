@@ -5,11 +5,12 @@ from collections.abc import Callable
 from argparse import Namespace
 
 from sellerops.features.catalog.shops import require_active
+from sellerops.features.products.plans import validate_price_intent
 from sellerops.persistence import db
 
 
 PRODUCT_ACTIONS = {'price', 'stock', 'discount', 'trash', 'review-price'}
-PUBLISH_ACTIONS = {'publish', 'create-cards', 'replicate', 'import', 'publish-openapi', 'normalize-vc'}
+PUBLISH_ACTIONS = {'publish', 'create-cards', 'replicate', 'publish-openapi', 'normalize-vc'}
 ACTIONS = PRODUCT_ACTIONS | PUBLISH_ACTIONS
 
 
@@ -76,21 +77,6 @@ def _verify_warehouses(scope: list | dict) -> None:
             raise ValueError(f'店铺 {sid} 的莫斯科仓 ID 已变化或无法核对，请重新预览')
 
 
-def _verify_book_price(options: Namespace, route: str, scope: list | dict) -> None:
-    if (route != 'price' or options.price is not None or options.keep_price
-            or (not options.from_price_book and options.discount is not None)):
-        return
-    from sellerops.persistence.mappings import MappingRepository
-
-    current = {item['sku']: item['floor'] for item in MappingRepository.load_price_book(fresh=True)}
-    entries = db.vc_entries()
-    for plan in scope:
-        for item in plan['items']:
-            sku = db.resolve_vc(item['vc'], entries).get('sku')
-            if item.get('price') != current.get(sku):
-                raise ValueError(f"{item['vc']} 的主表价格已变化，请重新预览")
-
-
 def _unknown(outcome: dict) -> bool:
     return any(row.get('status') in {'unknown', 'submitting'}
                for key in ('receipts', 'items') for row in outcome.get(key, []))
@@ -111,6 +97,9 @@ def apply(args: Namespace, execute: Callable[[str, Namespace], int]) -> int:
         document = json.loads(record['payload_json'])
         if document['route'] not in ACTIONS or not has_work(document['scope']):
             raise ValueError('计划单内容无效')
+        options = Namespace(**document['arguments'])
+        if document['route'] == 'price':
+            validate_price_intent(options.price, options.keep_price, options.discount, options.club_discount)
         if document['route'] in {'publish', 'create-cards'}:
             items = (row['item'] if document['route'] == 'publish' else row[0] for row in document['scope']['items'])
             if any(not item['extra'].get('seller_sku') or not item['extra'].get('vc_source') for item in items):
@@ -118,7 +107,6 @@ def apply(args: Namespace, execute: Callable[[str, Namespace], int]) -> int:
         connection.execute("UPDATE plans SET status='submitting', updated_at=? WHERE plan_id=? AND status='draft'",
                            (db.now(), plan_id))
     scope = document['scope']
-    options = Namespace(**document['arguments'])
     options.apply, options.yes, options.frozen = True, True, scope
     options.json = getattr(args, 'json', False)
     outcome, status, code = {}, 'partial', 1
@@ -126,7 +114,6 @@ def apply(args: Namespace, execute: Callable[[str, Namespace], int]) -> int:
         for sid in sorted(_scope_shops(scope)):
             require_active(sid)
         _verify_warehouses(scope)
-        _verify_book_price(options, document['route'], scope)
     except (ValueError, OSError) as error:
         outcome = {'error': str(error)}
     else:

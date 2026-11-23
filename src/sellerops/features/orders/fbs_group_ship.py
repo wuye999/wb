@@ -11,7 +11,7 @@ from uuid import uuid4
 from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError, RateLimitError
 from sellerops.core.files import FileLock, atomic_dump_json
 from sellerops.core.utils import ensure_utf8_stdout
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 from sellerops.features.publishing.open_api_common import safe_reason, select_accesses
 from sellerops.features.orders.matching import load_local_mapping as _catalog
 from sellerops.features.orders.fbs_pdfs import check_pair, export_pair, require_pdf_tools
@@ -21,7 +21,7 @@ from sellerops.persistence.fbs_shipments import (
     SINGAPORE, journal_path, load_journal, pdf_paths, save_journal, supply_names,
 )
 from sellerops.persistence.price_book import SHIPPING_MODE_WB, VALID_SHIPPING_MODES
-from sellerops.settings import paths
+from sellerops.settings import credentials, paths
 
 
 _VALID_META = {
@@ -54,7 +54,7 @@ def _groups(orders: list[dict], warehouse_id: int, catalog: tuple,
         if not cn:
             if warehouse == warehouse_id:
                 blocked.append({'order_ids': [row['id']], 'vendor_code': article,
-                                'reason': '莫斯科仓订单无法按完整 VC 确认中文名'})
+                                'reason': '已配置的 WB 仓库订单无法按完整 VC 确认中文名'})
             continue
         if selected_name and cn != selected_name:
             continue
@@ -182,7 +182,7 @@ def _process_shop(shop: OpenAPIShop, args, catalog: tuple | None, supplies: list
                   names: set[str], save: Callable[[], None], results: list[dict]) -> None:
     api = WBFBSAPI(shop.api_key)
     try:
-        warehouse = moscow_warehouse(api.warehouses())
+        warehouse = select_warehouse(api.warehouses(), credentials.get().wb_warehouse_keyword)
         print(f"{shop.name}({shop.id})｜{warehouse['name']} ID {warehouse['id']}", flush=True)
         if args.resume:
             pending = [r for r in supplies if r['shop_id'] == shop.id
@@ -194,7 +194,7 @@ def _process_shop(shop: OpenAPIShop, args, catalog: tuple | None, supplies: list
                 if record['stage'] != 'delivered' or not args.apply:
                     continue
                 if record.get('warehouse_id') != warehouse['id']:
-                    record['reason'] = '原供货仓库与当前本店莫斯科仓 ID 不一致'
+                    record['reason'] = '原供货仓库 ID 与本店已配置的 WB 仓库 ID 不一致'
                     save()
                     continue
                 if _try_export(api, record, save):

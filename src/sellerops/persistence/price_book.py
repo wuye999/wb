@@ -1,16 +1,4 @@
-"""商品价格表 D 列「实际售价」读取工具。
-
-D 列由用户手工维护，可能是数值，也可能是公式（`=F2*2` / `=F2` / `=$F$2*2` /
-`=ROUND(F2*1.3,2)` / 常量算式）。openpyxl 以 `data_only=False` 打开时只能拿到
-公式字符串，因此这里做三层处理：
-
-1. **受限求值**：只允许「单元格引用 + 四则运算 + 括号 + 数字常量」，
-   剥掉 `ROUND(expr,n)` 外壳；绝不执行任意函数或裸 eval；
-2. **缓存兜底**：求值失败时回退 Excel 保存的计算结果（`data_only=True`）；
-3. **显式告警**：兜底与彻底失败都打 `[警告]`，避免价格静默变空。
-
-口径：店铺整数价 = `math.floor(实际售价)`（见 `floor_price`）。
-"""
+"""按表头读取商品价格表。最低售价公式求值失败时使用 Excel 缓存并告警。"""
 import ast
 import math
 import operator
@@ -18,10 +6,10 @@ import os
 import re
 import sys
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from sellerops.persistence.headers import COL_ACTUAL_PRICE
 from sellerops.persistence.headers import COL_CN
+from sellerops.persistence.headers import COL_MIN_PRICE
 from sellerops.persistence.headers import find_col
 from sellerops.persistence.headers import read_headers
 from sellerops.persistence.headers import require_col
@@ -44,9 +32,8 @@ BOSS_COLUMNS = {
     "img": "产品图片",
     "sku": "卖家SKU",
     "cn": COL_CN,
-    "dp": COL_ACTUAL_PRICE,
     "dim": "尺寸",
-    "price": "最低售价",
+    "price": COL_MIN_PRICE,
     "prefix": "vendorCode前缀码",
     "stock_sku": "马帮库存SKU",
     "shipping_mode": "发货方式",
@@ -58,7 +45,7 @@ SHIPPING_MODE_SKIP = "不处理"
 VALID_SHIPPING_MODES = (SHIPPING_MODE_MABANG, SHIPPING_MODE_WB, SHIPPING_MODE_SKIP)
 
 
-def price_book_columns(ws, path: str, required=("cn", "dp")):
+def price_book_columns(ws, path: str, required=("cn", "price")):
     """解析商品价格表表头 → {逻辑字段: 列索引}；required 缺列抛 HeaderError。
 
     列位可任意调整（用户会插列/挪列），一律按表头名定位。
@@ -106,7 +93,7 @@ def _safe_eval(expr: str) -> Optional[float]:
 
 
 def resolve_formula(formula: Any, ws, depth: int = 2) -> Optional[float]:
-    """D 列公式 → 数值；不支持 / 无法求值 → None（调用方回退缓存值）。"""
+    """将支持的公式转换为数值，无法求值时交给调用方读取缓存。"""
     if not isinstance(formula, str):
         return to_number(formula)
     s = formula.strip()
@@ -122,7 +109,6 @@ def resolve_formula(formula: Any, ws, depth: int = 2) -> Optional[float]:
     if _FUNC_RE.search(s) or "!" in s or ":" in s:
         return None
 
-    import openpyxl                        # 延迟导入：仅公式路径需要
     from openpyxl.utils import column_index_from_string
 
     missing: List[str] = []
@@ -145,129 +131,67 @@ def resolve_formula(formula: Any, ws, depth: int = 2) -> Optional[float]:
 
 
 def floor_price(v: Any) -> Optional[int]:
-    """实际售价 → 店铺整数价（math.floor）；空 / 非法 / NaN / Inf → None。"""
+    """向下取整，空值和非有限数返回 None。"""
     num = to_number(v)
     if num is None or math.isnan(num) or math.isinf(num):
         return None
     return math.floor(num)
 
 
-class CachedDpReader:
-    """懒加载 data_only 工作簿，按行号取 D 列缓存值（一次 load_price_book 共享一份）。"""
-
-    def __init__(self, path: str, sheet: str = "Sheet1", col: int = 4):
-        self.path, self.sheet, self.col = path, sheet, col
-        self._wb = None
-
-    def get(self, row: int):
-        if self._wb is None:
-            import openpyxl
-            self._wb = openpyxl.load_workbook(self.path, data_only=True)
-        return self._wb[self.sheet].cell(row=row, column=self.col).value
-
-    def close(self):
-        if self._wb is not None:
-            self._wb.close()
-            self._wb = None
-
-
-_WARNED = set()                            # 同一进程内同类问题只告警一次（shelve 会反复调用）
-
-
-def warn_unresolved(path: str, by_cache: List[Tuple], missing: List[Tuple]) -> None:
-    """公式不可解析时的统一告警（缓存兜底 / 彻底失败）。"""
-    def _say(kind: str, rows: List[Tuple], msg: str):
-        key = (kind, str(path), tuple(r[0] for r in rows))
-        if key in _WARNED:
-            return
-        _WARNED.add(key)
-        sample = "、".join(f"行{r}({sku})" for r, sku, _raw in rows[:5])
-        tail = "…" if len(rows) > 5 else ""
-        print(f"[警告] 商品价格表 D 列{msg}：{len(rows)} 行 → {sample}{tail}", file=sys.stderr)
-
-    if by_cache:
-        _say("cache", by_cache,
-             "公式无法直接求值，已改用 Excel 缓存值（若刚改表且未保存，缓存可能过期）")
-    if missing:
-        _say("missing", missing,
-             "公式无法解析且无可用缓存值，这些行实际售价为空（改价/上架会被跳过）")
-
-
 def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, Any]]:
-    """商品价格表 → [{idx, sku, cn, dp, minimum_price, img, floor, prefix, stock_sku, shipping_mode}]
-
-    列全部**按表头名定位**（不依赖列位，用户可随意插列/挪列）：
-    产品图片 / 卖家SKU / 产品中文名 / 实际售价 / 尺寸 / 最低售价 / vendorCode前缀码 / 马帮库存SKU / 发货方式。
-    「实际售价」可写数值或公式（`=F2*2` / `=F2` / `=$F$2*2` / `=ROUND(F2*1.3,2)`）；
-    公式不可解析时回退 Excel 缓存值，仍取不到则 dp/floor=None 并打印 [警告]（不再静默空价）。
-    缺「实际售价」列 → HeaderError（fail-fast，避免改价/上架全部跳过）。
-    `floor` = math.floor(实际售价)，即店铺整数价口径。"""
+    """读取商品资料。默认要求中文名和最低售价表头。"""
     if not os.path.exists(path):
         return []
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=False)
+    cached = None
+
+    def cached_value(row, col):
+        nonlocal cached
+        if cached is None:
+            cached = openpyxl.load_workbook(path, data_only=True)
+        return cached["Sheet1"].cell(row=row, column=col + 1).value
+
+    def val(row, col):
+        return row[col].value if col is not None and len(row) > col else None
+
     try:
         ws = wb["Sheet1"]
-        required = ("cn", "dp") if require_price else ("cn",)
+        required = ("cn", "price") if require_price else ("cn",)
         cols = price_book_columns(ws, path, required=required)
         i_img, i_sku, i_cn = cols["img"], cols["sku"], cols["cn"]
-        i_dp, i_prefix, i_stock = cols["dp"], cols["prefix"], cols["stock_sku"]
-        cache = CachedDpReader(path, col=(i_dp or 0) + 1)
-        minimum_cache = CachedDpReader(path, col=(cols["price"] or 0) + 1)
-        dimension_cache = CachedDpReader(path, col=(cols["dim"] or 0) + 1)
+        i_price, i_dim = cols["price"], cols["dim"]
         items: List[Dict[str, Any]] = []
-        by_cache: List[Tuple] = []
-        missing: List[Tuple] = []
-
-        def val(row, i):
-            return row[i].value if i is not None and len(row) > i else None
-
-        try:
-            for row in ws.iter_rows(min_row=2):
-                sku = str(val(row, i_sku) or "").strip()
-                cn = str(val(row, i_cn) or "").strip()
-                if not sku and not cn:
-                    continue
-                raw = val(row, i_dp)
-                dp = to_number(raw)
-                if dp is None and isinstance(raw, str) and raw.strip().startswith("="):
-                    dp = resolve_formula(raw, ws)
-                    if dp is None:
-                        dp = to_number(cache.get(row[0].row))
-                        (by_cache if dp is not None else missing).append(
-                            (row[0].row, sku, raw))
-                elif dp is None and raw not in (None, ""):
-                    missing.append((row[0].row, sku, raw))
-                minimum_raw = val(row, cols["price"])
-                minimum = resolve_formula(minimum_raw, ws)
-                if minimum is None and isinstance(minimum_raw, str) and minimum_raw.startswith("="):
-                    minimum = to_number(minimum_cache.get(row[0].row))
-                    print(f"[警告] 最低售价行{row[0].row}公式无法求值，"
-                          + ("使用 Excel 缓存值" if minimum is not None else "且无可用缓存值"))
-                dimensions = val(row, cols["dim"])
-                if isinstance(dimensions, str) and dimensions.startswith("="):
-                    dimensions = dimension_cache.get(row[0].row)
-                shipping_mode = val(row, cols["shipping_mode"])
-                items.append({
-                    "idx": len(items) + 1,
-                    "sku": sku,
-                    "cn": cn,
-                    "dp": dp,
-                    "minimum_price": minimum,
-                    "img": str(val(row, i_img) or "").strip(),
-                    "floor": floor_price(dp),
-                    "prefix": str(val(row, i_prefix) or "").strip().upper(),
-                    "stock_sku": str(val(row, i_stock) or "").strip(),
-                    "shipping_mode": str(shipping_mode).strip() if shipping_mode is not None else "",
-                    "dimensions": dimensions,
-                })
-        finally:
-            cache.close()
-            minimum_cache.close()
-            dimension_cache.close()
+        for row_number, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            sku = str(val(row, i_sku) or "").strip()
+            cn = str(val(row, i_cn) or "").strip()
+            if not sku and not cn:
+                continue
+            minimum_raw = val(row, i_price)
+            minimum = resolve_formula(minimum_raw, ws)
+            if minimum is None and isinstance(minimum_raw, str) and minimum_raw.strip().startswith("="):
+                minimum = to_number(cached_value(row_number, i_price))
+                detail = "已使用 Excel 缓存值" if minimum is not None else "且无可用缓存值"
+                print(f"[警告] 最低售价第 {row_number} 行公式无法求值，{detail}", file=sys.stderr)
+            dimensions = val(row, i_dim)
+            if isinstance(dimensions, str) and dimensions.startswith("="):
+                dimensions = cached_value(row_number, i_dim)
+            shipping_mode = val(row, cols["shipping_mode"])
+            items.append({
+                "idx": len(items) + 1,
+                "sku": sku,
+                "cn": cn,
+                "minimum_price": minimum,
+                "img": str(val(row, i_img) or "").strip(),
+                "prefix": str(val(row, cols["prefix"]) or "").strip().upper(),
+                "stock_sku": str(val(row, cols["stock_sku"]) or "").strip(),
+                "shipping_mode": str(shipping_mode).strip() if shipping_mode is not None else "",
+                "dimensions": dimensions,
+            })
     finally:
         wb.close()
-    warn_unresolved(path, by_cache, missing)
+        if cached is not None:
+            cached.close()
     names = Counter(row['cn'] for row in items if row['cn'])
     seller_skus = {row['sku'] for row in items if row['sku']}
     for row in items:

@@ -6,7 +6,7 @@ Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需�
 
 可以对 AI 说“把 A 店和 B 店里中文名为旅行杯的商品库存改成 25”或“生成 A 店近 14 天的商品运营报告”。AI 用店铺列表定位 ID，按完整中文名匹配，输出命中链接、目标数量、受理结果和明细路径。有相似名称时，只有明确要求“名称包含”才采用包含筛选。
 
-WorkBuddy 先用 `doctor --json` 体检，用 `map candidates --json` 核对待认领商品。使用 `ops` 预览修改，展示单号和影响范围，经运营确认后用 `apply --plan` 提交。完整流程见 [日常操作指南](docs/AI_GUIDE.md)。
+WorkBuddy 先用 `doctor --json` 体检。首次配置时用 `sync` 获取快照，用 `map workbench --json` 生成看图归属工作台，再用 `map batch-set --file` 或 `catalog merge` 保存审核结果。使用 `ops` 预览商品操作，展示单号和影响范围，经运营确认后用 `apply --plan` 提交。完整流程见 [日常操作指南](docs/AI_GUIDE.md)。
 
 ## 从这里开始
 
@@ -41,7 +41,7 @@ python -m venv .venv
 
 从 1.0 升级时先看 [57 个旧命令的迁移对照及回退步骤](docs/MIGRATION.md)。
 
-已有用户可继续使用原来的 `data/` 和 `.venv`，无需重建数据或重新填写凭证。更新前先停止本项目的运行进程，在项目根目录执行：
+已有用户可沿用原来的 `data/`、`.venv` 和有效的平台会话。更新后请按下文核对仓库和交运渠道配置。更新前先停止本项目的运行进程，在项目根目录执行：
 
 ```powershell
 git pull --ff-only
@@ -69,6 +69,8 @@ wb/
     sellerops.db
     state/
 ```
+
+首次配置时，在 `data/credentials.json` 中填写 `wb.warehouse_keyword`（例如「莫斯科」或具体仓库全名）和 `mabang.handover_keyword`（例如「七库海外仓」）。请根据本店仓库列表和马帮账户的实际渠道名称填写。
 
 已有旧快照或映射表的用户，先按 [旧数据迁移说明](docs/MIGRATION.md#迁移旧商品数据) 将商品资料搬入 SQLite。样例凭证为空，不能直接连接平台。基础业务先准备所需平台凭证。真实凭证、浏览器资料和业务数据由 Git 排除，更新代码时保留自己的 data，并单独备份。
 
@@ -101,7 +103,7 @@ python run.py doctor --json
 默认体检只读取本机信息。需要检查现有会话时显式使用 `doctor --check-online --json`。已有价格表和快照时，按自己的店铺和商品生成操作预览：
 
 ```powershell
-python run.py ops price --shops 1001 --name "示例商品" --json
+python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
 ```
 
 店铺 ID 和商品名都是占位示例。核对范围、数量、价格及授权后，再对相同范围显式提交：
@@ -114,7 +116,7 @@ python run.py apply --plan P018
 
 ## 日常使用边界
 
-- 凡涉及仓库的操作，**默认且仅限各店铺自己的莫斯科仓库 ID**。全店/全部商品不等于全仓；成都及其他地区仓不操作，也不作为找不到莫斯科时的备用仓。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许莫斯科)。
+- 凡涉及 WB 仓库的操作，仅使用各店铺按 `wb.warehouse_keyword` 确认的唯一仓库 ID。运营应配置经核实的莫斯科业务仓。全店或全部商品只扩大商品范围。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许莫斯科)。
 - 普通用户及其运营 AI 使用已有命令，维护自己的 data；源码、文档、依赖声明和项目配置保持只读，临时脚本与产物放 `_scratch/`。维护者及其明确授权的开发任务按开发指南修改项目。
 - WB/BCS 写入异步处理。提交并记录接口结果后结束，不进行写后查询验证，不附加同步、拉取或合并。需要更新数据时，由用户单独要求运行 `catalog fetch`。
 - `listing publish-openapi` 包含建卡、有限等待新商品/规格标识、图片与莫斯科仓库存提交；该标识轮询是上架必要步骤，图片/库存受理后不回读验证。超时可用同一命令的 `--resume` 续办，不重复建卡。

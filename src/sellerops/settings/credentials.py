@@ -100,6 +100,11 @@ class Credentials:
     def feishu_base_url(self):
         return (self.data.get("feishu") or {}).get("base_url") or ""
 
+    @property
+    def wb_warehouse_keyword(self) -> str:
+        keyword = self.wb.get("warehouse_keyword")
+        return keyword.strip() if isinstance(keyword, str) else ""
+
     def wb_shops(self):
         return self.shops
 

@@ -44,53 +44,31 @@
 
 ## catalog mapping
 
-生成统一核对工作台（全部活跃店铺并集，一页两区）
+生成带图待认领工作台（同 map workbench）
 
-实现入口 [run_mapping](../src/sellerops/cli/catalog_handlers.py)
+实现入口 [run_workbench](../src/sellerops/features/catalog/workbench.py)
 
-- `--main-shop-only` 只使用主店候选商品
-
-## catalog import-mapping
-
-导入核对结果 → 保存归属（旧格式）
-
-实现入口 [run_mapping_import](../src/sellerops/cli/catalog_handlers.py)
-
-- `file` 核对结果 JSON
-
-## catalog check-mapping
-
-映射表核查工作台（带图，核对匹配是否有误）
-
-实现入口 [run_mapping_check](../src/sellerops/cli/catalog_handlers.py)
-
-- `--tol` 价格偏差阈值（元，默认 5）
+- `--json` 输出单个 JSON 对象
 
 ## catalog check-mismatch
 
-货不对板筛查工作台（看图勾选，导出 vc 下架）
+货不对板大图画廊（同 map check-mismatch）
 
 实现入口 [run_mismatch_check](../src/sellerops/cli/catalog_handlers.py)
 
 - `--cn` 只渲染指定中文名（精确匹配，如『牙膏-紫色』）
-- `--begin` 开始日期 YYYY-MM-DD（按映射表创建时间/上架时间筛选）
+- `--begin` 开始日期 YYYY-MM-DD（按商品创建时间筛选）
 - `--end` 结束日期 YYYY-MM-DD（缺省=今天）
 - `--days` 最近 N 天（含今天；与 --begin/--end 冲突时以具体日期为准）
 
-## catalog review
-
-多店铺待审核工作台
-
-实现入口 [run_review](../src/sellerops/cli/catalog_handlers.py)
-
-
 ## catalog merge
 
-保存审核确认的归属（file 可选）
+保存待认领工作台审核结果（同 map batch-set --file）
 
-实现入口 [run_merge](../src/sellerops/cli/catalog_handlers.py)
+实现入口 [run_batch_set](../src/sellerops/features/catalog/vc_mapping.py)
 
-- `file` 本次审核结果 JSON（可选）
+- `file` 审核结果 JSON 数组文件路径
+- `--json` 输出单个 JSON 对象
 
 ## catalog rename
 
@@ -120,7 +98,7 @@
 
 - 必选其一 --shops / --all-shops
 - 必选其一 --sku / --name / --name-contains / --prefix / --vc / --all-products
-- 最多选一项 --price / --from-price-book / --keep-price
+- 最多选一项 --price / --keep-price
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--sku` 商品价格表卖家 SKU
@@ -132,9 +110,8 @@
 - `--apply` 真正执行（默认 dry-run）
 - `--yes` 跳过不可逆操作确认
 - `--price` 指定正整数价格
-- `--from-price-book` 按对应价格表行取价；同时设折扣时必填此项或其他明确价格意图
 - `--keep-price` 保持各规格原价，须同时指定折扣
-- `--discount` 折扣 0-100，配合 --price、--from-price-book 或 --keep-price
+- `--discount` 折扣 0-100，配合 --price 或 --keep-price
 - `--club-discount` BCS 俱乐部折扣 0-100，须明确价格意图
 - `--auto-review` 改价后自动「应用新价格」（降价 30-49.9% 进审查时，精确匹配刚改价商品）
 - `--chunk` 每批提交条数（≤300，对齐 discount 实践，默认 100）
@@ -308,24 +285,6 @@
 - `--interval` 批次上架请求间隔秒
 - `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
 
-## listing import
-
-他人映射表导入上架：他人有我方无的商品（按真实 WB商品码 匹配）上架到我的店铺
-
-实现入口 [run](../src/sellerops/features/publishing/import_publish.py)
-
-- 最多选一项 --name / --name-contains
-- 必选其一 --shops / --all-shops
-- `xlsx` 他人映射表 xlsx 路径（同项目「映射总表」格式）
-- `--name` 外部表中的完整中文商品名
-- `--name-contains` 外部表商品名包含指定文字
-- `--shops` 目标店铺 ID，多个用逗号分隔
-- `--all-shops` 本动作的全部目标店铺
-- `--limit` 最多处理 N 个商品（0=不限）
-- `--apply` 真正执行（默认 dry-run）
-- `--interval` 批次上架请求间隔秒
-- `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
-
 ## listing publish
 
 批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）
@@ -339,7 +298,7 @@
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
 - `--sku` 商品价格表中的卖家 SKU，适用于本次输入商品
 - `--random-prefix` 没有唯一登记前缀时，明确允许在预览时随机生成
-- `--price` 指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+- `--price` 指定售价（CNY），不填时使用本地快照价
 - `--dims` 自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
 - `--length` 包装长 (cm)
 - `--width` 包装宽 (cm)
@@ -367,7 +326,7 @@
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
 - `--sku` 商品价格表中的卖家 SKU，适用于本次输入商品
 - `--random-prefix` 没有唯一登记前缀时，明确允许在预览时随机生成
-- `--price` 指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+- `--price` 指定售价（CNY），不填时使用本地快照价
 - `--dims` 自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
 - `--length` 包装长 (cm)
 - `--width` 包装宽 (cm)
@@ -824,38 +783,40 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## map candidates
 
-按完整 VC 和同源码查看待认领商品
+查看待认领分组、唯一前缀和最低售价倍数参考
 
 实现入口 [run_candidates](../src/sellerops/features/catalog/vc_mapping.py)
 
 - `--limit` 最多返回的候选组数
 - `--json` 输出单个 JSON 对象
 
+## map workbench
+
+生成带图待认领工作台（data/workbench/）
+
+实现入口 [run_workbench](../src/sellerops/features/catalog/workbench.py)
+
+- `--json` 输出单个 JSON 对象
+
 ## map batch-set
 
-确认明确列出的完整 VC
+按完整 VC 导入工作台审核结果或批量确认
 
 实现入口 [run_batch_set](../src/sellerops/features/catalog/vc_mapping.py)
 
-- `--file` 批量确认 JSON 文件路径，省略时从标准输入读取
+- `--file` 审核结果 JSON 数组文件路径，省略时从标准输入读取
 - `--json` 输出单个 JSON 对象
 
-## map export-pending
+## map check-mismatch
 
-导出六列待确认 Excel 表
+生成货不对板大图画廊（按中文名分组并标记异常）
 
-实现入口 [run_export](../src/sellerops/features/catalog/vc_mapping.py)
+实现入口 [run_mismatch_check](../src/sellerops/cli/catalog_handlers.py)
 
-- `--out` 输出路径，默认 exports/待确认商品.xlsx
-- `--json` 输出单个 JSON 对象
-
-## map import-excel
-
-导入六列表的运营最终确认
-
-实现入口 [run_import](../src/sellerops/features/catalog/vc_mapping.py)
-
-- `file` 待确认商品 Excel 路径
+- `--cn` 只渲染指定中文名（精确匹配，如『牙膏-紫色』）
+- `--begin` 开始日期 YYYY-MM-DD（按商品创建时间筛选）
+- `--end` 结束日期 YYYY-MM-DD（缺省=今天）
+- `--days` 最近 N 天（含今天；与 --begin/--end 冲突时以具体日期为准）
 - `--json` 输出单个 JSON 对象
 
 ## doctor
@@ -889,7 +850,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 - 必选其一 --shops / --all-shops
 - 必选其一 --sku / --name / --name-contains / --prefix / --vc / --all-products
-- 最多选一项 --price / --from-price-book / --keep-price
+- 最多选一项 --price / --keep-price
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--sku` 商品价格表卖家 SKU
@@ -901,9 +862,8 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--apply` 真正执行（默认 dry-run）
 - `--yes` 跳过不可逆操作确认
 - `--price` 指定正整数价格
-- `--from-price-book` 按对应价格表行取价；同时设折扣时必填此项或其他明确价格意图
 - `--keep-price` 保持各规格原价，须同时指定折扣
-- `--discount` 折扣 0-100，配合 --price、--from-price-book 或 --keep-price
+- `--discount` 折扣 0-100，配合 --price 或 --keep-price
 - `--club-discount` BCS 俱乐部折扣 0-100，须明确价格意图
 - `--auto-review` 改价后自动「应用新价格」（降价 30-49.9% 进审查时，精确匹配刚改价商品）
 - `--chunk` 每批提交条数（≤300，对齐 discount 实践，默认 100）
@@ -1023,25 +983,6 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
 - `--json` 输出单个 JSON 对象
 
-## ops import
-
-他人映射表导入上架：他人有我方无的商品（按真实 WB商品码 匹配）上架到我的店铺
-
-实现入口 [run](../src/sellerops/features/publishing/import_publish.py)
-
-- 最多选一项 --name / --name-contains
-- 必选其一 --shops / --all-shops
-- `xlsx` 他人映射表 xlsx 路径（同项目「映射总表」格式）
-- `--name` 外部表中的完整中文商品名
-- `--name-contains` 外部表商品名包含指定文字
-- `--shops` 目标店铺 ID，多个用逗号分隔
-- `--all-shops` 本动作的全部目标店铺
-- `--limit` 最多处理 N 个商品（0=不限）
-- `--apply` 真正执行（默认 dry-run）
-- `--interval` 批次上架请求间隔秒
-- `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
-- `--json` 输出单个 JSON 对象
-
 ## ops publish
 
 批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）
@@ -1055,7 +996,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
 - `--sku` 商品价格表中的卖家 SKU，适用于本次输入商品
 - `--random-prefix` 没有唯一登记前缀时，明确允许在预览时随机生成
-- `--price` 指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+- `--price` 指定售价（CNY），不填时使用本地快照价
 - `--dims` 自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
 - `--length` 包装长 (cm)
 - `--width` 包装宽 (cm)
@@ -1084,7 +1025,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--prefix` 4位前缀码（如 ABCD 或 BCS-ABCD）
 - `--sku` 商品价格表中的卖家 SKU，适用于本次输入商品
 - `--random-prefix` 没有唯一登记前缀时，明确允许在预览时随机生成
-- `--price` 指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导
+- `--price` 指定售价（CNY），不填时使用本地快照价
 - `--dims` 自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）
 - `--length` 包装长 (cm)
 - `--width` 包装宽 (cm)

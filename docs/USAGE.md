@@ -6,17 +6,14 @@
 python run.py doctor --json
 python run.py sync --all --json
 python run.py shop list --json
-python run.py map candidates --limit 20 --json
+python run.py map workbench --json
 ```
 
 体检默认只查本机。显式 `--check-online` 进行只读鉴权。用户要求拉取快照时运行 `sync`，已在 BCS 同步时可加 `--no-sync`。完整列表发现缺失店铺时返回 `missing_shops`，由运营确认后按店铺 ID 执行 `shop archive` 或 `shop restore`。
 
-`map batch-set` 从标准输入或 `--file` 读取 JSON 数组。例 `[{"vc":"BCS-TEST-123","action":"map","sku":"SKU-1"}]`。动作可用 `map`、`rebind`、`exclude`、`block`、`unblock`。禁上架使用 `shops: "ALL"` 或店铺 ID 列表，保留原有归属。
-也可导出六列审核表，最终确认列填唯一商品中文名、卖家 SKU 或「排除」，留空继续待定。
+从回执的 `data.artifacts.html` 打开工作台看图归属，导出审核 JSON 后用 `map batch-set --file` 或 `catalog merge` 保存确认结果。归属完成后用 `map check-mismatch --json` 生成货不对板筛查画廊。
 
 ```powershell
-python run.py map export-pending --json
-python run.py map import-excel exports/待确认商品.xlsx --json
 python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
 python run.py apply --plan P018 --json
 ```
@@ -33,7 +30,7 @@ python run.py apply --plan P018 --json
 | --- | --- | --- |
 | 不联网的帮助/任务预览 | 任意 `--help`、daily/schedule 不加 --apply | 显示定义，不执行平台业务任务 |
 | 平台查询与报表 | shops、product-report、orders、dims-check、promo-goods、promo-gap、feishu-vc-stats、fbs-delivery、order-stats、chats、appeals、ratings | 读取对应平台，通常生成本地输出；orders 默认先同步订单 |
-| 本地工作台与映射 | catalog 下的工作台、审核导入和纠偏，report mapping | 使用本地库，按需生成 HTML 或 Excel |
+| 本地工作台与映射 | map workbench、map batch-set、map check-mismatch、catalog rename、report mapping | 使用本地库，按需生成 HTML 或 Excel |
 | 数据更新 | fetch | 默认走 BCS 快照（先同步再读 BASE 缓存）；显式 --source wb-openapi 才从 WB 官方接口完整采集商品、价格及莫斯科仓库存 |
 | 业务写入 | 商品改价、折扣、库存、下架、上架、改码 | 用 ops 预览并按单号 apply。清理、促销、履约、飞书和客服按各自命令提交。 |
 | 会话/AI | login、ai-test、客服监听 | 可能回写凭证/状态或调用 LLM；细节见下文 |
@@ -50,50 +47,45 @@ WB 后台鉴权失败时先停止该店操作。用户可独立运行 `login wb`
 
 ## 商品映射与人工审核
 
-已有原 data 时，按需要生成工作台：
+首次配置先运行 `sync --all`，再进入 `map workbench`。`catalog mapping` 打开同一套流程。待认领商品按同源码或同图归组，先看图和出现店铺，再用前缀、倍数参考或中文名确认。点击缩略图放大，使用分类、处理状态及 VC／中文名／价格搜索定位商品。倍数参考按最接近的正整数倍计算，误差在 1 元内或相对误差在 2% 内时展示。
+
+一键采纳只填入尚未选择的前缀命中组。浏览器保存审核进度。点击「导出审核结果 JSON」展开已处理组的全部 VC，使用以下任一导入命令。
 
 ```powershell
-python run.py catalog mapping
-python run.py catalog review
-python run.py catalog check-mapping --tol 5
-python run.py catalog check-mismatch --cn "示例商品" --days 7
+python run.py map batch-set --file "_scratch/待认领审核.json" --json
+python run.py catalog merge "_scratch/待认领审核.json"
 ```
 
-按输出路径打开 `data/workbench/` 中的 HTML，核对候选归属、图片、中文名或商品码。`catalog check-mismatch` 滚动时加载 WB 中尺寸图，失败时自动尝试高清图和原链接，点击图片可放大。映射行缺少主图链接时，会尝试使用该行的 WB 商品码加载首图。
-
-默认 mapping 和 review 的 VC 中心审核导出交给 merge；不同工作台的结果协议不能混用：
+`map batch-set` 也可从标准输入读取 JSON 数组，支持 `map`（或 `mapped`）、`rebind`、`exclude`、`block`、`unblock`。禁上架使用 `shops: "ALL"` 或店铺 ID 列表，保留原有归属。审核导入和纠偏直接写入本地库。Excel 占用时，关闭提示中的工作簿后重试。导出单店表时，已确认的空店可生成空表，缺快照会提示无法导出该店。
 
 ```powershell
-python run.py catalog merge "_scratch/review.json"
+python run.py map check-mismatch --cn "示例商品" --days 7 --json
 python run.py report mapping --shop-id 1001
 python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品名"
 ```
 
-这些命令直接更新本地映射或状态。旧单店格式核对结果使用 `catalog import-mapping 文件.json`，不要用它替代多店 review→merge 流程。`catalog merge` 不从平台重新拉取商品，也不表示远端状态已经更新。
+`map check-mismatch` 和 `catalog check-mismatch` 生成同一份 HTML。`--cn` 精确匹配中文名，`--begin`、`--end` 和 `--days` 按创建日期筛选。回执含 `data.artifacts.html` 和 `data.counts` 中的总条数、中文名组数及异常条数。
 
-审核导入和纠偏直接写入本地库。导出单店表时，已确认的空店可以生成空表；缺快照会提示无法导出该店。
+画廊按中文名并排展示大图，异常组排在前面，并标记前缀冲突和非最低价倍数。逐店核对在架快照中的现价。各店可以采用不同的合理正整数倍，卡片会显示主店现价和匹配的倍数，例如「×2/×10」。若有店铺的现价偏离整数倍，标记会注明对应店铺。可以多选中文名，按 VC、中文名或俄文标题搜索，或切换「只看异常」「只看已勾选」。点击放大镜查看大图，点击卡片勾选货不对板，浏览器会保存勾选状态。WB 中尺寸图加载失败时依次尝试高清图、原链接。缺少主图链接时用 WB 商品码尝试加载首图。
 
-如果提示 Excel 占用，关闭提示中的工作簿，重新运行刚才的命令。程序会自动续完已准备的本地文件，即使原审核文件已移走也能完成。请等终端显示保存完成后再打开表格。若改为运行新的映射写命令，程序会先续完上一批，再处理新请求。
+勾选结果可导出 JSON 或复制逗号分隔的完整 VC。要下架时，核对目标店铺后，将复制的 VC 填入 `ops trash --vc` 预览计划单。
 
 只有用户明确要求获取最新商品数据时，独立运行：
 
 ```powershell
-python run.py catalog fetch --shop-id 1001
-python run.py catalog merge
+python run.py sync --shop-id 1001
 ```
 
 `catalog fetch` 默认等同于 `catalog fetch --source bcs`：先同步 WB → BCS，再按 BASE 读取该店缓存并原子保存快照，保留原有 BCS 行契约。用户已经在 BCS 后台同步过时可加 `--no-sync` 跳过同步直接读取上次结果；同步失败不会中止本次拉取，命令按原流程打印警示后继续读旧缓存。默认读取全部店铺；`--shop-id` 只更新指定店铺。
 
 ```powershell
 python run.py catalog fetch --no-sync
-python run.py catalog merge
 ```
 
 仅在需要绕开 BCS 同步、直接用官方接口重建快照时，显式选择 Open API 来源。该来源使用官方中国区 `.cn` 主机，不要求 WB 后台 Cookie、不触发 BCS 商品同步，也不会在失败时改读 BCS 旧缓存：
 
 ```powershell
 python run.py catalog fetch --source wb-openapi --shop-id 1001
-python run.py catalog merge
 ```
 
 显式 Open API 来源的全店拉取默认最多 **4 店同时采集**。可用 `--parallel` 调整正整数并发数，`--parallel 1` 改为串行；实际并发不超过店铺数量。每店独立使用自己的令牌、会话和莫斯科仓 ID，店内分页与请求仍按原有限流顺序执行。完整采集的店铺立即原子保存，终端按完成顺序显示店铺统计和总进度。`--shop-id` 单店拉取及默认 BCS 来源不受此参数影响。
@@ -110,8 +102,6 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 
 无规格、无效或重复规格 ID 的商品仍保留完整原行并输出缺失告警，本地映射不显示附带的占位零价格/库存。任一规格库存缺失、无效或重复时，商品库存显示为空；库存操作预览中的未知值也不标成0。总表不会用其他店的库存补本店空值。接口明确返回的有效零值仍保留。BCS 响应缺少 rows、总数与返回条数不一致或混入其他店铺数据时，拉取失败并保留该店原快照，不能按空店继续合并。
 
-`catalog merge 文件.json` 只保存审核确认的归属。没有审核文件时，查看 Excel 使用 `report mapping`。
-
 ## 改价与库存
 
 商品范围与店铺范围各选一项。--shops 接受逗号分隔的明确 ID，--all-shops 表示该通道全部店铺。--name 是完整中文名，--name-contains 才是包含匹配。--all-products 代表全部商品。库存数量必须显式传入，含清零的 --amount 0。
@@ -119,23 +109,22 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 先看预览，确认后才执行相同范围的写入：
 
 ```powershell
-python run.py ops price --shops 1001 --name "示例商品"
-python run.py ops price --shops 1001 --name "示例商品" --from-price-book --discount 35
+python run.py ops price --shops 1001 --name "示例商品" --price 55
+python run.py ops price --shops 1001 --name "示例商品" --keep-price --discount 35
 python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 ```
 
 | 用户意图 | WorkBuddy 首选命令 | 修改字段 |
 | --- | --- | --- |
-| 按表改价 | `product price` | 对应价格表行的实际售价，向下取整 |
 | 指定价格 | `product price --price P` | 价格 |
 | 同时指定价格与折扣 | `product price --price P --discount D` | 价格、折扣 |
-| 按表改价并设折扣 | `product price --from-price-book --discount D` | 对应价格表行的价格、折扣 |
+| 保持原价并设折扣 | `product price --keep-price --discount D` | 折扣 |
 | 只设折扣 | `product discount --target D` | 折扣 |
 | 设置库存 | `product stock --amount N` | 本店莫斯科仓的每个目标规格库存 |
 
 三项命令默认使用 WB 卖家后台。每条命令都需加店铺范围与商品范围。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
 
-`product price --keep-price --discount D` 仍可只设折扣。单独给 `--keep-price` 或单独给 `--discount` 会报参数错误。`--price`、`--keep-price`、`--from-price-book` 互斥。BCS 俱乐部折扣也需明确价格意图，参数为 `--channel bcs --club-discount D`。
+`product price` 和 `ops price` 必须选择正整数 `--price`，或使用 `--keep-price` 搭配折扣。BCS 可用 `--channel bcs --club-discount D` 搭配任一价格意图。
 
 `product stock` 默认使用本地映射及快照中可确认归属的商品筛选供应商代码，并从本地商品快照解析规格 ID（`--resolve snapshot`）。库存归零直接将目标规格设为 0，不需要先联网读取当前库存，即使本地库存未知或已为 0 也照常提交。缺少必要标识时按下表定向补齐；仍无法确认仓库或完整规格的商品会被阻止，预览和执行均以非零状态报告。仓库 ID 仍需逐店确认，更新商品快照使用独立的 `catalog fetch`。
 
@@ -144,7 +133,7 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 | 操作 | 必要数据 | 缺失数据的处理 |
 | --- | --- | --- |
 | 设置库存 | 本店完整、归属唯一的 chrtId，以及已确认的莫斯科仓 ID | 不要求旧库存、现价、图片或包装尺寸；规格标识缺失时定向查询本店商品卡 |
-| 普通改价 | 本店 nmId 和目标价 | 不要求规格库存或旧包装尺寸；缺 nmId 时定向补齐，目标价仍取手工参数或价格表 |
+| 普通改价 | 本店 nmId 和 `--price` 指定的目标价 | 缺 nmId 时定向补齐 |
 | WB `product price --keep-price --discount` / 不限原折扣的 `product discount` | 本店 nmId 和目标折扣 | 仅提交折扣，不传价格；缺现价、规格或旧折扣不阻止操作。按原折扣阈值筛选时，每轮通过 WB 官方价格接口读取本店商品当前值 |
 | 修改包装尺寸/毛重 | 本店 nmId，以及参数或价格表中的目标尺寸 | 不要求旧尺寸、规格或库存；缺 nmId 时定向补齐 |
 | 下架 | 本店 nmId、完整 chrtId 和已确认的莫斯科仓 ID | 不要求旧库存；先补齐必要标识，再提交全部规格清零，清零受理不完整时仍阻止下架 |
@@ -166,10 +155,9 @@ python run.py ops publish 123456789 --shops 1001 --sku SKU-1 --price 59 --dims "
 python run.py ops create-cards 123456789 --shops 1001 --sku SKU-1 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20 --json
 python run.py ops publish --file "examples/publish.example.json" --shops 1001
 python run.py ops replicate --shops 1001 --name "示例商品" --limit 1
-python run.py ops import "_scratch/foreign.xlsx" --shops 1001 --limit 1
 ```
 
-这些示例生成固定计划单，经确认后用 `apply --plan` 提交。发布默认库存是 999。需要其他数量时显式设置 `--stock`，跨店/导入可使用 `--cn-stock`。默认 BCS 上架把初始库存随建卡或推送请求提交。
+这些示例生成固定计划单，经确认后用 `apply --plan` 提交。售价使用指定价格或本地快照价。缺少快照价时请传 `--price`。发布默认库存是 999。需要其他数量时显式设置 `--stock`，也可使用 `--cn-stock` 按中文名指定库存。默认 BCS 上架把初始库存随建卡或推送请求提交。
 
 普通上架须确认价格表中的商品。有卖家 SKU 时可指定 `--sku`，批量 JSON 每行可填 `sellerSku`。没有 SKU 时可用唯一的产品中文名 `--cn`。编码优先保留完整 `--vc`，其次沿用 `--prefix`，然后使用已确认商品在价格表中唯一登记的前缀。缺失或多人共用时补 `--prefix`，也可经运营确认加 `--random-prefix`。随机前缀在预览时生成，随商品键、完整 VC 和编码来源一起保存。批量接口无法原样生成的完整 VC 改用 `ops create-cards` 预览。平台明确受理后本地保存完整 VC 的归属。升级前未提交的普通上架计划需要重新预览一次。
 
@@ -183,7 +171,7 @@ BCS 建卡已停用商品详情代理。`listing create-cards` 和 `listing repl
 python run.py ops replicate --source-shops 1001,1002 --shops 1003 --price-source minimum --price-multiplier 10 --stock 999 --all-products
 ```
 
-示例生成计划单，经确认后用 `apply --plan` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认1；`minimum` 必须匹配唯一的同中文名最低售价，不能回退到「实际售价」或整数价。金额按分四舍五入；库存默认999，显式0保留为0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，仅解析目标店莫斯科仓；任一目标仓缺失时阻止该商品组，提交后记录受理响应并结束。
+示例生成计划单，经确认后用 `apply --plan` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认 1。`minimum` 必须匹配唯一的同中文名最低售价。金额按分四舍五入，库存默认 999，显式 0 保留为 0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，仅解析目标店莫斯科仓；任一目标仓缺失时阻止该商品组，提交后记录受理响应并结束。
 
 备用官方上架与跨店内容更新使用 `listing publish-openapi`、`listing sync-cards`，详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。原有 BCS 上架默认入口保留。上架支持自有源店与任意 WB 商品码，统一完成建卡、有限标识等待、图片/莫斯科库存提交；超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再用新单号续办。内容同步按完整 VC 匹配本店商品码，单独使用其 `--apply`。
 

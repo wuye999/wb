@@ -5,23 +5,18 @@ from sellerops.features.catalog.selection import load_shop_rows, selection_error
 from sellerops.features.products import warehouse
 from sellerops.features.products.skip_report import SkipTracker
 from sellerops.domain.snapshot_values import bcs_keep_price, first_price, positive_id, stock_at, valid_sizes
-from sellerops.persistence.price_book import floor_price
 
 RED = "\033[91m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
 
-def target_price(vc: str, state: dict, manual: int | None = None, *,
-                 strict: bool = False) -> int | None:
-    if manual is not None:
-        return manual
-    identity = state.get(vc, {})
-    entry = identity.get("price_row")
-    price = entry.get("floor") if entry else None
-    if price is None and not strict and identity.get("dp_cn", identity.get("cn")) == identity.get("cn"):
-        price = floor_price(identity.get("dp"))
-    return price if price and price > 0 else None
+def validate_price_intent(price, keep_price, discount, club_discount):
+    if price is not None:
+        if type(price) is not int or price <= 0:
+            raise ValueError("目标价必须为正整数")
+    elif not keep_price or (discount is None and club_discount is None):
+        raise ValueError("必须使用 --price 指定目标价，或使用 --keep-price 搭配 --discount（BCS 可用 --club-discount）")
 
 
 def report_blocked(plans: list[dict], tracker: SkipTracker, label: str) -> None:
@@ -95,7 +90,8 @@ def prepare_cards(sid: int, targets: dict, rows: dict, state: dict, blocked: lis
 
 
 def plan_price(vcs, shops, state, manual, discount, club, keep_price=False, *,
-               resolver=None, allow_discount_only=False, shop_rows=None, from_price_book=False):
+               resolver=None, allow_discount_only=False, shop_rows=None):
+    validate_price_intent(manual, keep_price, discount, club)
     plans = []
     for sid in shops:
         rows = shop_rows[sid] if shop_rows is not None else load_shop_rows(sid)
@@ -115,10 +111,7 @@ def plan_price(vcs, shops, state, manual, discount, club, keep_price=False, *,
                     blocked.append(blocked_item(vc, row, state, "无法无损保持全部规格的单一原价"))
                     continue
             else:
-                price = target_price(vc, state, manual, strict=from_price_book)
-                if price is None:
-                    blocked.append(blocked_item(vc, row, state, "无有效目标价，请检查对应价格表行或用 --price 指定"))
-                    continue
+                price = manual
                 if cur is not None and price <= cur / 2:
                     blocked.append(blocked_item(vc, row, state, f"目标价 {price} 低于原价一半或等于一半（原价 {cur}）"))
                     continue

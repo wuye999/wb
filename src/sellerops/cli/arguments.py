@@ -53,10 +53,8 @@ def add_ops_args(p: argparse.ArgumentParser, *, with_price: bool = False, with_s
     if with_price:
         intent = p.add_mutually_exclusive_group()
         intent.add_argument("--price", type=int, help="指定正整数价格")
-        intent.add_argument("--from-price-book", action="store_true",
-                            help="按对应价格表行取价；同时设折扣时必填此项或其他明确价格意图")
         intent.add_argument("--keep-price", action="store_true", help="保持各规格原价，须同时指定折扣")
-        p.add_argument("--discount", type=int, help="折扣 0-100，配合 --price、--from-price-book 或 --keep-price")
+        p.add_argument("--discount", type=int, help="折扣 0-100，配合 --price 或 --keep-price")
         p.add_argument("--club-discount", type=int, help="BCS 俱乐部折扣 0-100，须明确价格意图")
         p.add_argument("--auto-review", action="store_true",
                        help="改价后自动「应用新价格」（降价 30-49.9%% 进审查时，精确匹配刚改价商品）")
@@ -82,7 +80,7 @@ def add_publish_args(parser):
     parser.add_argument("--prefix", default="", help="4位前缀码（如 ABCD 或 BCS-ABCD）")
     parser.add_argument("--sku", default="", help="商品价格表中的卖家 SKU，适用于本次输入商品")
     parser.add_argument("--random-prefix", action="store_true", help="没有唯一登记前缀时，明确允许在预览时随机生成")
-    parser.add_argument("--price", type=float, default=None, help="指定售价（CNY），不填时自动从本地价格映射表或商品价格表推导")
+    parser.add_argument("--price", type=float, default=None, help="指定售价（CNY），不填时使用本地快照价")
     parser.add_argument("--dims", default="", help="自定义尺寸重量 '长*宽*高/毛重'（例: 10*20*30/0.5）")
     parser.add_argument("--length", type=int, default=None, help="包装长 (cm)")
     parser.add_argument("--width", type=int, default=None, help="包装宽 (cm)")

@@ -70,18 +70,13 @@ def _run(args, result: ProductResult) -> None:
     plans = getattr(args, 'frozen', None)
     if plans is None:
         shops = result.shops = selected_shops(args)
-        state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False),
-                                           fresh=(result.apply and getattr(args, 'price', None) is None
-                                                  and not getattr(args, 'keep_price', False)
-                                                  and (getattr(args, 'from_price_book', False)
-                                                       or getattr(args, 'discount', None) is None)))
+        state, shop_rows, book = load_state(shops, all_products=getattr(args, "all_products", False))
         vcs, desc = resolve_filters(args, state, book)
         print(f"目标：{desc}，通道 WB 后台")
         with ProductDataResolver() as resolver:
             plans = plan_price(vcs, shops, state, getattr(args, "price", None), getattr(args, "discount", None),
                                None, keep_price=getattr(args, "keep_price", False), resolver=resolver,
-                               allow_discount_only=True, shop_rows=shop_rows,
-                               from_price_book=getattr(args, "from_price_book", False))
+                               allow_discount_only=True, shop_rows=shop_rows)
         args.prepared = plans
     result.add_plans(plans)
     if not result.apply:

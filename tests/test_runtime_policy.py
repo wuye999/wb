@@ -110,7 +110,7 @@ class TestDataLayout(unittest.TestCase):
                     {'shopId': 42, 'rows': [{'nmId': 123, 'vendorCode': vc}]}), encoding='utf8')
                 book = Workbook()
                 book.active.title = 'Sheet1'
-                book.active.append(['卖家SKU', '产品中文名', '实际售价', 'vendorCode前缀码'])
+                book.active.append(['卖家SKU', '产品中文名', '最低售价', 'vendorCode前缀码'])
                 book.active.append(['SKU', name, 12, 'TEST'])
                 book.save(directory / '商品价格表.xlsx')
                 book.close()
@@ -143,13 +143,13 @@ class TestDataLayout(unittest.TestCase):
             (data / 'products/shop42_products_all.json').write_text(json.dumps({'rows': [{'vendorCode': 'BCS-TEST-123', 'nmId': 123}]}), encoding='utf8')
             book = Workbook()
             book.active.title = 'Sheet1'
-            book.active.append(['卖家SKU', '产品中文名', '实际售价'])
+            book.active.append(['卖家SKU', '产品中文名', '最低售价'])
             book.active.append(['SKU1', '测试商品', 10])
             book.save(data / '商品价格表.xlsx')
             book.close()
             book = Workbook()
             book.active.title = '映射总表'
-            book.active.append(['产品中文名', 'vendorCode', '实际售价'])
+            book.active.append(['产品中文名', 'vendorCode', '最低售价'])
             book.active.append(['测试商品', 'BCS-TEST-123', 10])
             book.save(data / '价格映射表.xlsx')
             book.close()
@@ -233,13 +233,13 @@ class TestNoPostWriteQueries(unittest.TestCase):
     def test_publish_interfaces_stop_after_acceptance(self):
         from sellerops.features.publishing import bulk_publish, card_publish
         from sellerops.domain.models import PublishItem
-        from sellerops.features.catalog import products, mapping_sync
+        from sellerops.features.catalog import products, vc_mapping
         from sellerops.integrations.bcs.client import client as bcs
         item = PublishItem(nm_id=123, vendor_code='BCS-TEST-123', prefix='BCS-TEST', price=10,
                            length=10, width=20, height=30, weight=0.5,
                            target_shops=[42], extra={'card_info': {'data': {'subject_id': 1}}, 'wb_detail': {'subjectId': 1}})
         with patch.object(products, 'fetch_all') as fetch, patch.object(bcs, 'sync_shops_parallel') as sync, \
-                patch.object(mapping_sync, 'merge') as merge, contextlib.redirect_stdout(io.StringIO()):
+                patch.object(vc_mapping, 'run_batch_set') as review, contextlib.redirect_stdout(io.StringIO()):
             for module in [bulk_publish, card_publish]:
                 from sellerops.settings import paths
                 self.addCleanup(paths.configure, paths.current.data_dir)
@@ -256,4 +256,4 @@ class TestNoPostWriteQueries(unittest.TestCase):
                     self.assertEqual(result['ok'], 1)
             fetch.assert_not_called()
             sync.assert_not_called()
-            merge.assert_not_called()
+            review.assert_not_called()

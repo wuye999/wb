@@ -2,6 +2,7 @@
 import os
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 
 class TestRegression(unittest.TestCase):
@@ -135,12 +136,15 @@ class TestRegression(unittest.TestCase):
         finally:
             T.wb_api.make_session, T.wb_api.request_post = (orig_ms, orig_post)
 
-    def test_default_warehouse_resolution(self):
-        """仓库 ID 解析（WB 原生 offices/stores/short）：仅莫斯科，无确认结果则 None（离线）。
+    def test_configured_warehouse_resolution(self):
+        """仓库 ID 解析（WB 原生 offices/stores/short）：按配置匹配，无确认结果则 None（离线）。
 
             2026-10-29 起不再依赖 BCS，也不再读 known_warehouses.json。
             """
         from sellerops.features.products import warehouse as wh
+        config = patch.object(wh.credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科'))
+        config.start()
+        self.addCleanup(config.stop)
         orig = wh.list_stores
         try:
             wh.clear_cache()
@@ -234,57 +238,41 @@ class TestRegression(unittest.TestCase):
         self.assertTrue(all(r.status == 'accepted' for r in result.receipts[9352]))
         self.assertIn('已存在', result.receipts[9352][0].message)
 
-    def test_price_boss_dp_formula_unit(self):
-        """price 目标价：商品价格表 D 列「实际售价」公式解析 + floor 口径（离线）。
+    def test_minimum_price_formula_and_cache(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
 
-            覆盖 2026-10-20 口径变更：D 列由「双倍售价」改为「实际售价」，
-            不再假设 =F*2；需支持 =F2*2 / =F2 / =$F$2*2 / =ROUND(...) / 纯数值，
-            无法解析时回退 Excel 缓存值，两者皆无则 None 并告警。
-            """
-        import contextlib
-        import io as _io
-        import os
-        import shutil
-        import tempfile
-        from unittest import mock
-        import openpyxl
-        from sellerops.settings import paths as config
-        from sellerops.features.products import plans as ops_plan
-        from sellerops.persistence.mappings import MappingRepository
-        header = ['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '马帮库存SKU']
-        rows = [['', 'SKU-1', '旧格式', '=F2*2', '10*10*10/0.1', 40.25, 'AAAA', 's1'], ['', 'SKU-2', '无乘数', '=F3', '10*10*10/0.1', 41.525, 'BBBB', 's2'], ['', 'SKU-3', '绝对引用', '=$F$4*2', '10*10*10/0.1', 39.775, 'CCCC', 's3'], ['', 'SKU-4', 'ROUND', '=ROUND(F5*1.3,2)', '10*10*10/0.1', 46.2, 'DDDD', 's4'], ['', 'SKU-5', '走缓存', '=VLOOKUP(A2,A:F,6,0)', '10*10*10/0.1', 50, 'EEEE', 's5'], ['', 'SKU-6', '纯数值', 100.75, '10*10*10/0.1', 60, 'FFFF', 's6'], ['', 'SKU-7', '无缓存', '=IF(A2>0,1,2)', '10*10*10/0.1', 70, 'GGGG', 's7']]
-        wb_formula = openpyxl.Workbook()
-        ws = wb_formula.active
-        ws.title = 'Sheet1'
-        ws.append(header)
-        for r in rows:
-            ws.append(r)
-        wb_cached = openpyxl.Workbook()
-        ws2 = wb_cached.active
-        ws2.title = 'Sheet1'
-        ws2.append(header)
-        for r in rows:
-            ws2.append([r[0], r[1], r[2], None, r[4], r[5], r[6], r[7]])
-        ws2.cell(2, 4).value = 80.5
-        ws2.cell(3, 4).value = 41.525
-        ws2.cell(4, 4).value = 79.55
-        ws2.cell(5, 4).value = 60.06
-        ws2.cell(6, 4).value = 88.88
-        tmp = tempfile.mkdtemp()
-        try:
-            path = os.path.join(tmp, 'boss.xlsx')
-            wb_formula.save(path)
-            err = _io.StringIO()
-            with mock.patch('openpyxl.load_workbook', side_effect=lambda p, data_only=False, **kw: wb_cached if data_only else wb_formula), mock.patch.object(config.current, 'price_book_xlsx', path), contextlib.redirect_stderr(err):
-                boss = MappingRepository.load_price_book()
-            self.assertEqual([b['dp'] for b in boss], [80.5, 41.525, 79.55, 60.06, 88.88, 100.75, None])
-            self.assertEqual([b['floor'] for b in boss], [80, 41, 79, 60, 88, 100, None])
-            self.assertIn('缓存', err.getvalue())
-            self.assertIn('无法解析', err.getvalue())
-            self.assertEqual(ops_plan.target_price('VC-X', {'VC-X': {'cn': '无', 'dp': 88.9}}), 88)
-            self.assertIsNone(ops_plan.target_price('VC-Y', {'VC-Y': {'cn': '无', 'dp': 'bad'}}))
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        from openpyxl import Workbook
+        from sellerops.persistence.price_book import read_price_book
+
+        book = Workbook()
+        cached = Workbook()
+        for workbook in (book, cached):
+            workbook.active.title = 'Sheet1'
+            workbook.active.append(['最低售价', '产品中文名', '基准价'])
+        for formula, name, base in [
+            ('=C2*2', '引用', 40.25),
+            ('=$C$3', '绝对引用', 41.525),
+            ('=ROUND(C4*1.3,2)', '算式', 46.2),
+            ('=IF(C5>0,1,2)', '有缓存', 50),
+            (100.75, '纯数值', 60),
+            ('=IF(C7>0,1,2)', '无缓存', 70),
+        ]:
+            book.active.append([formula, name, base])
+        cached.active['A5'] = 88.88
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'book.xlsx'
+            book.save(path)
+            errors = StringIO()
+            with patch('openpyxl.load_workbook',
+                       side_effect=lambda path, data_only=False: cached if data_only else book), redirect_stderr(errors):
+                rows = read_price_book(str(path))
+        self.assertEqual([row['minimum_price'] for row in rows], [80.5, 41.525, 60.06, 88.88, 100.75, None])
+        self.assertIn('已使用 Excel 缓存值', errors.getvalue())
+        self.assertIn('且无可用缓存值', errors.getvalue())
 
     def test_stock_wb_offline(self):
         """stock-wb 离线断言（**不触网、不写平台**）：
@@ -358,38 +346,25 @@ class TestRegression(unittest.TestCase):
         for nm, want in cases.items():
             self.assertEqual(wc.basket_base(nm), want, f'nm={nm}')
 
-    def test_shelve_file_dp_floor_unit(self):
-        """shelve --file：CSV 上架价按商品价格表「实际售价」floor（离线）。
+    def test_publish_order_csv_uses_explicit_price_and_book_dimensions(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
 
-            口径 2026-10-20：D 列改为实际售价后，`shelve --file` 与 `price`/主链路口径统一为
-            floor(实际售价)——此前该分支直接 float(dp) 不取整（88.9 → 88.9，现 → 88）。
-            """
-        import os
-        import shutil
-        import tempfile
-        from unittest import mock
-        import openpyxl
-        from sellerops.settings import paths as config
-        from sellerops.features.publishing import publish_inputs as shelve_common
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = 'Sheet1'
-        ws.append(['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '马帮库存SKU'])
-        ws.append(['', 'SKU-9', '测试品', 88.9, '10*10*10/0.1', 40, 'TEST', 's9'])
-        tmp = tempfile.mkdtemp()
-        try:
-            boss_path = os.path.join(tmp, 'boss.xlsx')
-            wb.save(boss_path)
-            csv_path = os.path.join(tmp, 'orders.csv')
-            with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
-                f.write('商品中文名,现在商品的nmId,VC\n测试品,123456,OTHER-1\n')
-            with mock.patch('openpyxl.load_workbook', return_value=wb), mock.patch.object(config.current, 'price_book_xlsx', boss_path):
-                items, _raw = shelve_common.load_publish_file(csv_path)
-            self.assertEqual(len(items), 1)
-            self.assertEqual(items[0]['price'], 88)
-            self.assertIsInstance(items[0]['price'], int)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        from catalog_fixture import write_book
+        from sellerops.features.publishing.publish_inputs import load_publish_file
+        from sellerops.settings import paths
+
+        self.addCleanup(paths.configure, paths.current.data_dir)
+        with TemporaryDirectory() as directory:
+            paths.configure(directory)
+            write_book([('测试品', 88.9, '10*10*10/0.1')], headers=('产品中文名', '最低售价', '尺寸'))
+            csv_path = Path(directory) / 'orders.csv'
+            csv_path.write_text('商品中文名,现在商品的nmId,VC,price\n'
+                                '测试品,123456,OTHER-1,\n'
+                                '测试品,123457,OTHER-2,89.5\n', encoding='utf-8-sig')
+            items, _ = load_publish_file(str(csv_path))
+        self.assertEqual([item['price'] for item in items], [None, 89.5])
+        self.assertEqual((items[0]['length'], items[0]['weight']), (10, 0.1))
 
     def test_migration_reads_ownership_from_old_total_but_prices_from_main_book(self):
         from pathlib import Path
@@ -405,101 +380,44 @@ class TestRegression(unittest.TestCase):
             write_book([('SK1', 'fixture', 22, 'AAAA', '')])
             book = Workbook()
             book.active.title = '\u6620\u5c04\u603b\u8868'
-            book.active.append(['vendorCode', '\u4ea7\u54c1\u4e2d\u6587\u540d', '\u53cc\u500d\u552e\u4ef7'])
+            book.active.append(['vendorCode', '\u4ea7\u54c1\u4e2d\u6587\u540d', '店铺售价'])
             book.active.append(['BCS-AAAA-1', 'fixture', 88.9])
             book.save(paths.current.mapping_xlsx)
             book.close()
             migrate_legacy.migrate()
             Path(paths.current.mapping_xlsx).unlink()
             result = db.resolve_vc('BCS-AAAA-1')
-            self.assertEqual((result['sku'], result['dp'], result['source']), ('SK1', 22, 'prefix'))
+            self.assertEqual((result['sku'], result['minimum_price'], result['source']), ('SK1', 22, 'prefix'))
 
-
-
-    def test_importshelve_foreign_legacy_dp_raise_unit(self):
-        """import-shelve 读他人表：旧列名「双倍售价」→ 直接报错；新名挪位仍可读。"""
-        import os
-        import shutil
-        import tempfile
-        import openpyxl
-        from sellerops.persistence import headers as xlsx_headers
-        from sellerops.features.publishing import foreign_table as foreign_table
-        from sellerops.persistence.headers import HeaderError
-        tmp = tempfile.mkdtemp()
-        try:
-
-            def build(name, dp_header):
-                p = os.path.join(tmp, name)
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = '映射总表'
-                ws.append(['产品中文名', 'vendorCode', dp_header, 'WB商品码'])
-                ws.append(['他人品', 'BCS-CCCC-1396678', 66.6, 1396678])
-                wb.save(p)
-                return p
-            xlsx_headers.reset_warnings()
-            with self.assertRaises((RuntimeError, HeaderError)) as ctx:
-                foreign_table.load_foreign(build('old.xlsx', '双倍售价'))
-            msg = str(ctx.exception)
-            self.assertIn('实际售价', msg)
-            self.assertIn('双倍售价', msg)
-            self.assertIn('实际表头', msg)
-            items, _bad, _no_nm = foreign_table.load_foreign(build('new.xlsx', '实际售价'))
-            self.assertEqual(len(items), 1)
-            self.assertEqual(items[0]['dp'], 66.6)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def test_price_boss_dp_column_reorder_unit(self):
-        """price 读商品价格表：价格列按「实际售价」表头定位，四个读取点都位移仍正确。"""
-        import os
-        import shutil
-        import tempfile
-        import openpyxl
+    def test_minimum_price_header_required_even_after_optional_read(self):
         from pathlib import Path
-        from unittest import mock
-        from sellerops.settings import paths as config
-        from sellerops.persistence import headers as xlsx_headers
-        from sellerops.persistence.headers import HeaderError
-        from sellerops.features.publishing import publish_inputs as shelve_common
-        from sellerops.persistence.mappings import MappingRepository
-        tmp = tempfile.mkdtemp()
-        fixture = config.DataPaths(Path(tmp))
-        try:
+        from tempfile import TemporaryDirectory
 
-            def build(name, headers, row):
-                p = os.path.join(tmp, name)
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = 'Sheet1'
-                ws.append(headers)
-                ws.append(row)
-                wb.save(p)
-                return p
-            headers = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', '实际售价', 'vendorCode前缀码', '马帮库存SKU']
-            row = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 88.9, 'TEST', 's9']
-            p_ok = build('boss_ok.xlsx', headers, row)
-            xlsx_headers.reset_warnings()
-            with mock.patch.object(config, 'current', fixture), \
-                    mock.patch.object(fixture, 'price_book_xlsx', p_ok):
-                boss = MappingRepository.load_price_book()
-                pmap = MappingRepository.load_prefix_map()
-                shelve_dict = shelve_common.load_publish_catalog()
-            self.assertEqual(boss[0]['dp'], 88.9)
-            self.assertEqual(boss[0]['floor'], 88)
-            self.assertEqual(boss[0]['stock_sku'], 's9')
-            self.assertEqual(pmap['TEST']['dp'], 88.9)
-            self.assertEqual(shelve_dict['测试品']['dp'], 88.9)
-            headers_bad = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', 'vendorCode前缀码', '马帮库存SKU']
-            row_bad = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 'TEST', 's9']
-            p_bad = build('boss_bad.xlsx', headers_bad, row_bad)
-            with mock.patch.object(config, 'current', fixture), \
-                    mock.patch.object(fixture, 'price_book_xlsx', p_bad):
-                with self.assertRaises(HeaderError):
-                    MappingRepository.load_price_book()
-                self.assertEqual(MappingRepository.load_prefix_map()['TEST']['cn'], '\u6d4b\u8bd5\u54c1')
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        from catalog_fixture import write_book
+        from sellerops.features.system.doctor import check_book
+        from sellerops.persistence.headers import HeaderError
+        from sellerops.persistence.mappings import MappingRepository
+        from sellerops.persistence.price_book import read_price_book
+        from sellerops.settings import paths
+
+        self.addCleanup(paths.configure, paths.current.data_dir)
+        with TemporaryDirectory() as directory:
+            paths.configure(directory)
+            book = Path(paths.current.price_book_xlsx)
+            write_book([('测试品', 'TEST')], headers=('产品中文名', 'vendorCode前缀码'))
+            self.assertEqual(check_book(book)['missing_headers'], ['最低售价'])
+            with self.assertRaisesRegex(HeaderError, '最低售价'):
+                read_price_book(str(book))
+            self.assertIsNone(MappingRepository.load_prefix_map()['TEST']['minimum_price'])
+            with self.assertRaisesRegex(HeaderError, '最低售价'):
+                MappingRepository.load_price_book()
+
+            write_book([('10*10*10/0.1', 88.9, '测试品', 's9', 'TEST')],
+                       headers=('尺寸', '最低售价', '产品中文名', '马帮库存SKU', 'vendorCode前缀码'))
+            self.assertEqual(check_book(book)['status'], 'ready')
+            [row] = MappingRepository.load_price_book()
+            self.assertEqual((row['minimum_price'], row['stock_sku']), (88.9, 's9'))
+            self.assertEqual(MappingRepository.load_prefix_map()['TEST']['minimum_price'], 88.9)
 
     def test_legacy_payload_images_subject_id(self):
         from sellerops.domain.models import PublishItem as PublishItem

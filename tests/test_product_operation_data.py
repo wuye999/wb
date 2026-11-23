@@ -211,7 +211,7 @@ class TestProductOperationData(unittest.TestCase):
 
     def test_stock_cli_finishes_all_preparation_before_writing_and_never_refreshes_snapshots(self):
         from operation_fixture import run_business_cli as main
-        from sellerops.features.catalog import products, mapping_sync
+        from sellerops.features.catalog import products, vc_mapping
         from sellerops.integrations.wildberries import stocks as stock_api
         before = {sid: self.save(sid) for sid in (1, 2)}
         events = []
@@ -230,13 +230,13 @@ class TestProductOperationData(unittest.TestCase):
         with patch.object(stocks.credentials, 'get', return_value=cred), \
                 patch.object(stocks.wb_api, 'make_session'), patch.object(stocks.time, 'sleep'), \
                 patch.object(stock_api, 'post_stocks', side_effect=submit), \
-                patch.object(products, 'fetch_all') as fetch, patch.object(mapping_sync, 'merge') as merge:
+                patch.object(products, 'fetch_all') as fetch, patch.object(vc_mapping, 'run_batch_set') as review:
             code = main(['--data-dir', str(self.data), 'product', 'stock', '--vc', VC,
                          '--shops', '1,2', '--amount', '0', '--apply', '--yes'])
         self.assertEqual(code, 0)
         self.assertEqual(events, ['read-1', 'read-2', 'write-1', 'write-2'])
         fetch.assert_not_called()
-        merge.assert_not_called()
+        review.assert_not_called()
         for sid in (1, 2):
             self.assertEqual(document(sid), before[sid])
 

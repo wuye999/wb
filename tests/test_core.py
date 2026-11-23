@@ -153,11 +153,15 @@ class TestExecutionContracts(unittest.TestCase):
         previous = paths.current.data_dir
         with tempfile.TemporaryDirectory() as directory:
             p = Path(directory)
-            (p / 'credentials.json').write_text(json.dumps({'bcs': {'token': 'fixture'}}), encoding='utf8')
+            (p / 'credentials.json').write_text(json.dumps({
+                'bcs': {'token': 'fixture'}, 'wb': {'warehouse_keyword': '  测试仓  '},
+            }), encoding='utf8')
             try:
                 paths.configure(p)
                 self.assertEqual(credentials.get().token, 'fixture')
+                self.assertEqual(credentials.get().wb_warehouse_keyword, '测试仓')
                 paths.configure(p / 'other')
                 self.assertEqual(credentials.get().token, '')
+                self.assertEqual(credentials.get().wb_warehouse_keyword, '')
             finally:
                 paths.configure(previous)

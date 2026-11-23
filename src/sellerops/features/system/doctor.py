@@ -21,7 +21,7 @@ def check_book(path: Path) -> dict:
     from openpyxl import load_workbook
     from sellerops.persistence.price_book import BOSS_COLUMNS
 
-    required = [BOSS_COLUMNS[k] for k in ('cn', 'dp')]
+    required = [BOSS_COLUMNS[k] for k in ('cn', 'price')]
     if not path.is_file():
         return {'status': 'missing', 'missing_headers': required}
     workbook = load_workbook(path, read_only=True, data_only=True)
@@ -95,7 +95,7 @@ def run(args) -> int:
     elif not shops or not any(shop['last_synced_at'] for shop in shops):
         args.next_action = '按需运行 sync 获取商品快照'
     elif pending:
-        args.next_action = '用 map candidates 查看待认领商品'
+        args.next_action = '用 map workbench 生成带图待认领工作台'
     print(args.summary)
     if args.next_action:
         print(args.next_action)

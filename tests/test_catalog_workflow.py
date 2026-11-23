@@ -113,12 +113,12 @@ class TestCatalogWorkflow(unittest.TestCase):
 
     def test_missing_sku_header_and_older_product_cache(self):
         book = Path(paths.current.price_book_xlsx)
-        write_book([('唯一中文名', 30, 'TEST')], headers=('产品中文名', '实际售价', 'vendorCode前缀码'))
+        write_book([('唯一中文名', 30, 'TEST')], headers=('产品中文名', '最低售价', 'vendorCode前缀码'))
         stat = book.stat()
         with closing(sqlite3.connect(paths.current.database)) as connection, connection:
             connection.executescript(db.SCHEMA.replace(',\n    name_unique INTEGER,\n    shipping_mode TEXT', ''))
-            connection.execute('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                               ('OLD', '旧缓存', 10, None, '', '', '', '', stat.st_mtime_ns, stat.st_size, db.now()))
+            connection.execute('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               ('OLD', '旧缓存', 10, '', '', '', '', stat.st_mtime_ns, stat.st_size, db.now()))
         self.assertEqual(self.cli('doctor', '--json'), 0)
         self.assertEqual(json.loads(self.stdout.getvalue())['data']['price_book']['status'], 'ready')
         [product] = MappingRepository.load_price_book()
@@ -128,9 +128,10 @@ class TestCatalogWorkflow(unittest.TestCase):
         write_book([('SKU-A', '原名', 10, 'TEST', 'STOCK-A', '马帮发货')])
         stat = Path(paths.current.price_book_xlsx).stat()
         with closing(sqlite3.connect(paths.current.database)) as connection, connection:
-            connection.executescript(db.SCHEMA.replace(',\n    shipping_mode TEXT', ''))
+            connection.executescript(db.SCHEMA.replace(',\n    shipping_mode TEXT', '').replace(
+                '    minimum_price REAL,', '    actual_price REAL,\n    minimum_price REAL,'))
             connection.execute('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                               ('SKU-A', '原名', 10, None, '', '', 'TEST', 'OLD-STOCK',
+                               ('SKU-A', '原名', 99, 10, '', '', 'TEST', 'OLD-STOCK',
                                 stat.st_mtime_ns, stat.st_size, db.now(), 1))
             db.set_vc(connection, LIVE, 'mapped', sku='SKU-A', source='manual')
 
@@ -139,12 +140,16 @@ class TestCatalogWorkflow(unittest.TestCase):
         self.assertEqual(columns.count('shipping_mode'), 1)
         owner = db.resolve_vc(LIVE)
         self.assertEqual((owner['stock_sku'], owner['shipping_mode']), ('OLD-STOCK', None))
+        self.assertEqual(owner['minimum_price'], 10)
 
         [product] = MappingRepository.load_price_book()
         self.assertEqual((product['stock_sku'], product['shipping_mode']), ('STOCK-A', '马帮发货'))
         owner = db.resolve_vc(LIVE)
         self.assertEqual((owner['sku'], owner['stock_sku'], owner['shipping_mode']),
                          ('SKU-A', 'STOCK-A', '马帮发货'))
+        with db.connect() as connection:
+            self.assertEqual(tuple(connection.execute('SELECT actual_price, minimum_price FROM products').fetchone()),
+                             (None, 10))
 
     def test_migration_preserves_prefix_ownership_and_fixes_unambiguous_sku(self):
         self.legacy()
@@ -212,8 +217,8 @@ class TestCatalogWorkflow(unittest.TestCase):
                      paths.shop_json_path(1), paths.shop_json_path(2)):
             Path(path).unlink()
         review = self.folder / 'review.json'
-        good = {'vc': LIVE, 'action': 'mapped', 'bossSku': 'SKU-B', 'bossCn': '新名'}
-        atomic_dump_json(review, [good, {'vc': UNKNOWN, 'action': 'mapped', 'bossCn': '重名'}])
+        good = {'vc': LIVE, 'action': 'mapped', 'sku': 'SKU-B', 'cn': '新名'}
+        atomic_dump_json(review, [good, {'vc': UNKNOWN, 'action': 'mapped', 'cn': '重名'}])
         self.assertEqual(self.cli('catalog', 'merge', str(review)), 1)
         self.assertEqual(db.resolve_vc(LIVE)['sku'], 'SKU-A')
         self.assertIn('找不到唯一商品', self.stderr.getvalue())
@@ -260,4 +265,4 @@ class TestCatalogWorkflow(unittest.TestCase):
             # Exercise the explicit access check with unchanged workbook metadata.
             with self.assertRaisesRegex(ValueError, '保存并关闭'):
                 MappingRepository.load_price_book(fresh=True)
-            self.assertEqual(MappingRepository.load_price_book()[0]['dp'], 10)
+            self.assertEqual(MappingRepository.load_price_book()[0]['minimum_price'], 10)

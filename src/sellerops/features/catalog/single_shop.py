@@ -6,7 +6,7 @@ from sellerops.domain.snapshot_values import first_price
 from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository
-from sellerops.persistence.headers import COL_ACTUAL_PRICE
+from sellerops.persistence.headers import COL_MIN_PRICE
 from sellerops.persistence.headers import COL_CN
 from sellerops.persistence.headers import COL_H
 from sellerops.persistence.headers import COL_IMG
@@ -19,7 +19,7 @@ from sellerops.persistence.headers import COL_WT
 from sellerops.features.catalog.mapping_excel import stock_summary
 
 SINGLE_SHOP_HEADERS = [
-    COL_CN, COL_VC, COL_ACTUAL_PRICE, '本店售价(CNY)', '折扣%', 'club折扣%',
+    COL_CN, COL_VC, COL_MIN_PRICE, '本店售价(CNY)', '折扣%', 'club折扣%',
     '本店库存', '本店nmId', '俄文标题', '主图链接',
     '尺寸长(cm)', '尺寸宽(cm)', '尺寸高(cm)', '毛重(kg)',
     '创建时间', '更新时间', '匹配类型'
@@ -34,7 +34,7 @@ SINGLE_UNMAPPED_HEADERS = [
 SINGLE_UNMAPPED_WIDTHS = [24, 32, 12, 8, 10, 14, 14, 18]
 
 def build_single_shop_xlsx(sid: int, out_path):
-    """构建单店铺映射表（包含该店真实在架商品、实际售价、实际库存、实际nmId等）。
+    """构建单店铺映射表（包含该店在架商品、本店售价、库存和 nmId 等）。
     包含 2 个 Sheet：
       1. 在架映射明细（已归属中文名的商品）
       2. 未映射在架商品（在架但未匹配到中文名的商品）
@@ -78,12 +78,12 @@ def build_single_shop_xlsx(sid: int, out_path):
         item = db.resolve_vc(vc, entries)
         if item['status'] == 'excluded':
             continue
-        cn, dp = item.get('cn'), item.get('dp')
+        cn, minimum_price = item.get('cn'), item.get('minimum_price')
         match_type = item.get('source') or ''
 
         if cn:
             ws1.append([
-                cn, vc, dp, price, disc, club, stock, nm_id, title, img,
+                cn, vc, minimum_price, price, disc, club, stock, nm_id, title, img,
                 L, W, H, weight, create_at, update_at, match_type
             ])
             cur_row = ws1.max_row

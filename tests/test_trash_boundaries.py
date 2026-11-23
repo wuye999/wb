@@ -19,8 +19,25 @@ def response(rows, failed=()):
     return {'ok': ok, 'fail': len(details) - ok, 'details': details}
 
 
-class TestMoscowResolution(unittest.TestCase):
-    def test_ambiguous_unavailable_and_invalid_moscow_are_not_cached(self):
+class TestWarehouseResolution(unittest.TestCase):
+    def setUp(self):
+        from sellerops.features.products import warehouse
+        self.cred = Mock(wb_warehouse_keyword='莫斯科')
+        config = patch.object(warehouse.credentials, 'get', return_value=self.cred)
+        config.start()
+        self.addCleanup(config.stop)
+        warehouse.clear_cache()
+        self.addCleanup(warehouse.clear_cache)
+
+    def test_missing_keyword_stops_before_listing_warehouses(self):
+        from sellerops.features.products import warehouse
+        self.cred.wb_warehouse_keyword = ''
+        with patch.object(warehouse, 'list_stores') as read, redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(warehouse.resolve_warehouse(42))
+        read.assert_not_called()
+        self.assertIn('data/credentials.json 中配置 wb.warehouse_keyword', output.getvalue())
+
+    def test_ambiguous_unavailable_and_invalid_matches_are_not_cached(self):
         from sellerops.features.products import warehouse
         cases = [
             [{'id': 100, 'name': '莫斯科一仓'}, {'id': 200, 'name': '莫斯科二仓'}],
@@ -31,7 +48,6 @@ class TestMoscowResolution(unittest.TestCase):
             [{'id': True, 'name': '莫斯科仓库'}],
             [{'id': 1.5, 'name': '莫斯科仓库'}],
         ]
-        self.addCleanup(warehouse.clear_cache)
         for stores in cases:
             with self.subTest(stores=stores), redirect_stdout(io.StringIO()):
                 warehouse.clear_cache()
@@ -42,8 +58,6 @@ class TestMoscowResolution(unittest.TestCase):
 
     def test_confirmed_ids_are_cached_separately_for_each_shop(self):
         from sellerops.features.products import warehouse
-        warehouse.clear_cache()
-        self.addCleanup(warehouse.clear_cache)
         with patch.object(warehouse, 'list_stores', side_effect=lambda sid: [{'id': sid * 100, 'name': '莫斯科仓库', 'warehouseId': 9}]) as read:
             self.assertEqual(warehouse.resolve_warehouse(42), 4200)
             self.assertEqual(warehouse.resolve_warehouse(43), 4300)
@@ -160,11 +174,12 @@ class TestTrashExecution(unittest.TestCase):
         self.execution, self.stocks, self.trash = execution, stocks, trash
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.csv = Path(directory.name) / 'ops.csv'
+        data = execution.config.DataPaths(Path(directory.name))
+        self.csv = Path(data.result_csv)
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(redirect_stdout(io.StringIO()))
-        self.stack.enter_context(patch.object(execution.config.current, 'result_csv', str(self.csv)))
+        self.stack.enter_context(patch.object(execution.config, 'current', data))
         self.stack.enter_context(patch.object(execution.time, 'sleep'))
         self.cred = Mock(root_version='fixture')
         self.cred.wb_shop.side_effect = lambda sid: {'shopId': sid}

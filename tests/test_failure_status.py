@@ -1,6 +1,7 @@
 """Failure propagation and submission boundaries with synthetic platform responses."""
 from contextlib import ExitStack, redirect_stdout
 import io
+from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -21,6 +22,13 @@ def credential_fixture():
 class TestCommandFailures(unittest.TestCase):
     def setUp(self):
         from sellerops.cli.main import build_parser
+        from sellerops.settings import paths
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        context = patch.object(paths, 'current', paths.DataPaths(Path(directory.name)))
+        context.start()
+        self.addCleanup(context.stop)
         self.parser = build_parser()
         self.output = redirect_stdout(io.StringIO())
         self.output.__enter__()

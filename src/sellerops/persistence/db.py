@@ -15,7 +15,6 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS products (
     sku TEXT PRIMARY KEY NOT NULL,
     cn TEXT NOT NULL,
-    actual_price REAL,
     minimum_price REAL,
     image_url TEXT,
     dimensions TEXT,
@@ -156,7 +155,7 @@ def set_vc(connection: sqlite3.Connection, vc: str, status: str, *, sku: str | N
 
 
 _VC_QUERY = """
-    SELECT m.*, p.cn, p.actual_price AS dp, p.minimum_price, p.image_url AS img,
+    SELECT m.*, p.cn, p.minimum_price, p.image_url AS img,
            p.dimensions, p.prefix, p.stock_sku, p.shipping_mode
       FROM vc_map m LEFT JOIN products p ON m.sku = p.sku
 """

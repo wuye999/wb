@@ -1,10 +1,11 @@
-"""官方商品、价格和单一莫斯科仓库存 → 兼容本地商品快照。"""
+"""官方商品、价格和已配置的 WB 仓库库存 → 兼容本地商品快照。"""
 from math import isfinite
-from sellerops.domain.warehouses import moscow_warehouse
+from sellerops.domain.warehouses import select_warehouse
 from typing import Any
 
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.integrations.wildberries.open_api import WBOpenAPI, OpenAPIResponseError
+from sellerops.settings import credentials
 from sellerops.settings import paths as config
 
 
@@ -127,7 +128,7 @@ def collect_shop(shop: OpenAPIShop) -> tuple[list[dict[str, Any]], dict[str, Any
     """完成本店全部读取后返回归一化行；本函数不写文件。"""
     api = WBOpenAPI(shop.api_key, region='cn')
     try:
-        warehouse = moscow_warehouse(api.warehouses())
+        warehouse = select_warehouse(api.warehouses(), credentials.get().wb_warehouse_keyword)
         cards = api.cards()
         # 在库存请求前验证完整规格，避免只查询部分规格后生成成功快照。
         normalize_rows(shop.id, cards, [], [], warehouse)

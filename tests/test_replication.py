@@ -58,6 +58,16 @@ class TestReplication(TestCase):
         self.assertIsNone(error)
         self.assertEqual((resolved.price, resolved.cn, resolved.nm_id), (52, 'fixture title', 777))
 
+    def test_ordinary_publish_requires_a_price_when_source_snapshot_has_none(self):
+        from catalog_fixture import write_book
+
+        write_book([('S1', 'fixture', 60, 'TEST', '')])
+        candidate = item()
+        candidate.price = None
+        resolved, error = publish_details.resolve_publish_details(candidate)
+        self.assertIsNone(resolved)
+        self.assertIn('--price', error)
+
     def test_bcs_marks_submitting_before_send_and_open_api_respects_unknown(self):
         from sellerops.features.publishing import publish_records
         from sellerops.persistence import db, open_api_publish
@@ -115,7 +125,7 @@ class TestReplication(TestCase):
     def test_resolver_uses_supplied_metadata_and_preserves_explicit_zero(self):
         with patch.object(publish_details,'fetch_card_json',side_effect=AssertionError('unexpected read')):
             resolved, err = publish_details.resolve_publish_details(
-                item(), mapping_state={}, price_book=[{'sku': 'S1', 'cn': 'fixture', 'prefix': 'TEST', 'floor': 415}])
+                item(), mapping_state={}, price_book=[{'sku': 'S1', 'cn': 'fixture', 'prefix': 'TEST'}])
         self.assertIsNone(err)
         self.assertEqual(resolved.stock,0)
         self.assertEqual(resolved.price,415.25)
@@ -129,8 +139,8 @@ class TestReplication(TestCase):
             book = openpyxl.Workbook()
             sheet = book.active
             sheet.title = 'Sheet1'
-            sheet.append(['尺寸','最低售价','实际售价','产品中文名','卖家SKU'])
-            sheet.append(['10*20*30/0.5','=83.05/2',90,'fixture','sku'])
+            sheet.append(['尺寸','最低售价','产品中文名','卖家SKU'])
+            sheet.append(['10*20*30/0.5','=83.05/2','fixture','sku'])
             book.save(file)
             book.close()
             with patch.object(replicate.config.current,'price_book_xlsx',str(file)), \

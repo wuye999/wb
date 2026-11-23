@@ -180,6 +180,7 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         self.addCleanup(paths.configure, previous)
         self.folder = Path(temporary.name)
         paths.configure(self.folder)
+        (self.folder / 'credentials.json').write_text(json.dumps({'wb': {'warehouse_keyword': '莫斯科'}}), encoding='utf8')
         stack = ExitStack()
         self.addCleanup(stack.close)
         self.output = io.StringIO()

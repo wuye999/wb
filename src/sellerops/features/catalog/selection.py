@@ -31,10 +31,9 @@ def selected_shops(args):
     return shops
 
 
-def load_state(shops: list[int], *, all_products: bool = False,
-               fresh: bool = False) -> tuple[dict, dict, list]:
+def load_state(shops: list[int], *, all_products: bool = False) -> tuple[dict, dict, list]:
     """保留显式 VC 操作与全店范围，按名称或 SKU 操作用已确认归属。"""
-    book = MappingRepository.load_price_book(require_price=False, fresh=fresh)
+    book = MappingRepository.load_price_book(require_price=False)
     by_sku = {row['sku']: row for row in book}
     entries = db.vc_entries()
     shop_rows = {sid: load_shop_rows(sid) for sid in shops}
