@@ -500,7 +500,7 @@ WB Open API：按相同完整 VC 将源店商品内容同步到其他店
 
 ## order match
 
-马帮待处理订单 SKU 匹配核对/更换（VC→映射表中文名→价格表库存SKU）
+按价格表发货方式分流待处理订单，匹配/更换马帮库存SKU
 
 实现入口 [run](../src/sellerops/features/orders/matching.py)
 

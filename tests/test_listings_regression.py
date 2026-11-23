@@ -251,7 +251,7 @@ class TestRegression(unittest.TestCase):
         from sellerops.settings import paths as config
         from sellerops.features.products import plans as ops_plan
         from sellerops.persistence.mappings import MappingRepository
-        header = ['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '库存SKU']
+        header = ['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '马帮库存SKU']
         rows = [['', 'SKU-1', '旧格式', '=F2*2', '10*10*10/0.1', 40.25, 'AAAA', 's1'], ['', 'SKU-2', '无乘数', '=F3', '10*10*10/0.1', 41.525, 'BBBB', 's2'], ['', 'SKU-3', '绝对引用', '=$F$4*2', '10*10*10/0.1', 39.775, 'CCCC', 's3'], ['', 'SKU-4', 'ROUND', '=ROUND(F5*1.3,2)', '10*10*10/0.1', 46.2, 'DDDD', 's4'], ['', 'SKU-5', '走缓存', '=VLOOKUP(A2,A:F,6,0)', '10*10*10/0.1', 50, 'EEEE', 's5'], ['', 'SKU-6', '纯数值', 100.75, '10*10*10/0.1', 60, 'FFFF', 's6'], ['', 'SKU-7', '无缓存', '=IF(A2>0,1,2)', '10*10*10/0.1', 70, 'GGGG', 's7']]
         wb_formula = openpyxl.Workbook()
         ws = wb_formula.active
@@ -374,7 +374,7 @@ class TestRegression(unittest.TestCase):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'Sheet1'
-        ws.append(['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '库存SKU'])
+        ws.append(['产品图片', '卖家SKU', '产品中文名', '实际售价', '尺寸', '最低售价', 'vendorCode前缀码', '马帮库存SKU'])
         ws.append(['', 'SKU-9', '测试品', 88.9, '10*10*10/0.1', 40, 'TEST', 's9'])
         tmp = tempfile.mkdtemp()
         try:
@@ -456,6 +456,7 @@ class TestRegression(unittest.TestCase):
         import shutil
         import tempfile
         import openpyxl
+        from pathlib import Path
         from unittest import mock
         from sellerops.settings import paths as config
         from sellerops.persistence import headers as xlsx_headers
@@ -463,6 +464,7 @@ class TestRegression(unittest.TestCase):
         from sellerops.features.publishing import publish_inputs as shelve_common
         from sellerops.persistence.mappings import MappingRepository
         tmp = tempfile.mkdtemp()
+        fixture = config.DataPaths(Path(tmp))
         try:
 
             def build(name, headers, row):
@@ -474,12 +476,12 @@ class TestRegression(unittest.TestCase):
                 ws.append(row)
                 wb.save(p)
                 return p
-            headers = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', '实际售价', 'vendorCode前缀码', '库存SKU']
+            headers = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', '实际售价', 'vendorCode前缀码', '马帮库存SKU']
             row = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 88.9, 'TEST', 's9']
             p_ok = build('boss_ok.xlsx', headers, row)
             xlsx_headers.reset_warnings()
-            with mock.patch.object(config.current, 'price_book_xlsx', p_ok), \
-                    mock.patch.object(config.current, 'database', os.path.join(tmp, 'fixture.db')):
+            with mock.patch.object(config, 'current', fixture), \
+                    mock.patch.object(fixture, 'price_book_xlsx', p_ok):
                 boss = MappingRepository.load_price_book()
                 pmap = MappingRepository.load_prefix_map()
                 shelve_dict = shelve_common.load_publish_catalog()
@@ -488,11 +490,11 @@ class TestRegression(unittest.TestCase):
             self.assertEqual(boss[0]['stock_sku'], 's9')
             self.assertEqual(pmap['TEST']['dp'], 88.9)
             self.assertEqual(shelve_dict['测试品']['dp'], 88.9)
-            headers_bad = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', 'vendorCode前缀码', '库存SKU']
+            headers_bad = ['产品图片', '卖家SKU', '产品中文名', '尺寸', '最低售价', 'vendorCode前缀码', '马帮库存SKU']
             row_bad = ['', 'SKU-9', '测试品', '10*10*10/0.1', 40, 'TEST', 's9']
             p_bad = build('boss_bad.xlsx', headers_bad, row_bad)
-            with mock.patch.object(config.current, 'price_book_xlsx', p_bad), \
-                    mock.patch.object(config.current, 'database', os.path.join(tmp, 'fixture.db')):
+            with mock.patch.object(config, 'current', fixture), \
+                    mock.patch.object(fixture, 'price_book_xlsx', p_bad):
                 with self.assertRaises(HeaderError):
                     MappingRepository.load_price_book()
                 self.assertEqual(MappingRepository.load_prefix_map()['TEST']['cn'], '\u6d4b\u8bd5\u54c1')

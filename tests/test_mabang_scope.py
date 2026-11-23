@@ -9,6 +9,7 @@ from urllib.parse import parse_qs
 from sellerops.cli.main import build_parser
 from sellerops.features.orders import matching
 from sellerops.integrations.mabang import orders
+from sellerops.persistence.price_book import SHIPPING_MODE_MABANG
 
 
 class TestPendingOrderScope(unittest.TestCase):
@@ -67,5 +68,6 @@ class TestPendingOrderScope(unittest.TestCase):
             return {'id':oid,'shopIdText':shop,'order_ellipsis_other_title':'数量:BCS-AAAA-123',
                     'order_ellipsis_title':'商品种类:1 数量:old*1'}
         classified = matching.classify([row(1,'configured'),row(2,'unrelated')],
-            {'BCS-AAAA-123':'fixture'},{'BCS-AAAA-123':'SKU'},{'configured':'configured(1)'})
+            {'BCS-AAAA-123':'fixture'}, {'BCS-AAAA-123':'SKU'},
+            {'BCS-AAAA-123': SHIPPING_MODE_MABANG}, {'configured':'configured(1)'})
         self.assertEqual([r['status'] for r in classified],['REPLACE','SKIP_SHOP'])

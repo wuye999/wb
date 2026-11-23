@@ -46,7 +46,7 @@ python run.py apply --plan P018 --json
 | 商品综合报告 | `report products`。低评分、高退货率、近 7/14 天出单和链接缺口见 [报告说明](PRODUCT_REPORT.md)。 |
 | 修改快照或映射 | 用户明确要求更新时用 sync。归属用 map 查看候选、确认或排除。 |
 | 导入、复制及官方上架 | `listing import`、`listing replicate`、`listing publish` 或 `listing create-cards`。官方通道使用 `listing publish-openapi`，按原记录续办。 |
-| 处理新订单 | `order process` 处理配置店铺的全部新增待处理订单。预报确认后才交运。发货群使用 `order group-ship`。 |
+| 处理新订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
 | 汇报修改结果 | 核对店铺、商品与规格数、受理任务号、阻止原因和完整明细路径。预览与提交沿用同样的目标。 |
 

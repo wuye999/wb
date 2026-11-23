@@ -22,12 +22,34 @@ class TestRegression(unittest.TestCase):
         self.addCleanup(paths.configure, paths.current.data_dir)
         with tempfile.TemporaryDirectory() as tmp:
             paths.configure(tmp)
-            write_book([('TESTSKU-6161', 'S-1', '=D2*2', 10, '\u6d4b\u8bd5\u5546\u54c1')],
-                       ('\u5e93\u5b58SKU', '\u5356\u5bb6SKU', '\u5b9e\u9645\u552e\u4ef7', '\u6700\u4f4e\u552e\u4ef7', '\u4ea7\u54c1\u4e2d\u6587\u540d'))
+            write_book([('TESTSKU-6161', 'S-1', '=D2*2', 10, '测试商品', ' 马帮发货 ')],
+                       ('马帮库存SKU', '卖家SKU', '实际售价', '最低售价', '产品中文名', '发货方式'))
             map_vcs({'BCS-AAAA-123': 'S-1'})
-            names, stock = matching.load_local_mapping()
-            self.assertEqual(names, {'BCS-AAAA-123': '\u6d4b\u8bd5\u5546\u54c1'})
+            names, stock, modes = matching.load_local_mapping()
+            self.assertEqual(names, {'BCS-AAAA-123': '测试商品'})
             self.assertEqual(stock, {'BCS-AAAA-123': 'TESTSKU-6161'})
+            self.assertEqual(modes, {'BCS-AAAA-123': '马帮发货'})
+
+    def test_mabang_classifies_all_shipping_modes(self):
+        from sellerops.features.orders import matching
+
+        vc = 'BCS-AAAA-1'
+        order = {'id': 1, 'shopIdText': '9352', 'order_ellipsis_other_title': f'数量:{vc}*1'}
+        invalid_note = '价格表发货方式未填或无效，请填 马帮发货/WB发货/不处理'
+        cases = [
+            ('马帮发货', 'SKU-1', 'REPLACE', 'SKU-1', '系统匹配=(空)；字符串不一致'),
+            ('马帮发货', '', 'NO_SKU', '', '发货方式为马帮发货，但缺少马帮库存SKU'),
+            ('WB发货', 'SKU-1', 'GROUP_SHIPPING', '', '价格表标记WB发货，跳过马帮匹配、预报和交运'),
+            ('不处理', 'SKU-1', 'SKIP_SHIPPING', '', '价格表标记不处理，跳过发货'),
+            ('', 'SKU-1', 'NO_SKU', '', invalid_note),
+            ('无效', 'SKU-1', 'NO_SKU', '', invalid_note),
+        ]
+        for mode, sku, status, expected_sku, note in cases:
+            with self.subTest(mode=mode, sku=sku):
+                [row] = matching.classify([order], {vc: '测试商品'}, {vc: sku}, {vc: mode},
+                                         {'9352': '袁州1(9352)'})
+                self.assertEqual((row['status'], row['expected_sku'], row['note']),
+                                 (status, expected_sku, note))
 
     def test_mabang_process_upload_wait_unit(self):
         """离线单测：正向判据 —— 命中 status=3「预报成功」即完成 + 店铺映射提取。
@@ -221,20 +243,24 @@ class TestRegression(unittest.TestCase):
         from unittest.mock import patch
         from sellerops.features.orders import forecast_selection, matching
         from sellerops.integrations.wildberries import client as wb
-        from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+        from sellerops.persistence.price_book import SHIPPING_MODE_MABANG, SHIPPING_MODE_SKIP, SHIPPING_MODE_WB
 
         cred = {'shop_map': {'9352': '袁州1(9352)'}}
         marked = {'id': 1, 'shopIdText': '9352', 'platformOrderId': '101',
                   'order_ellipsis_other_title': '商品编号*数量:BCS-AAAA-1*1'}
         normal = dict(marked, id=2, platformOrderId='102',
                       order_ellipsis_other_title='商品编号*数量:BCS-BBBB-2*1')
-        names = {'BCS-AAAA-1': '群发商品', 'BCS-BBBB-2': '普通商品'}
-        sku_values = {'BCS-AAAA-1': GROUP_SHIPPING_MARKER, 'BCS-BBBB-2': 'SKU-2'}
+        skipped = dict(marked, id=3, platformOrderId='103',
+                       order_ellipsis_other_title='商品编号*数量:BCS-CCCC-3*1')
+        names = {'BCS-AAAA-1': '群发商品', 'BCS-BBBB-2': '普通商品', 'BCS-CCCC-3': '跳过商品'}
+        sku_values = {'BCS-BBBB-2': 'SKU-2'}
+        modes = {'BCS-AAAA-1': SHIPPING_MODE_WB, 'BCS-BBBB-2': SHIPPING_MODE_MABANG,
+                 'BCS-CCCC-3': SHIPPING_MODE_SKIP}
         args = SimpleNamespace(days=0, page_size=100, apply=True)
 
         with patch.object(matching, 'get_mabang_cred', return_value=cred), \
-                patch.object(matching, 'fetch_pending_orders', return_value=[marked]), \
-                patch.object(matching, 'load_local_mapping', return_value=(names, sku_values)), \
+                patch.object(matching, 'fetch_pending_orders', return_value=[marked, skipped]), \
+                patch.object(matching, 'load_local_mapping', return_value=(names, sku_values, modes)), \
                 patch.object(matching, 'write_csv') as report, \
                 patch.object(matching, 'api_ready') as api_ready, \
                 patch.object(matching, 'search_stock') as search:
@@ -243,53 +269,54 @@ class TestRegression(unittest.TestCase):
         api_ready.assert_not_called()
         search.assert_not_called()
         self.assertEqual(matched.group_ids, {'1'})
-        self.assertEqual(report.call_args.args[0][0]['status'], matching.STATUS_GROUP_SHIPPING)
+        self.assertEqual(matched.failures, {})
+        self.assertEqual([row['status'] for row in report.call_args.args[0]],
+                         [matching.STATUS_GROUP_SHIPPING, matching.STATUS_SKIP_SHIPPING])
 
         with patch.object(forecast_selection, 'get_mabang_cred', return_value=cred), \
-                patch.object(forecast_selection, 'fetch_pending_orders', return_value=[marked, normal]), \
+                patch.object(forecast_selection, 'fetch_pending_orders', return_value=[marked, normal, skipped]), \
                 patch.object(forecast_selection, 'load_local_mapping',
-                             side_effect=[(names, sku_values), (names, {**sku_values, 'BCS-AAAA-1': 'SKU-1'})]), \
+                             side_effect=[(names, sku_values, modes),
+                                          (names, {**sku_values, 'BCS-AAAA-1': 'SKU-1'},
+                                           {**modes, 'BCS-AAAA-1': SHIPPING_MODE_MABANG})]), \
                 patch.object(wb, 'fetch_canceled_ids', return_value=set()):
             direct_args = SimpleNamespace(days=0, page_size=100)
             for forecast_args in (direct_args, args):
                 target, _ = forecast_selection.collect_forecast_orders(forecast_args, group_shipping_ids=matched.group_ids if forecast_args is args else ())
                 self.assertEqual([r['order_id'] for r in target], [2])
 
-    def test_mabang_stock_daily_ignores_historical_group_shipping_as_a_sku(self):
+    def test_mabang_stock_daily_counts_empty_sku_separately(self):
         from unittest.mock import patch
         from sellerops.features.orders.mabang_stock_daily import read_orders_daily
-        from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
 
         day = '2026-11-11'
         rows = [{'fields': {'日期': day, '库存SKU': sku, '订单量': qty}}
-                for sku, qty in [([{'text': GROUP_SHIPPING_MARKER}], 2), ('SKU-2', 3)]]
+                for sku, qty in [(None, 2), ('SKU-2', 3)]]
         with patch('sellerops.integrations.feishu.tables.list_records', return_value=rows):
             daily, no_sku = read_orders_daily('fixture', 'orders', day, day)
         self.assertEqual(daily, {day: {'SKU-2': 3}})
         self.assertEqual(no_sku, {day: 2})
 
     def test_feishu_register_inventory_sku_unit(self):
-        """离线单测：登记「库存SKU」取本地价格表（cn2sku），绝不取马帮系统匹配值。"""
-        import tempfile
+        """飞书「库存SKU」取价格表，WB 发货订单留空。"""
         from types import SimpleNamespace
         from unittest import mock
         from sellerops.features.orders import feishu_register as feishu_register
-        from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+        from sellerops.persistence.price_book import SHIPPING_MODE_MABANG, SHIPPING_MODE_WB
         order = {'id': '421000001', 'shopIdText': '9352', 'platformOrderId': '6060000001', 'paidTime': '2026-10-19 09:00:00', 'order_ellipsis_other_title': '商品编号*数量:BCS-AAAA-100000001*1', 'order_ellipsis_title': '商品编号*数量:BCS-WRNG-999*1'}
         args = SimpleNamespace(scope='pending', days=1, page_size=100, no_pending=True, date='', begin='', end='')
-        cases = [('SKU-LOCAL-1', set(), 'SKU-LOCAL-1'), (GROUP_SHIPPING_MARKER, set(), None),
-                 ('SKU-LOCAL-1', {order['id']}, None)]
-        with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.object(feishu_register, 'get_mabang_cred',
+        cases = [(SHIPPING_MODE_MABANG, set(), 'SKU-LOCAL-1'), (SHIPPING_MODE_WB, set(), None),
+                 (SHIPPING_MODE_MABANG, {order['id']}, None)]
+        vc = 'BCS-AAAA-100000001'
+        with mock.patch.object(feishu_register, 'get_mabang_cred',
                                   return_value={'shop_map': {'9352': '袁州1(9352)'}}), \
                 mock.patch.object(feishu_register, 'fetch_pending_orders', return_value=[order]), \
                 mock.patch.object(feishu_register.ProductSnapshotRepository, 'load_snapshot_document', return_value=None), \
                 mock.patch('sellerops.integrations.wildberries.client.fetch_canceled_ids', return_value=set()):
-            for sku, group_shipping_ids, expected in cases:
-
-                with self.subTest(sku=sku, group_shipping_ids=group_shipping_ids), \
+            for mode, group_shipping_ids, expected in cases:
+                with self.subTest(mode=mode, group_shipping_ids=group_shipping_ids), \
                         mock.patch.object(feishu_register, 'mabang_load_local_mapping',
-                                          return_value=({'BCS-AAAA-100000001': '测试品'}, {'BCS-AAAA-100000001': sku})):
+                                          return_value=({vc: '测试品'}, {vc: 'SKU-LOCAL-1'}, {vc: mode})):
                     records, _skip, notice, _cred = feishu_register.build_records(args, group_shipping_ids=group_shipping_ids)
                     self.assertEqual(len(records), 1)
                     self.assertEqual(records[0]['库存SKU'], expected)

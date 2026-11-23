@@ -20,7 +20,7 @@ from sellerops.integrations.wildberries.fbs_api import BATCH_SIZE, FBSRequestErr
 from sellerops.persistence.fbs_shipments import (
     SINGAPORE, journal_path, load_journal, pdf_paths, save_journal, supply_names,
 )
-from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+from sellerops.persistence.price_book import SHIPPING_MODE_WB, VALID_SHIPPING_MODES
 from sellerops.settings import paths
 
 
@@ -42,20 +42,27 @@ class OrderGroup:
 
 def _groups(orders: list[dict], warehouse_id: int, catalog: tuple,
             selected_name: str) -> tuple[list[OrderGroup], list[dict]]:
-    mapping, sku_values = catalog
+    mapping, _, modes = catalog
     groups, blocked = defaultdict(list), []
     for row in orders:
         warehouse = row.get('warehouseId')
         if type(warehouse) is int and warehouse > 0 and warehouse != warehouse_id:
             continue
         article = row.get('article')
-        cn = mapping.get(article.strip()) if isinstance(article, str) else None
+        vc = article.strip() if isinstance(article, str) else ''
+        cn = mapping.get(vc)
         if not cn:
             if warehouse == warehouse_id:
                 blocked.append({'order_ids': [row['id']], 'vendor_code': article,
                                 'reason': '莫斯科仓订单无法按完整 VC 确认中文名'})
             continue
-        if sku_values.get(article.strip()) != GROUP_SHIPPING_MARKER or (selected_name and cn != selected_name):
+        if selected_name and cn != selected_name:
+            continue
+        mode = modes.get(vc)
+        if mode not in VALID_SHIPPING_MODES and type(warehouse) is int and warehouse == warehouse_id:
+            blocked.append({'order_ids': [row['id']], 'vendor_code': article,
+                            'reason': f'{cn}（{vc}）的「发货方式」未填或无效，请填 马帮发货/WB发货/不处理'})
+        if mode != SHIPPING_MODE_WB:
             continue
         if type(warehouse) is not int or warehouse != warehouse_id:
             blocked.append({'product_name': cn, 'order_ids': [row['id']],

@@ -181,7 +181,7 @@ def select_shops(shops: Sequence[Dict[str, Any]], token: str) -> List[Dict[str, 
 
 
 def load_cn_stock_sku() -> Dict[str, str]:
-    """商品价格表 → {商品中文名: 库存SKU}（第 8 列；缺列/空值 → ""）。
+    """商品价格表 → {商品中文名: 马帮库存SKU}（按表头读取）。
 
     供「按中文名统计」补「库存SKU」列；表缺失或读取异常时返回空 dict（不中断主流程）。
     """
@@ -192,7 +192,7 @@ def load_cn_stock_sku() -> Dict[str, str]:
             if cn and cn not in out:
                 out[cn] = (it.get("stock_sku") or "").strip()
     except Exception as ex:
-        print(f"  [警告] 读取商品价格表「库存SKU」失败（{type(ex).__name__}: {ex}）；库存SKU 列将留空")
+        print(f"  [警告] 读取商品价格表「马帮库存SKU」失败（{type(ex).__name__}: {ex}）；库存SKU 列将留空")
     return out
 
 
@@ -201,7 +201,7 @@ def aggregate_by_cn(orders: Sequence[Dict[str, Any]],
     """按「商品中文名」聚合（核心产出）。
 
     排序：商品数降序 → 同数按中文名升序；`(中文名未知)` 等未归类桶恒排最后。
-    `cn_stock_sku` = {商品中文名: 库存SKU}（读商品价格表），为每行补「库存SKU」列。
+    `cn_stock_sku` = {商品中文名: 马帮库存SKU}（读商品价格表），为每行补「库存SKU」列。
     """
     stat: Dict[str, Dict[str, Any]] = {}
     for o in orders:
@@ -289,7 +289,7 @@ def collect(days: int = 0, begin: str = "", end: str = "", date: str = "", shops
             resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True)
         except Exception as ex:
             print(f"  [警告] 中文名真源（映射表）加载失败（{type(ex).__name__}: {ex}）；中文名将留空")
-    cn_stock_sku = load_cn_stock_sku()   # {中文名: 库存SKU}（商品价格表第 8 列）
+    cn_stock_sku = load_cn_stock_sku()
 
     rows: List[Dict[str, Any]] = []
     supp_rows: List[Dict[str, Any]] = []

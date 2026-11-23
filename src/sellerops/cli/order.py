@@ -13,7 +13,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--page-size", type=int, default=50, help="分页每页条数")
     bind(p, 'sellerops.features.orders.orders', 'run')
 
-    p = sub.add_parser('match', help="马帮待处理订单 SKU 匹配核对/更换（VC→映射表中文名→价格表库存SKU）")
+    p = sub.add_parser('match', help="按价格表发货方式分流待处理订单，匹配/更换马帮库存SKU")
     p.add_argument("--days", type=int, default=0, help="新增待处理订单日期范围：0=不限日期（默认）；正数=最近 N 天")
     p.add_argument("--page-size", type=int, default=100, help="订单列表每页条数")
     p.add_argument("--apply", action="store_true", help="真正更换错误匹配（默认 dry-run 只出报表）")

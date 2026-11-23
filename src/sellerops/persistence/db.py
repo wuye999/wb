@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS products (
     book_mtime_ns INTEGER NOT NULL,
     book_size INTEGER NOT NULL,
     refreshed_at TEXT NOT NULL,
-    name_unique INTEGER
+    name_unique INTEGER,
+    shipping_mode TEXT
 );
 CREATE TABLE IF NOT EXISTS vc_map (
     vc TEXT PRIMARY KEY NOT NULL,
@@ -120,6 +121,12 @@ def connect(*, write: bool = False, migration: bool = False) -> Iterator[sqlite3
         connection.execute('PRAGMA foreign_keys = ON')
         if write or not exists:
             connection.executescript(SCHEMA)
+        shipping_mode_column = "SELECT 1 FROM pragma_table_info('products') WHERE name = 'shipping_mode'"
+        if exists and not connection.execute(shipping_mode_column).fetchone():
+            with connection:
+                connection.execute('BEGIN IMMEDIATE')
+                if not connection.execute(shipping_mode_column).fetchone():
+                    connection.execute('ALTER TABLE products ADD COLUMN shipping_mode TEXT')
         connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         if not migration and exists and not any(
             connection.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone() for table in TABLES
@@ -150,7 +157,7 @@ def set_vc(connection: sqlite3.Connection, vc: str, status: str, *, sku: str | N
 
 _VC_QUERY = """
     SELECT m.*, p.cn, p.actual_price AS dp, p.minimum_price, p.image_url AS img,
-           p.dimensions, p.prefix, p.stock_sku
+           p.dimensions, p.prefix, p.stock_sku, p.shipping_mode
       FROM vc_map m LEFT JOIN products p ON m.sku = p.sku
 """
 

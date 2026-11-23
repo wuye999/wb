@@ -48,10 +48,14 @@ BOSS_COLUMNS = {
     "dim": "尺寸",
     "price": "最低售价",
     "prefix": "vendorCode前缀码",
-    "stock_sku": "库存SKU",
+    "stock_sku": "马帮库存SKU",
+    "shipping_mode": "发货方式",
 }
 
-GROUP_SHIPPING_MARKER = "在发货群发货"
+SHIPPING_MODE_MABANG = "马帮发货"
+SHIPPING_MODE_WB = "WB发货"
+SHIPPING_MODE_SKIP = "不处理"
+VALID_SHIPPING_MODES = (SHIPPING_MODE_MABANG, SHIPPING_MODE_WB, SHIPPING_MODE_SKIP)
 
 
 def price_book_columns(ws, path: str, required=("cn", "dp")):
@@ -190,10 +194,10 @@ def warn_unresolved(path: str, by_cache: List[Tuple], missing: List[Tuple]) -> N
 
 
 def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, Any]]:
-    """商品价格表 → [{idx, sku, cn, dp, minimum_price, img, floor, prefix, stock_sku}]
+    """商品价格表 → [{idx, sku, cn, dp, minimum_price, img, floor, prefix, stock_sku, shipping_mode}]
 
     列全部**按表头名定位**（不依赖列位，用户可随意插列/挪列）：
-    产品图片 / 卖家SKU / 产品中文名 / 实际售价 / 尺寸 / 最低售价 / vendorCode前缀码 / 库存SKU。
+    产品图片 / 卖家SKU / 产品中文名 / 实际售价 / 尺寸 / 最低售价 / vendorCode前缀码 / 马帮库存SKU / 发货方式。
     「实际售价」可写数值或公式（`=F2*2` / `=F2` / `=$F$2*2` / `=ROUND(F2*1.3,2)`）；
     公式不可解析时回退 Excel 缓存值，仍取不到则 dp/floor=None 并打印 [警告]（不再静默空价）。
     缺「实际售价」列 → HeaderError（fail-fast，避免改价/上架全部跳过）。
@@ -243,6 +247,7 @@ def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, 
                 dimensions = val(row, cols["dim"])
                 if isinstance(dimensions, str) and dimensions.startswith("="):
                     dimensions = dimension_cache.get(row[0].row)
+                shipping_mode = val(row, cols["shipping_mode"])
                 items.append({
                     "idx": len(items) + 1,
                     "sku": sku,
@@ -253,6 +258,7 @@ def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, 
                     "floor": floor_price(dp),
                     "prefix": str(val(row, i_prefix) or "").strip().upper(),
                     "stock_sku": str(val(row, i_stock) or "").strip(),
+                    "shipping_mode": str(shipping_mode).strip() if shipping_mode is not None else "",
                     "dimensions": dimensions,
                 })
         finally:

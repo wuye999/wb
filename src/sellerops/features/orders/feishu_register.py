@@ -14,7 +14,7 @@ from sellerops.core import utils as common
 from sellerops.settings import credentials
 from sellerops.features.orders.matching import load_local_mapping as mabang_load_local_mapping
 from sellerops.features.orders.matching import parse_order as mabang_parse_order
-from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+from sellerops.persistence.price_book import SHIPPING_MODE_WB
 from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.integrations.feishu.tables import invoke
 from sellerops.integrations.feishu.tables import list_records
@@ -93,7 +93,7 @@ def _merge_pending(orders, cred, args):
     """把新增待处理订单并入登记范围，按平台单号去重；days=0 不限日期。
 
     为什么需要（2026-09-17 用户规则）：只做了匹配、未进预报/上传/交运流程的订单
-    （如 NO_SKU=价格表缺库存SKU）只存在于「待处理」tab，orderalllist 拉不到 →
+    （如 NO_SKU=价格表发货配置待补正）只存在于「待处理」tab，orderalllist 拉不到 →
     只按 orderalllist 登记会漏登这些订单（实测 419539845 / 419490094 缺失）。
     这些订单的「库存SKU」允许留空，商品中文名以本地映射表（vc→中文名）为准。
     """
@@ -152,7 +152,7 @@ def build_records(args, *, group_shipping_ids=()):
     if not orders:
         return [], {"空": 0}, {}, cred
 
-    vc2cn, cn2sku = mabang_load_local_mapping()
+    vc2cn, vc2sku, vc2mode = mabang_load_local_mapping()
     resolve_cn = _cn_resolver(vc2cn)      # 登记填名三级回退（映射表 → vc_known → 前缀码）
 
     # 各店快照 vendorCode→nmId（wb编号=下单店铺自己的码）
@@ -200,8 +200,8 @@ def build_records(args, *, group_shipping_ids=()):
             notice["VC不在映射表(仍登记·中文名留空)"] = notice.get("VC不在映射表(仍登记·中文名留空)", 0) + 1
         elif not p["vc"]:
             notice["无BCS编号(仍登记)"] = notice.get("无BCS编号(仍登记)", 0) + 1
-        stock_sku = cn2sku.get(p['vc']) or None
-        if stock_sku == GROUP_SHIPPING_MARKER or str(p["order_id"]) in group_shipping_ids:
+        stock_sku = vc2sku.get(p['vc']) or None
+        if vc2mode.get(p['vc']) == SHIPPING_MODE_WB or str(p["order_id"]) in group_shipping_ids:
             stock_sku = None
             key = "发货群订单(库存SKU留空)"
             notice[key] = notice.get(key, 0) + 1
@@ -221,9 +221,7 @@ def build_records(args, *, group_shipping_ids=()):
             "店铺": [shop_label],
             "BCS编号": p["vc"] or None,
             "商品中文名": (cn or None) if p["vc"] else None,
-            # 库存SKU：以本地商品价格表「库存SKU」列为准（用户规则 2026-09-17）；
-            # 本地查不到（含只匹配未走完预报/上传/交运流程的单）→ 留空，
-            # 不再回写马帮系统的匹配值（避免 BCS-FSCH-982897107 / BCS-xxx-40-56 这类非法值）
+            # 飞书「库存SKU」取价格表的「马帮库存SKU」，WB 发货留空。
             "库存SKU": stock_sku,
             "wb编号": wb_code or None,
             "商品链接": (f"https://www.wildberries.ru/catalog/{wb_code}/detail.aspx"

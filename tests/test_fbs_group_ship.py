@@ -10,13 +10,13 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from sellerops.features.orders import fbs_group_ship, matching
+from sellerops.features.orders import fbs_group_ship
 from sellerops.features.orders.fbs_pdfs import check_pair, export_pair
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.integrations.wildberries.fbs_api import FBSRequestError, WBFBSAPI
 from sellerops.integrations.wildberries.open_api import OpenAPIResponseError
 from sellerops.persistence.fbs_shipments import load_journal, pdf_paths, supply_names
-from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+from sellerops.persistence.price_book import SHIPPING_MODE_MABANG, SHIPPING_MODE_SKIP, SHIPPING_MODE_WB
 from sellerops.settings import paths
 
 
@@ -25,8 +25,9 @@ SECOND = OpenAPIShop(9353, '袁州2', 'synthetic')
 SUPPLY = 'WB-GI-1234567'
 PRODUCT = '黑丝假发'
 CATALOG = ({'BCS-HSJF-A': PRODUCT, 'BCS-HSJF-B': PRODUCT, 'BCS-OTHER-A': '\u5176\u4ed6\u5546\u54c1'},
-           {'BCS-HSJF-A': GROUP_SHIPPING_MARKER, 'BCS-HSJF-B': GROUP_SHIPPING_MARKER,
-            'BCS-OTHER-A': 'other-stock'})
+           {'BCS-OTHER-A': 'other-stock'},
+           {'BCS-HSJF-A': SHIPPING_MODE_WB, 'BCS-HSJF-B': SHIPPING_MODE_WB,
+            'BCS-OTHER-A': SHIPPING_MODE_MABANG})
 
 
 def order(order_id, **changes):
@@ -153,12 +154,17 @@ class FBSWorkflowTests(unittest.TestCase):
         self.assertEqual(self.run_workflow(apply=True, resume=True), 0)
         self.pdf.assert_called_once()
 
-    def test_mabang_routes_the_marker_out_of_sku_matching(self):
-        item = {'shop': '袁州1', 'kind': '1', 'vc': 'BCS-HSJF-A', 'matched_sku': ''}
-        with patch.object(matching, 'parse_order', return_value=item):
-            row = matching.classify([{}], CATALOG[0], {'BCS-HSJF-A': GROUP_SHIPPING_MARKER},
-                                    {'袁州1': '袁州1(9352)'})[0]
-        self.assertEqual((row['status'], row['expected_sku']), ('GROUP_SHIPPING', ''))
+    def test_shipping_modes_block_missing_or_invalid_values_in_configured_warehouse(self):
+        names, stocks, modes = CATALOG
+        modes = {**modes, 'BCS-HSJF-B': '', 'BCS-HSJF-C': '无效', 'BCS-HSJF-D': SHIPPING_MODE_SKIP}
+        names = {**names, 'BCS-HSJF-C': PRODUCT, 'BCS-HSJF-D': PRODUCT}
+        orders = [order(1), order(2, article='BCS-HSJF-B'), order(3, article='BCS-HSJF-C'),
+                  order(4, article='BCS-HSJF-D'), order(5, article='BCS-OTHER-A'),
+                  order(6, article='BCS-HSJF-B', warehouseId=999)]
+        groups, blocked = fbs_group_ship._groups(orders, 567, (names, stocks, modes), '')
+        self.assertEqual([group.ids for group in groups], [[1]])
+        self.assertEqual([row['order_ids'] for row in blocked], [[2], [3]])
+        self.assertTrue(all('「发货方式」' in row['reason'] for row in blocked))
 
 
 class FBSContractTests(unittest.TestCase):

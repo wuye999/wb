@@ -55,8 +55,8 @@ def collect_forecast_orders(args, *, failed_ids=(), group_shipping_ids=(), match
     if not orders:
         print("[完成] 无待处理订单")
         return [], cred
-    vc2cn, cn2sku = load_local_mapping()
-    recs = classify(orders, vc2cn, cn2sku, shop_map)
+    vc2cn, vc2sku, vc2mode = load_local_mapping()
+    recs = classify(orders, vc2cn, vc2sku, vc2mode, shop_map)
     for rec in recs:
         if rec["status"] != "SKIP_SHOP" and str(rec["order_id"]) in group_shipping_ids:
             rec["status"] = STATUS_GROUP_SHIPPING

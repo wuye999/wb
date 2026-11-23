@@ -116,13 +116,35 @@ class TestCatalogWorkflow(unittest.TestCase):
         write_book([('唯一中文名', 30, 'TEST')], headers=('产品中文名', '实际售价', 'vendorCode前缀码'))
         stat = book.stat()
         with closing(sqlite3.connect(paths.current.database)) as connection, connection:
-            connection.executescript(db.SCHEMA.replace(',\n    name_unique INTEGER', ''))
+            connection.executescript(db.SCHEMA.replace(',\n    name_unique INTEGER,\n    shipping_mode TEXT', ''))
             connection.execute('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                                ('OLD', '旧缓存', 10, None, '', '', '', '', stat.st_mtime_ns, stat.st_size, db.now()))
         self.assertEqual(self.cli('doctor', '--json'), 0)
         self.assertEqual(json.loads(self.stdout.getvalue())['data']['price_book']['status'], 'ready')
         [product] = MappingRepository.load_price_book()
         self.assertEqual((product['sku'], product['cn'], product['name_unique']), ('唯一中文名', '唯一中文名', 1))
+
+    def test_old_database_adds_shipping_mode_and_refreshes_unchanged_book(self):
+        write_book([('SKU-A', '原名', 10, 'TEST', 'STOCK-A', '马帮发货')])
+        stat = Path(paths.current.price_book_xlsx).stat()
+        with closing(sqlite3.connect(paths.current.database)) as connection, connection:
+            connection.executescript(db.SCHEMA.replace(',\n    shipping_mode TEXT', ''))
+            connection.execute('INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               ('SKU-A', '原名', 10, None, '', '', 'TEST', 'OLD-STOCK',
+                                stat.st_mtime_ns, stat.st_size, db.now(), 1))
+            db.set_vc(connection, LIVE, 'mapped', sku='SKU-A', source='manual')
+
+        with db.connect() as connection:
+            columns = [row['name'] for row in connection.execute('PRAGMA table_info(products)')]
+        self.assertEqual(columns.count('shipping_mode'), 1)
+        owner = db.resolve_vc(LIVE)
+        self.assertEqual((owner['stock_sku'], owner['shipping_mode']), ('OLD-STOCK', None))
+
+        [product] = MappingRepository.load_price_book()
+        self.assertEqual((product['stock_sku'], product['shipping_mode']), ('STOCK-A', '马帮发货'))
+        owner = db.resolve_vc(LIVE)
+        self.assertEqual((owner['sku'], owner['stock_sku'], owner['shipping_mode']),
+                         ('SKU-A', 'STOCK-A', '马帮发货'))
 
     def test_migration_preserves_prefix_ownership_and_fixes_unambiguous_sku(self):
         self.legacy()

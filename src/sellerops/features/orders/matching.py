@@ -14,7 +14,7 @@ from sellerops.integrations.mabang.orders import fetch_order_item_ids
 from sellerops.integrations.mabang.orders import search_stock
 from sellerops.integrations.mabang.orders import replace_order_item
 from sellerops.integrations.mabang.session import MabangAuthError
-from sellerops.persistence.price_book import GROUP_SHIPPING_MARKER
+from sellerops.persistence.price_book import SHIPPING_MODE_MABANG, SHIPPING_MODE_SKIP, SHIPPING_MODE_WB
 
 VC_RE = re.compile(r"(BCS-[A-Z]{4}-(?:(?:ozon-card-)?[A-Za-z0-9-]+|[^/*\s]+/\d+))(?:\*\d+)?$")
 
@@ -22,21 +22,23 @@ VC_RE = re.compile(r"(BCS-[A-Z]{4}-(?:(?:ozon-card-)?[A-Za-z0-9-]+|[^/*\s]+/\d+)
 TITLE_SKU_RE = re.compile(r"数量:(.*)$")
 
 STATUS_GROUP_SHIPPING = "GROUP_SHIPPING"
+STATUS_SKIP_SHIPPING = "SKIP_SHIPPING"
 
-def load_local_mapping() -> tuple[dict[str, str], dict[str, str]]:
-    """Resolve the Chinese name and stock SKU from the same seller SKU."""
+def load_local_mapping() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """按完整 VC 读取同一商品行的中文名、马帮库存 SKU 和发货方式。"""
     from sellerops.persistence import db
     from sellerops.persistence.mappings import MappingRepository
 
     MappingRepository.load_price_book(require_price=False, fresh=True)
     entries = db.vc_entries()
-    names, stocks = {}, {}
+    names, stocks, modes = {}, {}, {}
     for vc in entries:
         row = db.resolve_vc(vc, entries)
         if row['status'] == 'mapped':
             names[vc] = row['cn']
             stocks[vc] = row['stock_sku']
-    return names, stocks
+            modes[vc] = row['shipping_mode']
+    return names, stocks, modes
 
 
 def parse_order(o):
@@ -63,8 +65,8 @@ def parse_order(o):
         "channel_selected": "logisticsChannelText" in lg_html,
     }
 
-def classify(orders, vc2cn, cn2sku, shop_map):
-    """给每个订单解析 VC → 中文名 → 期望SKU；非目标店铺标记 SKIP_SHOP，返回记录列表"""
+def classify(orders, vc2cn, vc2sku, vc2mode, shop_map):
+    """按完整 VC 确认商品，根据价格表的发货方式分流目标店铺订单。"""
     recs = []
     for o in orders:
         p = parse_order(o)
@@ -92,22 +94,26 @@ def classify(orders, vc2cn, cn2sku, shop_map):
             recs.append(rec)
             continue
         rec["cn_name"] = cn
-        sku = cn2sku.get(p['vc'])
-        if not sku:
-            rec["status"] = "NO_SKU"
-            rec["note"] = "中文名在商品价格表无库存SKU"
-            recs.append(rec)
-            continue
-        if sku == GROUP_SHIPPING_MARKER:
+        mode = vc2mode.get(p["vc"])
+        sku = vc2sku.get(p["vc"])
+        if mode == SHIPPING_MODE_WB:
             rec["status"] = STATUS_GROUP_SHIPPING
-            rec["note"] = "价格表标记在发货群发货，跳过马帮匹配、预报和交运"
-            recs.append(rec)
-            continue
-        rec["expected_sku"] = sku
-        same = (sku.lower() == p["matched_sku"].lower())
-        # ★ 用户规则：无论系统是否已匹配（含字符串一致），一律强制更换为 VC 链路查到的 SKU
-        rec["status"] = "REPLACE"
-        rec["note"] = f"系统匹配={p['matched_sku'] or '(空)'}；字符串{'一致' if same else '不一致'}"
+            rec["note"] = "价格表标记WB发货，跳过马帮匹配、预报和交运"
+        elif mode == SHIPPING_MODE_SKIP:
+            rec["status"] = STATUS_SKIP_SHIPPING
+            rec["note"] = "价格表标记不处理，跳过发货"
+        elif mode != SHIPPING_MODE_MABANG:
+            rec["status"] = "NO_SKU"
+            rec["note"] = "价格表发货方式未填或无效，请填 马帮发货/WB发货/不处理"
+        elif not sku:
+            rec["status"] = "NO_SKU"
+            rec["note"] = "发货方式为马帮发货，但缺少马帮库存SKU"
+        else:
+            rec["expected_sku"] = sku
+            same = (sku.lower() == p["matched_sku"].lower())
+            # 系统匹配一致时也强制更换为价格表指定的 SKU。
+            rec["status"] = "REPLACE"
+            rec["note"] = f"系统匹配={p['matched_sku'] or '(空)'}；字符串{'一致' if same else '不一致'}"
         recs.append(rec)
     return recs
 
@@ -196,15 +202,15 @@ def write_csv(recs):
                                       time.strftime("%Y%m%d_%H%M%S"), _w)
 
 def report_no_sku(recs):
-    """NO_SKU 明细报告（控制台 + CSV）：价格表缺库存 SKU 的订单需人工处理"""
+    """报告需要修正发货方式或补填马帮库存 SKU 的订单。"""
     rows = [r for r in recs if r.get("status") == "NO_SKU"]
     if not rows:
         return
-    print(f"\n[⚠ 需人工处理] 价格表缺库存 SKU 的订单 {len(rows)} 单"
+    print(f"\n[⚠ 需人工处理] 价格表发货配置待补正的订单 {len(rows)} 单"
           "（仅登记/匹配，未进批次生成/上传/交运）：")
     for r in rows:
         print(f"  {r['order_id']} [{r['shop_bcs'] or r['shop']}] "
-              f"{r['vc'] or '(无VC)'} {r['cn_name']}")
+              f"{r['vc'] or '(无VC)'} {r['cn_name']} | {r['note']}")
 
     def _w(f):
         w = csv.writer(f)
@@ -277,8 +283,8 @@ def match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
         print("[完成] 无待处理订单")
         return result
 
-    vc2cn, cn2sku = load_local_mapping()
-    recs = classify(orders, vc2cn, cn2sku, shop_map)
+    vc2cn, vc2sku, vc2mode = load_local_mapping()
+    recs = classify(orders, vc2cn, vc2sku, vc2mode, shop_map)
     result.group_ids = {str(r["order_id"]) for r in recs
                                      if r["status"] == STATUS_GROUP_SHIPPING and r["order_id"]}
 
@@ -328,7 +334,7 @@ def match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
     print(f"\n[汇总] 明细: {csv_path or '（未生成，见上方警告）'}")
     # The combined workflow handles failed IDs explicitly and keeps other orders moving.
     result.failures = {str(r["order_id"]): r["note"] for r in recs if r["order_id"]
-                       and r["status"] not in {"SKIP_SHOP", STATUS_GROUP_SHIPPING, "REPLACE"}}
+                       and r["status"] not in {"SKIP_SHOP", STATUS_GROUP_SHIPPING, STATUS_SKIP_SHIPPING, "REPLACE"}}
     result.matched_ids = {str(r["order_id"]) for r in recs if r["status"] == "REPLACE" and r["order_id"]}
     return result
 

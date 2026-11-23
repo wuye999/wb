@@ -12,9 +12,9 @@ def run(args):
     common.ensure_utf8_stdout()
     t0 = time.time()
 
-    # ① 匹配商品（强制更换为价格表库存SKU）
+    # ① 发货分流并匹配马帮库存 SKU
     print("\n" + "#" * 72)
-    print("# 步骤 ① 马帮订单商品匹配更换（VC→中文名→库存SKU）")
+    print("# 步骤 ① 按发货方式分流并更换马帮库存SKU")
     print("#" * 72)
     matched = match_orders(days=args.days, page_size=args.page_size, apply=args.apply)
     if matched.stopped:
@@ -35,7 +35,7 @@ def run(args):
         print("[中止] 预报/交运失败")
         return code
 
-    # ③ 自动登记飞书（库存SKU 取自本地价格表）
+    # ③ 自动登记飞书
     print("\n" + "#" * 72)
     print("# 步骤 ③ 新订单登记飞书（最近500条去重，只登新增）")
     print("#" * 72)
