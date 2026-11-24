@@ -4,20 +4,18 @@ Wildberries、BCS、马帮、飞书和 AI 客服的命令行运营工具。需�
 
 ## 用中文交代运营任务
 
-可以对 AI 说“把 A 店和 B 店里中文名为旅行杯的商品库存改成 25”或“生成 A 店近 14 天的商品运营报告”。AI 用店铺列表定位 ID，按完整中文名匹配，输出命中链接、目标数量、受理结果和明细路径。有相似名称时，只有明确要求“名称包含”才采用包含筛选。
-
-WorkBuddy 先用 `doctor --json` 体检。首次配置时用 `sync` 获取快照，用 `map workbench --json` 生成看图归属工作台，再用 `map batch-set --file` 或 `catalog merge` 保存审核结果。使用 `ops` 预览商品操作，展示单号和影响范围，经运营确认后用 `apply --plan` 提交。完整流程见 [日常操作指南](docs/AI_GUIDE.md)。本工具兼容各类支持调用本地命令行的 AI 客户端，文档默认以免费且满足日常运营需求的 WorkBuddy 为例。
+电商运营可以用中文向 WorkBuddy 交代任务，例如“生成 A 店近 14 天的商品运营报告”，也可以使用其他支持调用本地命令行的 AI 客户端。零代码上手步骤和日常话术见 [用户使用手册](user-guide/README.md)。
 
 ## 从这里开始
 
 | 读者或任务 | 阅读入口 |
 | --- | --- |
-| 团队管理与电商运营（WorkBuddy 快速上手） | [用户使用手册](user-guide/README.md)：零代码功能速览、快速上手与日常话术速查 |
-| 第一次使用 | 本页安装与数据准备 → [配置](docs/CONFIGURATION.md) → [操作流程](docs/USAGE.md) |
-| 日常查询与运营 | [操作流程](docs/USAGE.md)、[命令参考](docs/CLI.md) |
+| 电商运营与团队管理 | [用户使用手册](user-guide/README.md)，普通运营唯一日常入口，涵盖零代码上手和日常话术 |
+| 让 AI 协助操作 | [项目约束](AGENTS.md)、[AI 操作指南](docs/AI_GUIDE.md) |
+| 命令行用法与参数参考 | [按业务模块查命令](docs/USAGE.md)、[完整参数参考](docs/CLI.md) |
+| 安装与环境配置 | [安装并启动](#安装并启动)、[准备自己的数据](#准备自己的数据)、[配置指南](docs/CONFIGURATION.md) |
 | 连接或更新平台凭证 | [WorkBuddy 平台连接](docs/CONFIGURATION.md#通过-workbuddy-连接平台) |
 | 数据准备与备份 | [数据契约](docs/DATA.md) |
-| 让 AI 协助操作 | [项目约束](AGENTS.md)、[AI 操作指南](docs/AI_GUIDE.md) |
 | 开发与维护 | [开发指南](docs/DEVELOPMENT.md)，包含架构、代码入口、复用能力和开发准则 |
 | 商品运营报告 | [报告说明](docs/PRODUCT_REPORT.md)：退货、差评、近7/14天出单和店铺链接缺口 |
 | WB Open API 商品写入 | [上架、内容更新与 VC 规范化](docs/OPEN_API_LISTINGS.md)：两种商品来源、有限标识等待、断点续办、相同 VC 跨店更新、按明确归属规范历史 VC 前缀；BCS 默认接口保留 |
@@ -118,12 +116,9 @@ python run.py apply --plan P018
 
 ## 日常使用边界
 
-- 凡涉及 WB 仓库的操作，仅使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓）。未配置、匹配不到或匹配多个时中止该店操作。不得猜测仓库、跨店复用 ID 或回退至未配置的仓库。全店或全部商品只扩大商品范围。具体 ID 规则见 [配置](docs/CONFIGURATION.md#仓库范围仅允许配置的本店默认业务仓)。
-- 普通用户及其运营 AI 使用已有命令，维护自己的 data；源码、文档、依赖声明和项目配置保持只读，临时脚本与产物放 `_scratch/`。维护者及其明确授权的开发任务按开发指南修改项目。
-- WB/BCS 写入异步处理。提交并记录接口结果后结束，不进行写后查询验证，不附加同步、拉取或合并。需要更新数据时，由用户单独要求运行 `catalog fetch`。
-- 官方上架超时后，可用 `ops publish-openapi --resume` 预览续办计划，确认后用 `apply --plan` 提交剩余阶段。
-- 商品计划类操作用 `ops` 预览、`apply --plan` 提交。其余写操作按各自命令规则使用 `--apply`，部分操作还需 `--yes`。非零退出时先核对本次回执和任务号。
-- Windows 任务记录注册时的解释器、代码和数据路径；移动项目或更换环境后需重新注册，并避免同一业务重复执行。
+- 商品计划类操作先预览，经运营确认后提交，执行结果以本次回执为准。写入、续办和汇报细则见 [AI 操作指南](docs/AI_GUIDE.md)。
+- 涉及 WB 仓库时只使用本店已确认的默认业务仓。配置与核对方法见 [仓库范围](docs/CONFIGURATION.md#仓库范围仅允许配置的本店默认业务仓)。
+- 日常运营使用自己的 `data/`，临时工作放 `_scratch/`，项目文件保持只读。维护者授权的开发工作见 [开发指南](docs/DEVELOPMENT.md)。
 
 ## 开发检查
 

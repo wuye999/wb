@@ -1,28 +1,12 @@
-# 日常操作流程
+# CLI 命令用法
 
-## WorkBuddy 入门
+本文件按业务模块汇总 CLI 命令用法、参数示例与执行边界，供命令行使用者和 AI 按需查阅。普通电商运营请使用 [用户使用手册](../user-guide/README.md)。AI 执行规范、命令选型和汇报要求见 [AI 日常操作指南](AI_GUIDE.md)。
 
-```powershell
-python run.py doctor --json
-python run.py sync --all --json
-python run.py shop list --json
-python run.py map workbench --json
-```
+## 通用命令约定
 
-体检默认只查本机。显式 `--check-online` 进行只读鉴权。用户要求拉取快照时运行 `sync`，已在 BCS 同步时可加 `--no-sync`。完整列表发现缺失店铺时返回 `missing_shops`，由运营确认后按店铺 ID 执行 `shop archive` 或 `shop restore`。
-
-从回执的 `data.artifacts.html` 打开工作台看图归属，导出审核 JSON 后用 `map batch-set --file` 或 `catalog merge` 保存确认结果。归属完成后用 `map check-mismatch --json` 生成货不对板筛查画廊。
-
-```powershell
-python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
-python run.py apply --plan P018 --json
-```
-
-`P018` 为示例，提交时用本次预览的单号。改价、价格审核、折扣、库存、下架、上架和改码首选 `ops` 预览，运营确认后用 `apply --plan` 提交。对应的 `product` 和 `listing` 子命令保留为兼容预览入口。
-
-命令均在项目根目录执行，店铺 ID `1001`、商品码 `123456789` 和商品名仅为示例。批量商品命令要求明确指定店铺和商品范围。只读查询与履约任务的默认范围见对应命令。完整参数见 [CLI](CLI.md)，配置见 [CONFIGURATION](CONFIGURATION.md)。
-
-支持 `--json` 的命令会在 stdout 返回单条 UTF-8 JSON，进度和日志走 stderr。整体解析 stdout，按 `ok`、`summary`、`next_action` 了解结果。计划范围见 `data.scope`，单号见 `plan_id`，提交回执见 `data.receipt`，报表路径见 `data.artifacts`。未加 `--json` 时，部分兼容入口和 `report products` 会在普通输出末行附旧版 JSON 摘要，文件路径在该摘要的 `artifacts` 字段。
+- 在项目根目录运行示例。店铺 ID `1001`、商品码 `123456789`、商品名和计划单号均为占位值，提交时使用本次预览的单号。
+- 批量商品命令须指定店铺和商品范围。只读查询与履约任务的默认范围见对应模块。
+- `--json` 输出与回执字段见 [AI 汇报口径](AI_GUIDE.md#根据什么汇报)。完整参数见 [CLI 命令参考](CLI.md)，环境设置见 [配置指南](CONFIGURATION.md)。
 
 ## 看懂读写边界
 
@@ -43,13 +27,20 @@ python run.py apply --plan P018 --json
 
 ## 当前运行约定
 
-涉及 WB 仓库的读取与修改，仅使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的**本店默认业务仓**（如莫斯科仓或运营配置的其他业务仓）。这包括库存、下架前清库存、回收站归零和上架。“全店”“全部商品”只扩大商品范围。逐店核对仓库名称和 `id`。未配置、匹配不到或匹配多个时中止该店操作，不猜测、不跨店复用 ID、不回退未配置的仓库，也不使用 office 字段 `warehouseId` 代替库存仓库 ID。详见 [仓库范围](CONFIGURATION.md#仓库范围仅允许配置的本店默认业务仓)。
-
-WB 后台鉴权失败时先停止该店操作。用户可独立运行 `login wb`，按 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台) 在专用浏览器恢复会话。
+- 涉及 WB 仓库的读写只用本店已核实的默认业务仓。配置和 ID 核对见 [仓库范围](CONFIGURATION.md#仓库范围仅允许配置的本店默认业务仓)。
+- WB 后台鉴权失败时停止该店操作。会话恢复见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
+- 操作限制与续期边界见 [AI 日常操作指南](AI_GUIDE.md)。
 
 ## 商品映射与人工审核
 
-首次配置先运行 `sync --all`，再进入 `map workbench`。`catalog mapping` 打开同一套流程。待认领商品按同源码或同图归组，先看图和出现店铺，再用前缀、倍数参考或中文名确认。点击缩略图放大，使用分类、处理状态及 VC／中文名／价格搜索定位商品。倍数参考按最接近的正整数倍计算，误差在 1 元内或相对误差在 2% 内时展示。
+首次配置且运营要求获取快照时，先运行 `sync --all`，再进入 `map workbench`。`catalog mapping` 打开同一套流程。
+
+```powershell
+python run.py sync --all --json
+python run.py map workbench --json
+```
+
+待认领商品按同源码或同图归组，先看图和出现店铺，再用前缀、倍数参考或中文名确认。点击缩略图放大，使用分类、处理状态及 VC／中文名／价格搜索定位商品。倍数参考按最接近的正整数倍计算，误差在 1 元内或相对误差在 2% 内时展示。
 
 一键采纳只填入尚未选择的前缀命中组。浏览器保存审核进度。点击「导出审核结果 JSON」展开已处理组的全部 VC，使用以下任一导入命令。
 
@@ -116,14 +107,11 @@ python run.py ops price --shops 1001 --name "示例商品" --keep-price --discou
 python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 ```
 
-| 用户意图 | WorkBuddy 首选命令 | 修改字段 |
-| --- | --- | --- |
-| 指定价格 | `ops price --price P` | 价格 |
-| 同时指定价格与折扣 | `ops price --price P --discount D` | 价格、折扣 |
-| 保持原价并设折扣 | `ops price --keep-price --discount D` | 折扣 |
-| 只设折扣 | `ops discount --target D` | 折扣 |
-| 设置库存 | `ops stock --amount N` | 本店默认业务仓的每个目标规格库存 |
-| 审核新价格 | `ops review-price` | 待审核价格 |
+确认后提交对应计划（`P018` 为示例单号）。
+
+```powershell
+python run.py apply --plan P018 --json
+```
 
 `ops price`、`ops discount` 和 `ops stock` 默认使用 WB 卖家后台，需指定店铺与商品范围。`ops review-price` 用 `--shops` 或 `--all-shops` 指定要查询待审核商品的店铺。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
 
@@ -147,13 +135,13 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 
 按名称或 SKU 筛选使用库中已确认的归属；新快照中待确认的完整 VC 可以先在工作台核对。批量操作完整的跳过明细保存在 `data/logs/YYYY-MM-DD/商品操作跳过_*.csv`。
 
-改价与设库存默认走 WB；`--channel bcs` 是另选的 BCS 通道。WB 网页会话失效时先用 `login wb` 恢复，不要让 AI 自动换通道提交同一批可能已被接受的操作。`ops stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店默认业务仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
+改价与设库存可显式用 `--channel bcs` 选择 BCS 通道。鉴权失败和提交异常的处理见 [AI 日常操作指南](AI_GUIDE.md)。`ops stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店默认业务仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
 
 计划阻止目标价低于或等于已知原价一半的商品。规格 ID 同时被本店不同卡认领时，库存与下架清零均阻止涉及的目标卡，即使另一张卡未被选中。需要审核新价格时，用 `ops review-price` 预览，确认后用 `apply --plan` 提交。用户明确要求整合审核时才使用支持它的 `--auto-review`。
 
 ## 发布商品与跨店补齐
 
-**上架选型规则。日常上架统一走 BCS 建卡通道。** CLI 用 `ops create-cards`、`ops replicate` 或 `listing import-publish`，不要主动选用 `ops publish` 或 `ops publish-openapi`。WorkBuddy 自定义脚本批量上架统一构造字典列表，一次传入 `sellerops.features.publishing.card_publish.publish_cards_simple`。
+日常上架走 BCS 建卡，通道与命令选型见 [AI 日常操作指南](AI_GUIDE.md#选择与执行命令)。
 
 ```powershell
 python run.py ops create-cards 123456789 --shops 1001 --sku SKU-1 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20 --json
@@ -181,7 +169,7 @@ python run.py ops replicate --source-shops 1001,1002 --shops 1003 --price-source
 
 示例生成计划单，经确认后用 `apply --plan` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认 1。`minimum` 必须匹配唯一的同中文名最低售价。金额按分四舍五入，库存默认 999，显式 0 保留为 0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，逐店确认目标店的默认业务仓；任一目标仓无法确认时阻止该商品组，提交后记录受理响应并结束。
 
-仅在 BCS 通道不可用时考虑备用官方上架。使用 `ops publish-openapi` 预览，经确认用 `apply --plan` 提交。支持自有源店与任意 WB 商品码，依次完成建卡、有限标识等待、图片和本店默认业务仓库存提交。超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再确认并提交新单。跨店内容更新使用 `listing sync-cards`，按完整 VC 匹配本店商品码，用该命令的 `--apply` 提交。详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。
+备用官方上架使用 `ops publish-openapi` 预览，经确认用 `apply --plan` 提交。支持自有源店与任意 WB 商品码，依次完成建卡、有限标识等待、图片和本店默认业务仓库存提交。超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再确认并提交新单。跨店内容更新使用 `listing sync-cards`，按完整 VC 匹配本店商品码，用该命令的 `--apply` 提交。详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。
 
 历史随机 VC 前缀使用 `ops normalize-vc --shops 1001 --name "示例商品"` 生成计划单。写入只改前缀不一致的商品，保留原尾部；店铺或回收站资料不完整先停止。详见 [VC 前缀规范化](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。
 

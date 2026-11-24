@@ -26,4 +26,6 @@ python run.py catalog export-products --all-shops
 python run.py listing import-publish --file exports/shops_products.xlsx --shops 1002 --prefix ABCD --limit 50
 ```
 
-具体命令、认证续期、快照来源、马帮店铺范围和写操作边界见 [日常操作指南](docs/AI_GUIDE.md)，授权开发见 [开发指南](docs/DEVELOPMENT.md)。
+- 详细 AI 操作规范与命令选型见 [AI 日常操作指南](docs/AI_GUIDE.md)。
+- 按模块查阅 CLI 命令示例见 [CLI 用法](docs/USAGE.md)，完整参数见 [命令参考](docs/CLI.md)。
+- 授权开发见 [开发指南](docs/DEVELOPMENT.md)。
