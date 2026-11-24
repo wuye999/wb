@@ -247,6 +247,7 @@ class TestOrderFailures(unittest.TestCase):
                 with self.subTest(replace_failed=replace_failed, registration=registration), redirect_stdout(io.StringIO()), \
                         patch.object(pipeline, 'match_orders', side_effect=match), \
                         patch.object(pipeline, 'mabang_run_forecast', return_value=0) as forecast, \
+                        patch.object(pipeline, 'find_lark_cli', return_value='fixture-cli'), \
                         patch.object(pipeline, 'feishu_register_run', return_value=registration,
                                      side_effect=registration if isinstance(registration, Exception) else None) as register:
                     code = pipeline.run(parser.parse_args(['order', 'process', '--url', 'https://fixture.invalid', '--apply']))
@@ -255,6 +256,25 @@ class TestOrderFailures(unittest.TestCase):
                                      ['failed-order'] if replace_failed else [])
                     self.assertEqual(forecast.call_args.kwargs['group_shipping_ids'], {'group-order'})
                     self.assertEqual(register.call_args.kwargs['group_shipping_ids'], {'group-order'})
+
+    def test_pipeline_mabang_failure_remains_nonzero_without_feishu(self):
+        from sellerops.cli.main import build_parser
+        from sellerops.features.orders import mabang_process as pipeline
+        from sellerops.features.orders.matching import MatchResult
+
+        args = build_parser().parse_args(['order', 'process', '--apply'])
+        cases = [(MatchResult(stopped=True), 0, 1),
+                 (MatchResult(), 2, 2),
+                 (MatchResult(failures={'failed-order': '更换失败'}), 0, 1)]
+        for match, forecast_code, expected in cases:
+            with self.subTest(match=match, forecast_code=forecast_code), redirect_stdout(io.StringIO()), \
+                    patch.object(pipeline, 'match_orders', return_value=match), \
+                    patch.object(pipeline, 'mabang_run_forecast', return_value=forecast_code) as forecast, \
+                    patch.object(pipeline.credentials, 'get', return_value=SimpleNamespace(feishu_base_url=lambda: '')), \
+                    patch.object(pipeline, 'feishu_register_run') as register:
+                self.assertEqual(pipeline.run(args), expected)
+                self.assertEqual(forecast.call_count, int(not match.stopped))
+                register.assert_not_called()
 
     def test_forecast_does_not_handover_when_one_failed_batch_has_unknown_shop(self):
         from sellerops.features.orders import forecast

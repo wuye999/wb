@@ -89,7 +89,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     bind(p, 'sellerops.features.orders.fbs_group_ship', 'run')
 
     p = sub.add_parser('process',
-                           help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运→飞书登记（登记含只匹配未进预报流程的订单）")
+                           help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运；有飞书地址和 lark-cli 时登记")
     p.add_argument("--days", type=int, default=0, help="配置店铺的全部新增待处理订单，0=不限日期（默认）；正数=最近 N 天")
     p.add_argument("--page-size", type=int, default=100, help="订单列表分页大小（默认 100）")
     p.add_argument("--wait", type=int, default=0,
@@ -98,7 +98,7 @@ def register(sub: argparse._SubParsersAction) -> None:
                        help="轮询等待新批次上传结束的最长秒数（默认读配置 mabang.upload_timeout_seconds，缺省 900）")
     p.add_argument("--poll-interval", type=int, default=None,
                        help="批次状态轮询间隔秒数（默认读配置 mabang.upload_poll_interval，缺省 20）")
-    p.add_argument("--url", default="", help="飞书表格地址（可选，默认读配置 feishu.base_url）")
+    p.add_argument("--url", default="", help="飞书表格地址（默认读配置 feishu.base_url；缺地址或 lark-cli 时跳过登记）")
     p.add_argument("--table", default="订单登记", help="飞书订单登记表名（默认 订单登记）")
     p.add_argument("--no-pending", action="store_true",
                        help="飞书登记时不合并「待处理订单」数据源（默认合并，覆盖只匹配未进预报/上传/交运的订单）")

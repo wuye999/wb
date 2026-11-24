@@ -49,11 +49,12 @@ python run.py apply --plan P018 --json
 | 用户意图 | 入口与注意事项 |
 | --- | --- |
 | 中文名改价、设折扣、设库存、下架 | 先用 `shop list --name` 从本地库确认唯一店铺 ID。`ops price`、`ops discount`、`ops stock`、`ops trash` 需要显式店铺及商品范围。`--name` 精确匹配，`--name-contains` 用于用户明确要求包含的任务。库存必须给数量。 |
-| 商品综合报告 | `report products`。低评分、高退货率、近 7/14 天出单和链接缺口见 [报告说明](PRODUCT_REPORT.md)。 |
+| 商品综合报告 | `report products`。WB 订单按 UTC+8 下单日统计，`--order-days` 控制退货窗口。近 7/14 天有效出单采用口径 A，仅计在途和买断。无需飞书或 `lark-cli`，旧参数 `--url` 和 `--table` 已移除。[报告说明](PRODUCT_REPORT.md) |
+| 统计 VC 销量 | `report vc-sales --json`。用 WB 订单动态按北京时间统计下单件数，默认近 7 天（含今天）。可用 `--shops` 选店，在 `data.artifacts.workbook` 查看本地 Excel 路径，有 `data.failed_shops` 时标明结果不完整。无需飞书。 |
 | 更新快照或映射 | 用户明确要求更新时用 `sync`。归属用 `map` 查看候选、确认或排除。 |
 | 筛查货不对板 | `map check-mismatch --json`。可按 `--cn` 精确限定中文名，按 `--begin`、`--end` 或 `--days` 限定创建日期。 |
 | 发布、复制及官方上架 | `ops replicate`、`ops publish` 或 `ops create-cards`。官方通道使用 `ops publish-openapi`，按原记录续办。 |
-| 处理新订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
+| 处理新订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。缺飞书地址或 `lark-cli` 时自动跳过飞书登记。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
 | 汇报修改结果 | 核对店铺、商品与规格数、受理任务号、阻止原因和完整明细路径。预览与提交沿用同样的目标。 |
 
@@ -70,7 +71,7 @@ python run.py apply --plan P018 --json
 
 只设指定商品折扣用 `--target`。有 `--threshold` 或 `--below` 时，预览按本店当前折扣固定范围。全店折扣分页未完成的店铺不得提交。计划任务支持 `--shops`，内置每日折扣走 WB，用 `--target 50` 生成待确认计划单。
 
-用户要求为商品报告临时引入其他BCS账号时，使用 `report products --extra-bcs-stdin`，将本次提供的完整fetch文本通过子进程标准输入管道以UTF-8传入并关闭输入流；多个fetch块依次传入。不要将秘密拼进命令行、环境变量或保存到临时脚本/抓包文件，不替换本机凭证。解析只提取认证，不执行原fetch。`--shops`只筛本机目标，临时账号的全部店铺补充统计且不进入链接缺口目标；飞书仍读取本机一份来源。查看报告中的账号来源及失败明细，凭证失效不启用浏览器续期。详见 [报告说明](PRODUCT_REPORT.md#临时引入其他bcs账号)。
+用户要求为商品报告临时引入其他 BCS 账号时，使用 `report products --extra-bcs-stdin`，将完整 fetch 文本通过子进程标准输入管道以 UTF-8 传入并关闭输入流。多个 fetch 块依次传入。不要将秘密拼进命令行、环境变量或保存到临时脚本或抓包文件，不替换本机凭证。解析只提取认证，不执行原 fetch。`--shops` 仅筛本机目标。临时账号的店铺补充退货和近 7/14 天有效出单等指标，链接缺口仅针对本机目标店铺。查看报告中的账号来源及失败明细，凭证失效不启用浏览器续期。[报告说明](PRODUCT_REPORT.md#临时引入其他bcs账号)
 
 马帮命令默认 `--days 0`，查询新增待处理状态且不发送日期限制，仅处理 `mabang.shop_map` 配置店铺。用户说“处理马帮订单”时不自行缩小为最近1天；正数天数用于明确的最近 N 天范围。分页超限或不完整会中止，不以部分清单宣称全部处理。其他店铺与历史已完成订单不进入匹配、预报或交运。
 
@@ -109,7 +110,7 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 未加 `--json` 时，部分兼容入口和 `report products` 仍在普通输出末行附旧版 JSON 摘要。自动化首选支持 `--json` 的入口。
 
 - 商品预览的实际目标见 `data.scope`。商品回执见 `data.receipt`，汇报时区分商品卡数、库存规格数和平台已返回的任务号。
-- 报表路径见 `data.artifacts`。`report products` 的期间、数据来源、覆盖和缺失分别见 `data.period`、`data.sources`、`data.coverage_complete`、`data.issues`。
+- 报表路径见 `data.artifacts`。`report products` 在 `data.period` 中提供退货统计、实际采集及近 7/14 天出单的起点。数据来源、订单覆盖和缺失分别见 `data.sources`、`data.orders_complete`、`data.issues`。
 
 必须阅读本次日志中的成功、失败、跳过和人工待处理项；退出码 0 不能证明平台已最终生效。非零退出也可能已有部分提交，不能因此盲目重放整批。持续监听会记录本轮异常并继续，单轮 --once 遇到失败则退出。没有执行过的步骤不能声称完成；失败时说明停在匹配、预报、交运、登记还是其他具体阶段。
 

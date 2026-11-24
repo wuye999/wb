@@ -6,6 +6,7 @@ from sellerops.settings import credentials
 from sellerops.features.orders.feishu_register import run as feishu_register_run
 from sellerops.features.orders.matching import match_orders
 from sellerops.features.orders.forecast import run_forecast as mabang_run_forecast
+from sellerops.integrations.feishu.tables import find_lark_cli
 
 
 def run(args):
@@ -24,7 +25,7 @@ def run(args):
     group_shipping_ids = matched.group_ids
     if replace_fail_ids:
         print(f"\n[提示] 步骤① 未完成商品匹配或更换 {len(replace_fail_ids)} 单："
-              "本轮不进预报/交运（飞书登记照常）")
+              "本轮不进预报/交运")
 
     # ② 生成预报单 → 依次上传（自动发货）→ 物流交运
     print("\n" + "#" * 72)
@@ -39,13 +40,19 @@ def run(args):
     print("\n" + "#" * 72)
     print("# 步骤 ③ 新订单登记飞书（最近500条去重，只登新增）")
     print("#" * 72)
-    url = args.url or credentials.get().feishu_base_url()
+    url = args.url.strip() or credentials.get().feishu_base_url().strip()
     fail_tail = (f"；匹配或更换失败 {len(replace_fail_ids)} 单未预报/交运"
                  if replace_fail_ids else "")
+    skip_reason = ""
     if not url:
-        print("[提示] 未提供 --url 且配置 feishu.base_url 缺失，跳过飞书登记")
+        skip_reason = "未提供 --url 且配置 feishu.base_url 缺失"
+    elif not find_lark_cli():
+        skip_reason = "未检测到 lark-cli"
+    if skip_reason:
+        print(f"[提示] {skip_reason}，跳过飞书登记")
         print(f"\n[完成] 马帮订单处理耗时 {time.time() - t0:.0f}s{fail_tail}")
         return 1 if replace_fail_ids else 0
+    args.url = url
     registration_failed = False
     try:
         code = feishu_register_run(args, group_shipping_ids=group_shipping_ids)

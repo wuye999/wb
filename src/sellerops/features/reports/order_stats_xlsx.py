@@ -233,17 +233,17 @@ def _write_detail_sheet(ws: Worksheet, rows: Sequence[Dict[str, Any]], max_rows:
 
 
 # ---------------- 落盘 ----------------
-def _save_targets(out: str, ts: str) -> List[str]:
+def _save_targets(out: str, ts: str, summaries_only: bool) -> List[str]:
     """候选落盘路径：--out 优先；否则中文名 → ASCII 别名（环境按文件名拦截时回退）。"""
     if (out or "").strip():
         return [os.path.abspath(out.strip())]
-    return [os.path.join(str(config.current.exports_dir), f"订单动态统计_{ts}.xlsx"),
-            os.path.join(str(config.current.exports_dir), f"order_stats_{ts}.xlsx")]
+    names = ("VC销量统计", "vc_sales") if summaries_only else ("订单动态统计", "order_stats")
+    return [os.path.join(str(config.current.exports_dir), f"{name}_{ts}.xlsx") for name in names]
 
 
 def write_xlsx(result: Dict[str, Any], out: str = "", with_detail: bool = True,
-               detail_max_rows: int = 0) -> str:
-    """把 `order_stats.collect()` 的结果写成 xlsx；返回实际路径（全部失败返回 ""）。"""
+               detail_max_rows: int = 0, *, summaries_only: bool = False) -> str:
+    """把 `order_stats.collect()` 的结果写成 xlsx；返回实际路径。"""
     rows = result.get("rows") or []
     ws_meta = [
         f"统计区间：{result.get('begin', '')} ~ {result.get('end', '')}（按订单下单时间 created，闭区间）",
@@ -266,7 +266,7 @@ def write_xlsx(result: Dict[str, Any], out: str = "", with_detail: bool = True,
 
     wb = Workbook()
     ws0 = wb.active
-    ws0.title = TITLE_SUMMARY
+    ws0.title = "按商品中文名汇总" if summaries_only else TITLE_SUMMARY
     used = {TITLE_SUMMARY.lower(), TITLE_DETAIL.lower(), TITLE_VC.lower()}
     total_vc = len({r.get("vc") for r in rows if r.get("vc")})
     _write_stat_sheet(ws0, result.get("by_cn") or [], total_vc=total_vc,
@@ -274,27 +274,25 @@ def write_xlsx(result: Dict[str, Any], out: str = "", with_detail: bool = True,
     _append_meta(ws0, ws_meta)
 
     vc_rows = result.get("by_vc") or []
-    if vc_rows:      # 老调用方不传 by_vc 时不新增 Sheet（行为不变）
+    if vc_rows or summaries_only:
         total_nm = len({str(r.get("nm_id")).strip() for r in rows if str(r.get("nm_id") or "").strip()})
-        _write_vc_sheet(wb.create_sheet(TITLE_VC), vc_rows,
+        _write_vc_sheet(wb.create_sheet("按完整 VC 汇总" if summaries_only else TITLE_VC), vc_rows,
                         shop_count=len(result.get("by_shop") or []), nm_count=total_nm)
 
-    by_cn_by_shop = result.get("by_cn_by_shop") or {}
-    for p in result.get("per_shop") or []:
-        if p.get("error") or not by_cn_by_shop.get(p["label"]):
-            continue
-        ws = wb.create_sheet(safe_sheet_name(p["label"], used))
-        _write_stat_sheet(ws, by_cn_by_shop[p["label"]], total_vc=0, shop_count=1)
-
-    detail_n = 0
-    if with_detail and rows:
-        if len(rows) > DETAIL_WARN_ROWS:
-            print(f"  [提示] 订单明细 {len(rows)} 行，文件可能较大（可加 --no-detail 或 --detail-max-rows）")
-        ws_d = wb.create_sheet(TITLE_DETAIL)
-        detail_n = _write_detail_sheet(ws_d, rows, detail_max_rows)
+    if not summaries_only:
+        by_cn_by_shop = result.get("by_cn_by_shop") or {}
+        for p in result.get("per_shop") or []:
+            if p.get("error") or not by_cn_by_shop.get(p["label"]):
+                continue
+            ws = wb.create_sheet(safe_sheet_name(p["label"], used))
+            _write_stat_sheet(ws, by_cn_by_shop[p["label"]], total_vc=0, shop_count=1)
+        if with_detail and rows:
+            if len(rows) > DETAIL_WARN_ROWS:
+                print(f"  [提示] 订单明细 {len(rows)} 行，文件可能较大（可加 --no-detail 或 --detail-max-rows）")
+            _write_detail_sheet(wb.create_sheet(TITLE_DETAIL), rows, detail_max_rows)
 
     ts = time.strftime("%Y%m%d_%H%M%S")
-    targets = _save_targets(out, ts)
+    targets = _save_targets(out, ts, summaries_only)
     last_err = None
     for k, path in enumerate(targets):
         try:

@@ -234,7 +234,9 @@ python run.py order stock-days
 
 商品价格表的「发货方式」决定订单分流。「马帮发货」须填写「马帮库存SKU」，才能进入马帮匹配、预报和交运。「WB发货」走下述 WB 供货流程，「不处理」跳过发货。发货方式留空、填错或马帮库存 SKU 缺失时，马帮匹配报告会标记 `NO_SKU` 并列出原因。
 
-`order process --apply` 默认处理 `mabang.shop_map` 配置店铺的全部新增待处理订单，不限日期。顺序为库存 SKU 匹配、预报上传、成功状态轮询、交运；配置飞书地址时再登记飞书。`order match`、`order forecast` 及飞书登记合并的待处理单也使用相同日期语义：`--days 0`（默认）不发送起止日期限制；明确要处理最近 N 天时传正数，例如 `--days 7`。仍只处理配置店铺与新增待处理状态，不包含其他店铺或历史已完成订单。列表完整翻页，达到安全上限或重复分页时报错，不用部分结果继续执行。更换失败、缺 SKU、预报失败或未完成的订单会按流程阻断后续履约，依据本次日志处理，不删除状态后盲目重跑。
+`order process --apply` 默认处理 `mabang.shop_map` 配置店铺的全部新增待处理订单，不限日期。处理顺序为库存 SKU 匹配、预报上传、成功状态轮询和交运。有飞书地址（`--url` 或 `feishu.base_url`）且能找到 `lark-cli` 时再登记。缺任一项会提示并跳过登记，马帮流程成功时仍返回 0。马帮处理失败或实际尝试登记失败时返回非零。
+
+`order match`、`order forecast` 及飞书登记合并的待处理单也使用相同日期语义：`--days 0`（默认）不发送起止日期限制；明确要处理最近 N 天时传正数，例如 `--days 7`。仍只处理配置店铺与新增待处理状态，不包含其他店铺或历史已完成订单。列表完整翻页，达到安全上限或重复分页时报错，不用部分结果继续执行。更换失败、缺 SKU、预报失败或未完成的订单会按流程阻断后续履约，依据本次日志处理，不删除状态后盲目重跑。
 
 预报状态等待是交运前必要步骤，不能当成写后验证而跳过。`--check` 只是查看预报批次，`order forecast --apply` 才执行整条预报/交运链。
 
@@ -267,17 +269,18 @@ python run.py order group-ship --shops 1001 --resume --apply
 
 ## 查询报表与客服
 
-商品运营综合报告使用 BCS＋WB Open API＋飞书，只生成本地 Excel，不修改商品或飞书，不自动同步、拉取或合并快照：
+商品运营综合报告使用 BCS、WB Open API 和已有本地快照生成 Excel，无需飞书或 `lark-cli`。旧参数 `--url` 和 `--table` 已移除。
 
 ```powershell
 python run.py report products
 python run.py report products --shops 1001,1002 --feedback-days 365 --out exports/product_report.xlsx
 ```
 
-默认近30天退货、接口可取历史评价，按UTC+8日期计算。默认输出评分≤3.5且本店存在、高退货率≥30%且本店存在，以及排除已知风险且中文名在价格表的近7/14天出单清单；完整VC只显示一行，列存在/缺少/待确认店铺，不列商品链接。风险与缺口按VC最长数字段合并；加 `--details` 才追加原始证据表。目标店无快照或授权失败时标为未知，报告仍输出并返回非零；不要把本地缺口视为实时缺货。配置、工作表和完整口径见 [报告说明](PRODUCT_REPORT.md)。
+报告按 UTC+8 下单日统计，含今天。`--order-days` 控制退货统计窗口，默认 30 天。实际采集至少近 14 天，有效出单固定展示近 7/14 天，口径 A 仅计在途和买断，每行一件。评价默认取接口可访问的历史。默认输出本机目标店存在的低评分（≤3.5）、高退货率（完单口径≥30%）商品，以及排除已知风险且中文名可匹配价格表的近期出单候选。简洁表中的风险和缺口按 VC 最长数字段判断。加 `--details` 可查看订单明细和各项汇总。缺失数据会标为未知，报告有错误时仍导出并返回非零。[报告说明](PRODUCT_REPORT.md)
 
 ```powershell
-python run.py report vc-sales --days 7
+python run.py report vc-sales --json
+python run.py report vc-sales --shops 1001 --days 7 --json
 python run.py report delivery --shops 1001 --days 7
 python run.py report orders --shops 1001 --days 30
 python run.py support appeals --shops 1001 --days-max 5
@@ -285,6 +288,8 @@ python run.py report ratings --shops 1001 --one-star
 python run.py support questions --shops 1001 --no-detail
 python run.py support chats --shops 1001 --limit 10 --no-detail
 ```
+
+`report vc-sales` 读取 WB 订单动态，默认统计北京时间（`Asia/Shanghai`，UTC+8）近 7 天（含今天）。服务端按更新时间粗筛，本地按下单日期精筛。每行计一件，取消和退货仍计入下单总量，并列出退货数、退货率及未知状态提示。默认在 `exports/` 导出按商品中文名和按完整 VC 汇总的 Excel，零单时也导出两张表。用 `--out` 指定路径，`--top` 只限制终端展示。JSON 回执在 `data.artifacts.workbook` 提供文件路径。采集不完整时返回非零并列出 `data.failed_shops`。该命令可独立于飞书使用。
 
 报告默认写入 `exports/`，部分命令支持 `--out`。`report orders` 默认时区为 America/Los_Angeles，统计窗口按该时区解释，不要直接当成本机当天；导出还区分订单创建时间/更新时间的口径。
 

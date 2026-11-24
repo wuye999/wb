@@ -549,7 +549,7 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 
 ## order process
 
-马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运→飞书登记（登记含只匹配未进预报流程的订单）
+马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运；有飞书地址和 lark-cli 时登记
 
 实现入口 [run](../src/sellerops/features/orders/mabang_process.py)
 
@@ -558,7 +558,7 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 - `--wait` 轮询之外额外的最小等待秒数（默认 0；旧「盲等固定秒数」语义已废弃）
 - `--upload-timeout` 轮询等待新批次上传结束的最长秒数（默认读配置 mabang.upload_timeout_seconds，缺省 900）
 - `--poll-interval` 批次状态轮询间隔秒数（默认读配置 mabang.upload_poll_interval，缺省 20）
-- `--url` 飞书表格地址（可选，默认读配置 feishu.base_url）
+- `--url` 飞书表格地址（默认读配置 feishu.base_url；缺地址或 lark-cli 时跳过登记）
 - `--table` 飞书订单登记表名（默认 订单登记）
 - `--no-pending` 飞书登记时不合并「待处理订单」数据源（默认合并，覆盖只匹配未进预报/上传/交运的订单）
 - `--apply` 真正执行（默认 dry-run 预览）
@@ -575,37 +575,33 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 
 ## report products
 
-只读：默认筛选低评分、高退货率及近期出单补货候选 → Excel
+只读：基于 WB Open API 筛选低评分、高退货率及近7/14天有效出单候选 → Excel
 
 实现入口 [run](../src/sellerops/features/reports/product_report.py)
 
 - `--details` 追加原始汇总、订单、评价和链接证据表（默认仅简洁筛选与覆盖说明）
-- `--shops` 本机目标店铺ID，逗号分隔（默认本机BCS账号全部店铺；不筛选临时账号或飞书来源）
+- `--shops` 本机目标店铺ID，逗号分隔（默认本机BCS账号全部店铺；临时账号全部补充统计）
 - `--extra-bcs-stdin` 从标准输入读取临时BCS账号的一个或多个fetch抓包，仅补充统计，凭证不落盘
-- `--order-days` 退货统计下单窗口，含今天（1–31天，默认30）
+- `--order-days` 退货统计下单窗口，UTC+8 含今天（1–31天，默认30；采集至少覆盖近14天）
 - `--feedback-days` 评价日期窗口，含今天（默认0：接口可访问的全部历史）
 - `--wb-region` WB官方主机区域（默认ru；不自动跨域重试）（ru / cn）
-- `--url` 飞书多维表格地址（默认feishu.base_url）
-- `--table` 飞书来源表（默认订单登记）
 - `--out` 输出.xlsx路径（默认exports/商品运营报告_时间.xlsx）
 - `--json` 输出单个 JSON 对象
 
 ## report vc-sales
 
-只读：飞书「订单登记」按供应商代码(BCS编号)统计单数并降序（跨店合并；支持店铺/日期过滤）
+只读：WB「订单动态」跨店按商品中文名和完整 VC 统计下单件数（默认近 7 天，UTC+8），导出 Excel
 
-实现入口 [run](../src/sellerops/features/reports/feishu_vc_stats.py)
+实现入口 [run_vc_sales](../src/sellerops/features/reports/order_stats.py)
 
 - `--days` 近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）
 - `--date` 单天 YYYY-MM-DD（等价 --begin=--end）
 - `--begin` 区间开始 YYYY-MM-DD（单独给按单天处理）
 - `--end` 区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）
 - `--shops` 店铺过滤，逗号分隔，支持店铺ID或短名（如 1001 或 示例店铺；默认全部）
-- `--top` 控制台只显示前 N 名（0=全部；CSV 始终写全量）
-- `--by-prefix` 按 vendorCode 的 4 位前缀码聚合（默认完整 vendorCode）
-- `--no-cn` 不补全商品中文名（表内已有的仍会显示）
-- `--url` 飞书表格地址（可选，默认读配置 feishu.base_url）
-- `--table` 表名（默认 订单登记）
+- `--top` 控制台每张表只显示前 N 名（0=全部；Excel 始终写全量）
+- `--no-cn` 不解析商品中文名（仍按完整 VC 汇总）
+- `--out` 输出 .xlsx 路径（默认 exports/VC销量统计_<时间戳>.xlsx）
 - `--json` 输出单个 JSON 对象
 
 ## report delivery

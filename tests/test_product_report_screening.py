@@ -7,10 +7,12 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 
 from sellerops.domain.product_reports import ProductReport, ReportCatalog
+from sellerops.features.reports.product_report_data import order_row
 from sellerops.features.reports.product_report_screening import product_key, screen_products
 from sellerops.features.reports.product_report_xlsx import write_report
 from sellerops.persistence.report_catalog import load_report_catalog
 from sellerops.settings import paths
+from test_product_report import order
 
 
 VC = 'BCS-AAAA-123456789'
@@ -20,18 +22,20 @@ OTHER = 'BCS-BBBB-123456789-2'
 class TestProductScreening(unittest.TestCase):
     def report(self):
         report = ProductReport('2026-11-03T16:00:00+08:00', '2026-10-05', '2026-11-03')
-        report.shops = [{'id': i, 'name': f'袁州{i}'} for i in range(1, 5)] + [{'id': 9, 'name': '外部店'}]
+        report.shops = ([{'id': i, 'name': f'袁州{i}'} for i in range(1, 5)] +
+                        [{'id': 9, 'name': '外部店'}, {'id': 10, 'name': '外部店'}])
         report.target_shop_ids = {1, 2, 3, 4}
         report.snapshots = {1: [{'vendorCode': VC, 'nmId': 101}],
                             2: [{'vendorCode': VC, 'nmId': 102}],
                             3: [{'vendorCode': OTHER, 'nmId': 103}], 4: []}
         report.coverage = {shop['id']: {'orders': '完整', 'feedbacks': '完整', 'snapshot': '可读取'} for shop in report.shops}
         report.catalog = ReportCatalog({'新商品'}, {OTHER: '新商品'})
-        report.feishu_complete = report.publish_records_complete = True
+        report.publish_records_complete = True
         return report
 
-    def sales(self, vc=VC, nm='901', shop='外部店', date='2026-11-03'):
-        return {'vc': vc, 'nm_id': nm, 'shops': [shop], 'cn': '旧商品', '日期': date, 'qty': 1}
+    def wb_order(self, vc=VC, nm=901, sid=9, date='2026-11-03', status='created'):
+        raw = order(nm=nm, date=date, status=status)
+        return order_row(raw, sid, '外部店', {str(nm): vc}, {'id': sid, 'name': '业务仓'}, lambda *args: '旧商品')
 
     def test_longest_digit_identity_rejects_ties_and_does_not_use_last_variant(self):
         self.assertEqual(product_key(OTHER), '123456789')
@@ -53,9 +57,9 @@ class TestProductScreening(unittest.TestCase):
 
     def test_return_denominator_and_risk_exclusion_use_all_accounts_and_prefixes(self):
         report = self.report()
-        report.sales = [self.sales()]
-        report.orders = [{'vc': OTHER, 'status': status, 'cn': '', 'nm_id': '999', 'shop_name': '外部店'}
-                         for status in ['cancel'] * 3 + ['buyout'] * 7 + ['created'] * 10]
+        report.orders = [self.wb_order()] + [
+            self.wb_order(vc=OTHER, status=status, nm=999)
+            for status in ['cancel'] * 3 + ['buyout'] * 7 + ['created'] * 10]
         result = screen_products(report)
         self.assertEqual(len(result.high_returns), 2)
         self.assertEqual(result.high_returns[0]['done_rate'], 0.3)
@@ -64,14 +68,16 @@ class TestProductScreening(unittest.TestCase):
 
     def test_recent_one_row_per_full_vc_retains_nm_pairs_and_normalized_missing_shops(self):
         report = self.report()
-        report.sales = [self.sales(), self.sales(nm='902', shop='另一个外部店'), self.sales(date='2026-10-21')]
-        row = screen_products(report).recent[0]
+        report.orders = [self.wb_order(), self.wb_order(nm=902, sid=10), self.wb_order(date='2026-10-21')]
+        rows = screen_products(report).recent
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
         self.assertEqual((row['orders7'], row['orders14']), (2, 3))
         self.assertEqual(row['cn'], '新商品')  # 当前映射优先于旧报告中文名。
         self.assertEqual(row['present_shops'], '袁州1、袁州2、袁州3')
         self.assertEqual(row['missing_shops'], '袁州4')
-        self.assertIn('外部店：901', row['source_nms'])
-        self.assertIn('另一个外部店：902', row['source_nms'])
+        self.assertIn('外部店(9)：901', row['source_nms'])
+        self.assertIn('外部店(10)：902', row['source_nms'])
         self.assertIn('评分未知', row['note'])
         self.assertIn('退货率未知', row['note'])
 
@@ -79,7 +85,7 @@ class TestProductScreening(unittest.TestCase):
         for state in ('unknown', 'partial', 'pending', 'trash'):
             with self.subTest(state=state):
                 report = self.report()
-                report.sales = [self.sales()]
+                report.orders = [self.wb_order()]
                 if state == 'unknown':
                     report.snapshots[4] = None
                 elif state == 'partial':
@@ -94,7 +100,7 @@ class TestProductScreening(unittest.TestCase):
 
     def test_current_name_must_match_price_book_and_ambiguity_is_not_guessed(self):
         report = self.report()
-        report.sales = [self.sales()]
+        report.orders = [self.wb_order()]
         report.catalog.mapped_names = {VC: '不在价格表'}
         self.assertFalse(screen_products(report).recent)
         report.catalog.price_names.add('另一个商品')
@@ -104,22 +110,25 @@ class TestProductScreening(unittest.TestCase):
     def test_rating_threshold_inclusive_and_missing_catalog_is_visible(self):
         report = self.report()
         report.feedbacks = [{'vc': VC, 'stars': star, 'cn': '', 'nm_id': '', 'shop_name': '外部店'} for star in [3, 4]]
-        self.assertEqual(screen_products(report).low_rating[0]['rating'], 3.5)
+        report.orders = [self.wb_order()]
+        result = screen_products(report)
+        self.assertEqual(result.low_rating[0]['rating'], 3.5)
+        self.assertFalse(result.recent)
         report.catalog = None
         self.assertTrue(screen_products(report).failed)
 
-    def test_missing_nm_is_only_resolved_from_unique_same_shop_identity(self):
+    def test_partial_order_coverage_labels_known_counts_for_each_full_vc(self):
         report = self.report()
-        report.sales = [self.sales(nm='', shop='袁州3')]
-        self.assertEqual(screen_products(report).recent[0]['source_nms'], '袁州3：103')
-        report.sales = [self.sales(nm='', shop='不存在的店铺')]
-        self.assertIn('nmID未知', screen_products(report).recent[0]['source_nms'])
-        report.sales = [self.sales(nm='', shop='外部店'), self.sales(nm='777', shop='外部店')]
-        self.assertEqual(screen_products(report).recent[0]['source_nms'], '外部店：777')
+        report.orders = [self.wb_order(), self.wb_order(vc=OTHER, nm=902)]
+        report.coverage[10]['orders'] = '未知'
+        rows = screen_products(report).recent
+        self.assertEqual({row['vc']: row['orders14'] for row in rows}, {VC: 1, OTHER: 1})
+        for row in rows:
+            self.assertIn('出单件数仅为已知部分', row['note'])
 
     def test_default_workbook_is_compact_without_product_urls_and_preserves_unknowns(self):
         report = self.report()
-        report.sales = [self.sales()]
+        report.orders = [self.wb_order()]
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'report.xlsx'
             write_report(report, output)

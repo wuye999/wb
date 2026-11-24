@@ -1,5 +1,6 @@
 """Remote table pagination and temporary payload isolation with fake CLI results."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +11,29 @@ from sellerops.integrations.feishu import tables
 
 
 class TestFeishu(unittest.TestCase):
+    def test_cli_override_must_be_a_file_and_does_not_fall_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            cli = directory / 'lark-cli.cmd'
+            cli.touch()
+            for path, expected in [(cli, str(cli)), (directory, None), (directory / 'missing.cmd', None)]:
+                with self.subTest(path=path), patch.dict(os.environ, SELLEROPS_LARK_CLI=str(path)), \
+                        patch.object(tables.shutil, 'which') as which, patch.object(tables.subprocess, 'run') as run:
+                    self.assertEqual(tables.find_lark_cli(), expected)
+                    if expected is None:
+                        with self.assertRaisesRegex(RuntimeError, '未找到 lark-cli'):
+                            tables.invoke(['+table-list'])
+                    which.assert_not_called()
+                    run.assert_not_called()
+
+    def test_cli_path_lookup_checks_cmd_when_default_name_is_missing(self):
+        with patch.dict(os.environ, SELLEROPS_LARK_CLI=''), \
+                patch.object(tables.shutil, 'which', side_effect=[None, 'fixture-cli.cmd']) as which, \
+                patch.object(tables.subprocess, 'run') as run:
+            self.assertEqual(tables.find_lark_cli(), 'fixture-cli.cmd')
+        self.assertEqual([call.args[0] for call in which.call_args_list], ['lark-cli', 'lark-cli.cmd'])
+        run.assert_not_called()
+
     def test_pagination_reads_every_page(self):
         offsets = []
 
@@ -48,13 +72,13 @@ class TestFeishu(unittest.TestCase):
             paths.append(payload)
             raise TimeoutError('fake timeout')
 
-        with patch.object(tables.shutil, 'which', return_value='fixture-cli'), patch.object(tables.subprocess, 'run', side_effect=fail):
+        with patch.object(tables, 'find_lark_cli', return_value='fixture-cli'), patch.object(tables.subprocess, 'run', side_effect=fail):
             with self.assertRaises(TimeoutError):
                 tables.invoke(['+record-batch-create'], {'value': '测试'})
         self.assertFalse(paths[0].exists())
 
     def test_nonzero_exit_cannot_be_reported_as_success(self):
         result = SimpleNamespace(returncode=1, stdout='{"ok":true}')
-        with patch.object(tables.shutil, 'which', return_value='fixture-cli'), patch.object(tables.subprocess, 'run', return_value=result):
+        with patch.object(tables, 'find_lark_cli', return_value='fixture-cli'), patch.object(tables.subprocess, 'run', return_value=result):
             with self.assertRaisesRegex(RuntimeError, '退出码'):
                 tables.invoke(['+table-list'])

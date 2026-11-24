@@ -17,11 +17,12 @@ from sellerops.domain.product_reports import ReportCatalog
 from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLimitError
 from sellerops.features.reports import product_report as workflow
 from sellerops.features.reports.product_report_analysis import analyze
+from sellerops.features.reports.product_report_screening import screen_products
 from sellerops.integrations.bcs.capture import MAX_CAPTURE_CHARS, parse_sessions
 from sellerops.integrations.bcs.session import BCS_BASE_URL, BCSSession
 from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop
 from sellerops.settings import credentials
-from test_product_report import NOW, VC, feedback, order, register
+from test_product_report import NOW, VC, feedback, order
 
 
 def capture(token='temporary-token-a', key='temporary-limit-a', *, url=None, headers=None):
@@ -120,6 +121,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
     def fixture(self, accounts=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(patch('sellerops.features.catalog.shops.archive_set', return_value=set()))
         stack.enter_context(patch.object(credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科')))
         stack.enter_context(patch.object(workflow, 'load_report_catalog', return_value=ReportCatalog({'测试商品'}, {VC: '测试商品'})))
         self.local = stack.enter_context(patch.object(workflow.bcs, 'fetch_open_api_shops', return_value=[
@@ -147,17 +149,19 @@ class TestTemporaryReportAccounts(unittest.TestCase):
             VC: {'11': 'local-pending', '21': 'must-not-use-temporary-pending'}}))
         stack.enter_context(patch.object(workflow.MappingRepository, 'build_vc_resolver',
                                          return_value=(lambda vc, fallback='': '测试商品' if vc else fallback, {})))
-        stack.enter_context(patch.object(workflow.tables, 'resolve_base', return_value='base'))
-        stack.enter_context(patch.object(workflow.tables, 'resolve_table', return_value='table'))
-        self.feishu = stack.enter_context(patch.object(workflow.tables, 'list_records', return_value=[
-            register(nm=110), register(nm=210, shop='外部店', rid='external')]))
         self.apis = {}
         for sid in (11, 12, 21, 22, 31):
             api = Mock()
             api.warehouses.return_value = [{'name': '莫斯科仓库', 'id': sid * 100, 'warehouseId': 999999}]
-            api.feedbacks.return_value = [feedback(nm=sid * 10)]
-            api.orders.return_value = [order(nm=sid * 10, status='return' if sid >= 20 else 'buyout')]
-            api.fbs_orders.return_value = [{'rid': 'o1', 'warehouseId': sid * 100, 'nmId': sid * 10, 'article': VC}]
+            api.feedbacks.return_value = [feedback(nm=sid * 10, stars=5)]
+            orders = [order(nm=sid * 10, status='buyout')]
+            if sid == 21:
+                orders.append(order('returned', nm=sid * 10, status='return'))
+            api.orders.return_value = orders
+            api.fbs_orders.return_value = [
+                {'rid': row['srid'], 'warehouseId': sid * 100, 'nmId': row['nmId'], 'article': VC}
+                for row in orders
+            ]
             self.apis['official-' + str(sid)] = api
         self.api_factory = stack.enter_context(patch.object(
             workflow, 'WBOpenAPI', side_effect=lambda key, region: self.apis[key]))
@@ -165,7 +169,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
                            'gateway=temporary-cookie-' + str(index)) for index in range(len(accounts))]
 
     def collect(self, sessions, **kwargs):
-        return workflow.collect(now=NOW, url='fixture', extra_bcs_accounts=sessions, **kwargs)
+        return workflow.collect(now=NOW, extra_bcs_accounts=sessions, **kwargs)
 
     def test_combines_statistics_but_keeps_only_local_gap_targets(self):
         sessions = self.fixture()
@@ -173,19 +177,20 @@ class TestTemporaryReportAccounts(unittest.TestCase):
         self.assertFalse(report.failed)
         self.assertEqual(report.target_shop_ids, {11, 12})
         self.assertEqual({shop['id'] for shop in report.shops}, {11, 12, 21})
-        self.assertEqual(len(report.orders), 3)
+        self.assertEqual(len(report.orders), 4)
         self.assertEqual(len(report.feedbacks), 3)  # 相同评价ID在不同店铺不误去重。
         self.assertEqual(report.coverage[21]['snapshot'], '不适用：仅补充统计')
         self.assertEqual([call.args[0] for call in self.snapshots.call_args_list], [11, 12])
         self.assertNotIn('21', report.publish_records[VC])
         result = analyze(report)
         self.assertEqual({row['shop_id'] for row in result['gaps']}, {11, 12})
-        self.assertEqual(result['by_vc'][0]['return_rate'], 1 / 3)
-        self.assertEqual(result['vc_feedback'][0]['negative'], 3)
+        self.assertEqual(result['by_vc'][0]['return_rate'], 1 / 4)
+        self.assertEqual(result['vc_feedback'][0]['feedback_count'], 3)
         external = next(row for row in result['links'] if row['shop_id'] == 21)
-        self.assertEqual(external['negative'], 1)
-        self.assertIn('飞书出单记录（历史）', external['source'])
-        self.feishu.assert_called_once()
+        self.assertEqual(external['return_rate'], 1 / 2)
+        for row in (result['sales'][0], screen_products(report).recent[0]):
+            self.assertEqual((row['orders7'], row['orders14']), (3, 3))
+            self.assertIn('外部店(21)：210', row['source_nms'])
         self.assertTrue(all(self.apis[key].close.called for key in ('official-11', 'official-12', 'official-21')))
 
     def test_shops_filters_only_local_targets_and_multiple_accounts_are_supported(self):
@@ -205,7 +210,8 @@ class TestTemporaryReportAccounts(unittest.TestCase):
             [OpenAPIShop(21, '外部店', 'wrong-extra-key'), OpenAPIShop(31, '第三店', 'official-31')]])
         report = self.collect(sessions)
         self.assertFalse(report.failed)
-        self.assertEqual(len(report.orders), 4)
+        self.assertEqual(len(report.orders), 5)
+        self.assertEqual(analyze(report)['sales'][0]['orders14'], 4)
         self.assertEqual([call.args[0] for call in self.api_factory.call_args_list],
                          ['official-11', 'official-12', 'official-21', 'official-31'])
 
@@ -214,7 +220,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
         report = self.collect(sessions)
         self.assertTrue(report.failed)
         self.assertTrue(any(issue.shop_id == 11 and '名称冲突' in issue.message for issue in report.issues))
-        self.assertEqual(len(report.orders), 3)
+        self.assertEqual(len(report.orders), 4)
         self.assertEqual(next(shop['name'] for shop in report.shops if shop['id'] == 11), '店甲')
 
     def test_temporary_id_in_shops_is_not_promoted_to_a_local_target(self):
@@ -264,12 +270,14 @@ class TestTemporaryReportAccounts(unittest.TestCase):
                     api.orders.side_effect = RateLimitError('temporary-token-0')
                 report = self.collect(sessions)
                 self.assertTrue(report.failed)
-                external = next(row for row in analyze(report)['links'] if row['shop_id'] == 21)
-                self.assertIsNone(external['orders'])
+                links = [row for row in analyze(report)['links'] if row['shop_id'] == 21]
+                self.assertEqual(report.coverage[21]['orders'], '未知')
                 if bad_warehouse:
-                    self.assertIsNone(external['negative'])
+                    self.assertFalse(links)
                     api.orders.assert_not_called()
                     api.feedbacks.assert_not_called()
+                else:
+                    self.assertIsNone(links[0]['orders'])
                 self.assertEqual(report.coverage[11]['orders'], '完整')
 
     def test_cli_stdin_utf8_no_secret_output_or_credential_files(self):
@@ -280,7 +288,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
             sentinel.write_bytes(b'{"local":"unchanged"}')
             output = root / 'report.xlsx'
             args = build_parser().parse_args(['report', 'products', '--shops', '11', '--extra-bcs-stdin', '--details',
-                                              '--url', 'fixture', '--out', str(output)])
+                                              '--out', str(output)])
             # UTF-8管道不受Windows文本流默认编码影响。
             stdin = io.TextIOWrapper(io.BytesIO(capture().encode('utf-8')), encoding='gbk')
             self.addCleanup(stdin.close)
@@ -331,9 +339,10 @@ class TestTemporaryReportAccounts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'report.xlsx'
             args = build_parser().parse_args(['report', 'products', '--extra-bcs-stdin', '--details',
-                                              '--url', 'fixture', '--out', str(output)])
+                                              '--out', str(output)])
             stdout = io.StringIO()
-            with patch.object(workflow.sys, 'stdin', io.StringIO(capture())), redirect_stdout(stdout):
+            with patch.object(workflow.sys, 'stdin', io.StringIO(capture())), redirect_stdout(stdout), \
+                    patch.object(workflow, 'collect', wraps=partial(workflow.collect, now=NOW)):
                 self.assertEqual(workflow.run(args), 1)
             wb = load_workbook(output)
             self.addCleanup(wb.close)
@@ -349,7 +358,7 @@ class TestTemporaryReportAccounts(unittest.TestCase):
         self.fixture([])
         stdin = Mock()
         stdin.read.side_effect = AssertionError('must not read stdin')
-        report = workflow.collect(now=NOW, url='fixture')
+        report = workflow.collect(now=NOW)
         with tempfile.TemporaryDirectory() as directory, patch.object(workflow.sys, 'stdin', stdin), \
                 patch.object(workflow, 'collect', return_value=report):
             args = build_parser().parse_args(['report', 'products', '--out', str(Path(directory) / 'report.xlsx')])

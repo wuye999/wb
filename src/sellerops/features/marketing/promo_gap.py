@@ -128,7 +128,7 @@ def promo_gap(days: int = 7, begin: str = "", end: str = "", date: str = "",
     # 飞书只读一次；跨域只经 order_svc 门面（REUSE_GUIDE 铁律 3）
     from sellerops.features.reports import feishu_vc_stats as order_statistics
     fs = order_statistics.vc_order_stats(days=days, begin=begin, end=end, date=date,
-                                        shops=None, url=url, table=table, with_cn=False)
+                                        url=url, table=table)
     rows = fs["raw_rows"]
     begin, end = fs["begin"], fs["end"]
     resolve_cn = MappingRepository.build_vc_resolver()[0] if with_cn else None

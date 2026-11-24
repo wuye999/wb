@@ -2,16 +2,13 @@
 from datetime import datetime, timedelta, timezone
 import re
 from typing import Any
-from urllib.parse import urlsplit
-
-from sellerops.features.reports.feishu_vc_stats import parse_row as parse_register_row
 
 TZ = timezone(timedelta(hours=8))
 KNOWN_STATUSES = {'created', 'buyout', 'cancel', 'return', 'returndefective'}
 
 
 def timestamp(value: Any) -> datetime:
-    """带偏移时间或飞书毫秒时间转为 UTC+8；无偏移的登记时间按 UTC+8。"""
+    """将时间转换为 UTC+8；无时区偏移的时间按 UTC+8 处理。"""
     if isinstance(value, bool) or value is None or value == '':
         raise ValueError('日期缺失或无效')
     if isinstance(value, (int, float)) or re.fullmatch(r'\d{10,13}', str(value)):
@@ -45,80 +42,6 @@ def positive_id(value: Any) -> str:
 def product_url(nm_id: Any) -> str:
     nm = positive_id(nm_id)
     return f'https://www.wildberries.ru/catalog/{nm}/detail.aspx' if nm else ''
-
-
-def cell_text(value: Any, *, link: bool = False) -> str:
-    if isinstance(value, list):
-        return ''.join(cell_text(item, link=link) for item in value)
-    if isinstance(value, dict):
-        keys = ('link', 'url', 'text', 'value') if link else ('text', 'value', 'name')
-        return next((cell_text(value[key], link=link) for key in keys if value.get(key) is not None), '')
-    return '' if value is None else str(value).strip()
-
-
-def auxiliary_register_record(record: Any) -> bool:
-    """只有记录ID和辅助公式列的行不构成订单；有任何业务内容时不能跳过。"""
-    if not isinstance(record, dict):
-        return False
-    fields = record.get('fields', record)
-    return isinstance(fields, dict) and all(
-        key in {'record_id', '商品（链接）'} or not cell_text(value)
-        for key, value in fields.items())
-
-
-def register_row(record: dict[str, Any]) -> dict[str, Any]:
-    """保留原飞书一记录一单口径，并补充来源链接；不从 VC 尾号推测商品码。"""
-    if not isinstance(record, dict):
-        raise ValueError('飞书记录不是对象')
-    fields = record.get('fields', record)
-    if not isinstance(fields, dict):
-        raise ValueError('飞书记录缺少有效 fields')
-    row = parse_register_row(fields)
-    row['日期'] = timestamp(cell_text(fields.get('日期'))).date().isoformat()
-    row['record_id'] = str(record.get('record_id') or '')
-    raw_shops = fields.get('店铺')
-    row['shops'] = [cell_text(item) for item in raw_shops] if isinstance(raw_shops, list) else [cell_text(raw_shops)]
-    row['shops'] = [item for item in row['shops'] if item]
-    raw_url = cell_text(fields.get('商品链接'), link=True)
-    # lark-cli 的展示值可能是 Markdown 超链接，保留原文并单独解析目标。
-    markdown = re.fullmatch(r'\[[^\]]*\]\((https?://[^\s]+)\)', raw_url)
-    target_url = markdown.group(1) if markdown else raw_url
-    nm = positive_id(cell_text(fields.get('wb编号')))
-    notes = []
-    raw_qty = cell_text(fields.get('订单量'))
-    if raw_qty:
-        try:
-            qty = float(raw_qty)
-            if not qty.is_integer() or qty <= 0:
-                raise ValueError('订单量无效')
-        except ValueError:
-            notes.append('订单量无效，件数按原登记规则兜底1')
-            row['qty'] = 1
-    url_nm = ''
-    if raw_url:
-        url = urlsplit(target_url)
-        match = re.match(r'^/catalog/(\d+)(?:/|$)', url.path)
-        if url.scheme in {'http', 'https'} and url.hostname in {
-            'wildberries.ru', 'www.wildberries.ru', 'wildberries.cn', 'www.wildberries.cn',
-        } and match:
-            url_nm = positive_id(match.group(1))
-        else:
-            notes.append('来源商品链接格式无法识别')
-    if nm and url_nm and nm != url_nm:
-        notes.append('wb编号与商品链接冲突')
-        row['nm_id'], row['url'] = '', ''
-    else:
-        row['nm_id'] = nm or url_nm
-        row['url'] = target_url if url_nm else product_url(nm)
-    row['source_url'] = raw_url
-    if not row['url']:
-        notes.append('缺少可确认的商品链接')
-    if not row['vc']:
-        notes.append('缺少VC')
-    if not row['shops']:
-        notes.append('缺少来源店铺')
-    row['notes'] = '；'.join(notes)
-    return row
 
 
 def nm_vendor_map(snapshot: list[dict[str, Any]], feedbacks: list[dict[str, Any]]) -> dict[str, str]:

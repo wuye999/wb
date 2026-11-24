@@ -265,8 +265,10 @@ class TestRegression(unittest.TestCase):
         self.assertEqual(bodies[0]['orderBy'], {'field': 'order.updated', 'mode': 'desc'})
         self.assertFalse(bodies[0]['isDefective'])
         self.assertEqual(feed.cursor_offset('NTA:MjAyNi0xMC0yNyAwNzoyNToxNg'), 50)
-        with mock.patch.object(feed.wb_api, 'request', return_value={'data': {'pageInfo': {'cursor': 'SAME'}, 'orders': [{'order': {'id': 'x'}}]}}):
-            self.assertEqual(len(list(feed.iter_orders(object(), 'a', 'b', max_pages=9, sleep=0))), 2)
+        cycle = [{'orders': [{'order': {'id': key}}], 'cursor': key} for key in ('a', 'b', 'a')]
+        with mock.patch.object(feed, 'fetch_orders_page', side_effect=cycle):
+            with self.assertRaisesRegex(feed.PlatformApiError, '游标重复'):
+                list(feed.iter_orders(object(), 'a', 'b', sleep=0))
         with mock.patch.object(feed.wb_api, 'request', return_value={'data': {'pageInfo': {'cursor': 'C'}, 'orders': []}}):
             self.assertEqual(list(feed.iter_orders(object(), 'a', 'b', sleep=0)), [])
         with mock.patch.object(feed.wb_api, 'request', return_value={'error': True, 'errorText': 'bad period'}):
@@ -310,3 +312,146 @@ class TestRegression(unittest.TestCase):
             self.assertEqual(ws['C3'].value, 1)
             self.assertEqual(book['订单明细'].max_row, 2)
             self.assertEqual(book['订单明细']['I2'].value, '退货')
+
+
+class TestOrderReportCLI(unittest.TestCase):
+    def setUp(self):
+        from contextlib import ExitStack
+        from datetime import datetime
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from sellerops.features.reports import order_stats
+        from sellerops.integrations.feishu import tables
+        from sellerops.integrations.wildberries import order_feed
+        from sellerops.settings import paths
+
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        self.addCleanup(paths.configure, paths.current.data_dir)
+        self.root = Path(stack.enter_context(TemporaryDirectory()))
+        self.data = self.root / 'fixture-data'
+        self.shops = [{'shopId': 1001, 'shopName': '甲店'}, {'shopId': 1002, 'shopName': '乙店'}]
+        self.feishu_url = Mock(return_value='https://fixture.invalid')
+        cred = SimpleNamespace(wb_shops=lambda: self.shops, root_version='fixture',
+                               feishu_base_url=self.feishu_url)
+        stack.enter_context(patch.object(order_stats.credentials, 'get', return_value=cred))
+        stack.enter_context(patch.object(order_stats.wb_api, 'make_session', side_effect=lambda shop, _: shop['shopId']))
+        self.request = stack.enter_context(patch.object(order_feed.wb_api, 'request'))
+        names = {'BCS-TEST-1': '测试甲', 'BCS-TEST-2': '测试甲', 'BCS-ALT-3': '测试乙'}
+        self.lookup = stack.enter_context(patch.object(
+            order_stats.MappingRepository, 'build_vc_resolver', return_value=(names.get, None)))
+        stack.enter_context(patch.object(order_stats, 'load_cn_stock_sku', return_value={}))
+        stack.enter_context(patch.object(order_stats.time, 'sleep'))
+        clock = stack.enter_context(patch.object(order_stats, 'datetime', wraps=datetime))
+        clock.utcnow.return_value = datetime(2026, 10, 26, 16, 0)
+        self.invoke = stack.enter_context(patch.object(tables, 'invoke'))
+
+    def run_report(self, command, *flags):
+        import json
+        from contextlib import redirect_stderr, redirect_stdout
+        from io import StringIO
+        from sellerops.cli.main import main
+
+        stdout, stderr = StringIO(), StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main(['--data-dir', str(self.data), 'report', command, *flags, '--json'])
+        self.feishu_url.assert_not_called()
+        self.invoke.assert_not_called()
+        return code, json.loads(stdout.getvalue()), stderr.getvalue()
+
+    @staticmethod
+    def row(vc, nm, order, created, status):
+        return {'product': {'vendorCode': vc, 'id': nm},
+                'order': {'id': order, 'created': created, 'status': status}}
+
+    def test_vc_sales_filters_by_shanghai_order_date_and_groups_across_shops(self):
+        from pathlib import Path
+        from openpyxl import load_workbook
+
+        vc = 'BCS-TEST-1'
+        rows = {
+            1001: [self.row(vc, 101, 'old.0.0', '2026-10-20T15:59:59Z', 'buyout'),
+                   self.row(vc, 101, 'a.0.0', '2026-10-20T16:00:00Z', 'cancel'),
+                   self.row(vc, 101, 'a.1.0', '2026-10-21T20:00:00+08:00', 'return'),
+                   self.row('BCS-TEST-2', 102, 'b.0.0', '2026-10-21T15:59:59Z', 'buyout')],
+            1002: [self.row(vc, 201, 'c.0.0', '2026-10-21T12:00:00+08:00', 'unrecognized'),
+                   self.row('BCS-ALT-3', 202, 'd.0.0', '2026-10-21T12:00:00+08:00', 'buyout'),
+                   self.row(vc, 201, 'late.0.0', '2026-10-21T16:00:00Z', 'buyout')],
+        }
+        self.request.side_effect = lambda shop_id, *_args, **_kw: {'data': {'orders': rows[shop_id]}}
+        code, reply, log = self.run_report('vc-sales', '--date', '2026-10-21', '--top', '1')
+        self.assertEqual(code, 0)
+        self.assertTrue(reply['ok'])
+        self.assertEqual(reply['data']['rows'], 5)
+        self.assertEqual(reply['data']['unknown_status'], {'unrecognized': 1})
+        self.assertNotIn('BCS-TEST-2', log)
+        self.assertNotIn('测试乙', log)
+        for call in self.request.call_args_list:
+            payload = call.kwargs['json']
+            self.assertEqual(payload['timezone'], 'Asia/Shanghai')
+            self.assertEqual(payload['currentPeriod'], {'start': '2026-10-21', 'end': '2026-10-27'})
+            self.assertEqual(payload['orderBy']['field'], 'order.updated')
+
+        path = Path(reply['data']['artifacts']['workbook'])
+        self.assertEqual(path.parent, self.root / 'exports')
+        book = load_workbook(path)
+        try:
+            self.assertEqual(book.sheetnames, ['按商品中文名汇总', '按完整 VC 汇总'])
+            cn, by_vc = book.worksheets
+            self.assertEqual([c.value for c in cn[2][1:5]], ['测试甲', 4, 2, 0.5])
+            self.assertEqual(cn['B3'].value, '测试乙')
+            self.assertEqual([c.value for c in by_vc[2][1:5]], [vc, '测试甲', 3, 2])
+            self.assertAlmostEqual(by_vc['F2'].value, 2 / 3)
+            self.assertEqual(by_vc['J2'].value, '101,201')
+            self.assertEqual({by_vc['B3'].value, by_vc['B4'].value}, {'BCS-TEST-2', 'BCS-ALT-3'})
+            self.assertIn('未知状态：unrecognized=1', list(cn.values)[-2][0])
+        finally:
+            book.close()
+
+    def test_vc_sales_with_no_orders_exports_both_empty_tables(self):
+        from openpyxl import load_workbook
+
+        self.request.return_value = {'data': {'orders': []}}
+        out = self.root / 'custom.xlsx'
+        code, reply, _ = self.run_report('vc-sales', '--shops', '乙店', '--no-cn', '--out', str(out))
+        self.assertEqual(code, 0)
+        self.assertEqual(reply['data']['rows'], 0)
+        self.assertEqual(reply['data']['failed_shops'], [])
+        self.assertEqual(reply['data']['artifacts']['workbook'], str(out))
+        self.lookup.assert_not_called()
+        self.request.assert_called_once()
+        self.assertEqual(self.request.call_args.args[0], 1002)
+        self.assertEqual(self.request.call_args.kwargs['json']['currentPeriod'],
+                         {'start': '2026-10-21', 'end': '2026-10-27'})
+        book = load_workbook(out)
+        try:
+            self.assertEqual(book.sheetnames, ['按商品中文名汇总', '按完整 VC 汇总'])
+            self.assertEqual((book.worksheets[0]['C2'].value, book.worksheets[1]['D2'].value), (0, 0))
+        finally:
+            book.close()
+
+    def test_incomplete_pagination_is_reported_with_partial_workbook(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from sellerops.integrations.wildberries import order_feed
+
+        for command, cursor, reason in [('vc-sales', 'repeat', '游标重复'),
+                                        ('vc-sales', 'next', '达到翻页上限'),
+                                        ('orders', 'next', '达到翻页上限')]:
+            row = self.row('BCS-TEST-1', 101, 'a.0.0', '2026-10-25T00:00:00+08:00', 'buyout')
+            self.request.side_effect = [
+                {'data': {'pageInfo': {'cursor': 'repeat'}, 'orders': [row]}},
+                {'data': {'pageInfo': {'cursor': cursor}, 'orders': [row]}},
+                {'data': {'orders': [row]}},
+            ]
+            flags = ['--max-pages', '2'] if command == 'orders' else []
+            with self.subTest(command=command, cursor=cursor), patch.object(order_feed, 'MAX_PAGES', 2):
+                code, reply, log = self.run_report(command, *flags)
+                self.assertEqual(code, 1)
+                self.assertFalse(reply['ok'])
+                self.assertIn('不完整', reply['summary'])
+                self.assertIn(reason, log)
+                self.assertEqual(reply['data']['failed_shops'], ['甲店(1001)'])
+                self.assertTrue(Path(reply['data']['artifacts']['workbook']).is_file())

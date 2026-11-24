@@ -107,16 +107,18 @@ def iter_orders(session, start: str, end: str, limit: int = PAGE_SIZE,
         max_rows: >0 时取够 N 行即停（0=翻到底）。
         sleep: 页间间隔秒（0=不限速，测试用）。
 
-    终止条件（五重，缺一不可）：空页 / cursor 假值 / cursor 与上页相同 / 超过 max_pages /
-    达到 max_rows。**不**用「本页行数 < limit」判到底。
+    空页、无游标或达到显式行数上限时返回。重复游标、达到页数上限且仍有下一页时
+    抛出 PlatformApiError，供调用方标记采集不完整。页大小不足不代表已经到底。
     """
     page_size = max(1, int(limit or PAGE_SIZE))
     nxt: Optional[str] = None
-    seen: Any = None
+    seen: set[str] = set()
     page = rows = 0
     while True:
         got = fetch_orders_page(session, start, end, nxt, page_size, timezone)
         chunk, cur = got["orders"], got["cursor"]
+        if cur and str(cur) in seen:
+            raise PlatformApiError("订单动态游标重复，分页未完成")
         page += 1
         rows += len(chunk)
         if verbose:
@@ -129,19 +131,16 @@ def iter_orders(session, start: str, end: str, limit: int = PAGE_SIZE,
             if verbose:
                 print(f"    [提示] 已达行数上限 {max_rows}，停止翻页", flush=True)
             return
-        if not chunk:
+        if not chunk or not cur:
             return
-        if 0 < len(chunk) < page_size and cur:
+        if page >= max_pages:
+            raise PlatformApiError(f"订单动态达到翻页上限 max_pages={max_pages}，分页未完成")
+        if len(chunk) < page_size:
             if verbose:
                 print(f"    [提示] 服务端页大小上限={len(chunk)}（请求 limit={page_size}），已自适应", flush=True)
             page_size = len(chunk)
-        if not cur or str(cur) == str(seen):
-            return
-        if page >= max_pages:
-            print(f"    [警告] 翻页超过 max_pages={max_pages} 仍未结束，提前终止（该店结果可能不完整）",
-                  flush=True)
-            return
-        seen = nxt = cur
+        seen.add(str(cur))
+        nxt = cur
         if sleep:
             time.sleep(sleep)
 

@@ -34,6 +34,7 @@ sellerops WB「订单动态」近一月订单按商品中文名统计（只读�
 import time
 from collections import Counter
 from datetime import date, datetime, timedelta
+from datetime import timezone as fixed_timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sellerops.core import utils as common
@@ -101,7 +102,7 @@ def resolve_window(days: int = DEFAULT_DAYS, begin: str = "", end: str = "",
                    today: Optional[date] = None) -> Tuple[str, str]:
     """推导 (begin, end) 闭区间；**默认近 days 天含今天**（与 fbs-delivery 的"默认不过滤"不同）。
 
-    优先级：begin/end 成对 > date 单天 > days（默认 30）。只给 --end → ValueError（同 feishu-vc-stats）。
+    优先级：begin/end 成对 > date 单天 > days。只给 --end → ValueError。
     """
     b_in, e_in, d_in = (begin or "").strip(), (end or "").strip(), (date or "").strip()
     if e_in and not (b_in or d_in):
@@ -137,7 +138,19 @@ def classify_status(status: Any) -> str:
     return KIND_UNKNOWN
 
 
-def parse_row(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _created_day(created: str, timezone: str) -> str:
+    # WB 通常已按请求时区返回时间。固定偏移时区也兼容接口返回其他偏移的时间戳。
+    if timezone != DEFAULT_TZ and timezone in TZ_OFFSET_MIN:
+        try:
+            timestamp = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except ValueError:
+            return created[:10]
+        if timestamp.tzinfo is not None:
+            return timestamp.astimezone(fixed_timezone(timedelta(minutes=TZ_OFFSET_MIN[timezone]))).date().isoformat()
+    return created[:10]
+
+
+def parse_row(raw: Dict[str, Any], timezone: str = DEFAULT_TZ) -> Dict[str, Any]:
     """`data.orders[]` 一项 → 归一化明细行（缺字段容错，全部字符串化）。"""
     p = (raw or {}).get("product") or {}
     o = (raw or {}).get("order") or {}
@@ -147,7 +160,7 @@ def parse_row(raw: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "order_id": oid,
         "order_no": oid.rsplit(".", 2)[0] if oid.count(".") >= 2 else oid,
-        "created": created, "created_day": created[:10],
+        "created": created, "created_day": _created_day(created, timezone),
         "updated": str(o.get("updated") or ""),
         "status": st, "kind": classify_status(st),
         "cancel_type": str(o.get("cancelType") or ""),
@@ -260,7 +273,7 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
             resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True)
         except Exception as ex:
             print(f"  [警告] 中文名真源（映射表）加载失败（{type(ex).__name__}: {ex}）；中文名将留空")
-    cn_stock_sku = load_cn_stock_sku()   # {中文名: 库存SKU}
+    cn_stock_sku = load_cn_stock_sku() if with_cn else {}
 
     rows: List[Dict[str, Any]] = []
     per_shop: List[Dict[str, Any]] = []
@@ -278,7 +291,7 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
             for raw in feed.iter_orders(session, b, server_end, limit=page_size, max_pages=max_pages,
                                         timezone=timezone, max_rows=limit, sleep=interval,
                                         verbose=verbose):
-                r = parse_row(raw)
+                r = parse_row(raw, timezone)
                 if local_filter and not in_window(r["created_day"], b, e):
                     out_of_window += 1
                     continue
@@ -319,7 +332,7 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
             for p in per_shop},
         "by_shop": aggregate_by_shop(rows),
         "status_counter": Counter(r["status"] or "(空)" for r in rows),
-        "unknown_status": Counter(r["status"] for r in rows if r["kind"] == KIND_UNKNOWN),
+        "unknown_status": Counter(r["status"] or "(空)" for r in rows if r["kind"] == KIND_UNKNOWN),
         "out_of_window": out_of_window,
         "dup_order_ids": sorted(dup_ids),
         "failed_shops": [p for p in per_shop if p.get("error")],
@@ -332,11 +345,16 @@ def order_stats(**kwargs) -> Dict[str, Any]:
 
 
 # ---------------- CLI 入口 ----------------
-def run(args: Any) -> int:
-    """`sellerops report orders`：WB「订单动态」近一月订单按商品中文名统计（只读，输出 xlsx 多 Sheet）。"""
+def run_vc_sales(args: Any) -> int:
+    """`sellerops report vc-sales`：按北京时间统计 WB 下单件数，仅导出两张汇总表。"""
+    return run(args, summaries_only=True)
+
+
+def run(args: Any, *, summaries_only: bool = False) -> int:
+    """读取 WB「订单动态」并导出 Excel。"""
     common.ensure_utf8_stdout()
-    days = getattr(args, "days", DEFAULT_DAYS)
-    timezone = getattr(args, "timezone", DEFAULT_TZ) or DEFAULT_TZ
+    days = getattr(args, "days", 7 if summaries_only else DEFAULT_DAYS)
+    timezone = "Asia/Shanghai" if summaries_only else getattr(args, "timezone", DEFAULT_TZ) or DEFAULT_TZ
     shops = getattr(args, "shops", "") or ""
     top = common.to_int(getattr(args, "top", 0))
     try:
@@ -348,7 +366,7 @@ def run(args: Any) -> int:
         print(f"[错误] {err}")
         return 1
 
-    print(f"[区间] {b} ~ {e}（按**下单时间 created** 统计；时区 {timezone}，比北京时间晚约 15 小时）"
+    print(f"[区间] {b} ~ {e}（按下单时间 created 统计；时区 {timezone}）"
           f"｜店铺={shops or '全部'}"
           f"｜中文名={'不解析' if getattr(args, 'no_cn', False) else '解析'}")
     print("[口径] 接口 currentPeriod 按 updated 粗筛（超集），本地再按 created 精筛；"
@@ -357,15 +375,14 @@ def run(args: Any) -> int:
           f"请更新 data/credentials.json）")
 
     try:
-        r = collect(days=days, begin=getattr(args, "begin", ""), end=getattr(args, "end", ""),
-                    date=getattr(args, "date", ""), shops=shops, timezone=timezone,
+        r = collect(begin=b, end=e, shops=shops, timezone=timezone,
                     page_size=common.to_int(getattr(args, "page_size", feed.PAGE_SIZE)) or feed.PAGE_SIZE,
                     max_pages=common.to_int(getattr(args, "max_pages", feed.MAX_PAGES)) or feed.MAX_PAGES,
                     limit=common.to_int(getattr(args, "limit", 0)),
                     with_cn=not getattr(args, "no_cn", False),
                     local_filter=not getattr(args, "no_local_filter", False),
                     interval=float(getattr(args, "interval", 0.3) or 0),
-                    verbose=not getattr(args, "quiet", False))
+                    verbose=not getattr(args, "quiet", summaries_only))
     except (RuntimeError, ValueError) as err:
         args.summary = str(err)
         print(f"[错误] {err}")
@@ -373,14 +390,17 @@ def run(args: Any) -> int:
 
     rows, by_cn = r["rows"], r["by_cn"]
     failed = r["failed_shops"]
+    args.output = {'rows': len(rows), 'failed_shops': [shop['label'] for shop in failed]}
+    if summaries_only:
+        args.output['unknown_status'] = dict(r['unknown_status'])
     if failed:
         print(f"  [警告] {len(failed)}/{len(r['per_shop'])} 家店铺失败，结果不完整："
               + "、".join(p["label"] for p in failed))
     if not rows:
         print("\n窗口内没有命中任何订单行（检查 --shops/--days/--begin/--end）")
-        args.output = {'rows': 0, 'failed_shops': [shop['label'] for shop in failed]}
-        args.summary = '部分店铺订单读取失败' if failed else '该时间段内没有匹配订单'
-        return int(bool(failed))
+        if failed or not summaries_only:
+            args.summary = '店铺订单采集不完整' if failed else '该时间段内没有匹配订单'
+            return int(bool(failed))
 
     print(f"\n[汇总] 订单行 {len(rows)} 行｜去重订单号 {len({x['order_no'] for x in rows if x['order_no']})} 个"
           f"｜中文名 {len(by_cn)} 种｜去重供应商代码 {len({x['vc'] for x in rows if x['vc']})} 个")
@@ -415,16 +435,17 @@ def run(args: Any) -> int:
         from sellerops.features.reports.order_stats_xlsx import write_xlsx
         path = write_xlsx(r, out=getattr(args, "out", "") or "",
                           with_detail=not getattr(args, "no_detail", False),
-                          detail_max_rows=common.to_int(getattr(args, "detail_max_rows", 0)))
+                          detail_max_rows=common.to_int(getattr(args, "detail_max_rows", 0)),
+                          summaries_only=summaries_only)
     except ImportError as ex:
         args.summary = '生成订单报表失败，请检查 openpyxl 依赖'
         print(f"[错误] 生成 xlsx 失败：{ex}（请用带 openpyxl 的 venv Python 运行）")
         return 1
-    print(f"\n[xlsx] 汇总 {len(by_cn)} 行 / 供应商代码 {len(r['by_vc'])} 个 / "
-          f"店铺 {len(r['by_shop'])} 家 / 明细 {len(rows)} 行 → "
+    print(f"\n[xlsx] 中文名汇总 {len(by_cn)} 行 / 供应商代码汇总 {len(r['by_vc'])} 行 → "
           f"{path or '（未生成，见上方警告）'}")
-    args.output = {'rows': len(rows), 'failed_shops': [shop['label'] for shop in failed],
-                   'artifacts': {'workbook': str(path)} if path else {}}
-    args.summary = ('订单报表未生成' if not path else
-                    '已导出订单报表，部分店铺读取失败' if failed else '已导出订单报表')
+    args.output['artifacts'] = {'workbook': str(path)} if path else {}
+    report = 'VC 销量报表' if summaries_only else '订单报表'
+    args.summary = f'已导出{report}' if path else f'{report}未生成'
+    if failed:
+        args.summary += '，店铺订单采集不完整'
     return 1 if failed or not path else 0

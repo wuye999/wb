@@ -62,9 +62,9 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | `mabang-stock-register` | `order stock-register` |
 | `mabang-stock-daily` | `order stock-days` |
 | `fbs-group-ship-openapi` | `order group-ship` |
-| `mabang-process` | `order process` |
-| `product-report` | `report products` |
-| `feishu-vc-stats` | `report vc-sales` |
+| `mabang-process` | `order process`。缺少飞书地址或 `lark-cli` 时自动跳过登记 |
+| `product-report` | `report products`。移除旧参数 `--url` 和 `--table`，无需飞书或 `lark-cli`。近 7/14 天有效出单改用 WB Open API，口径 A 仅计在途和买断，每行一件。退货继续使用 `--order-days`。JSON 中用 `data.orders_complete` 查看订单覆盖，并用 `data.period.orders_collected_from` 查看实际采集起点 |
+| `feishu-vc-stats` | `report vc-sales`。改用 WB 订单动态，按北京时间统计下单件数并在 `exports/` 导出 Excel。迁移时去掉 `--url`、`--table` 和 `--by-prefix`，从 `data.artifacts.workbook` 读取路径 |
 | `fbs-delivery` | `report delivery` |
 | `order-stats` | `report orders` |
 | `ratings` | `report ratings` |

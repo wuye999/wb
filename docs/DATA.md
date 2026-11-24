@@ -24,7 +24,7 @@
 
 固定 Chromium 程序安装在项目根目录的 `.runtime/browsers/`。`--data-dir` 选择登录资料和凭证的位置，各数据目录共用项目内的浏览器程序。安装步骤见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
 
-`report products` 在 `exports/` 生成商品运营工作簿，只读现有快照、归属和提交记录。BCS提供对应店铺官方令牌，无需新增凭证段；`--extra-bcs-stdin` 接收的临时账号仅驻留本轮内存，不增加凭证文件或额外店铺快照。报告按账号标注统计来源，链接缺口仅针对本机目标店；来源链接、UTC+8日期及未知数据约定见 [报告说明](PRODUCT_REPORT.md)。
+`report products` 在 `exports/` 生成商品运营工作簿，使用现有快照、归属、提交记录及本轮 WB Open API 订单。订单明细保留实际采集窗口，退货统计按 `--order-days` 过滤。近 7/14 天采用口径 A，仅统计在途和买断，每行一件。报告无需飞书或 `lark-cli`，旧参数 `--url` 和 `--table` 已移除。BCS 提供对应店铺的官方令牌，`--extra-bcs-stdin` 接收的临时账号仅驻留本轮内存。报告按账号标注来源，链接缺口仅针对本机目标店。[报告说明](PRODUCT_REPORT.md)
 
 ## 商品价格表
 
@@ -103,7 +103,13 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 
 订单登记的「库存SKU」取自本地价格表的「马帮库存SKU」，WB 发货和缺 SKU 的订单留空。wb编号来自下单店铺自己的快照。登记会完整分页读取现有订单编号去重。已有重复可单独使用 `order deduplicate` 清理。
 
+`order process` 有飞书地址且能找到 `lark-cli` 时才登记，缺任一项时自动跳过。
+
 `order stock-register --apply` 会先删除库存表已有记录再全量写入，原日期列对应的历史数据不能因此自动保留。`order stock-days` 的显式日期/区间模式会删除早于起始日期的旧日期列；默认模式和区间模式不能当作同一动作。
+
+## VC 销量报表
+
+`report vc-sales` 以 WB 订单动态的下单行作为数据源。默认按北京时间取近 7 天（含今天），每行计一件。取消、退货、残次退货都计入下单总件数及退货数。Excel 默认写入 `exports/`，含「按商品中文名汇总」和「按完整 VC 汇总」两张表。文件路径见 `data.artifacts.workbook`，未知状态和采集不完整的店铺分别见 `data.unknown_status` 和 `data.failed_shops`。该数据源独立于飞书。
 
 ## AI 对照样例集
 

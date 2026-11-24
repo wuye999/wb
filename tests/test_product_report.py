@@ -16,6 +16,7 @@ from sellerops.domain.product_reports import ProductReport, ReportCatalog
 from sellerops.features.reports import product_report as workflow
 from sellerops.features.reports import product_report_data as data
 from sellerops.features.reports.product_report_analysis import analyze, return_metrics
+from sellerops.features.reports.product_report_screening import screen_products
 from sellerops.features.reports.product_report_xlsx import write_report
 from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop
 from sellerops.integrations.wildberries.open_api import WBOpenAPI, OpenAPIResponseError
@@ -34,12 +35,6 @@ def feedback(fid='f1', nm=101, stars=1, vc=VC, date='2026-11-01T20:00:00Z'):
 def order(oid='o1', nm=101, status='cancel', warehouse='莫斯科仓库', date='2026-11-01T20:00:00Z'):
     return {'srid': oid, 'nmId': nm, 'createdAt': date, 'updatedAt': date,
             'status': status, 'warehouseName': warehouse, 'isMp': True}
-
-
-def register(vc=VC, nm=101, shop='店甲', date='2026-11-02', rid='r1'):
-    return {'record_id': rid, 'fields': {'日期': date, 'BCS编号': vc, '店铺': [shop],
-            '订单编号': rid, 'wb编号': str(nm), '商品中文名': '测试商品', '订单量': 2,
-            '商品链接': {'text': '查看商品', 'link': data.product_url(nm)}}}
 
 
 class TestOpenAPIProtocol(unittest.TestCase):
@@ -187,10 +182,10 @@ class TestReportRules(unittest.TestCase):
         report.coverage = {sid: {'orders': '完整', 'feedbacks': '完整'} for sid in (11, 12)}
         report.snapshots = {11: [], 12: []}
         for i in range(10):
-            report.orders.append({'shop_id': 11 if i == 0 else 12, 'shop_name': '甲' if i == 0 else '乙',
-                                  'nm_id': '101' if i == 0 else '202', 'vc': VC, 'cn': '同一商品',
-                                  'url': data.product_url(101 if i == 0 else 202),
-                                  'status': 'cancel' if i == 0 else 'buyout'})
+            sid, name, nm = (11, '甲', 101) if i == 0 else (12, '乙', 202)
+            raw = order(str(i), nm=nm, status='cancel' if i == 0 else 'buyout')
+            report.orders.append(data.order_row(raw, sid, name, {str(nm): VC},
+                                               {'id': sid, 'name': '业务仓'}, lambda *args: '同一商品'))
         report.feedbacks = [data.feedback_row(feedback(nm=101), 11, '甲', lambda *args: '同一商品')]
         result = analyze(report)
         self.assertAlmostEqual(result['by_cn'][0]['return_rate'], .1)
@@ -199,7 +194,7 @@ class TestReportRules(unittest.TestCase):
         self.assertEqual([row['negative'] for row in result['links']], [1, 0])
         self.assertEqual(result['vc_feedback'][0]['negative'], 1)
 
-    def test_timezone_windows_link_conflicts_and_no_vc_tail_guess(self):
+    def test_timezone_windows_and_no_vc_tail_guess(self):
         start, end, feedback_start = data.windows(30, 0, NOW)
         self.assertEqual(start.date().isoformat(), '2026-10-04')
         self.assertEqual(end.date().isoformat(), '2026-11-03')
@@ -207,16 +202,11 @@ class TestReportRules(unittest.TestCase):
         for days in (0, 32):
             with self.assertRaises(ValueError):
                 data.windows(days, 0, NOW)
-        raw = register()
-        raw['fields']['日期'] = int(data.timestamp('2026-10-26T17:00:00Z').timestamp() * 1000)
-        row = data.register_row(raw)
-        self.assertEqual(row['日期'], '2026-10-27')
+        row = data.order_row(order(date='2026-10-26T17:00:00Z'), 11, '甲', {},
+                             {'id': 11, 'name': '业务仓'}, lambda *args: '测试商品')
+        self.assertEqual(row['created'], '2026-10-27T01:00:00+08:00')
         self.assertEqual(row['url'], data.product_url(101))
-        raw['fields']['wb编号'] = '999'
-        self.assertIn('冲突', data.register_row(raw)['notes'])
-        raw['fields'].pop('wb编号')
-        raw['fields'].pop('商品链接')
-        self.assertEqual(data.register_row(raw)['nm_id'], '')
+        self.assertEqual(row['vc'], '')
 
     def test_only_unique_moscow_id_and_no_office_id(self):
         selected = select_warehouse([{'name': '成都仓', 'id': 9},
@@ -227,23 +217,6 @@ class TestReportRules(unittest.TestCase):
                      [{'name': '莫斯科一', 'id': 1}, {'name': '莫斯科二', 'id': 2}]):
             with self.assertRaises(ValueError):
                 select_warehouse(rows, '莫斯科')
-
-    def test_feishu_markdown_links_preserve_original_and_extract_actual_url(self):
-        for label in ('商品详情', data.product_url(101)):
-            raw = register()
-            raw['fields'].pop('wb编号')
-            original = f'[{label}]({data.product_url(101)})'
-            raw['fields']['商品链接'] = original
-            row = data.register_row(raw)
-            self.assertEqual(row['nm_id'], '101')
-            self.assertEqual(row['url'], data.product_url(101))
-            self.assertEqual(row['source_url'], original)
-            self.assertEqual(row['notes'], '')
-        raw = register()
-        raw['fields']['商品链接'] = '[其他站点](https://example.invalid/catalog/101/)'
-        self.assertIn('无法识别', data.register_row(raw)['notes'])
-        raw['fields']['商品链接'] = f'[冲突]({data.product_url(202)})'
-        self.assertIn('冲突', data.register_row(raw)['notes'])
 
     def test_snapshot_missing_wrong_shop_and_incomplete(self):
         from catalog_fixture import corrupt_snapshot, snapshot
@@ -268,6 +241,7 @@ class TestReportWorkflow(unittest.TestCase):
     def fixture(self, *, missing=False, api_error=False, bad_warehouse=False, records=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(patch('sellerops.features.catalog.shops.archive_set', return_value=set()))
         stack.enter_context(patch.object(workflow.credentials, 'get', return_value=Mock(wb_warehouse_keyword='莫斯科')))
         stack.enter_context(patch.object(workflow, 'load_report_catalog', return_value=ReportCatalog({'测试商品'}, {VC: '测试商品'})))
         accesses = [OpenAPIShop(11, '店甲', 'secret-a'), OpenAPIShop(12, '店乙', 'secret-b')]
@@ -281,12 +255,6 @@ class TestReportWorkflow(unittest.TestCase):
             return {'shopId': sid, 'fetchedAt': '2026-11-01 12:00:00',
                     'rows': [{'nmId': 101 if sid == 11 else 202, 'vendorCode': VC}]}
         stack.enter_context(patch.object(workflow.ProductSnapshotRepository, 'load_snapshot_document', side_effect=snapshot))
-        stack.enter_context(patch.object(workflow.tables, 'resolve_base', return_value='base'))
-        stack.enter_context(patch.object(workflow.tables, 'resolve_table', return_value='table'))
-        sources = [register(date='2026-10-27', rid='7day'), register(date='2026-10-26', rid='14day'),
-                   register(vc='BCS-OTHR-9', nm=909, shop='外部店', date='2026-10-20', rid='external'),
-                   register(vc='too-old', date='2026-10-19', rid='old')]
-        stack.enter_context(patch.object(workflow.tables, 'list_records', return_value=sources))
         apis = []
         for sid in (11, 12):
             api = Mock()
@@ -309,9 +277,16 @@ class TestReportWorkflow(unittest.TestCase):
         return apis, factory
 
     def collect(self, **kwargs):
-        return workflow.collect(now=NOW, url='fixture-url', **kwargs)
+        return workflow.collect(now=NOW, **kwargs)
 
-    def test_collection_keeps_external_sources_and_windows(self):
+    def set_orders(self, api, sid, rows):
+        api.orders.return_value = [row for row, _ in rows]
+        api.fbs_orders.return_value = [
+            {'rid': row['srid'], 'warehouseId': sid * 100, 'nmId': row['nmId'], 'article': vc}
+            for row, vc in rows
+        ]
+
+    def test_collection_keeps_only_business_warehouse_and_requested_dates(self):
         apis, factory = self.fixture()
         report = self.collect()
         self.assertFalse(report.failed)
@@ -320,15 +295,71 @@ class TestReportWorkflow(unittest.TestCase):
         self.assertEqual(report.coverage[11]['outside_warehouse'], 1)
         self.assertEqual(report.coverage[11]['outside_created'], 1)
         self.assertEqual(factory.call_args_list[0].args, ('secret-a', 'ru'))
-        result = analyze(report)
-        vc_sale = next(row for row in result['sales'] if row['vc'] == VC)
-        self.assertEqual((vc_sale['orders7'], vc_sale['orders14']), (1, 2))
-        self.assertIn('BCS-OTHR-9', {row['vc'] for row in result['sales']})
-        self.assertNotIn('too-old', {row['vc'] for row in result['sales']})
-        external = next(row for row in result['links'] if row['shop_name'] == '外部店')
-        self.assertIsNone(external['negative'])
-        self.assertIn('未知', external['note'])
+        self.assertEqual(report.orders_collected_from, report.order_begin)
+        self.assertFalse(analyze(report)['sales'])
         self.assertTrue(all(api.close.called for api in apis))
+
+    def test_short_return_window_keeps_utc8_sales_boundaries_for_both_apis_and_xlsx(self):
+        apis, _ = self.fixture()
+        for api in apis:
+            api.feedbacks.return_value = []
+        self.set_orders(apis[0], 11, [
+            (order('today-11', status='buyout'), VC),
+            (order('first-of-7', status='buyout', date='2026-10-26T16:00:00Z'), VC),
+            (order('eighth-day', status='created', date='2026-10-26T15:59:59Z'), VC),
+            (order('first-of-14', status='buyout', date='2026-10-19T16:00:00Z'), VC),
+            (order('before-14', status='buyout', date='2026-10-19T15:59:59Z'), VC),
+            (order('after-today', status='buyout', date='2026-11-02T16:00:00Z'), VC),
+            (order('old-return', status='return', date='2026-10-26T15:59:59Z'), VC),
+            (order('old-cancel', status='cancel', date='2026-10-26T15:59:59Z'), VC),
+        ])
+        self.set_orders(apis[1], 12, [(order('today-12', nm=202, status='buyout'), VC)])
+        report = self.collect(order_days=3)
+        self.assertTrue(report.orders_complete)
+        for api in apis:
+            for call in (api.orders.call_args, api.fbs_orders.call_args):
+                self.assertEqual(call.args[0].isoformat(), '2026-10-20T00:00:00+08:00')
+        self.assertEqual(report.order_begin, '2026-10-31')
+        self.assertEqual(report.orders_collected_from, '2026-10-20')
+        self.assertEqual({row['order_id'] for row in report.orders},
+                         {'today-11', 'today-12', 'first-of-7', 'eighth-day', 'first-of-14',
+                          'old-return', 'old-cancel'})
+        result = analyze(report)
+        for key in ('by_cn', 'by_vc'):
+            self.assertEqual((result[key][0]['orders'], result[key][0]['combined_returns']), (2, 0))
+        self.assertEqual({row['shop_id']: row['orders'] for row in result['links']}, {11: 1, 12: 1})
+        screening = screen_products(report)
+        self.assertFalse(screening.high_returns)
+        for row in (result['sales'][0], screening.recent[0]):
+            self.assertEqual((row['orders7'], row['orders14']), (3, 5))
+            self.assertEqual(set(row['source_nms'].splitlines()), {'店甲(11)：101', '店乙(12)：202'})
+
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(shops='', order_days=3, feedback_days=0, wb_region='ru',
+                                   json=True, details=True, out=str(Path(directory) / 'report.xlsx'))
+            with patch.object(workflow, 'collect', return_value=report):
+                self.assertEqual(workflow.run(args), 0)
+            self.assertNotIn('feishu_complete', args.output)
+            self.assertTrue(args.output['orders_complete'])
+            self.assertEqual(args.output['period'], {
+                'orders_from': '2026-10-31', 'orders_collected_from': '2026-10-20',
+                'feedbacks_from': None, 'sales_7_from': '2026-10-27',
+                'sales_14_from': '2026-10-20', 'through': '2026-11-02',
+            })
+            self.assertEqual(args.output['return_metrics']['orders'], 2)
+            self.assertEqual(args.output['return_metrics']['return_rate'], 0)
+            with open(args.out, 'rb') as stream:
+                wb = load_workbook(stream)
+                self.assertNotIn('飞书出单明细', wb.sheetnames)
+                self.assertEqual(wb['订单明细'].max_row, 8)
+                for sheet in ('近期出单筛选', '近7及14天出单', '店铺链接缺口'):
+                    headers, *rows = wb[sheet].values
+                    self.assertEqual([rows[0][headers.index(f'近{days}天有效出单件数')] for days in (7, 14)], [3, 5])
+                coverage = dict(wb['数据覆盖说明'].values)
+                self.assertIn('2026-10-20', coverage['订单采集窗口'])
+                self.assertIn('2026-10-31', coverage['退货统计窗口'])
+                self.assertIn('buyout', coverage['有效出单口径 A'])
+                wb.close()
 
     def test_partial_auth_failure_continues_other_shop_and_never_zeros_unknown(self):
         self.fixture(api_error=True)
@@ -371,7 +402,9 @@ class TestReportWorkflow(unittest.TestCase):
         self.assertEqual(report.coverage[11]['orders'], '部分')
 
     def test_missing_snapshot_and_pending_publish_are_distinct(self):
-        self.fixture(missing=True, records={'BCS-OTHR-9': {'11': '2026-11-02 10:00:00'}})
+        apis, _ = self.fixture(missing=True, records={'BCS-OTHR-9': {'11': '2026-11-02 10:00:00'}})
+        self.set_orders(apis[0], 11, [(order(status='buyout'), VC),
+                                     (order('other-vc', nm=909, status='created'), 'BCS-OTHR-9')])
         report = self.collect()
         self.assertTrue(report.failed)
         gaps = analyze(report)['gaps']
@@ -391,7 +424,7 @@ class TestReportWorkflow(unittest.TestCase):
         self.assertTrue(report.failed)
         self.assertEqual([shop['id'] for shop in report.shops], [99])
         factory.assert_not_called()
-        self.assertEqual({row['state'] for row in analyze(report)['gaps']}, {'缺少快照无法判断'})
+        self.assertFalse(analyze(report)['gaps'])
 
     def test_malformed_feedback_is_partial_and_other_shop_continues(self):
         apis, _ = self.fixture()
@@ -409,30 +442,24 @@ class TestReportWorkflow(unittest.TestCase):
         self.assertIn('BCS-NOOR-3', {row['key'] for row in result['vc_feedback']})
         self.assertNotIn('BCS-NOOR-3', {row['key'] for row in result['by_vc']})
 
-    def test_feishu_failure_or_bad_date_not_empty_success(self):
-        self.fixture()
-        with patch.object(workflow.tables, 'list_records', side_effect=RuntimeError('secret-a')):
-            report = self.collect()
-        self.assertTrue(report.failed)
-        self.assertFalse(report.feishu_complete)
-        self.assertNotIn('secret-a', str(report.issues))
-        with patch.object(workflow.tables, 'list_records', return_value=[register(date='invalid')]):
-            report = self.collect()
-        self.assertTrue(report.failed)
-
-    def test_auxiliary_formula_rows_are_not_mistaken_for_undated_orders(self):
-        self.fixture()
-        with patch.object(workflow.tables, 'list_records', return_value=[register(),
-                {'record_id': 'empty-row', '商品（链接）': '辅助公式展示值'}]):
-            report = self.collect()
-        self.assertFalse(report.failed)
-        self.assertTrue(report.feishu_complete)
-        self.assertEqual(len(report.sales), 1)
-        self.assertTrue(any('占位行' in issue.message for issue in report.issues))
-        with patch.object(workflow.tables, 'list_records', return_value=[
-                {'record_id': 'real-undated', 'BCS编号': VC, '日期': ''}]):
-            report = self.collect()
-        self.assertTrue(report.failed)
+    def test_all_statuses_feed_returns_but_only_valid_orders_with_vc_feed_sales(self):
+        apis, _ = self.fixture()
+        statuses = ('created', 'buyout', 'cancel', 'return', 'returnDefective', 'new-status')
+        self.set_orders(apis[0], 11, [(order(status, status=status), VC) for status in statuses] +
+                        [(order('unknown-vc', nm=909, status='buyout'), ''),
+                         (order('bad-date', status='buyout', date='invalid'), VC)])
+        report = self.collect()
+        self.assertFalse(report.orders_complete)
+        self.assertEqual(len(report.orders), 8)
+        self.assertEqual(next(row for row in report.orders if row['order_id'] == 'unknown-vc')['vc'], '')
+        result = analyze(report)
+        returns = next(row for row in result['by_vc'] if row['key'] == VC)
+        self.assertEqual((returns['orders'], returns['combined_returns'], returns['unknown']), (7, 4, 1))
+        self.assertEqual(len(result['sales']), 1)
+        sale = result['sales'][0]
+        self.assertEqual((sale['orders7'], sale['orders14']), (2, 2))
+        self.assertIn('部分', sale['sales_scope'])
+        self.assertTrue(any('下单时间无效' in issue.message for issue in report.issues))
 
     def test_safe_protocol_reason_is_visible_in_report(self):
         apis, _ = self.fixture()
@@ -464,6 +491,6 @@ class TestReportWorkflow(unittest.TestCase):
         self.fixture(api_error=True)
         with tempfile.TemporaryDirectory() as directory:
             args = SimpleNamespace(shops='', order_days=30, feedback_days=0, wb_region='ru',
-                                   url='fixture', table='订单登记', out=str(Path(directory) / 'report.xlsx'))
+                                   out=str(Path(directory) / 'report.xlsx'))
             self.assertEqual(workflow.run(args), 1)
             self.assertTrue(Path(args.out).exists())

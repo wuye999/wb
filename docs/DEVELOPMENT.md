@@ -10,7 +10,7 @@
 
 根目录 `api/` 保存维护者的接口说明与原始抓包，可能含敏感信息，整体由 Git 忽略；本地入口为 `api/API.md`。公开仓库及离线检查不依赖该目录存在。凭证与运行约束见 [配置](CONFIGURATION.md)，已支持功能见 [操作流程](USAGE.md)。不得为了修复文档链接而把私有 API 目录加入提交。
 
-`report products` 已有独立的 WB Open API 只读客户端，使用订单动态、评价及归档评价、卖家仓库目录；BCS 提供对应店铺的官方令牌，飞书提供出单来源。[完整口径与限制](PRODUCT_REPORT.md)。现有默认商品写入通道及后台会话管理没有因此迁移到 Open API。
+`report products` 使用只读 WB Open API 客户端读取订单动态、FBS 订单、评价及卖家仓库目录，BCS 提供各店官方令牌。分析和筛选共用 `ProductReport.orders`，按 UTC+8 下单日计算近 7/14 天有效出单，口径 A 仅计在途和买断。采集窗口至少 14 天，退货指标严格使用 `--order-days`。命令已移除飞书及 `lark-cli` 依赖和 `--url`、`--table` 参数。[完整口径与限制](PRODUCT_REPORT.md)
 
 临时报告账号由 `integrations.bcs.capture.parse_sessions()` 从标准输入文本解析为不显示秘密的 `BCSSession`，通过 `BCSClient(session)` 注入独立认证，默认客户端仍延迟读取本机配置。`product_report.collect(extra_bcs_accounts=...)` 合并统计来源，`ProductReport.target_shop_ids` 单独限定本机链接缺口目标（直接构造旧实体时None沿用全部店铺）；`unavailable_accounts` 保留店铺列表读取失败的账号标签，防止健康店铺的汇总误标整轮完整。报告实体不保存认证；额外店铺不加载本地快照或使用本机提交记录。离线边界见 [临时账号测试](../tests/test_product_report_accounts.py)。
 

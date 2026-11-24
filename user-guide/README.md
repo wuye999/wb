@@ -80,7 +80,7 @@ python run.py doctor --json
 python run.py ops price --shops 1001 --name "旅行杯" --price 55 --json
 python run.py apply --plan P018 --json
 
-# 生成多店商品综合运营报告（出单、退货、差评、链接缺口）
+# 生成多店商品综合运营报告（WB 近 7/14 天有效出单、退货、差评、链接缺口）
 python run.py report products --shops 1001,1002 --json
 
 # WB 发货群供货预览（提交后自动生成供货码与标签两份 PDF）

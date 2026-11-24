@@ -9,32 +9,28 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument('--out', default='', help='输出路径（默认 exports/ 下的 .xlsx）')
     bind(p, 'sellerops.features.catalog.mapping_sync', 'run_export')
 
-    p = sub.add_parser('products', help='只读：默认筛选低评分、高退货率及近期出单补货候选 → Excel')
+    p = sub.add_parser('products', help='只读：基于 WB Open API 筛选低评分、高退货率及近7/14天有效出单候选 → Excel')
     p.add_argument('--details', action='store_true', help='追加原始汇总、订单、评价和链接证据表（默认仅简洁筛选与覆盖说明）')
-    p.add_argument('--shops', default='', help='本机目标店铺ID，逗号分隔（默认本机BCS账号全部店铺；不筛选临时账号或飞书来源）')
+    p.add_argument('--shops', default='', help='本机目标店铺ID，逗号分隔（默认本机BCS账号全部店铺；临时账号全部补充统计）')
     p.add_argument('--extra-bcs-stdin', action='store_true',
                    help='从标准输入读取临时BCS账号的一个或多个fetch抓包，仅补充统计，凭证不落盘')
-    p.add_argument('--order-days', type=int, default=30, help='退货统计下单窗口，含今天（1–31天，默认30）')
+    p.add_argument('--order-days', type=int, default=30, help='退货统计下单窗口，UTC+8 含今天（1–31天，默认30；采集至少覆盖近14天）')
     p.add_argument('--feedback-days', type=int, default=0, help='评价日期窗口，含今天（默认0：接口可访问的全部历史）')
     p.add_argument('--wb-region', choices=['ru', 'cn'], default='ru', help='WB官方主机区域（默认ru；不自动跨域重试）')
-    p.add_argument('--url', default='', help='飞书多维表格地址（默认feishu.base_url）')
-    p.add_argument('--table', default='订单登记', help='飞书来源表（默认订单登记）')
     p.add_argument('--out', default='', help='输出.xlsx路径（默认exports/商品运营报告_时间.xlsx）')
     bind(p, 'sellerops.features.reports.product_report', 'run')
 
     p = sub.add_parser('vc-sales',
-                           help="只读：飞书「订单登记」按供应商代码(BCS编号)统计单数并降序（跨店合并；支持店铺/日期过滤）")
+                           help="只读：WB「订单动态」跨店按商品中文名和完整 VC 统计下单件数（默认近 7 天，UTC+8），导出 Excel")
     p.add_argument("--days", type=int, default=7, help="近 N 天（含今天，默认 7；仅当未给 --begin/--end/--date 时生效）")
     p.add_argument("--date", default="", help="单天 YYYY-MM-DD（等价 --begin=--end）")
     p.add_argument("--begin", default="", help="区间开始 YYYY-MM-DD（单独给按单天处理）")
     p.add_argument("--end", default="", help="区间结束 YYYY-MM-DD（必须与 --begin 或 --date 同用）")
     p.add_argument("--shops", default="", help="店铺过滤，逗号分隔，支持店铺ID或短名（如 1001 或 示例店铺；默认全部）")
-    p.add_argument("--top", type=int, default=0, help="控制台只显示前 N 名（0=全部；CSV 始终写全量）")
-    p.add_argument("--by-prefix", action="store_true", help="按 vendorCode 的 4 位前缀码聚合（默认完整 vendorCode）")
-    p.add_argument("--no-cn", action="store_true", help="不补全商品中文名（表内已有的仍会显示）")
-    p.add_argument("--url", default="", help="飞书表格地址（可选，默认读配置 feishu.base_url）")
-    p.add_argument("--table", default="订单登记", help="表名（默认 订单登记）")
-    bind(p, 'sellerops.features.reports.feishu_vc_stats', 'run')
+    p.add_argument("--top", type=int, default=0, help="控制台每张表只显示前 N 名（0=全部；Excel 始终写全量）")
+    p.add_argument("--no-cn", action="store_true", help="不解析商品中文名（仍按完整 VC 汇总）")
+    p.add_argument("--out", default="", help="输出 .xlsx 路径（默认 exports/VC销量统计_<时间戳>.xlsx）")
+    bind(p, 'sellerops.features.reports.order_stats', 'run_vc_sales')
 
     p = sub.add_parser('delivery',
                            help="只读：WB FBS「配送中」清单及其全部商品采集+统计（按清单 createdAt 时段、"

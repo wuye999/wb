@@ -322,58 +322,78 @@ class TestRegression(unittest.TestCase):
                     self.assertEqual(records[0]['库存SKU'], expected)
                     self.assertEqual(notice.get('发货群订单(库存SKU留空)', 0), int(expected is None))
 
-    def test_feishu_vc_stats_offline(self):
-        """feishu-vc-stats 离线断言（**不联网、不调 lark-cli**）：字段解析 / 窗口 / 跨店合并 / 降序 / 前缀。
+    def test_mabang_process_skips_feishu_when_address_or_cli_is_missing(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from sellerops.cli.main import build_parser
+        from sellerops.features.orders import mabang_process as pipeline
+        from sellerops.features.orders.matching import MatchResult
+        from sellerops.integrations.feishu import tables
 
-            背景：飞书「订单登记」表的 vendorCode 载体是 `BCS编号` 列（表内无「供应商代码」列）；
-            同一 vendorCode 在各店 wb编号 不同，但统计须**跨店合并**到同一条（用户口径 2026-09-23）。
-            """
-        from datetime import datetime, timedelta
+        cases = [
+            (' ', '', 'feishu.base_url 缺失'),
+            ('https://fixture.invalid', '', '未检测到 lark-cli'),
+            ('https://fixture.invalid', '?:/missing-lark-cli.cmd', '未检测到 lark-cli'),
+        ]
+        for url, configured_cli, reason in cases:
+            args = build_parser().parse_args(['order', 'process'])
+            cred = SimpleNamespace(feishu_base_url=lambda: url)
+            output = StringIO()
+            with self.subTest(reason=reason, cli=configured_cli), redirect_stdout(output), \
+                    patch.dict(os.environ, SELLEROPS_LARK_CLI=configured_cli), \
+                    patch.object(tables.shutil, 'which', return_value=None), \
+                    patch.object(pipeline.credentials, 'get', return_value=cred), \
+                    patch.object(pipeline, 'match_orders', return_value=MatchResult()), \
+                    patch.object(pipeline, 'mabang_run_forecast', return_value=0) as forecast, \
+                    patch.object(pipeline, 'feishu_register_run') as register:
+                self.assertEqual(pipeline.run(args), 0)
+                forecast.assert_called_once()
+                register.assert_not_called()
+                self.assertIn(f'{reason}，跳过飞书登记', output.getvalue())
+
+    def test_mabang_process_uses_configured_feishu_address_and_passes_registration_options(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from sellerops.cli.main import build_parser
+        from sellerops.features.orders import mabang_process as pipeline
+        from sellerops.features.orders.matching import MatchResult
+
+        args = build_parser().parse_args(['order', 'process', '--apply', '--table', '测试表', '--no-pending'])
+        cred = SimpleNamespace(feishu_base_url=lambda: ' https://fixture.invalid ')
+        with redirect_stdout(StringIO()), \
+                patch.object(pipeline.credentials, 'get', return_value=cred), \
+                patch.object(pipeline, 'match_orders', return_value=MatchResult(group_ids={'fixture-order'})), \
+                patch.object(pipeline, 'mabang_run_forecast', return_value=0), \
+                patch.object(pipeline, 'find_lark_cli', return_value='fixture-cli'), \
+                patch.object(pipeline, 'feishu_register_run', return_value=0) as register:
+            self.assertEqual(pipeline.run(args), 0)
+        register.assert_called_once_with(args, group_shipping_ids={'fixture-order'})
+        self.assertEqual((args.url, args.table, args.no_pending), ('https://fixture.invalid', '测试表', True))
+
+    def test_promo_gap_feishu_register_parsing_and_window(self):
+        from unittest.mock import patch
         from sellerops.features.reports import feishu_vc_stats as st
-        row = st.parse_row({'日期': '2026-09-22T03:26:00.000+08:00', '订单编号': '419915682', '店铺': ['袁州1'], 'BCS编号': 'BCS-JPAV-163906301', '商品中文名': '毛球修剪器', '订单量': 3})
-        self.assertEqual(row['日期'], '2026-09-22')
-        self.assertEqual(row['vc'], 'BCS-JPAV-163906301')
-        self.assertEqual(row['cn'], '毛球修剪器')
-        self.assertEqual(row['shops'], ['袁州1'])
-        self.assertEqual(row['qty'], 3)
-        self.assertEqual(row['order_id'], '419915682')
-        empty = st.parse_row({})
-        self.assertEqual((empty['日期'], empty['vc'], empty['shops'], empty['qty']), ('', '', [], 1))
-        self.assertTrue(st.in_window({'日期': '2026-09-22'}, '2026-09-22', '2026-09-22'))
-        self.assertTrue(st.in_window({'日期': '2026-09-17'}, '2026-09-17', '2026-09-23'))
-        self.assertFalse(st.in_window({'日期': '2026-09-16'}, '2026-09-17', '2026-09-23'))
-        self.assertFalse(st.in_window({'日期': ''}, '2026-09-17', '2026-09-23'))
-        b, e = st.resolve_window(days=7)
-        self.assertEqual(e, time.strftime('%Y-%m-%d'))
-        self.assertEqual(datetime.strptime(e, '%Y-%m-%d') - datetime.strptime(b, '%Y-%m-%d'), timedelta(days=6))
-        self.assertEqual(st.resolve_window(date='2026-9-5'), ('2026-09-05', '2026-09-05'))
-        self.assertEqual(st.resolve_window(begin='2026-09-20'), ('2026-09-20', '2026-09-20'))
-        self.assertEqual(st.resolve_window(begin='2026-09-02', end='2026-09-05'), ('2026-09-02', '2026-09-05'))
+
+        fields = {'日期': '2026-09-22T03:26:00.000+08:00', '订单编号': 'fixture-order',
+                  '店铺': ['示例店'], 'BCS编号': 'BCS-TEST-1', '商品中文名': '测试品', '订单量': 3}
+        records = [{'fields': fields}, {'fields': {'日期': '2026-09-21'}},
+                   {'fields': {'日期': '2026-09-22'}}, {}]
+        with patch.object(st, 'resolve_base', return_value='fixture-base'), \
+                patch.object(st, 'resolve_table', return_value='fixture-table'), \
+                patch.object(st, 'list_records', return_value=records):
+            result = st.vc_order_stats(date='2026-9-22', url='https://fixture.invalid')
+        self.assertEqual((result['begin'], result['end']), ('2026-09-22', '2026-09-22'))
+        self.assertEqual(result['raw_rows'][0], {'日期': '2026-09-22', 'order_id': 'fixture-order',
+                                               'shops': ['示例店'], 'vc': 'BCS-TEST-1', 'cn': '测试品', 'qty': 3})
+        self.assertEqual((result['raw_rows'][1]['vc'], result['raw_rows'][1]['qty']), ('', 1))
+        self.assertEqual(result['stats'], {'总记录': 4, '无日期': 1, '日期不在窗口': 1,
+                                          '店铺被过滤': 0, '无BCS编号': 1})
         with self.assertRaises(ValueError):
             st.resolve_window(end='2026-09-22')
-        rows = [{'日期': '2026-09-22', 'vc': 'BCS-AAAA-1', 'cn': '甲', 'shops': ['袁州1'], 'qty': 2, 'order_id': 'o1'}, {'日期': '2026-09-22', 'vc': 'BCS-AAAA-1', 'cn': '甲', 'shops': ['袁州3'], 'qty': 1, 'order_id': 'o2'}, {'日期': '2026-09-22', 'vc': 'BCS-BBBB-2', 'cn': '乙', 'shops': ['袁州2'], 'qty': 1, 'order_id': 'o3'}, {'日期': '2026-09-22', 'vc': 'BCS-CCCC-3', 'cn': '丙', 'shops': ['袁州1'], 'qty': 1, 'order_id': 'o4'}, {'日期': '2026-09-22', 'vc': '', 'cn': '', 'shops': ['袁州1'], 'qty': 1, 'order_id': 'o5'}]
-        agg = st.aggregate(rows)
-        self.assertEqual([(r['key'], r['orders'], r['qty']) for r in agg], [('BCS-AAAA-1', 2, 3), ('BCS-BBBB-2', 1, 1), ('BCS-CCCC-3', 1, 1), (st.NO_VC_KEY, 1, 1)])
-        self.assertEqual([r['rank'] for r in agg], [1, 2, 3, 4])
-        self.assertTrue(str(agg[-1]['key']).startswith('('))
-        self.assertEqual(agg[0]['shops'], ['袁州1', '袁州3'])
-        self.assertEqual(agg[0]['cn'], '甲')
-        self.assertEqual([r['key'] for r in agg if r['key'] == st.NO_VC_KEY], [st.NO_VC_KEY])
-        pre = st.aggregate(rows, by_prefix=True)
-        self.assertEqual([(r['key'], r['orders']) for r in pre], [('AAAA', 2), ('BBBB', 1), ('CCCC', 1), (st.NO_PREFIX_KEY, 1)])
-        r_shop = {'日期': '2026-09-22', 'vc': 'x', 'shops': ['袁州2']}
-        self.assertTrue(st.match_shops(r_shop, None))
-        self.assertTrue(st.match_shops(r_shop, set()))
-        self.assertFalse(st.match_shops(r_shop, {'袁州1', '袁州3'}))
-        self.assertTrue(st.match_shops(r_shop, {'袁州2'}))
-        from unittest.mock import patch, Mock
-        fixture = Mock()
-        fixture.wb_shops.return_value = [{'shopId': 9352, 'shopName': '袁州1'}, {'shopId': 9353, 'shopName': '袁州2'}]
-        with patch.object(st.credentials, 'get', return_value=fixture):
-            self.assertEqual(st.resolve_shop_labels('9352'), {'袁州1'})
-            self.assertEqual(st.resolve_shop_labels('袁州1,袁州3'), {'袁州1', '袁州3'})
-            self.assertEqual(st.resolve_shop_labels(['9353', '璧山1']), {'袁州2', '璧山1'})
-            self.assertEqual(st.resolve_shop_labels(''), set())
 
     def test_feishu_register_chinese_name_requires_confirmed_vc(self):
         from sellerops.features.orders import feishu_register

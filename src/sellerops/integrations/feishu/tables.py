@@ -9,8 +9,20 @@ import time
 from typing import Any
 
 
+def find_lark_cli() -> str | None:
+    """查找显式配置的文件或 PATH 中的入口，不执行 CLI。"""
+    configured = os.environ.get('SELLEROPS_LARK_CLI')
+    if configured:
+        path = Path(configured)
+        try:
+            return str(path.absolute()) if path.is_file() else None
+        except OSError:
+            return None
+    return shutil.which('lark-cli') or shutil.which('lark-cli.cmd')
+
+
 def invoke(args: list[str], payload: Any = None, timeout: float = 120) -> dict:
-    executable = os.environ.get('SELLEROPS_LARK_CLI') or shutil.which('lark-cli') or shutil.which('lark-cli.cmd')
+    executable = find_lark_cli()
     if not executable:
         raise RuntimeError('未找到 lark-cli，请配置 PATH 或 SELLEROPS_LARK_CLI')
     with tempfile.TemporaryDirectory(prefix='sellerops-lark-') as directory:

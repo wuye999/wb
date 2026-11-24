@@ -17,8 +17,9 @@
 | `ops price`、`ops stock`、`ops trash`、`ops discount`、`ops review-price` 的默认 WB 通道，`marketing enroll`、WB 后台客服和报表 | 对应 WB 店铺完整 Cookie 三件套，商品匹配还需本地数据 |
 | `ops publish`、`ops create-cards`、`ops replicate`、BCS 库存和下架的仓库解析 | BCS 与对应店铺 WB 凭证，以及本地价格、归属和快照。默认仓库解析走 WB |
 | `order match`、`order forecast`、`order process` | 马帮凭证、店铺映射、本地商品和库存 SKU 映射。取消单过滤可能读取 WB |
-| `order register`、`order deduplicate`、`order stock-register`、`order stock-days`、`report vc-sales`、`marketing audit` | 已登录的 lark-cli 用户、目标表和对应权限。登记与库存操作还需马帮配置，推广审计还需店铺快照和推广信息 |
-| `report products` | BCS 各店官方 apiKey、本地快照和商品归属，以及可读飞书订单登记表的 lark-cli 用户 |
+| `report vc-sales` | 各目标店的 WB 后台会话，商品中文名使用本地映射。默认在 `exports/` 导出 Excel，可独立于飞书使用 |
+| `order register`、`order deduplicate`、`order stock-register`、`order stock-days`、`marketing audit` | 已登录的 lark-cli 用户、目标表和对应权限。登记与库存操作还需马帮配置，推广审计还需店铺快照和推广信息 |
+| `report products` | BCS 各店官方 apiKey、各店默认业务仓、本地快照和商品归属。无需飞书或 `lark-cli` |
 | `support ai-test`、客服草稿 | LLM key、完整请求端点和模型。自动发送还需 WB 凭证与显式 `--apply` |
 | `login bcs`、`login mabang`、`login wb` | 浏览器连接使用本机专用浏览器。BCS、马帮须先在本机配置对应登录名 |
 
@@ -86,7 +87,7 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 显式 `--source wb-openapi` 使用中国区 `.cn` 官方主机。个人令牌可用于自有程序及本地软件，快照只需要 Content、Prices and Discounts、Marketplace 的读取权限；基础令牌的类别可用性与限额不同，不能只凭令牌字符串判断。401/403 时检查 BCS 对应店铺 apiKey 是否有效及权限是否齐全，更新后重新执行独立的 `sync` 或 `catalog fetch`。429 会结束该店采集并保留旧快照，稍后再按原范围重试。默认的 BCS 快照来源走 BCS 同步与 BASE 缓存，不需要这些官方令牌。
 
-`report products` 要求 BCS 已保存各店有效的官方令牌，并具有 Analytics、Feedbacks and Questions、Marketplace 类别权限。默认使用 `.ru` 官方主机，需使用中国区主机时显式传 `--wb-region cn`；不自动切换主机或改走后台 Cookie。常规限额以个人、服务或带密钥基础令牌为前提，低限额基础令牌可能触发429；限流或401/403时该阶段停止并记录未知，不启动浏览器。飞书仍使用已登录的 lark-cli。[报告说明](PRODUCT_REPORT.md)
+`report products` 要求 BCS 已保存各店有效的官方令牌，并具有 Analytics、Feedbacks and Questions、Marketplace 类别权限。默认使用 `.ru` 官方主机，需使用中国区主机时显式传 `--wb-region cn`。常规限额以个人、服务或带密钥基础令牌为前提，低限额基础令牌可能触发 429。限流时停止该阶段，遇到 401/403 时停止采集该店。订单按 `wb.warehouse_keyword` 核对本店唯一业务仓。近 7/14 天有效出单采用口径 A，从 WB 订单统计在途和买断件数。旧参数 `--url` 和 `--table` 已移除。[报告说明](PRODUCT_REPORT.md)
 
 `report products --extra-bcs-stdin` 可临时引入其他BCS账号：由调用方或AI通过标准输入管道传入一个或多个完整JSON形式fetch抓包（UTF-8，传完关闭输入流），包含该账号匹配的Authorization、X-Limit-Key和Cookie。仅接受上述BCS固定域名，不执行抓包请求、不写入本机配置或文件。临时店铺只补充统计，`--shops` 只筛本机目标；下次运行需重新提供。具体输入、去重及报告范围见 [临时账号说明](PRODUCT_REPORT.md#临时引入其他bcs账号)。
 
@@ -141,9 +142,11 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 ## 飞书：feishu 与本机 lark-cli
 
+`order process` 的飞书登记可选。缺少飞书地址或本机找不到 `lark-cli` 时自动跳过，马帮步骤成功时返回 0。两者齐备时才尝试登记，登记失败返回非零。
+
 - `feishu.base_url` 填有权限的多维表格链接；命令的 `--url` 可覆盖。
 - 本机需安装并登录支持当前 `base +...` 子命令的 lark-cli，程序以 `--as user` 调用。登录/安装方法使用所安装 CLI 自带帮助，不把不同版本的身份配置混用。
-- 在 PATH 中可找到 `lark-cli` / `lark-cli.cmd`，或用 `SELLEROPS_LARK_CLI` 环境变量指定可执行文件的完整路径。
+- 用 `SELLEROPS_LARK_CLI` 环境变量指定可执行文件的完整路径。该变量未设置时，查找 PATH 中的 `lark-cli` 或 `lark-cli.cmd`。
 - 先准备现有目标表和列，程序不会替你新建整份业务表格。默认表名为「订单登记」「马帮库存登记表」，可由各命令的 `--table` 覆盖。
 
 表字段见 [数据契约](DATA.md#飞书业务表)。用户身份需具备目标操作的权限：统计只需读取，登记、清理和库存重建还需相应写入权限。

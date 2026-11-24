@@ -16,11 +16,11 @@ RETURN_COLUMNS = [('orders', '商品件数'), ('combined_returns', '取消及退
                   ('cancel', '取消数'), ('cancel_rate', '取消率'), ('returned', '退货数'),
                   ('defective', '瑕疵退货数'), ('actual_rate', '实际退货数/商品件数'),
                   ('pending', '未完结数'), ('buyout', '买断数'), ('unknown', '未知状态数')]
-SALES_COLUMNS = [('key', '完整VC/未知分组'), ('cn', '商品中文名'), ('orders7', '近7天登记单数'),
-                 ('qty7', '近7天登记件数'), ('orders14', '近14天登记单数'), ('qty14', '近14天登记件数'),
-                 ('sources', '来源店铺（包含外部店）'), ('urls', '来源商品链接'),
+RECENT_COLUMNS = [('orders7', '近7天有效出单件数'), ('orders14', '近14天有效出单件数'),
+                  ('source_nms', '来源店铺（ID）：nmID')]
+SALES_COLUMNS = [('vc', '完整VC'), ('cn', '商品中文名'), *RECENT_COLUMNS, ('urls', 'WB订单商品链接'),
                  ('known_negative', '已授权范围内已知差评数'), ('risk_scope', '风险数据范围'),
-                 ('sales_scope', '飞书数据完整性'), ('notes', '来源数据问题')]
+                 ('sales_scope', '订单数据覆盖')]
 
 
 def _sheet(wb: Workbook, title: str, columns: list[tuple[str, str]], rows: list[dict[str, Any]]) -> None:
@@ -66,15 +66,14 @@ def _screened(wb: Workbook, result: ProductScreening) -> None:
     _sheet(wb, '高退货率VC', [*common, ('done_rate', '完单口径兼容退货率'),
                               ('combined_returns', '取消及退货合计'), ('completed', '完单分母'),
                               ('present_shops', '存在店铺')], result.high_returns)
-    _sheet(wb, '近期出单筛选', [*common, ('orders7', '近7天登记单数'), ('orders14', '近14天登记单数'),
-                              ('source_nms', '来源店铺：nmID'), ('present_shops', '已存在店铺'),
+    _sheet(wb, '近期出单筛选', [*common, *RECENT_COLUMNS, ('present_shops', '已存在店铺'),
                               ('missing_shops', '缺少店铺'), ('waiting_shops', '待确认店铺'),
                               ('note', '数据说明')], result.recent)
     for name in ('低评分VC', '高退货率VC', '近期出单筛选'):
         ws = wb[name]
         for index, cell in enumerate(ws[1], 1):
             ws.column_dimensions[cell.column_letter].width = (44 if index == 1 else 38
-                if cell.value in {'存在店铺', '已存在店铺', '缺少店铺', '待确认店铺', '来源店铺：nmID', '数据说明'}
+                if cell.value in {'存在店铺', '已存在店铺', '缺少店铺', '待确认店铺', '来源店铺（ID）：nmID', '数据说明'}
                 else 22 if index == 2 else 18)
         for row in ws.iter_rows(min_row=2):
             lines = max(max(str(c.value or '').count('\n') + 1,
@@ -94,7 +93,11 @@ def write_report(report: ProductReport, path: Path | str, *, details: bool = Fal
     _screened(wb, screening)
     metadata = [
         ('生成时间', report.generated_at), ('报告日期时区', 'UTC+8'),
-        ('订单下单日期范围', f'{report.order_begin} 至 {report.end}，含首尾日期'),
+        ('订单采集窗口', f'{report.orders_collected_from} 至 {report.end}，含首尾下单日'),
+        ('退货统计窗口', f'{report.order_begin} 至 {report.end}，含首尾下单日及窗口内所有状态'),
+        ('近7天有效出单窗口', f'{report.recent_begin(7)} 至 {report.end}，含首尾下单日'),
+        ('近14天有效出单窗口', f'{report.recent_begin(14)} 至 {report.end}，含首尾下单日'),
+        ('有效出单口径 A', 'WB Open API 订单仅计在途（created）和已买断（buyout），排除取消、退货、瑕疵退货及未知状态。每行一件，按完整VC汇总，缺VC仅保留订单明细和退货统计'),
         ('评价范围', f'{report.feedback_begin or "接口可访问的全部历史"} 至 {report.end}'),
         ('官方主机区域', report.region), ('数据状态', '部分数据缺失，请先查看错误' if report.failed or screening.failed else '所选数据采集完成'),
         ('兼容退货率', '(取消+退货+瑕疵退货)/商品件数；完单口径分母=商品件数-未完结，保留旧口径'),
@@ -106,20 +109,19 @@ def write_report(report: ProductReport, path: Path | str, *, details: bool = Fal
         ('账号来源', '本机账号和临时账号合并统计；具体来源及用途见店铺数据覆盖。凭证不写入报告'),
         ('店铺范围未知的账号', '、'.join(report.unavailable_accounts) or '无'),
         ('商品覆盖', '链接缺口仅针对本机目标店铺，比较其本地快照；快照中未见不等于实时缺少。提交记录不等于已生效'),
-        ('仓库范围', '订单动态srid关联同店FBS订单rid，以warehouseId核对目录确认的莫斯科仓id；评价无仓库维度'),
-        ('飞书口径', '一条登记记录计一单，订单量求和为件数；全部来源店铺，近7天和14天均含今天'),
+        ('仓库范围', '订单动态srid关联同店FBS订单rid，以warehouseId核对目录确认的本店业务仓id；评价无仓库维度'),
         ('默认筛选', '评分≤3.5和完单口径兼容退货率≥30%仅列本店在架VC；近期出单排除上述风险且中文名须在商品价格表'),
         ('商品归一', '按VC唯一最长连续数字段合并风险；同一完整VC一行。缺口按同数字段判断，前缀或较短规格尾号不同仍算已存在'),
         ('近期出单', '来源nmID按店铺保留对应关系；无评价或完单分母为0标注未知，不视为已确认低风险'),
         ('补货缺口', '已存在、快照中缺少、快照未知、已有提交和回收站分别列示；临时账号不成为补货目标'),
-        ('操作边界', '仅生成本地报告；未上架/下架/修改/写飞书，未同步或更新快照'),
+        ('操作边界', '仅生成本地只读报告，使用现有快照'),
     ]
     _sheet(wb, '数据覆盖说明', [('key', '项目'), ('value', '说明')],
            [{'key': key, 'value': value} for key, value in metadata])
     coverage = [{**shop, **report.coverage.get(shop['id'], {})} for shop in report.shops]
     _sheet(wb, '店铺数据覆盖', [('id', '店铺ID'), ('name', '店铺'),
-                            ('account_source', '账号来源'), ('role', '店铺用途'), ('warehouse_id', '莫斯科仓ID'),
-                            ('warehouse_name', '莫斯科仓名称'), ('snapshot', '本地快照'),
+                            ('account_source', '账号来源'), ('role', '店铺用途'), ('warehouse_id', '业务仓ID'),
+                            ('warehouse_name', '业务仓名称'), ('snapshot', '本地快照'),
                             ('fetched_at', '快照时间'), ('orders', '订单采集'), ('feedbacks', '评价采集'),
                             ('outside_warehouse', '未计入其他仓订单数'), ('outside_created', '下单日期越界数'),
                             ('fbs_orders', '仓库归属关联订单数')], coverage)
@@ -165,11 +167,6 @@ def _details(wb: Workbook, report: ProductReport) -> None:
                           ('text', '评价正文'), ('pros', '优点'), ('cons', '缺点'), ('state', '处理状态'),
                           ('parent_id', '原评价ID'), ('child_id', '追加评价ID')], result['negative'])
     _sheet(wb, '近7及14天出单', SALES_COLUMNS, result['sales'])
-    _sheet(wb, '飞书出单明细', [('日期', '付款日期UTC+8'), ('vc', '完整VC'), ('cn', '商品中文名'),
-                              ('shops_text', '来源店铺'), ('nm_id', '来源WB商品码'), ('url', '商品链接'),
-                              ('source_url', '登记原始链接'), ('order_id', '订单编号'), ('qty', '登记件数'),
-                              ('record_id', '飞书记录ID'), ('notes', '来源数据问题')],
-           [{**row, 'shops_text': '、'.join(row['shops'])} for row in report.sales])
     _sheet(wb, '店铺链接缺口', [('shop_id', '目标店铺ID'), ('shop_name', '目标店铺'), ('state', '本地覆盖状态'),
                               ('target_urls', '目标店铺已有链接'), ('fetched_at', '目标快照时间'),
                               ('submitted', '已有提交记录时间'), *SALES_COLUMNS], result['gaps'])
@@ -177,6 +174,6 @@ def _details(wb: Workbook, report: ProductReport) -> None:
                           ('nm_id', '本店WB商品码'), ('cn', '商品中文名'), ('url', '商品链接'),
                           ('order_id', '商品订单srid'), ('created', '下单时间UTC+8'),
                           ('updated', '状态时间UTC+8'), ('status', '订单状态'), ('cancel_type', '取消类型'),
-                          ('warehouse_id', '已确认莫斯科仓ID'), ('warehouse', '匹配仓库名称'),
+                          ('warehouse_id', '已确认业务仓ID'), ('warehouse', '匹配仓库名称'),
                           ('warehouse_report_name', '订单动态原始仓库名称'),
                           ('price', '卖家价格')], result['orders'])
