@@ -88,18 +88,20 @@ class ProductSnapshotRepository:
             """, (str(shop_id),)).fetchone() is not None
 
     @classmethod
-    def load_snapshot_document(cls, shop_id: Any) -> dict | None:
-        with db.connect() as connection:
-            shop = connection.execute("""
-                SELECT snapshot_json FROM shops WHERE shop_id = ? AND status = 'active'
-            """, (str(shop_id),)).fetchone()
-            if shop is None or shop['snapshot_json'] is None:
-                return None
-            rows = connection.execute(
-                'SELECT row_json FROM shop_items WHERE shop_id = ? ORDER BY rowid',
-                (str(shop_id),)).fetchall()
-            document = {**json.loads(shop['snapshot_json']), 'rows': [json.loads(row[0]) for row in rows]}
-            return validate_document(int(shop_id), document)
+    def load_snapshot_document(cls, shop_id: Any, *, connection: sqlite3.Connection | None = None) -> dict | None:
+        if connection is None:
+            with db.connect() as local:
+                return cls.load_snapshot_document(shop_id, connection=local)
+        shop = connection.execute("""
+            SELECT snapshot_json FROM shops WHERE shop_id = ? AND status = 'active'
+        """, (str(shop_id),)).fetchone()
+        if shop is None or shop['snapshot_json'] is None:
+            return None
+        rows = connection.execute(
+            'SELECT row_json FROM shop_items WHERE shop_id = ? ORDER BY rowid',
+            (str(shop_id),)).fetchall()
+        document = {**json.loads(shop['snapshot_json']), 'rows': [json.loads(row[0]) for row in rows]}
+        return validate_document(int(shop_id), document)
 
     @classmethod
     def load_shop_products(cls, shop_id: Any) -> list[dict]:

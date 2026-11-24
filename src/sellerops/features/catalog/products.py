@@ -216,14 +216,15 @@ def snapshot_shops() -> list[dict]:
                 for row in connection.execute("SELECT * FROM shops WHERE status = 'active' ORDER BY rowid")]
 
 
-def load_all_shops():
-    """读取本地在架商品和店铺清单；缺少快照与空店分开。"""
+def load_all_shops(*, include_trash: bool = False):
+    """读取本地商品快照和店铺清单，默认只返回在架商品。"""
     shops_meta = snapshot_shops()
     shops_data = {}
     for shop in shops_meta:
         document = ProductSnapshotRepository.load_snapshot_document(shop['id'])
         if document is not None:
-            shops_data[shop['id']] = [r for r in document['rows'] if not r.get('trashedAt')]
+            rows = document['rows']
+            shops_data[shop['id']] = rows if include_trash else [r for r in rows if not r.get('trashedAt')]
     if not shops_data:
         raise RuntimeError('未找到店铺快照，请先迁移旧数据或运行 sellerops catalog fetch')
     return shops_data, shops_meta

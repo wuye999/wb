@@ -113,6 +113,7 @@ def build_card_payload(
     main_image = item.main_image or (images.split(";")[0] if images else "")
 
     title = item.title or (card_info or {}).get("imt_name") or wb_detail.get("name") or ""
+    offer_url = f"https://www.wildberries.ru/catalog/{item.nm_id}/detail.aspx"
 
     shop_arr = []
     for sid in target_sids:
@@ -128,6 +129,7 @@ def build_card_payload(
         "oModel": True,
         "status": "1",
         "collectionType": "0",
+        "offerUrl": offer_url,
         "shopDatas": [{
             # ★ nmId 提交前必须置空 null，避免被判定为更新已有卡
             "nmId": None,
@@ -138,6 +140,7 @@ def build_card_payload(
             "wbCardInfo": json.dumps(card_info, ensure_ascii=False, separators=(",", ":")),
             "images": images,
             "video": "",
+            "videos": "",
             "mainImage": main_image,
             "packagLength": math.ceil(float(item.length or 0)),
             "packagWidth": math.ceil(float(item.width or 0)),
@@ -149,15 +152,18 @@ def build_card_payload(
             "subjectName": subject_name,
             "parentName": parent_name,
             "sourceSku": str(item.nm_id),
+            "offerUrl": offer_url,
         }],
         "mode": 1,
         "mergeCards": 1,
         "carryBrand": 1,
         "customBrand": None,
         "titleSuffix": None,
+        "vendorCodePrefix": None,
         "aiRewrite": False,
         "aiRetouch": False,
         "aiRetouchTemplateId": None,
         "imgUploadMode": 0,
+        "removeBrandText": False,
     }
     return payload, None

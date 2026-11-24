@@ -59,7 +59,8 @@ def save_state(state: dict[str, Any]) -> None:
         write_state(connection, state)
 
 
-def write_shared(connection: sqlite3.Connection, records: dict, *, status: str = 'done') -> int:
+def write_shared(connection: sqlite3.Connection, records: dict, *, status: str = 'done',
+                 vc_keys: set[str] | None = None) -> int:
     if not isinstance(records, dict):
         raise ValueError('复制上架记录损坏')
     count = 0
@@ -70,13 +71,20 @@ def write_shared(connection: sqlite3.Connection, records: dict, *, status: str =
             if not str(sid).isdecimal() or not isinstance(stamp, str):
                 raise ValueError('复制上架记录的店铺或时间无效')
             identity = item_key(int(sid), key)
-            db.save_plan(connection, 'legacy-publish:' + identity, 'publish', status, identity,
-                         {'key': key, 'shopId': sid, 'timestamp': stamp}, stamp)
+            payload = {'key': key, 'shopId': sid, 'timestamp': stamp}
+            if vc_keys is not None:
+                payload['vc'] = key if key in vc_keys else None
+            db.save_plan(connection, 'legacy-publish:' + identity, 'publish', status, identity, payload, stamp)
             count += 1
     return count
 
 
-def load_shared_records(*, include_open_api: bool = False) -> dict[str, Any]:
+def record_vc(key: str, payload_json: str) -> str | None:
+    # 历史回执未标记键类型，纯数字键通常是源 nmId。
+    return json.loads(payload_json).get('vc', None if key.isdecimal() else key)
+
+
+def load_shared_records(*, include_open_api: bool = False, vc_only: bool = False) -> dict[str, Any]:
     with db.connect() as connection:
         rows = db.plans('publish', 'legacy-publish:', connection)
         if include_open_api:
@@ -86,6 +94,8 @@ def load_shared_records(*, include_open_api: bool = False) -> dict[str, Any]:
         if row['status'] not in {'submitting', 'unknown', 'done', 'partial'}:
             continue
         sid, key = json.loads(row['dedup_key'])
+        if vc_only and record_vc(key, row['payload_json']) is None:
+            continue
         records.setdefault(key, {})[str(sid)] = row['updated_at']
     return records
 
@@ -99,4 +109,4 @@ def legacy_submitted(shop_id: int, vc: str, records: dict[str, Any] | None = Non
 def record_shared(shop_id: int, vcs: list[str]) -> None:
     stamp = db.now()
     with db.connect(write=True) as connection:
-        write_shared(connection, {vc: {str(shop_id): stamp} for vc in vcs})
+        write_shared(connection, {vc: {str(shop_id): stamp} for vc in vcs}, vc_keys=set(vcs))

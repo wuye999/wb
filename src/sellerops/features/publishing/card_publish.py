@@ -1,6 +1,8 @@
 """保留完整供应商代码的建卡发布。"""
 import copy
+from collections import Counter
 from dataclasses import asdict
+import json
 import os
 import time
 from datetime import datetime
@@ -14,11 +16,22 @@ from sellerops.features.products.warehouse import resolve_warehouse
 from sellerops.features.publishing.publish_inputs import (
     DEFAULT_STOCK, load_publish_file, parse_cn_stock, parse_dims_str, publish_codes, stock_for,
 )
-from sellerops.features.publishing.publish_records import load_records, publish_keys, publish_task_id, submit_once
+from sellerops.features.publishing.publish_records import (
+    load_records, publish_keys, publish_task_id, publish_vc_key, records_by_shop,
+    submit_once, today_publish_counts, vendor_code_index,
+)
 from sellerops.features.publishing.publish_details import resolve_publish_details, resolve_publish_items
 from sellerops.features.publishing.publish_report import create_publish_csv, print_publish_preview
 from sellerops.features.publishing.product_details import fetch_card_json
 from sellerops.features.publishing.card_payload import build_card_payload
+
+
+def _matching_target(sid: int, vc: str, existing: dict, submitted_vcs: dict) -> bool:
+    key = publish_vc_key(vc)
+    matched = existing.get(sid, {}).get(key) or submitted_vcs.get(str(sid), {}).get(key)
+    if matched:
+        print(f"[跳过] 店铺 {sid} 的 {vc} 命中目标店已有同源商品 VC：{matched}")
+    return bool(matched)
 
 
 def execute_publish(
@@ -34,6 +47,7 @@ def execute_publish(
     warehouses: Optional[Dict[int, int]] = None,
     capture: bool = False,
     frozen: dict | None = None,
+    limit: int = 0,
 ) -> Dict[str, Any]:
     """保留完整 VC 建卡；先完成整批读取和载荷准备，再提交写入。
 
@@ -45,12 +59,29 @@ def execute_publish(
 
     common.validate_batch_options(interval=interval)
     if frozen is not None:
-        prepared = [(PublishItem(**it), targets, payload) for it, targets, payload in frozen['items']]
-        result = {'ok': 0, 'skip': 0, 'fail': 0, 'plans': len(prepared), 'csv': '', 'details': []}
+        result = {'ok': 0, 'skip': 0, 'fail': 0, 'plans': len(frozen['items']), 'csv': '', 'details': [],
+                  'daily_limit_warnings': []}
         overrides = frozen['overrides']
+        submitted_vcs = records_by_shop(load_records(vc_only=True))
+        target_ids = {sid for _, targets, _ in frozen['items'] for sid in targets}
+        existing = {
+            sid: vendor_code_index(row.get('vendorCode') for row in ProductSnapshotRepository.load_shop_products(sid))
+            for sid in sorted(target_ids) if check_exists and ProductSnapshotRepository.exists(sid)
+        }
+        prepared = []
+        for fields, targets, payload in frozen['items']:
+            it = PublishItem(**fields)
+            final_targets = [sid for sid in targets if not _matching_target(sid, it.vendor_code, existing, submitted_vcs)]
+            if not final_targets:
+                result['skip'] += 1
+                continue
+            if final_targets != targets:
+                shops = [shop for shop in json.loads(payload['shop']) if shop['id'] in final_targets]
+                payload = {**payload, 'shop': db.dumps(shops)}
+            prepared.append((it, final_targets, payload))
     else:
         result = {"ok": 0, "skip": 0, "fail": 0, "plans": len(items),
-                  "csv": csv_path or "", "details": []}
+                  "csv": csv_path or "", "details": [], "daily_limit_warnings": []}
         if not items:
             return result
         explicit = {sid for it in items for sid in (it.target_shops or [])}
@@ -69,13 +100,16 @@ def execute_publish(
             warehouses = {sid: wh for sid in sorted(target_ids)
                           if (wh := resolve_warehouse(sid)) is not None}
         records = load_records()
+        submitted_vcs = records_by_shop(load_records(vc_only=True))
         restrictions = db.vc_entries()
         existing = {}
         if check_exists:
             for sid in sorted(target_ids):
                 if not ProductSnapshotRepository.exists(sid):
                     raise ValueError(f"店{sid}缺少本地快照，不能把未知商品清单当作空店")
-                existing[sid] = {r.get("vendorCode") for r in ProductSnapshotRepository.load_shop_products(sid)}
+                existing[sid] = vendor_code_index(
+                    row.get("vendorCode") for row in ProductSnapshotRepository.load_shop_products(sid)
+                )
 
         prepared = []
         seen = set()
@@ -89,14 +123,14 @@ def execute_publish(
                                           "ok": False, "msg": f"目标店或莫斯科仓不可用：{invalid}"})
                 continue
             final_targets = []
+            vc_key = publish_vc_key(it.vendor_code)
             for sid in targets:
-                pair = (it.vendor_code, sid)
+                if _matching_target(sid, it.vendor_code, existing, submitted_vcs):
+                    continue
                 submitted = any(str(sid) in records.get(key, {}) for key in publish_keys(it))
-                if (pair in seen or submitted or db.listing_blocked(it.vendor_code, sid, restrictions)
-                        or (check_exists and it.vendor_code in existing[sid])):
+                if (vc_key, sid) in seen or submitted or db.listing_blocked(it.vendor_code, sid, restrictions):
                     continue
                 final_targets.append(sid)
-                seen.add(pair)
             if not final_targets:
                 result["skip"] += 1
                 continue
@@ -114,21 +148,37 @@ def execute_publish(
                                           "ok": False, "msg": err or "载荷构造失败"})
                 continue
             prepared.append((it, final_targets, payload))
+            seen.update((vc_key, sid) for sid in final_targets)
+            if limit > 0 and len(prepared) >= limit:
+                break
         for d in result["details"]:
             print(f"[失败] {d['vc']}: {d['msg']}")
-        if not apply:
-            preview = []
-            for it, targets, _ in prepared:
-                cp = copy.copy(it)
-                cp.target_shops = targets
-                preview.append(cp)
-            print_publish_preview(preview, all_shop_ids)
-            print(f"[dry-run] 待提交 {len(prepared)} 组，跳过 {result['skip']}，失败 {result['fail']}。")
-            if capture and prepared:
-                result['prepared'] = {'items': [(asdict(it), targets, payload) for it, targets, payload in prepared],
-                                      'warehouses': {sid: warehouses[sid] for _, targets, _ in prepared for sid in targets},
-                                      'overrides': overrides, 'blocked': result['details']}
-            return result
+
+    if prepared:
+        today = today_publish_counts()
+        pending_by_shop = Counter(sid for _, targets, _ in prepared for sid in targets)
+        for sid, pending in sorted(pending_by_shop.items()):
+            submitted = today.get(sid, 0)
+            total = submitted + pending
+            if total > 1000:
+                result["daily_limit_warnings"].append({"shop_id": sid, "today_submitted": submitted,
+                                                        "pending": pending, "total": total})
+                print(f"[警告] 店铺 {sid} 今日已提交 {submitted} 张，本次待提交 {pending} 张，合计 {total} 张，"
+                      "超过每日 1000 张建卡限额，建议分天或分批上架。")
+
+    if frozen is None and not apply:
+        preview = []
+        for it, targets, _ in prepared:
+            cp = copy.copy(it)
+            cp.target_shops = targets
+            preview.append(cp)
+        print_publish_preview(preview, all_shop_ids)
+        print(f"[dry-run] 待提交 {len(prepared)} 组，跳过 {result['skip']}，失败 {result['fail']}。")
+        if capture and prepared:
+            result['prepared'] = {'items': [(asdict(it), targets, payload) for it, targets, payload in prepared],
+                                  'warehouses': {sid: warehouses[sid] for _, targets, _ in prepared for sid in targets},
+                                  'overrides': overrides, 'blocked': result['details']}
+        return result
 
     managed_file = writer is None
     csv_file = None
@@ -177,6 +227,39 @@ def execute_publish(
     if result["ok"] and managed_file:
         common.print_write_hint()
     return result
+
+
+def publish_cards_simple(
+    items: list[dict | PublishItem],
+    apply: bool = False,
+    interval: float = 0.5,
+    limit: int = 0,
+    check_exists: bool = True,
+) -> dict[str, Any]:
+    """用直接提供的商品字段预览或提交独立 BCS 建卡。"""
+    required = ('nm_id', 'vendor_code', 'price', 'length', 'width', 'height', 'weight', 'target_shops')
+    candidates = []
+    for raw in items:
+        if isinstance(raw, PublishItem):
+            item = raw
+        else:
+            values = dict(raw)
+            card_info = values.pop('card_info', None)
+            if card_info is not None:
+                values['extra'] = {**(values.get('extra') or {}), 'card_info': card_info}
+            if 'nm_id' not in values:
+                raise ValueError('建卡商品缺少必填字段 nm_id')
+            item = PublishItem(**values)
+        missing = [field for field in required if getattr(item, field) is None]
+        if missing:
+            raise ValueError(f"建卡商品缺少必填字段：{'、'.join(missing)}")
+        if type(item.nm_id) is not int or item.nm_id <= 0:
+            raise ValueError('nm_id 必须是正整数')
+        if not item.target_shops or any(type(sid) is not int or sid <= 0 for sid in item.target_shops):
+            raise ValueError('target_shops 必须提供目标店铺 ID')
+        candidates.append(item)
+    return execute_publish(candidates, apply=apply, interval=interval, limit=limit, check_exists=check_exists)
+
 
 def publish_product(
     nm_id: int,
@@ -324,4 +407,6 @@ def run(args: Any) -> int:
     )
     if isinstance(res, dict) and res.get('prepared'):
         args.prepared = res['prepared']
+    if res.get('daily_limit_warnings'):
+        args.outcome = {'daily_limit_warnings': res['daily_limit_warnings']}
     return 1 if resolution_failures or res["fail"] else 0

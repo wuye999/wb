@@ -1,4 +1,4 @@
-"""从本地快照跨店复制，完整 VC 是跨店去重键。"""
+"""从本地快照跨店复制，保留完整 VC 并检查同源商品。"""
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -7,7 +7,7 @@ from sellerops.features.catalog import products as catalog_products
 from sellerops.features.publishing import card_publish
 from sellerops.features.publishing.publish_details import resolve_publish_details
 from sellerops.features.publishing.publish_inputs import parse_cn_stock, stock_for
-from sellerops.features.publishing.publish_records import load_records
+from sellerops.features.publishing.publish_records import load_records, publish_vc_key, records_by_shop
 from sellerops.features.publishing.publish_report import print_publish_preview
 from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
@@ -15,13 +15,16 @@ from sellerops.settings import paths as config
 
 
 def build_coverage(shops_data):
-    """本地在架行按完整 VC 汇总，忽略回收站行。"""
+    """汇总全状态覆盖范围，并保留按完整 VC 索引的在架源行。"""
     vc_shops, vc_rows = {}, {}
     for sid, rows in shops_data.items():
         for row in rows:
             vc = (row.get("vendorCode") or "").strip()
-            if vc and not row.get("trashedAt"):
-                vc_shops.setdefault(vc, set()).add(sid)
+            if not vc:
+                continue
+            vc_shops.setdefault(vc, set()).add(sid)
+            vc_shops.setdefault(publish_vc_key(vc), set()).add(sid)
+            if not row.get("trashedAt"):
                 vc_rows.setdefault(vc, {})[sid] = row
     return vc_shops, vc_rows, sorted(shops_data)
 
@@ -69,6 +72,7 @@ def build_replication_items(
     stock: int = 999,
     records: Optional[Dict[str, Any]] = None,
     restrictions: Optional[dict] = None,
+    record_vcs: Optional[dict] = None,
 ) -> Tuple[List[PublishItem], List[Dict[str, str]]]:
     """零网络生成复制候选；源店和目标店独立，缺快照时明确失败。"""
     sources = set(source_shops if source_shops is not None else shops_data)
@@ -80,12 +84,16 @@ def build_replication_items(
         raise ValueError("源店和目标店都不能为空")
     if isinstance(stock, bool) or not isinstance(stock, int) or stock < 0:
         raise ValueError("库存必须为非负整数")
-    coverage, source_rows, _ = build_coverage({sid: shops_data[sid] for sid in sources})
+    _, source_rows, _ = build_coverage({sid: shops_data[sid] for sid in sources})
     all_coverage, _, _ = build_coverage(shops_data)
+    records = records or {}
+    submitted = records_by_shop(records if record_vcs is None else record_vcs)
     items, blocked = [], []
-    for vc in sorted(coverage):
-        missing = sorted(targets - all_coverage.get(vc, set()))
-        missing = [sid for sid in missing if str(sid) not in ((records or {}).get(vc) or {})]
+    for vc in sorted(source_rows):
+        key = publish_vc_key(vc)
+        missing = sorted(targets - all_coverage.get(key, set()))
+        missing = [sid for sid in missing if key not in submitted.get(str(sid), {})
+                   and str(sid) not in records.get(vc, {})]
         missing = [sid for sid in missing if not db.listing_blocked(vc, sid, restrictions or {})]
         if not missing:
             continue
@@ -118,7 +126,7 @@ def build_replication_items(
 
 
 def run(args: Any) -> int:
-    shops_data, _ = catalog_products.load_all_shops()
+    shops_data, _ = catalog_products.load_all_shops(include_trash=True)
     state, _ = MappingRepository.load_mapping_state()
     book = MappingRepository.load_price_book(
         fresh=getattr(args, 'apply', False) and getattr(args, 'price_source', '') == 'minimum')
@@ -130,6 +138,7 @@ def run(args: Any) -> int:
         price_source=getattr(args, "price_source", "snapshot"),
         price_multiplier=getattr(args, "price_multiplier", 1.0),
         stock=getattr(args, "stock", 999), records=load_records(), restrictions=db.vc_entries(),
+        record_vcs=load_records(vc_only=True),
     )
     wanted = {s.strip() for s in (getattr(args, "vc", "") or "").split(",") if s.strip()}
     prefix = (getattr(args, "prefix", "") or "").upper()
@@ -169,4 +178,6 @@ def run(args: Any) -> int:
                                          **({'capture': True} if capture else {}))
     if result.get('prepared'):
         args.prepared = result['prepared']
+    if result.get('daily_limit_warnings'):
+        args.outcome = {'daily_limit_warnings': result['daily_limit_warnings']}
     return 1 if blocked or result["fail"] else 0

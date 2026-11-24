@@ -42,9 +42,11 @@ python run.py apply --plan P018 --json
 
 归属完成后用 `map check-mismatch --json` 生成货不对板大图画廊。打开 `data.artifacts.html`，按中文名看图并核对前缀冲突和非最低价倍数。价格检查覆盖各活跃店铺有现价的在架快照，允许各店采用不同的合理正整数倍。`data.counts` 给出商品总条数、中文名组数及异常条数。运营勾选并导出 JSON 或复制完整 VC 后，按确认的店铺和 VC 用 `ops trash` 预览下架计划。
 
-商品计划类操作先用 `ops` 预览，展示店铺、商品、规格、目标值与受阻明细，运营确认后用 `apply --plan` 提交。提交中和结果未知的单号停止重发。已受理上架需要补图片或库存时，用 `ops publish-openapi --resume` 生成续办单，再按新单确认提交。其余写操作按各自命令规则使用 `--apply`。
+商品计划类操作先用 `ops` 预览，展示店铺、商品、规格、目标值与受阻明细，运营确认后用 `apply --plan` 提交。提交中和结果未知的单号停止重发。经官方通道受理的上架需要补图片或库存时，用 `ops publish-openapi --resume` 生成续办单，再按新单确认提交。其余写操作按各自命令规则使用 `--apply`。
 
 ## 选择与执行命令
+
+**上架选型规则。日常上架统一走 BCS 建卡通道。** CLI 用 `ops create-cards`、`ops replicate` 或 `listing import-publish`，不要主动选用 `ops publish` 或 `ops publish-openapi`。WorkBuddy 自定义脚本批量上架统一构造字典列表，一次传入 `sellerops.features.publishing.card_publish.publish_cards_simple`。
 
 | 用户意图 | 入口与注意事项 |
 | --- | --- |
@@ -53,7 +55,7 @@ python run.py apply --plan P018 --json
 | 统计 VC 销量 | `report vc-sales --json`。用 WB 订单动态按北京时间统计下单件数，默认近 7 天（含今天）。可用 `--shops` 选店，在 `data.artifacts.workbook` 查看本地 Excel 路径，有 `data.failed_shops` 时标明结果不完整。无需飞书。 |
 | 更新快照或映射 | 用户明确要求更新时用 `sync`。归属用 `map` 查看候选、确认或排除。 |
 | 筛查货不对板 | `map check-mismatch --json`。可按 `--cn` 精确限定中文名，按 `--begin`、`--end` 或 `--days` 限定创建日期。 |
-| 发布、复制及官方上架 | `ops replicate`、`ops publish` 或 `ops create-cards`。官方通道使用 `ops publish-openapi`，按原记录续办。 |
+| 新建商品、跨店补齐、导入标准表 | 分别用 `ops create-cards`、`ops replicate`、`listing import-publish`。标准表导入默认预览，经运营确认后加 `--apply`。 |
 | 处理新订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。缺飞书地址或 `lark-cli` 时自动跳过飞书登记。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
 | 汇报修改结果 | 核对店铺、商品与规格数、受理任务号、阻止原因和完整明细路径。预览与提交沿用同样的目标。 |
@@ -77,9 +79,11 @@ python run.py apply --plan P018 --json
 
 已配置自动续期的马帮命令可在预览或执行时更新本地会话。遇到验证码或短信验证时停止，提示用户发起 `login mabang`，在官网完成验证并关窗。可用 `--resume` 续办，或在关窗恢复失败时用 `--keep-open`。不读取或输出账号密码，不把认证失败当成无订单、模板缺失或普通逐单失败。已发出的业务写请求不因续期重放。见 [马帮配置](CONFIGURATION.md#马帮mabang)。
 
-普通上架先确认卖家 SKU 或唯一产品中文名，再展示完整 VC 和编码来源。手工指定完整 VC 时保留原码，批量接口无法透传时用 `ops create-cards`。无唯一登记前缀时请运营指定前缀，或明确同意使用 `--random-prefix`，再生成计划单。
+用 `ops create-cards` 上架前确认卖家 SKU 或唯一产品中文名，再展示完整 VC 和编码来源。手工指定完整 VC 时保留原码。无唯一登记前缀时请运营指定前缀，或明确同意使用 `--random-prefix`，再生成计划单。
 
-复制上架使用 `ops replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分；默认库存999，显式0不替换。默认商品清单与查重读取本地快照和提交记录，缺快照不当作空店；快照滞后时结合已受理的下架/上架回执处理范围。回收站已有卡不会自动恢复，需先区分恢复与新建；不把 BCS 缓存命中直接视为实时状态。必须在首个写请求前准备好整批详情，并核实各目标店的默认业务仓。
+复制上架使用 `ops replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分。默认库存 999，显式 0 保留。目标店已存在或已提交完整 VC 或相同的最长连续数字段时跳过，数字段至少 6 位。查重覆盖本地全状态快照（含回收站）和提交记录。缺快照时先核对，快照滞后时结合已有回执确认范围。首个写请求前准备好整批详情，并核实各目标店的默认业务仓。
+
+BCS 建卡逐店显示每日限额提醒。今日已提交加本次待提交超过 1000 张时，把 `[警告]` 中的店铺、张数和分批建议一起展示给运营，再确认计划范围。
 
 使用已有帮助解决语法问题，不通过执行写入命令“试参数”。dry-run 可以联网和生成本地记录；`login`、`map batch-set`、`catalog rename`、`catalog merge` 等本地写操作不受 --apply 控制。
 
@@ -90,6 +94,17 @@ python run.py apply --plan P018 --json
 `catalog fetch` 的默认 BCS 快照来源会先触发 WB → BCS 同步（加 `--no-sync` 才跳过并直接读上次同步结果），再按 BASE 读取该店缓存；同步失败不中止本次拉取，按原流程打印警示后继续读旧缓存。显式 `--source wb-openapi` 才改用官方接口，该来源不使用 WB 后台 Cookie；缺 apiKey、401/403、限流或读取失败时保留旧快照并报告失败，不自动改回 `--source bcs`，官方令牌应在 BCS 对应店铺更新。两种来源都不补零缺失的价格或库存，分页不完整不能宣称已完成全量快照。
 
 BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 VC 去重；只在非空业务值一致且存在完整原行时保留该整行。快照数量和单店表均按去重结果统计，零值不视为空。标识或业务值冲突时不能手工随意删行、按最新时间覆盖或把失败当空店处理。按 [数据契约](DATA.md#映射快照与标识) 处理，离线整理旧快照前先备份。
+
+## 导出标准商品表与导入他人表格上架
+
+用 `catalog export-products` 从本地店铺快照导出 13 列标准 XLSX，包含来源店铺，未归属商品的中文名留空。默认过滤回收站和人工排除商品，按源数字码跨店去重，并优先保留有有效售价和完整包装资料的记录。用 `--shops` 指定来源店铺，或用 `--all-shops` 导出全部活跃店铺。终端会打印扫描、过滤、去重和导出条数及文件路径。
+
+```powershell
+python run.py catalog export-products --shops 1001
+python run.py listing import-publish --file exports/shop_1001_products.xlsx --shops 1002 --prefix ABCD --price-multiplier 1.2 --limit 50
+```
+
+导入默认预览，允许联网读取目标仓和公开商品详情。向运营展示目标店、目标 VC、价格、包装规格、库存及跳过原因，核对每日限额提醒。运营明确确认后才用同一命令加 `--apply`，提交中或结果未知时按现有回执处理。`--limit` 在查重后选取有效商品。见 [操作示例](USAGE.md#导出标准商品表与导入他人表格上架)。
 
 ## 写操作结束规则
 

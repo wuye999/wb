@@ -153,20 +153,25 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 
 ## 发布商品与跨店补齐
 
+**上架选型规则。日常上架统一走 BCS 建卡通道。** CLI 用 `ops create-cards`、`ops replicate` 或 `listing import-publish`，不要主动选用 `ops publish` 或 `ops publish-openapi`。WorkBuddy 自定义脚本批量上架统一构造字典列表，一次传入 `sellerops.features.publishing.card_publish.publish_cards_simple`。
+
 ```powershell
-python run.py ops publish 123456789 --shops 1001 --sku SKU-1 --price 59 --dims "10*20*30/0.5" --stock 20 --json
 python run.py ops create-cards 123456789 --shops 1001 --sku SKU-1 --vc "BCS-TEST-123456789" --price 59 --dims "10*20*30/0.5" --stock 20 --json
-python run.py ops publish --file "examples/publish.example.json" --shops 1001
+python run.py ops create-cards --file "examples/publish.example.json" --shops 1001
 python run.py ops replicate --shops 1001 --name "示例商品" --limit 1
 ```
 
-这些示例生成固定计划单，经确认后用 `apply --plan` 提交。售价使用指定价格或本地快照价。缺少快照价时请传 `--price`。发布默认库存是 999。需要其他数量时显式设置 `--stock`，也可使用 `--cn-stock` 按中文名指定库存。默认 BCS 上架把初始库存随建卡或推送请求提交。
+这些示例生成固定计划单，经确认后用 `apply --plan` 提交。售价使用指定价格或本地快照价。缺少快照价时请传 `--price`。发布默认库存是 999。需要其他数量时显式设置 `--stock`，也可使用 `--cn-stock` 按中文名指定库存。BCS 建卡随请求提交初始库存。
 
-普通上架须确认价格表中的商品。有卖家 SKU 时可指定 `--sku`，批量 JSON 每行可填 `sellerSku`。没有 SKU 时可用唯一的产品中文名 `--cn`。编码优先保留完整 `--vc`，其次沿用 `--prefix`，然后使用已确认商品在价格表中唯一登记的前缀。缺失或多人共用时补 `--prefix`，也可经运营确认加 `--random-prefix`。随机前缀在预览时生成，随商品键、完整 VC 和编码来源一起保存。批量接口无法原样生成的完整 VC 改用 `ops create-cards` 预览。平台明确受理后本地保存完整 VC 的归属。升级前未提交的普通上架计划需要重新预览一次。
+用 `ops create-cards` 上架须确认价格表中的商品。有卖家 SKU 时可指定 `--sku`，批量 JSON 每行可填 `sellerSku`。没有 SKU 时可用唯一的产品中文名 `--cn`。编码优先保留完整 `--vc`，其次沿用 `--prefix`，然后使用已确认商品在价格表中唯一登记的前缀。缺失或多人共用时补 `--prefix`，也可经运营确认加 `--random-prefix`。随机前缀在预览时生成，随商品键、完整 VC 和编码来源一起保存。平台明确受理后本地保存完整 VC 的归属。升级前未提交的普通上架计划需要重新预览一次。
 
-`ops replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次；WB 商品码取自选中的源店快照，不从 VC 尾段猜测。默认使用本地快照和提交记录计算缺失目标，不逐商品联网扫描列表。目标本地全状态快照中已有的卡（包括回收站）会跳过；此命令不自动恢复回收站卡。快照可能滞后，执行前需结合已知操作回执核对范围，不能把刚下架的旧快照行再次当作在架源商品。
+`ops replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次。WB 商品码取自选中的源店快照。上架和复制在每家目标店按完整 VC 或相同的最长连续数字段查重，数字段至少 6 位。BCS 建卡和复制使用目标店全状态本地快照及提交记录，回收站中的卡也会跳过。BCS 批量推送在有本地快照时也用它查重。快照滞后时，结合已有操作回执核对范围，并确认在架源商品仍然有效。
 
 BCS 建卡已停用商品详情代理。`ops create-cards` 和 `ops replicate` 默认用 `card.json` 合成详情，生成一条尺码为 `0` 的规格。`ops create-cards --file` 的 JSON 商品项仍可通过 `extra.wb_detail.sizes` 提供规格，建卡只取第一条并写入目标 VC 和价格。`ops replicate` 使用合成规格，源商品的非零尺码及其他规格不会带入新卡。
+
+BCS 独立建卡在预览和提交前逐店检查本机今日已提交张数与本次待提交张数。合计超过 1000 张会显示 `[警告]` 和建议分天或分批上架，计划商品仍可提交。计数按本机提交记录汇总，同店同 VC 只计一次。
+
+Python 入口 `sellerops.features.publishing.card_publish.publish_cards_simple` 接受字典或 `PublishItem`，必填 `nm_id`、`vendor_code`、`price`、`length`、`width`、`height`、`weight` 和 `target_shops`。可直接提供 `card_info`，库存默认 999，无需在价格表绑定商品。默认预览，经确认可用 `apply=True` 提交。`limit` 大于 0 时只选择查重后的前几个有效待提交商品，结果中的 `daily_limit_warnings` 按店列出超额提醒。
 
 复制上架可分别限定源店与目标店，并按商品价格表的「最低售价」定价：
 
@@ -176,9 +181,25 @@ python run.py ops replicate --source-shops 1001,1002 --shops 1003 --price-source
 
 示例生成计划单，经确认后用 `apply --plan` 提交。`--price-source` 默认 `snapshot`（源店价格），倍数默认 1。`minimum` 必须匹配唯一的同中文名最低售价。金额按分四舍五入，库存默认 999，显式 0 保留为 0。包装尺寸与毛重优先映射表，其次价格表，再次公开商品详情。上架前准备整批详情与载荷，逐店确认目标店的默认业务仓；任一目标仓无法确认时阻止该商品组，提交后记录受理响应并结束。
 
-备用官方上架使用 `ops publish-openapi` 预览，经确认用 `apply --plan` 提交。支持自有源店与任意 WB 商品码，依次完成建卡、有限标识等待、图片和本店默认业务仓库存提交。超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再确认并提交新单。跨店内容更新使用 `listing sync-cards`，按完整 VC 匹配本店商品码，用该命令的 `--apply` 提交。详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。
+仅在 BCS 通道不可用时考虑备用官方上架。使用 `ops publish-openapi` 预览，经确认用 `apply --plan` 提交。支持自有源店与任意 WB 商品码，依次完成建卡、有限标识等待、图片和本店默认业务仓库存提交。超时用 `ops publish-openapi --resume --shops ... --vc ...` 预览剩余阶段，再确认并提交新单。跨店内容更新使用 `listing sync-cards`，按完整 VC 匹配本店商品码，用该命令的 `--apply` 提交。详见 [Open API 商品写入](OPEN_API_LISTINGS.md)。
 
 历史随机 VC 前缀使用 `ops normalize-vc --shops 1001 --name "示例商品"` 生成计划单。写入只改前缀不一致的商品，保留原尾部；店铺或回收站资料不完整先停止。详见 [VC 前缀规范化](OPEN_API_LISTINGS.md#历史-vc-前缀规范化)。
+
+## 导出标准商品表与导入他人表格上架
+
+在项目根目录运行。导出只读本地快照，生成名为「商品列表」的单 Sheet XLSX，共 13 列，含来源店铺和快照售价。缺少店名时使用店铺 ID，未归属商品的中文名留空。售价取首规格价格，规格库存齐全时汇总库存。`--shops` 可指定单店或逗号分隔的多家店铺，`--all-shops` 选择全部活跃店铺。单店默认写入 `exports/shop_1001_products.xlsx`（以店铺 ID 命名），指定多店或使用 `--all-shops` 默认写入 `exports/shops_products.xlsx`。`--out` 可指定数据目录之外的 `.xlsx` 路径。
+
+导出过滤回收站和人工排除商品。用原 VC 最长的连续数字段（至少 6 位）跨店及表内去重，无满足长度的数字段时使用完整 VC。优先保留售价有效且包装尺寸、毛重齐全的一行，其次按主店优先和店铺 ID 升序选择。终端打印各项条数和导出路径。
+
+```powershell
+python run.py catalog export-products --shops 1001
+python run.py catalog export-products --all-shops
+python run.py listing import-publish --file exports/shop_1001_products.xlsx --shops 1002,1003 --prefix ABCD --price-multiplier 1.2 --stock 999 --limit 50
+```
+
+导入支持标准 `.xlsx` 和同表头的 UTF-8 `.csv`。`--prefix` 使用 4 位大写英文字母，目标编码为 `BCS-ABCD-源数字码`，依次取表中有效的源数字码、原 VC 的最长数字段（至少 6 位）或本店 nmId。`--price` 可覆盖整批售价，金额四舍五入到分。无有效 nmId、售价或包装资料的行会逐条列出并跳过。导入按同源商品和目标 VC 去除表内重复行。上架库存由 `--stock` 指定，默认 999。
+
+预览会读取目标店默认业务仓和公开商品详情。先核对目标店、编码、售价、包装、库存、跳过原因和每日限额提醒，再经运营明确确认后在同一命令末尾加 `--apply`。`--limit` 按查重及载荷校验后的待提交商品分批，0 表示不限。两条命令均可用 `--data-dir` 指定该次运行的数据目录。
 
 ## 尺寸、下架和清理
 

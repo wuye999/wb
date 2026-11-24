@@ -14,6 +14,7 @@ from sellerops.features.publishing.open_api_sources import (
     fill_public_characteristics, public_inputs, public_template,
 )
 from sellerops.features.publishing.publish_inputs import parse_dims_str
+from sellerops.features.publishing.publish_records import publish_vc_key, records_by_shop, vendor_code_index
 from sellerops.features.publishing.open_api_finish import (
     PublishContinuation, can_continue, resume, validate_wait, wait_and_finish,
 )
@@ -46,7 +47,8 @@ def run(args: Any) -> int:
             for shop in targets:
                 require_active(shop.id)
         state = store.load_state()
-        shared_records = store.load_shared_records()
+        shared_keys = store.load_shared_records()
+        shared_records = records_by_shop(store.load_shared_records(include_open_api=True, vc_only=True))
         restrictions = db.vc_entries()
         sources = []
         if source is not None:
@@ -75,8 +77,8 @@ def run(args: Any) -> int:
                 clients[shop.id] = api
                 warehouse = select_warehouse(api.warehouses(), credentials.get().wb_warehouse_keyword)
                 warehouses[shop.id] = warehouse
-                existing = card_index(api.cards())
-                trash = card_index(api.trash_cards())
+                existing = vendor_code_index(card_index(api.cards()))
+                trash = vendor_code_index(card_index(api.trash_cards()))
                 schemas = {}
                 for card, _, _ in sources:
                     subject = positive_id(card.get('subjectID'))
@@ -85,6 +87,8 @@ def run(args: Any) -> int:
             except Exception as exc:
                 log.add(shop.id, '*', 'failed', reason=safe_reason(exc))
                 continue
+            submitted = shared_records.get(str(shop.id), {})
+            seen = {}
             for original, price, options in sources:
                 card = copy.deepcopy(original)
                 vc = card['vendorCode']
@@ -104,8 +108,11 @@ def run(args: Any) -> int:
                 if db.listing_blocked(vc, shop.id, restrictions):
                     log.add(shop.id, vc, 'skipped', reason='已禁止在此店上架')
                     continue
-                if vc in existing or vc in trash or store.legacy_submitted(shop.id, vc, shared_records):
-                    log.add(shop.id, vc, 'skipped', reason='已有同 VC 商品/回收站卡/BCS 提交记录')
+                vc_key = publish_vc_key(vc)
+                matched = (existing.get(vc_key) or trash.get(vc_key) or submitted.get(vc_key) or seen.get(vc_key)
+                           or (vc if store.legacy_submitted(shop.id, vc, shared_keys) else None))
+                if matched:
+                    log.add(shop.id, vc, 'skipped', reason=f'命中目标店已有同源商品 VC：{matched}')
                     continue
                 try:
                     if args.dims:
@@ -124,6 +131,7 @@ def run(args: Any) -> int:
                              'status': 'planned', 'warehouse': warehouse, 'card': payload,
                              'media': media, 'stock': args.stock, 'stages': {}}
                     prepared.setdefault(shop.id, []).append((key, entry))
+                    seen[vc_key] = vc
                     log.add(shop.id, vc, 'planned', sourceNm=entry['sourceNm'], warehouse=warehouse,
                             card=payload, media=media, stock=args.stock)
                 except Exception as exc:
@@ -212,7 +220,8 @@ def apply_frozen(args) -> int:
     log = OperationLog('publish-openapi', True)
     with store.operation_lock(), ExitStack() as stack:
         state = store.load_state()
-        shared = store.load_shared_records()
+        shared_keys = store.load_shared_records()
+        shared = records_by_shop(store.load_shared_records(include_open_api=True, vc_only=True))
         restrictions = db.vc_entries()
         clients, warehouses, prepared, continuations = {}, {}, {}, []
         for shop in targets:
@@ -223,8 +232,12 @@ def apply_frozen(args) -> int:
             sid, vc = entry['shopId'], entry['vc']
             key = store.item_key(sid, vc)
             prior = state['items'].get(key)
+            matched = (shared.get(str(sid), {}).get(publish_vc_key(vc))
+                       or (vc if store.legacy_submitted(sid, vc, shared_keys) else None))
+            if matched:
+                log.add(sid, vc, 'skipped', reason=f'命中目标店已有同源商品 VC：{matched}')
+                continue
             if (entry['warehouse']['id'] != warehouses[sid]['id'] or db.listing_blocked(vc, sid, restrictions)
-                    or store.legacy_submitted(sid, vc, shared)
                     or (prior and prior['status'] not in {'preparing', 'prepare_failed'})):
                 log.add(sid, vc, 'blocked', reason='\u4e0a\u67b6\u8303\u56f4\u3001\u83ab\u65af\u79d1\u4ed3\u6216\u8bb0\u5f55\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u65b0\u9884\u89c8')
                 continue

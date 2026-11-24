@@ -1,6 +1,5 @@
 """SellerOps 的商品、店铺与提交记录。所有路径跟随本次命令的数据目录。"""
 import json
-import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from sellerops.core.json_values import json_value
+from sellerops.domain.vendor_codes import extract_vc_source_code
 from sellerops.settings import paths
 
 
@@ -101,8 +101,13 @@ def legacy_exists() -> bool:
             or (Path(data.data_dir) / '上架排除清单/exclude_vcs.json').exists())
 
 
+_SHIPPING_MODE_COLUMN = "SELECT 1 FROM pragma_table_info('products') WHERE name = 'shipping_mode'"
+
+
 @contextmanager
-def connect(*, write: bool = False, migration: bool = False) -> Iterator[sqlite3.Connection]:
+def connect(*, write: bool = False, migration: bool = False, read_only: bool = False) -> Iterator[sqlite3.Connection]:
+    if read_only and (write or migration):
+        raise ValueError('只读连接不能写入或迁移数据库')
     path = Path(paths.current.database)
     exists = path.exists()
     if not exists:
@@ -113,6 +118,8 @@ def connect(*, write: bool = False, migration: bool = False) -> Iterator[sqlite3
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             connection = sqlite3.connect(path, timeout=15)
+    elif read_only:
+        connection = sqlite3.connect(f'{path.resolve().as_uri()}?mode=ro', uri=True, timeout=15)
     else:
         connection = sqlite3.connect(path, timeout=15)
     connection.row_factory = sqlite3.Row
@@ -120,11 +127,10 @@ def connect(*, write: bool = False, migration: bool = False) -> Iterator[sqlite3
         connection.execute('PRAGMA foreign_keys = ON')
         if write or not exists:
             connection.executescript(SCHEMA)
-        shipping_mode_column = "SELECT 1 FROM pragma_table_info('products') WHERE name = 'shipping_mode'"
-        if exists and not connection.execute(shipping_mode_column).fetchone():
+        if exists and not read_only and not connection.execute(_SHIPPING_MODE_COLUMN).fetchone():
             with connection:
                 connection.execute('BEGIN IMMEDIATE')
-                if not connection.execute(shipping_mode_column).fetchone():
+                if not connection.execute(_SHIPPING_MODE_COLUMN).fetchone():
                     connection.execute('ALTER TABLE products ADD COLUMN shipping_mode TEXT')
         connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         if not migration and exists and not any(
@@ -138,7 +144,7 @@ def connect(*, write: bool = False, migration: bool = False) -> Iterator[sqlite3
 
 
 def source_code(vc: str) -> str | None:
-    return max(re.findall(r'\d+', vc), key=len, default=None)
+    return extract_vc_source_code(vc)
 
 
 def set_vc(connection: sqlite3.Connection, vc: str, status: str, *, sku: str | None = None,
@@ -165,7 +171,9 @@ def vc_entries(connection: sqlite3.Connection | None = None) -> dict[str, dict]:
     if connection is None:
         with connect() as local:
             return vc_entries(local)
-    return {row['vc']: dict(row) for row in connection.execute(_VC_QUERY)}
+    query = _VC_QUERY if connection.execute(_SHIPPING_MODE_COLUMN).fetchone() else _VC_QUERY.replace(
+        'p.shipping_mode', 'NULL AS shipping_mode')
+    return {row['vc']: dict(row) for row in connection.execute(query)}
 
 
 def resolve_vc(vc: str, entries: dict[str, dict] | None = None) -> dict:

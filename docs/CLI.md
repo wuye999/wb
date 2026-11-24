@@ -90,6 +90,17 @@
 - `--shop-id` 指定店铺ID（默认全部活跃店铺）
 - `--force` 兼容旧参数；导出总是读取当前库
 
+## catalog export-products
+
+导出店铺标准商品表（.xlsx，不含底价；默认按源数字码跨店去重，便于查看与分享上架）
+
+实现入口 [run](../src/sellerops/features/catalog/export_products.py)
+
+- 必选其一 --shops / --all-shops
+- `--shops` 来源店铺 ID，逗号分隔
+- `--all-shops` 导出全部活跃店铺
+- `--out` 输出路径 .xlsx（单店默认 exports/shop_<shop_id>_products.xlsx，多店或 --all-shops 默认 exports/shops_products.xlsx）
+
 ## product price
 
 改价或按显式价格意图设折扣（默认 WB 后台，默认预览）
@@ -263,7 +274,7 @@
 
 ## listing replicate
 
-跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）
+[BCS建卡] 跨店复制上架：把部分覆盖的商品上架到缺失店铺（默认预览）
 
 实现入口 [run](../src/sellerops/features/publishing/replicate.py)
 
@@ -287,7 +298,7 @@
 
 ## listing publish
 
-批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）
+[旧通道/不保留完整VC，日常优先用 create-cards] 批量推送 WB 商品到店铺
 
 实现入口 [run](../src/sellerops/features/publishing/bulk_publish.py)
 
@@ -315,7 +326,7 @@
 
 ## listing create-cards
 
-建卡发布上架：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡）
+[BCS建卡] 按 WB 商品码上架，支持保留完整 VC 和自定义详情
 
 实现入口 [run](../src/sellerops/features/publishing/card_publish.py)
 
@@ -343,7 +354,7 @@
 
 ## listing publish-openapi
 
-[备用] WB Open API 上架：建卡、有限等待标识、上传图片和莫斯科库存；支持续办
+[备用/仅BCS通道不可用时] WB Open API 上架，支持按原记录续办
 
 实现入口 [run](../src/sellerops/features/publishing/open_api_publish.py)
 
@@ -377,6 +388,22 @@ WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店�
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--apply` 兼容保留；确认改码计划单后，用 apply --plan 提交
+
+## listing import-publish
+
+[BCS建卡] 导入标准商品表并上架（按 --prefix + 源数字码生成目标VC，默认预览，加 --apply 提交）
+
+实现入口 [run](../src/sellerops/features/publishing/import_publish.py)
+
+- `--file` 标准商品表 .xlsx 或 UTF-8 .csv
+- `--shops` 目标店铺 ID，逗号分隔
+- `--prefix` 目标 VC 前缀，4 位大写英文字母
+- `--price-multiplier` 表中售价的乘数（默认 1.0）
+- `--price` 统一售价（CNY），覆盖表中售价和乘数
+- `--stock` 上架库存（默认 999，可设 0）
+- `--limit` 查重与校验后最多提交的商品组数（默认 0，不限）
+- `--interval` 商品组提交间隔秒（默认 0.5）
+- `--apply` 提交 BCS 建卡（默认只预览）
 
 ## listing sync-cards
 
@@ -966,7 +993,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## ops replicate
 
-跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）
+[BCS建卡] 跨店复制上架：把部分覆盖的商品上架到缺失店铺（默认预览）
 
 实现入口 [run](../src/sellerops/features/publishing/replicate.py)
 
@@ -991,7 +1018,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## ops publish
 
-批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）
+[旧通道/不保留完整VC，日常优先用 create-cards] 批量推送 WB 商品到店铺
 
 实现入口 [run](../src/sellerops/features/publishing/bulk_publish.py)
 
@@ -1020,7 +1047,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## ops create-cards
 
-建卡发布上架：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡）
+[BCS建卡] 按 WB 商品码上架，支持保留完整 VC 和自定义详情
 
 实现入口 [run](../src/sellerops/features/publishing/card_publish.py)
 
@@ -1049,7 +1076,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 ## ops publish-openapi
 
-[备用] WB Open API 上架：建卡、有限等待标识、上传图片和莫斯科库存；支持续办
+[备用/仅BCS通道不可用时] WB Open API 上架，支持按原记录续办
 
 实现入口 [run](../src/sellerops/features/publishing/open_api_publish.py)
 

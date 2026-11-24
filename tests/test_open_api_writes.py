@@ -399,6 +399,24 @@ class TestOpenAPIWriteWorkflows(unittest.TestCase):
         api.barcodes.assert_not_called()
         api.create_cards.assert_not_called()
 
+    def test_same_source_with_different_prefix_is_skipped_for_live_trash_and_shared_cards(self):
+        source = 'BCS-SRCX-123456-1'
+        src = self.clients['fixture-secret-1']
+        api = self.clients['fixture-secret-2']
+        src.cards.side_effect = self.reader('source', [card(vc=source)])
+        for kind in ('live', 'trash', 'shared'):
+            with self.subTest(kind=kind):
+                vc = f'BCS-{kind.upper()}-123456'
+                api.cards.side_effect = self.reader('cards-2', [card(202, vc=vc)] if kind == 'live' else [])
+                api.trash_cards.side_effect = self.reader('trash-2', [card(202, vc=vc)] if kind == 'trash' else [])
+                if kind == 'shared':
+                    store.record_shared(2, [vc])
+                self.assertEqual(self.cli('listing', 'publish-openapi', '--source-shop', '1', '--shops', '2',
+                                          '--vc', source, '--price', '59', '--apply'), 0)
+                self.assertIn(f'命中目标店已有同源商品 VC：{vc}', self.output.getvalue())
+        api.barcodes.assert_not_called()
+        api.create_cards.assert_not_called()
+
     def test_finish_stock_failure_preserves_media_acceptance_and_blocks_ambiguous_retry(self):
         api = self.clients['fixture-secret-2']
         api.set_stocks.side_effect = NetworkError('fixture-secret-2')

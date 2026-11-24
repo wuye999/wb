@@ -28,15 +28,17 @@ from typing import Dict, Any, List, Optional, Tuple
 from sellerops.domain.models import PublishItem
 from sellerops.integrations.bcs.client import client as bcs
 from sellerops.persistence import db
+from sellerops.persistence.snapshots import ProductSnapshotRepository
 
 
 from sellerops.core import utils as common
 
 from sellerops.features.publishing.publish_inputs import DEFAULT_STOCK
 
-from sellerops.features.publishing.publish_records import load_records
-from sellerops.features.publishing.publish_records import publish_keys, publish_task_id, submit_once
-from sellerops.features.publishing.publish_records import vc_exists_in_shop
+from sellerops.features.publishing.publish_records import (
+    load_records, publish_keys, publish_task_id, publish_vc_key, records_by_shop,
+    submit_once, vc_exists_in_shop, vendor_code_index,
+)
 from sellerops.features.publishing.publish_inputs import parse_dims_str
 from sellerops.features.publishing.publish_inputs import parse_cn_stock
 from sellerops.features.publishing.publish_inputs import stock_for
@@ -103,7 +105,13 @@ def execute_publish(
                 warehouses[sid] = wh
 
         records = load_records()
+        submitted_vcs = records_by_shop(load_records(vc_only=True))
         restrictions = db.vc_entries()
+        target_ids = {sid for it in items for sid in (it.target_shops or all_shop_ids) if sid in warehouses}
+        existing = {
+            sid: vendor_code_index(row.get('vendorCode') for row in ProductSnapshotRepository.load_shop_products(sid))
+            for sid in sorted(target_ids) if ProductSnapshotRepository.exists(sid)
+        }
 
         # 2. 查重过滤与店铺候选拆分
         valid_items: List[Dict[str, Any]] = []
@@ -124,8 +132,10 @@ def execute_publish(
                 fail_count += 1
                 continue
             keys = publish_keys(it) | {actual_vc}
+            vc_keys = {publish_vc_key(actual_vc), publish_vc_key(it.vendor_code or actual_vc)}
             target_sids = [sid for sid in target_sids
-                           if (actual_vc, sid) not in seen
+                           if not any((key, sid) in seen or key in existing.get(sid, {})
+                                      or key in submitted_vcs.get(str(sid), {}) for key in vc_keys)
                            and not any(str(sid) in records.get(key, {}) for key in keys)
                            and not db.listing_blocked(it.vendor_code or actual_vc, sid, restrictions)
                            and not db.listing_blocked(actual_vc, sid, restrictions)]
@@ -142,7 +152,7 @@ def execute_publish(
                 print(f"  [跳过] 商品 {it.nm_id} ({it.vendor_code}) 目标店铺均已存在或已提交")
                 skip_count += 1
                 continue
-            seen.update((actual_vc, sid) for sid in final_targets)
+            seen.update((key, sid) for key in vc_keys for sid in final_targets)
 
             p_val = float(it.price or 0.0)
             price_str = str(int(p_val)) if p_val.is_integer() else f"{p_val:.2f}"

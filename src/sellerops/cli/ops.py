@@ -41,6 +41,8 @@ def execute_frozen(action: str, args) -> int:
     executor = bulk_publish if action == 'publish' else card_publish
     result = executor.execute_publish([], apply=True, interval=args.interval, frozen=args.frozen)
     args.outcome = {k: result[k] for k in ('ok', 'skip', 'fail', 'csv')}
+    if 'daily_limit_warnings' in result:
+        args.outcome['daily_limit_warnings'] = result['daily_limit_warnings']
     args.outcome['items'] = [
         {'vc': row['vc'], 'targets': row['targets'],
          'task_id': row.get('task_id'),

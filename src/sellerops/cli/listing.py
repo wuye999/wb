@@ -5,7 +5,7 @@ from sellerops.cli.arguments import add_shop_scope, nonempty, shop_ids, add_publ
 
 
 def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> None:
-    p = sub.add_parser('replicate', help="跨店复制上架：把部分覆盖的商品上架到缺失店铺（dry-run 默认）")
+    p = sub.add_parser('replicate', help='[BCS建卡] 跨店复制上架：把部分覆盖的商品上架到缺失店铺（默认预览）')
     selection = p.add_mutually_exclusive_group(required=True)
     selection.add_argument("--vc", type=nonempty, help="完整 VC")
     selection.add_argument("--prefix", type=nonempty, help="四位前缀")
@@ -26,15 +26,15 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     p.add_argument("--cn-stock", default="", help="按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）")
     bind(p, 'sellerops.features.publishing.replicate', 'run')
 
-    p = sub.add_parser('publish', help="批量发布上架：输入 WB 商品码推送到店铺（支持指定前缀/完整VC/价格/尺寸/店铺）")
+    p = sub.add_parser('publish', help='[旧通道/不保留完整VC，日常优先用 create-cards] 批量推送 WB 商品到店铺')
     add_publish_args(p)
     bind(p, 'sellerops.features.publishing.bulk_publish', 'run')
 
-    p = sub.add_parser('create-cards', help="建卡发布上架：输入 WB 商品码推送到店铺（支持自定义完整VC/俄文详情与主图建卡）")
+    p = sub.add_parser('create-cards', help='[BCS建卡] 按 WB 商品码上架，支持保留完整 VC 和自定义详情')
     add_publish_args(p)
     bind(p, 'sellerops.features.publishing.card_publish', 'run')
 
-    p = sub.add_parser('publish-openapi', help='[备用] WB Open API 上架：建卡、有限等待标识、上传图片和莫斯科库存；支持续办')
+    p = sub.add_parser('publish-openapi', help='[备用/仅BCS通道不可用时] WB Open API 上架，支持按原记录续办')
     p.add_argument('--source-shop', type=int, help='自有源店 BCS 店铺 ID；不传则从公开 CDN 读取任意商品码')
     p.add_argument('--nm', default='', help='源 WB 商品码，逗号分隔；自有源店模式使用该店商品码')
     p.add_argument('--vc', default='', help='源店模式为完整 VC 筛选；公开商品模式指定目标完整 VC（支持 {nm} 模板）')
@@ -63,6 +63,18 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
 
     if planned_only:
         return
+
+    p = sub.add_parser('import-publish', help='[BCS建卡] 导入标准商品表并上架（按 --prefix + 源数字码生成目标VC，默认预览，加 --apply 提交）')
+    p.add_argument('--file', required=True, help='标准商品表 .xlsx 或 UTF-8 .csv')
+    p.add_argument('--shops', type=shop_ids, required=True, help='目标店铺 ID，逗号分隔')
+    p.add_argument('--prefix', required=True, help='目标 VC 前缀，4 位大写英文字母')
+    p.add_argument('--price-multiplier', type=float, default=1.0, help='表中售价的乘数（默认 1.0）')
+    p.add_argument('--price', type=float, help='统一售价（CNY），覆盖表中售价和乘数')
+    p.add_argument('--stock', type=int, default=999, help='上架库存（默认 999，可设 0）')
+    p.add_argument('--limit', type=int, default=0, help='查重与校验后最多提交的商品组数（默认 0，不限）')
+    p.add_argument('--interval', type=float, default=0.5, help='商品组提交间隔秒（默认 0.5）')
+    p.add_argument('--apply', action='store_true', help='提交 BCS 建卡（默认只预览）')
+    bind(p, 'sellerops.features.publishing.import_publish', 'run')
 
     p = sub.add_parser('sync-cards', help='WB Open API：按相同完整 VC 将源店商品内容同步到其他店')
     p.add_argument('--source-shop', type=int, required=True, help='修改后的源店 BCS 店铺 ID（例如示例店铺对应的 1001）')

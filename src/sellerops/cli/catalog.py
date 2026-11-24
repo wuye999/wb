@@ -1,5 +1,6 @@
 """命令定义：catalog。"""
 import argparse
+from sellerops.cli.arguments import shop_ids
 from sellerops.cli.binding import bind
 
 
@@ -29,6 +30,13 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--shop-id", type=int, default=None, help="指定店铺ID（默认全部活跃店铺）")
     p.add_argument("--force", action="store_true", help="兼容旧参数；导出总是读取当前库")
     bind(p, 'sellerops.cli.catalog_handlers', 'run_shops_mapping')
+
+    p = sub.add_parser('export-products', help='导出店铺标准商品表（.xlsx，不含底价；默认按源数字码跨店去重，便于查看与分享上架）')
+    shops = p.add_mutually_exclusive_group(required=True)
+    shops.add_argument('--shops', type=shop_ids, help='来源店铺 ID，逗号分隔')
+    shops.add_argument('--all-shops', action='store_true', help='导出全部活跃店铺')
+    p.add_argument('--out', help='输出路径 .xlsx（单店默认 exports/shop_<shop_id>_products.xlsx，多店或 --all-shops 默认 exports/shops_products.xlsx）')
+    bind(p, 'sellerops.features.catalog.export_products', 'run')
 
 
 def add_mismatch_args(p: argparse.ArgumentParser) -> None:
