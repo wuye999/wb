@@ -7,7 +7,7 @@ sellerops WB 原生卖家后台「库存」适配器 (wb_stock_client)
          → data.next 游标分页 + data.stocks[]（article=vendorCode / chrtId / nmId / amount / storeId）
 - 修改: POST .../api/v3/portal/stocks/{warehouseId}
          body {"data":[{"chrtId":X,"amount":N}, ...]}（数组天然批量，官方同构端点单请求支持 ≤1000 SKU）
-         → 同步返回 {"error":false,"errorText":"","data":{}}
+         → 同步返回 {"error":false,"errorText":"","additionalErrors":{"errorCode":""},"data":{}}
 
 鉴权：WB 三件套（wb_api.make_session），与 remote_wh.py 同域同会话，已实证可用。
 会话由调用方构建，本模块不建 session。

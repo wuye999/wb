@@ -1,0 +1,30 @@
+{
+  "method": "POST",
+  "path": "/ns/marketplace-app/marketplace-remote-wh/api/v3/portal/stocks/{warehouseId}",
+  "responses": [
+    {
+      "http_status": 200,
+      "body_type": "json",
+      "response_json": {
+        "additionalErrors": {
+          "errorCode": ""
+        },
+        "data": {},
+        "errorText": "",
+        "error": false
+      }
+    },
+    {
+      "http_status": 200,
+      "body_type": "json",
+      "response_json": {
+        "additionalErrors": {
+          "errorCode": ""
+        },
+        "data": {},
+        "errorText": "",
+        "error": false
+      }
+    }
+  ]
+}

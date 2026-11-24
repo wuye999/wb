@@ -2,6 +2,7 @@
 
 from catalog_fixture import map_vcs, corrupt_snapshot
 import csv
+import json
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -13,7 +14,7 @@ from unittest.mock import Mock, patch
 import openpyxl
 import requests
 
-from sellerops.cli.main import build_parser
+from sellerops.cli.main import build_parser, main as cli_main
 from operation_fixture import run_business_cli as main
 from sellerops.core.errors import AuthenticationError, PlatformApiError
 from sellerops.features.products import clean, warehouse
@@ -222,6 +223,38 @@ class OperationalExamples(unittest.TestCase):
         with receipt.open(encoding="utf-8-sig") as stream:
             self.assertEqual(len(list(csv.DictReader(stream))), 6)
         self.assertFalse((Path(paths.current.log_dir) / "ops_result.csv").exists())
+
+    def test_stock_receipt_status_drives_command_outcome(self):
+        from sellerops.integrations.wildberries import stocks
+
+        cases = [
+            ({"error": False, "errorText": "", "additionalErrors": {"errorCode": ""}, "data": {}}, "accepted"),
+            ({"error": False, "additionalErrors": {"errorCode": None}}, "accepted"),
+            ({"error": False, "additionalErrors": {"errorCode": "ERR_01"}}, "unknown"),
+            ({"error": False, "additionalErrors": {"errorCode": 0}}, "unknown"),
+            ({"error": False, "additionalErrors": {"errorCode": "", "detail": "invalid chrtId"}}, "unknown"),
+            ({"error": False, "additionalErrors": ["ERR_01"]}, "unknown"),
+            ({"data": {}}, "unknown"),
+            ({"error": 0}, "unknown"),
+            ({"error": True, "errorText": "库存拒绝"}, "failed"),
+        ]
+        args = ["--data-dir", str(self.folder)]
+        for platform_reply, status in cases:
+            with self.subTest(reply=platform_reply), redirect_stderr(StringIO()), \
+                    patch.object(stocks, "post_stocks", return_value=platform_reply) as post:
+                draft, applied = StringIO(), StringIO()
+                with redirect_stdout(draft):
+                    self.assertEqual(cli_main([*args, "ops", "stock", "--shops", "1", "--vc", "BCS-AAAA-1",
+                                               "--amount", "25", "--json"]), 0)
+                plan_id = json.loads(draft.getvalue())["plan_id"]
+                with redirect_stdout(applied):
+                    code = cli_main([*args, "apply", "--plan", plan_id, "--json"])
+                reply = json.loads(applied.getvalue())
+                self.assertIs(reply["ok"], status == "accepted")
+                self.assertEqual(code, 0 if status == "accepted" else 1)
+                [receipt] = reply["data"]["receipt"]["receipts"]
+                self.assertEqual(receipt["status"], status)
+                post.assert_called_once()
 
     def test_partial_response_keeps_chinese_receipts_and_stops_this_shops_batches(self):
         from sellerops.integrations.wildberries import stocks

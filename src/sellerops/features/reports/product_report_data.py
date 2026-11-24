@@ -44,19 +44,34 @@ def product_url(nm_id: Any) -> str:
     return f'https://www.wildberries.ru/catalog/{nm}/detail.aspx' if nm else ''
 
 
-def nm_vendor_map(snapshot: list[dict[str, Any]], feedbacks: list[dict[str, Any]]) -> dict[str, str]:
+def nm_vendor_map(snapshot: list[dict[str, Any]], feedbacks: list[dict[str, Any]]) -> tuple[dict[str, str], int]:
+    """快照优先，评价仅补充快照中未出现的商品码。"""
+    def collect(rows: list[dict[str, Any]]) -> dict[str, set[str]]:
+        by_nm: dict[str, set[str]] = {}
+        for row in rows:
+            details = row.get('productDetails', row)
+            if not isinstance(details, dict):
+                continue
+            nm = positive_id(details.get('nmId') or details.get('nmID'))
+            if not nm:
+                continue
+            codes = by_nm.setdefault(nm, set())
+            for key in ('vendorCode', 'goodsCode', 'supplierArticle'):
+                vc = str(details.get(key) or '').strip()
+                if vc:
+                    codes.add(vc)
+                    break
+        return by_nm
+
     result: dict[str, str] = {}
-    for row in [*snapshot, *feedbacks]:
-        details = row.get('productDetails', row)
-        if not isinstance(details, dict):
-            continue
-        nm = positive_id(details.get('nmId') or details.get('nmID'))
-        vc = str(details.get('vendorCode') or details.get('supplierArticle') or '').strip()
-        if nm and vc:
-            if nm in result and result[nm] != vc:
-                raise ValueError('同店商品码对应多个 VC，无法可靠归属订单')
-            result[nm] = vc
-    return result
+    conflicts = 0
+    by_nm = collect(feedbacks) | collect(snapshot)
+    for nm, codes in by_nm.items():
+        if len(codes) == 1:
+            result[nm] = next(iter(codes))
+        elif len(codes) > 1:
+            conflicts += 1
+    return result, conflicts
 
 
 def order_row(raw: dict[str, Any], sid: int, name: str, mapping: dict[str, str],

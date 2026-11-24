@@ -74,6 +74,11 @@ def build_plans(vcs, shops, state, amount, resolve="snapshot", max_pages=200, *,
     return plans
 
 
+def _has_additional_errors(additional) -> bool:
+    if isinstance(additional, dict):
+        return any(key != "errorCode" or value not in (None, "") for key, value in additional.items())
+    return additional not in (None, "", [])
+
 
 def _stock_batches(session, warehouse_id, chrt_items, chunk, interval):
     for offset in range(0, len(chrt_items), chunk):
@@ -81,7 +86,7 @@ def _stock_batches(session, warehouse_id, chrt_items, chunk, interval):
         try:
             reply = wsc.post_stocks(session, warehouse_id, batch)
             flag = reply.get("error") if isinstance(reply, dict) else None
-            if flag is False and not reply.get("additionalErrors"):
+            if flag is False and not _has_additional_errors(reply.get("additionalErrors")):
                 status, message = "accepted", ""
             elif flag is True:
                 status, message = "failed", str(reply.get("errorText") or "WB 拒绝库存提交")

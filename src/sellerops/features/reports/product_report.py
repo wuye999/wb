@@ -70,11 +70,10 @@ def _shop(report: ProductReport, access: Any, start: datetime, end: datetime,
         if invalid:
             cover['feedbacks'] = '部分'
             report.issues.append(ReportIssue('评价', f'{invalid}条评价字段无效，数量仅为已知部分', sid))
-        try:
-            mapping = data.nm_vendor_map(report.snapshots[sid] or [], feedbacks)
-        except ValueError:
-            mapping = {}
-            report.issues.append(ReportIssue('商品映射', '同店商品码与VC冲突，订单VC标为未知', sid))
+        mapping, conflicts = data.nm_vendor_map(report.snapshots[sid] or [], feedbacks)
+        if conflicts > 0:
+            report.issues.append(ReportIssue('商品映射', f'{conflicts}个商品码存在多个VC，已跳过兜底映射',
+                                             sid, severity='警告'))
         try:
             cutoff = min(datetime.now(data.TZ), end)
             fbs = api.fbs_orders(start, cutoff)

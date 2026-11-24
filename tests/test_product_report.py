@@ -12,7 +12,7 @@ from unittest.mock import Mock, PropertyMock, patch
 from openpyxl import load_workbook
 
 from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLimitError
-from sellerops.domain.product_reports import ProductReport, ReportCatalog
+from sellerops.domain.product_reports import ProductReport, ReportCatalog, ReportIssue
 from sellerops.features.reports import product_report as workflow
 from sellerops.features.reports import product_report_data as data
 from sellerops.features.reports.product_report_analysis import analyze, return_metrics
@@ -238,7 +238,7 @@ class TestReportRules(unittest.TestCase):
 
 
 class TestReportWorkflow(unittest.TestCase):
-    def fixture(self, *, missing=False, api_error=False, bad_warehouse=False, records=None):
+    def fixture(self, *, missing=False, api_error=False, bad_warehouse=False, records=None, snapshot_rows=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch('sellerops.features.catalog.shops.archive_set', return_value=set()))
@@ -252,8 +252,11 @@ class TestReportWorkflow(unittest.TestCase):
         def snapshot(sid):
             if missing and sid == 12:
                 return None
+            rows = [{'nmId': 101 if sid == 11 else 202, 'vendorCode': VC}]
+            if sid == 11 and snapshot_rows is not None:
+                rows = snapshot_rows
             return {'shopId': sid, 'fetchedAt': '2026-11-01 12:00:00',
-                    'rows': [{'nmId': 101 if sid == 11 else 202, 'vendorCode': VC}]}
+                    'rows': rows}
         stack.enter_context(patch.object(workflow.ProductSnapshotRepository, 'load_snapshot_document', side_effect=snapshot))
         apis = []
         for sid in (11, 12):
@@ -298,6 +301,55 @@ class TestReportWorkflow(unittest.TestCase):
         self.assertEqual(report.orders_collected_from, report.order_begin)
         self.assertFalse(analyze(report)['sales'])
         self.assertTrue(all(api.close.called for api in apis))
+
+    def test_snapshot_vc_wins_over_historical_feedback(self):
+        snapshot = [{'nmId': 101, 'vendorCode': 'VC_NEW'}]
+        apis, _ = self.fixture(snapshot_rows=snapshot)
+        apis[0].feedbacks.return_value = [feedback(vc='VC_OLD')]
+        self.set_orders(apis[0], 11, [(order(), '')])
+
+        self.assertEqual(data.nm_vendor_map(snapshot, apis[0].feedbacks.return_value), ({'101': 'VC_NEW'}, 0))
+        report = self.collect()
+        self.assertEqual(report.orders[0]['vc'], 'VC_NEW')
+        self.assertFalse(any(issue.source == '商品映射' for issue in report.issues))
+        self.assertFalse(report.failed)
+
+    def test_feedback_conflict_warns_and_preserves_clean_mappings(self):
+        snapshot = [{'nmId': 101, 'vendorCode': VC}]
+        feedbacks = [feedback('a', nm=202, vc='VC_A'), feedback('b', nm=202, vc='VC_B'),
+                     feedback('c', nm=303, vc='VC_C'), feedback('d', nm=303, vc='VC_C')]
+        apis, _ = self.fixture(snapshot_rows=snapshot)
+        apis[0].feedbacks.return_value = feedbacks
+        self.set_orders(apis[0], 11, [(order(), ''), (order('o2', nm=202), 'VC_FBS'), (order('o3', nm=303), '')])
+
+        self.assertEqual(data.nm_vendor_map(snapshot, feedbacks), ({'101': VC, '303': 'VC_C'}, 1))
+        report = self.collect()
+        self.assertEqual({row['nm_id']: row['vc'] for row in report.orders if row['shop_id'] == 11},
+                         {'101': VC, '202': 'VC_FBS', '303': 'VC_C'})
+        self.assertEqual([issue for issue in report.issues if issue.source == '商品映射'], [
+            ReportIssue('商品映射', '1个商品码存在多个VC，已跳过兜底映射', 11, severity='警告')])
+        self.assertFalse(report.failed)
+
+    def test_order_needing_conflicting_fallback_still_fails_report(self):
+        apis, _ = self.fixture()
+        apis[0].feedbacks.return_value = [feedback('a', nm=202, vc='VC_A'), feedback('b', nm=202, vc='VC_B')]
+        self.set_orders(apis[0], 11, [(order(nm=202), '')])
+        del apis[0].fbs_orders.return_value[0]['article']
+
+        report = self.collect()
+        self.assertEqual(report.orders[0]['vc'], '')
+        self.assertIn(ReportIssue('商品映射', '1个商品码存在多个VC，已跳过兜底映射', 11, severity='警告'), report.issues)
+        self.assertIn(ReportIssue('订单', '商品码无法映射VC（未猜测VC尾号）：1条', 11), report.issues)
+        self.assertTrue(report.failed)
+
+    def test_snapshot_conflict_does_not_fall_back_to_feedback(self):
+        snapshot = [{'nmId': 101, 'vendorCode': 'VC_A', 'goodsCode': 'VC_UNUSED'},
+                    {'nmId': 101, 'vendorCode': ' ', 'goodsCode': ' VC_B ', 'supplierArticle': 'VC_UNUSED'},
+                    {'nmID': 303, 'goodsCode': 'VC_C'}, {'nmId': 404}]
+        feedbacks = [feedback(vc='VC_A'), feedback('blank-snapshot', nm=404, vc='VC_D')]
+
+        self.assertEqual(data.nm_vendor_map(snapshot, feedbacks), ({'303': 'VC_C'}, 1))
+        self.assertEqual(data.nm_vendor_map(snapshot[:1], feedbacks[:1]), ({'101': 'VC_A'}, 0))
 
     def test_short_return_window_keeps_utc8_sales_boundaries_for_both_apis_and_xlsx(self):
         apis, _ = self.fixture()
