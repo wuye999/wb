@@ -9,6 +9,7 @@ from sellerops.features.publishing.open_api_payloads import characteristics, doc
 
 
 MAX_REQUEST_BYTES = 10_000_000
+MAX_BATCH_CARDS = 1000
 
 
 def encoded_size(value: Any) -> int:
@@ -76,14 +77,14 @@ def rename_payload(card: dict[str, Any], new_vc: str) -> dict[str, Any]:
 
 
 def batch_lengths(cards: list[dict[str, Any]]) -> list[int]:
-    """预先分批；每批最多100张卡，且默认 JSON 序列化不超过10MB。"""
+    """预先分批，每批最多 1000 张卡，且默认 JSON 序列化不超过 10 MB。"""
     lengths, count, total = [], 0, 2
     for card in cards:
         size = encoded_size(card)
         if size + 2 > MAX_REQUEST_BYTES:
             raise ValueError('单张商品卡的更新请求超过 10 MB')
         extra = size + (2 if count else 0)
-        if count and (count == 100 or total + extra > MAX_REQUEST_BYTES):
+        if count and (count == MAX_BATCH_CARDS or total + extra > MAX_REQUEST_BYTES):
             lengths.append(count)
             count, total, extra = 0, 2, size
         count += 1

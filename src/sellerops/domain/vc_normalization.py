@@ -16,7 +16,14 @@ class NormalizationCatalog:
         key = vc.upper()
         return self.overrides.get(key) or self.owners.get(key, set())
 
-    def resolve(self, vc: str) -> tuple[str, str]:
+    def prefix_owners(self) -> dict[str, set[str]]:
+        owners: dict[str, set[str]] = {}
+        for name, prefixes in self.prefixes.items():
+            for prefix in prefixes:
+                owners.setdefault(prefix, set()).add(name)
+        return owners
+
+    def resolve(self, vc: str, *, _prefix_owners: dict[str, set[str]] | None = None) -> tuple[str, str]:
         names = self.names(vc)
         if len(names) != 1:
             raise ValueError('缺少明确商品归属' if not names else '已有商品归属存在分歧')
@@ -27,7 +34,9 @@ class NormalizationCatalog:
         prefix = values[0]
         if not re.fullmatch(r'[A-Z]{4}', prefix):
             raise ValueError('价格表前缀必须为四位英文字母')
-        if any(name != cn and prefix in prefixes for name, prefixes in self.prefixes.items()):
+        if _prefix_owners is None:
+            _prefix_owners = self.prefix_owners()
+        if len(_prefix_owners.get(prefix, ())) > 1:
             raise ValueError('价格表前缀被多个商品共用')
         return cn, prefix
 

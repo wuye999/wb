@@ -1,7 +1,9 @@
 """历史 VC 前缀规范化；全部读取先于写入，跨店统一分配且不重放提交。"""
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from sellerops.core.files import FileLock
@@ -18,6 +20,9 @@ from sellerops.integrations.wildberries.content_api import WBContentAPI
 from sellerops.persistence import db
 from sellerops.persistence.vc_normalization import COMMAND, load_attempts, load_catalog, write_log
 from sellerops.settings import paths
+
+
+READ_WORKERS = 4
 
 
 @dataclass
@@ -45,11 +50,23 @@ def _read_cards(api: WBContentAPI) -> tuple[dict[str, dict[str, Any]], dict[int,
     return active, ids
 
 
+def _read_shop(api_key: str) -> tuple[WBContentAPI, dict[str, dict[str, Any]], dict[int, str], float]:
+    started = monotonic()
+    api = WBContentAPI(api_key)
+    try:
+        active, all_ids = _read_cards(api)
+    except BaseException:
+        api.close()
+        raise
+    return api, active, all_ids, monotonic() - started
+
+
 def _candidate_rows(args: Any, catalog: NormalizationCatalog,
                     cards: dict[int, dict[str, dict[str, Any]]], requested: list[str],
                     log: OperationLog) -> tuple[dict[str, str], list[tuple[int, dict[str, Any], str]]]:
     bases: dict[str, str] = {}
     candidates = []
+    prefix_owners = catalog.prefix_owners()
     for sid, index in sorted(cards.items()):
         selected = requested if requested else sorted(index)
         for vc in selected:
@@ -68,7 +85,7 @@ def _candidate_rows(args: Any, catalog: NormalizationCatalog,
                 log.add(sid, vc, 'skipped', reason='商品已人工排除', **detail)
                 continue
             try:
-                cn, prefix = catalog.resolve(vc)
+                cn, prefix = catalog.resolve(vc, _prefix_owners=prefix_owners)
                 base = replacement_base(vc, prefix)
                 if extract_vc_prefix(vc) == prefix:
                     log.add(sid, vc, 'skipped', reason='已有正确前缀', **detail)
@@ -112,16 +129,19 @@ def _prepare(args: Any, catalog: NormalizationCatalog, attempts: list[RenameAtte
         except Exception as exc:
             log.add(sid, old, 'blocked', reason=safe_reason(exc), **detail)
             continue
-        row = log.add(sid, old, 'planned', card=payload, **detail)
+        row = log.add(sid, old, 'planned', **detail)
         prepared.append(PreparedRename(sid, payload, row))
     return prepared
 
 
 def _submit(clients: dict[int, WBContentAPI], prepared: list[PreparedRename], log: OperationLog) -> None:
     # 在首个写请求之前完成所有批次的大小校验。
+    items_by_shop: dict[int, list[PreparedRename]] = {}
+    for item in prepared:
+        items_by_shop.setdefault(item.shop_id, []).append(item)
     batches: dict[int, list[list[PreparedRename]]] = {}
     for sid in sorted(clients):
-        items = [item for item in prepared if item.shop_id == sid]
+        items = items_by_shop.get(sid, [])
         offset = 0
         batches[sid] = []
         for count in batch_lengths([item.payload for item in items]):
@@ -129,12 +149,7 @@ def _submit(clients: dict[int, WBContentAPI], prepared: list[PreparedRename], lo
             offset += count
     for sid, groups in batches.items():
         stopped = False
-        for group in groups:
-            if stopped:
-                for item in group:
-                    item.record.update(status='blocked', reason='本店此前提交失败，后续批次未发送')
-                log.save()
-                continue
+        for index, group in enumerate(groups):
             for item in group:
                 item.record['status'] = 'submitting'
             # 必须先持久化 submitting，进程中断或保存回执失败均不能重放。
@@ -145,12 +160,21 @@ def _submit(clients: dict[int, WBContentAPI], prepared: list[PreparedRename], lo
                     raise ValueError('更新接口没有完整受理回执，禁止自动重放')
             except Exception as exc:
                 stopped = True
+                reason = safe_reason(exc)
                 for item in group:
-                    item.record.update(status='unknown', reason=safe_reason(exc))
+                    item.record.update(status='unknown', reason=reason)
             else:
                 for item in group:
                     item.record.update(status='accepted', cardReceipt=receipt)
             log.save()
+            if stopped:
+                remaining = groups[index + 1:]
+                if remaining:
+                    for pending in remaining:
+                        for item in pending:
+                            item.record.update(status='blocked', reason='本店此前提交失败，后续批次未发送')
+                    log.save()
+                break
 
 
 def _run(args: Any, requested: list[str], log: OperationLog) -> int:
@@ -162,27 +186,38 @@ def _run(args: Any, requested: list[str], log: OperationLog) -> int:
         shops = [shop for shop in shops if shop.id not in archived]
     log.document['shops'] = [{'id': shop.id, 'name': shop.name} for shop in shops]
     cards, occupied, clients = {}, {}, {}
-    failed = False
+    failures = {}
     with ExitStack() as stack:
-        for shop in shops:
-            try:
-                api = stack.enter_context(closing(WBContentAPI(shop.api_key)))
-                clients[shop.id] = api
-                active, all_ids = _read_cards(api)
-                cards[shop.id] = active
-                occupied.update({(shop.id, nm): vc for nm, vc in all_ids.items()})
-                print(f'[读取] 店{shop.id}：非回收站 {len(active)}，含回收站编码 {len(all_ids)}')
-            except Exception as exc:
-                failed = True
-                log.add(shop.id, '*', 'failed', reason=safe_reason(exc))
-        if failed:
+        if shops:
+            workers = min(READ_WORKERS, len(shops))
+            print(f'[读取] 开始拉取 {len(shops)} 个店铺（最多 {workers} 店并发）', flush=True)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                reads = {pool.submit(_read_shop, shop.api_key): shop.id for shop in shops}
+                for done, future in enumerate(as_completed(reads), 1):
+                    sid = reads[future]
+                    try:
+                        api, active, all_ids, elapsed = future.result()
+                    except Exception as exc:
+                        reason = failures[sid] = safe_reason(exc)
+                        print(f'[读取] ({done}/{len(shops)}) 店{sid}：失败（{reason}）', flush=True)
+                        continue
+                    stack.callback(api.close)
+                    clients[sid] = api
+                    cards[sid] = active
+                    occupied.update({(sid, nm): vc for nm, vc in all_ids.items()})
+                    print(f'[读取] ({done}/{len(shops)}) 店{sid}：非回收站 {len(active)}，'
+                          f'含回收站编码 {len(all_ids)}（{elapsed:.1f}s）', flush=True)
+        if failures:
+            for shop in shops:
+                if shop.id in failures:
+                    log.add(shop.id, '*', 'failed', reason=failures[shop.id])
             log.document['aborted'] = '店铺读取不完整；未分配新码，整轮未提交'
             print('[停止] 店铺读取不完整，整轮不提交')
             return log.finish()
         prepared = _prepare(args, catalog, attempts, cards, occupied, requested, log)
         log.save()
         if getattr(args, 'capture_plan', False):
-            args.prepared = {'items': [item.record for item in prepared],
+            args.prepared = {'items': [{**item.record, 'card': item.payload} for item in prepared],
                              'blocked': [row for row in log.document['items'] if row['status'] != 'planned']}
         if args.apply:
             _submit(clients, prepared, log)
@@ -231,22 +266,28 @@ def apply_frozen(args: Any) -> int:
     with FileLock(Path(paths.current.state_dir) / COMMAND), ExitStack() as stack:
         _, shops = select_accesses(','.join(map(str, ids)))
         history = load_attempts()
-        completed = {(row.shop_id, row.nm_id) for row in history}
+        completed = set()
+        history_by_old: dict[str, set[str]] = {}
+        history_by_new: dict[str, set[str]] = {}
+        for attempt in history:
+            completed.add((attempt.shop_id, attempt.nm_id))
+            history_by_old.setdefault(attempt.old_vc, set()).add(attempt.new_vc)
+            history_by_new.setdefault(attempt.new_vc.upper(), set()).add(attempt.old_vc)
         clients = {shop.id: stack.enter_context(closing(WBContentAPI(shop.api_key))) for shop in shops}
         prepared = []
         for record in planned:
-            row = dict(record)
+            row = {k: v for k, v in record.items() if k != 'card'}
             log.document['items'].append(row)
             if (row['shopId'], row['nmID']) in completed:
                 row.update(status='blocked', reason='\u672c\u5e97\u540c\u5361\u5df2\u6709\u63d0\u4ea4\u8bb0\u5f55')
                 continue
-            previous = {attempt.new_vc for attempt in history if attempt.old_vc == row['vc']}
-            conflict = any(attempt.new_vc.upper() == row['newVC'].upper() and attempt.old_vc != row['vc']
-                           for attempt in history)
+            previous = history_by_old.get(row['vc'])
+            target_owners = history_by_new.get(row['newVC'].upper())
+            conflict = target_owners and (len(target_owners) > 1 or row['vc'] not in target_owners)
             if conflict or (previous and previous != {row['newVC']}):
                 row.update(status='blocked', reason='\u8be5\u65e7 VC \u7684\u5386\u53f2\u65b0\u7801\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u65b0\u9884\u89c8')
                 continue
-            prepared.append(PreparedRename(row['shopId'], row['card'], row))
+            prepared.append(PreparedRename(row['shopId'], record['card'], row))
         _submit(clients, prepared, log)
     args.outcome = {'items': log.document['items']}
     return log.finish()

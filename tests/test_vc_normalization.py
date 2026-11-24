@@ -8,6 +8,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from threading import Barrier
 import unittest
 from unittest.mock import Mock, patch
 
@@ -61,10 +62,12 @@ class TestNormalizationRules(unittest.TestCase):
             catalog.resolve('BCS-TEST-unknown')
 
     def test_duplicate_names_shared_prefix_and_invalid_prefix_are_blocked(self):
-        for prefixes in ({CN: ['TEST', 'TEST']}, {CN: ['TEST'], '另一个商品': ['TEST']},
+        for prefixes in ({CN: ['TEST', 'TEST']}, {CN: ['TEST'], '另一个商品': ['NEXT', 'TEST']},
                          {CN: ['1234']}, {CN: ['']}, {}):
-            with self.subTest(prefixes=prefixes), self.assertRaises(ValueError):
-                NormalizationCatalog(prefixes=prefixes, owners={OLD: {CN}}).resolve(OLD)
+            catalog = NormalizationCatalog(prefixes=prefixes, owners={OLD: {CN}})
+            for owners in (None, catalog.prefix_owners()):
+                with self.subTest(prefixes=prefixes, owners=owners), self.assertRaises(ValueError):
+                    catalog.resolve(OLD, _prefix_owners=owners)
 
     def test_colliding_candidates_receive_unique_deterministic_suffixes(self):
         other = 'BCS-ZZZZ-123-2'
@@ -163,7 +166,9 @@ class TestRenamePayload(unittest.TestCase):
                 payloads.rename_payload(dict(card(1), **change), NEW)
 
     def test_batches_respect_card_count_and_actual_ascii_json_byte_size(self):
-        self.assertEqual(payloads.batch_lengths([{'nmID': i} for i in range(201)]), [100, 100, 1])
+        limit = payloads.MAX_BATCH_CARDS
+        self.assertEqual(limit, 1000)
+        self.assertEqual(payloads.batch_lengths([{'nmID': i} for i in range(2 * limit + 1)]), [limit, limit, 1])
         cards = [{'nmID': i, 'description': '中' * 60} for i in range(5)]
         with patch.object(payloads, 'MAX_REQUEST_BYTES', 850):
             lengths = payloads.batch_lengths(cards)
@@ -261,12 +266,18 @@ class TestNormalizationCommand(unittest.TestCase):
     def records(self):
         return [row for doc in self.documents() for row in doc['items']]
 
+    def assert_shop_reads(self, events):
+        self.assertEqual(len(events), 2 * len(self.shops))
+        self.assertEqual(set(events), {(kind, shop.id) for shop in self.shops for kind in ('active', 'trash')})
+        for shop in self.shops:
+            self.assertLess(events.index(('active', shop.id)), events.index(('trash', shop.id)))
+
     def test_preview_defaults_to_all_shops_and_leaves_inputs_and_state_unchanged(self):
         atomic_dump_json(self.folder / 'products' / 'sentinel.json', {'not': 'a snapshot to load'})
         before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file() and p != Path(paths.current.database)}
         self.assertEqual(self.cli('--all'), 0)
         self.assertFalse(self.wrote)
-        self.assertEqual(self.events, [('active', 1), ('trash', 1), ('active', 2), ('trash', 2)])
+        self.assert_shop_reads(self.events)
         rows = self.records()
         self.assertEqual([(r['shopId'], r['newVC'], r['status']) for r in rows], [(1, NEW, 'planned'), (2, NEW, 'planned')])
         for p, content in before.items():
@@ -280,7 +291,7 @@ class TestNormalizationCommand(unittest.TestCase):
             api.prices.assert_not_called()
             api.stocks.assert_not_called()
 
-    def test_public_plan_freezes_original_card_and_replacement_code(self):
+    def test_public_plan_freezes_full_cards_without_copying_them_to_audit_or_receipt(self):
         from sellerops.cli.main import main
 
         prefix = ['--data-dir', str(self.folder)]
@@ -288,25 +299,39 @@ class TestNormalizationCommand(unittest.TestCase):
         with redirect_stdout(output):
             self.assertEqual(main([*prefix, 'ops', 'normalize-vc', '--all-shops', '--all', '--json']), 0)
         plan_id = json.loads(output.getvalue())['plan_id']
+        plan, = db.plans('normalize_vc', 'P')
+        self.assertEqual(plan['plan_id'], plan_id)
+        frozen = json.loads(plan['payload_json'])['scope']['items']
+        expected = [payloads.rename_payload(self.active[sid][0], NEW) for sid in (1, 2)]
+        self.assertEqual([row['card'] for row in frozen], expected)
+        self.assertTrue(all('card' not in row for row in self.records()))
         self.active[1] = [card(999)]
         reads = list(self.events)
         with redirect_stdout(io.StringIO()):
             self.assertEqual(main([*prefix, 'apply', '--plan', plan_id, '--json']), 0)
         self.assertEqual(self.events, [*reads, ('write', 1), ('write', 2)])
-        self.assertEqual(self.clients[1].update_cards.call_args.args[0][0]['nmID'], 101)
-        self.assertEqual(self.clients[1].update_cards.call_args.args[0][0]['vendorCode'], NEW)
+        for sid, payload in enumerate(expected, 1):
+            self.clients[sid].update_cards.assert_called_once_with([payload])
+        self.assertTrue(all('card' not in row for row in self.records()))
+        plan, = db.plans('normalize_vc', 'P')
+        document = json.loads(plan['payload_json'])
+        self.assertEqual(document['scope']['items'], frozen)
+        receipt = document['receipt']['items']
+        self.assertEqual([(row['shopId'], row['status']) for row in receipt], [(1, 'accepted'), (2, 'accepted')])
+        self.assertTrue(all('card' not in row for row in receipt))
 
     def test_apply_reads_all_shops_first_and_preserves_each_shops_identifiers(self):
         before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file() and p != Path(paths.current.database)}
         self.assertEqual(self.cli('--all', '--apply'), 0)
-        self.assertEqual(self.events[:4], [('active', 1), ('trash', 1), ('active', 2), ('trash', 2)])
+        self.assert_shop_reads(self.events[:-2])
+        self.assertEqual(self.events[-2:], [('write', 1), ('write', 2)])
         for sid, nm in ((1, 101), (2, 202)):
             body = self.clients[sid].update_cards.call_args.args[0][0]
             self.assertEqual((body['nmID'], body['vendorCode']), (nm, NEW))
             self.assertEqual(body['sizes'], self.active[sid][0]['sizes'])
             self.clients[sid].save_media.assert_not_called()
             self.clients[sid].set_stocks.assert_not_called()
-        self.assertTrue(all(row['status'] == 'accepted' for row in self.records()))
+        self.assertEqual([(row['shopId'], row['status']) for row in self.records()], [(1, 'accepted'), (2, 'accepted')])
         self.assertTrue(all(row['cardReceipt']['taskId'] == 123 for row in self.records()))
         logs = json.dumps(self.documents())
         self.assertNotIn('fixture-secret', self.output.getvalue() + logs)
@@ -387,6 +412,28 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertTrue(self.documents()[0]['aborted'])
         self.assertNotIn('fixture-secret', self.output.getvalue() + json.dumps(self.documents()))
 
+    def test_concurrent_read_failure_finishes_other_reads_and_closes_all_clients(self):
+        reading = Barrier(2, timeout=5)
+        for sid, api in self.clients.items():
+            def read_together(read=self.reader(sid, 'active')):
+                reading.wait()
+                return read()
+            api.cards.side_effect = read_together
+
+        def fail_trash():
+            self.reader(2, 'trash')()
+            raise requests.Timeout()
+
+        self.clients[2].trash_cards.side_effect = fail_trash
+        self.assertEqual(self.cli('--all', '--apply'), 1)
+        self.assert_shop_reads(self.events)
+        self.assertEqual([(row['shopId'], row['status']) for row in self.records()], [(2, 'failed')])
+        self.assertTrue(self.documents()[0]['aborted'])
+        self.assertFalse(self.wrote)
+        for api in self.clients.values():
+            api.update_cards.assert_not_called()
+            api.close.assert_called_once_with()
+
     def test_duplicate_or_invalid_remote_identity_aborts_before_any_write(self):
         self.trash[2] = [card(202, 'different-vc')]
         self.assertEqual(self.cli('--all', '--apply'), 1)
@@ -466,7 +513,8 @@ class TestNormalizationCommand(unittest.TestCase):
                 raise requests.Timeout('fixture-secret-1')
             return good(batch)
         self.clients[1].update_cards.side_effect = write
-        self.assertEqual(self.cli('--all', '--apply'), 1)
+        with patch.object(payloads, 'MAX_BATCH_CARDS', 100):
+            self.assertEqual(self.cli('--all', '--apply'), 1)
         statuses = [r['status'] for r in self.records() if r['shopId'] == 1]
         self.assertEqual(statuses.count('accepted'), 100)
         self.assertEqual(statuses.count('unknown'), 100)
