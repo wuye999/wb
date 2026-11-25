@@ -58,8 +58,9 @@ class OpenAPIShop:
 class BCSClient:
     """BCS ERP 客户端"""
 
-    def __init__(self, session: BCSSession | None = None) -> None:
+    def __init__(self, session: BCSSession | None = None, *, auto_refresh: bool = True) -> None:
         self._session = session
+        self._auto_refresh = auto_refresh
 
     @property
     def base_url(self) -> str:
@@ -75,7 +76,14 @@ class BCSClient:
         read_only = method in READ_METHODS and not mutating
         attempts = max(1, retry) if read_only or (idempotent and not mutating) else 1
         current = None
-        if self._session is None and url.startswith(BCS_BASE_URL + '/'):
+        if not self._auto_refresh:
+            kwargs['allow_redirects'] = False
+            if self._session is None:
+                saved = credentials.get()
+                if not saved.token or not saved.limit_key:
+                    raise AuthenticationError('BCS 暂无已保存会话')
+                return self._send_json(method, url, saved.bcs_headers(), attempts, **kwargs)
+        elif self._session is None and url.startswith(BCS_BASE_URL + '/'):
             candidate = credentials.get()
             if auto_refresh_enabled(candidate):
                 current = candidate
@@ -182,8 +190,8 @@ class BCSClient:
                     raise NetworkError('读取 BCS 店铺列表超时')
                 timeout = min(3, remaining / 2)
                 d = self.request_json('GET', url, retry=1, timeout=(timeout, timeout), allow_redirects=False)
-                if isinstance(d, dict) and d.get('code') in (401, '401', 403, '403'):
-                    raise AuthenticationError('BCS 会话无效或缺少权限')
+            if isinstance(d, dict) and d.get('code') in (401, '401', 403, '403'):
+                raise AuthenticationError('BCS 会话无效或缺少权限')
             if not isinstance(d, dict) or d.get('code') != 200 or not isinstance(d.get('rows'), list):
                 raise PlatformApiError('BCS 店铺列表响应不完整')
             rows = d['rows']

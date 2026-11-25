@@ -55,6 +55,50 @@ class TestStep2(unittest.TestCase):
     def confirm(self, *rows):
         return self.cli('map', 'batch-set', stdin=json.dumps(list(rows)))
 
+    def test_review_price_empty_preview_has_no_plan_in_either_command(self):
+        cred = Mock(root_version='fixture')
+        cred.wb_shops.return_value = [{'shopId': 1, 'shopName': '测试店'}]
+        with patch.object(wb.credentials, 'get', return_value=cred), patch.object(wb.time, 'sleep'), \
+                patch.object(wb, 'make_session') as session, \
+                patch.object(wb, 'request', return_value={'error': False, 'data': {'quarantineGoods': None}}) as request:
+            for scope in ('ops', 'product'):
+                rc, reply, _ = self.cli(scope, 'review-price', '--shops', '1')
+                self.assertEqual((rc, reply['plan_id'], reply['summary']), (0, None, '所选店铺无待审核商品'))
+                self.assertEqual(reply['data']['scope'], [])
+                self.assertEqual(reply['data']['result']['failed_shops'], [])
+        self.assertEqual([call.args[1] for call in request.call_args_list], ['GET', 'GET'])
+        self.assertEqual(session.return_value.close.call_count, 2)
+
+    def test_review_price_empty_explicit_shop_filter_does_not_query_all(self):
+        cred = Mock(root_version='fixture')
+        cred.wb_shops.return_value = [{'shopId': 1, 'shopName': '测试店'}]
+        with patch.object(wb.credentials, 'get', return_value=cred), patch.object(wb, 'make_session') as session:
+            rc, reply, _ = self.cli('ops', 'review-price', '--shops', ',')
+        self.assertEqual((rc, reply['plan_id']), (2, None))
+        session.assert_not_called()
+
+    def test_review_price_partial_preview_freezes_only_the_shop_read_successfully(self):
+        cred = Mock(root_version='fixture')
+        cred.wb_shops.return_value = [{'shopId': sid, 'shopName': f'店{sid}'} for sid in (1, 2, 3)]
+        sessions = {sid: Mock() for sid in (1, 2, 3)}
+        review = {'id': 19, 'nmID': 101, 'vendorCode': A, 'oldPrice': 100, 'newPrice': 60}
+        responses = [wb.common.CookieExpiredError('private-fixture'), {'error': False, 'data': {}},
+                     {'error': False, 'data': {'quarantineGoods': [review]}}]
+        with patch.object(wb.credentials, 'get', return_value=cred), patch.object(wb.time, 'sleep'), \
+                patch.object(wb, 'make_session', side_effect=lambda shop, _: sessions[shop['shopId']]), \
+                patch.object(wb, 'request', side_effect=responses) as request:
+            rc, reply, stderr = self.cli('ops', 'review-price', '--all-shops')
+        self.assertEqual(rc, 1)
+        self.assertIsNotNone(reply['plan_id'])
+        self.assertIn('部分店铺', reply['summary'])
+        self.assertEqual([row['shopId'] for row in reply['data']['scope']], [3])
+        self.assertEqual(reply['data']['scope'][0]['items'][0]['id'], 19)
+        self.assertEqual([row['shop_id'] for row in reply['data']['result']['failed_shops']], [1, 2])
+        self.assertNotIn('private-fixture', stderr + str(reply))
+        self.assertEqual([call.args[1] for call in request.call_args_list], ['GET', 'GET', 'GET'])
+        for session in sessions.values():
+            session.close.assert_called_once()
+
     def test_doctor_default_has_no_auth_or_file_mutation(self):
         with patch.object(doctor, 'online_checks', side_effect=AssertionError('offline')) as online:
             code, reply, _ = self.cli('doctor')

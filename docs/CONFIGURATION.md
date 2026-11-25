@@ -14,12 +14,13 @@
 | `sync`、`catalog fetch` 的 `--source wb-openapi` | BCS 凭证和 BCS 各店保存的官方 apiKey，具备 Content、Prices and Discounts、Marketplace 读取权限 |
 | `ops publish-openapi`、`ops normalize-vc`、`listing sync-cards` | BCS 保存的各店中国区官方 apiKey，具备 Content 读写权限。上架另需 Marketplace 仓库读取和库存写入权限。见 [专门说明](OPEN_API_LISTINGS.md) |
 | `order group-ship` | BCS 保存的各店中国区 Marketplace apiKey、本地商品映射及价格表。提交供货需要写权限，导出 PDF 需要可选依赖 |
-| `ops price`、`ops stock`、`ops trash`、`ops discount`、`ops review-price` 的默认 WB 通道，`marketing enroll`、WB 后台客服和报表 | 对应 WB 店铺完整 Cookie 三件套，商品匹配还需本地数据 |
+| `ops price`、`ops stock`、`ops trash`、`ops discount`、`ops review-price` 的默认 WB 通道，`marketing enroll`、WB 后台客服及订单报表 | 对应 WB 店铺完整 Cookie 三件套，商品匹配还需本地数据 |
 | `ops publish`、`ops create-cards`、`ops replicate`、BCS 库存和下架的仓库解析 | BCS 与对应店铺 WB 凭证，以及本地价格、归属和快照。默认仓库解析走 WB |
 | `order match`、`order forecast`、`order process` | 马帮凭证、店铺映射、本地商品和库存 SKU 映射。取消单过滤可能读取 WB |
 | `report vc-sales` | 各目标店的 WB 后台会话，商品中文名使用本地映射。默认在 `exports/` 导出 Excel，可独立于飞书使用 |
 | `order register`、`order deduplicate`、`order stock-register`、`order stock-days`、`marketing audit` | 已登录的 lark-cli 用户、目标表和对应权限。登记与库存操作还需马帮配置，推广审计还需店铺快照和推广信息 |
 | `report products` | BCS 各店官方 apiKey、各店默认业务仓、本地快照和商品归属。无需飞书或 `lark-cli` |
+| `report ratings` | 本机已保存的 BCS 会话、BCS 各店具备评价权限的官方 apiKey。本地映射提供中文名和价格，在架快照用于补入零评价商品 |
 | `support ai-test`、客服草稿 | LLM key、完整请求端点和模型。自动发送还需 WB 凭证与显式 `--apply` |
 | `login bcs`、`login mabang`、`login wb` | 浏览器连接使用本机专用浏览器。BCS、马帮须先在本机配置对应登录名 |
 

@@ -1,4 +1,5 @@
 """feishu register。"""
+from collections import Counter
 from sellerops.integrations.mabang.client import get_mabang_cred
 from sellerops.integrations.mabang.session import MabangAuthError
 from sellerops.integrations.mabang.orders import fetch_pending_orders
@@ -22,6 +23,10 @@ from sellerops.integrations.feishu.tables import resolve_base
 from sellerops.integrations.feishu.tables import resolve_table
 
 ORDER_ID_FIELD = "订单编号"
+WB_SHIPPING = "WB发货订单（库存SKU留空）"
+UNRESOLVED_NAME = "有VC但中文名留空"
+MISSING_VC = "无BCS编号"
+BLANK_REASONS = (WB_SHIPPING, UNRESOLVED_NAME, MISSING_VC)
 
 def _flat_cell(v):
     """单元格值 → 去空格字符串（兼容 list/dict 富文本）"""
@@ -104,8 +109,8 @@ def _merge_pending(orders, cred, args):
         pend = fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
     except MabangAuthError:
         raise
-    except Exception as e:
-        print(f"  [警告] 待处理订单拉取失败（本次仅用 orderalllist 登记）: {str(e)[:120]}")
+    except Exception as error:
+        print(f"  [警告] 待处理订单拉取失败（{type(error).__name__}），本次仅用 orderalllist 登记")
         return orders
     seen = {_key(o) for o in orders}
     extra = [o for o in pend if _key(o) and _key(o) not in seen]
@@ -115,7 +120,7 @@ def _merge_pending(orders, cred, args):
     return orders + extra
 
 def build_records(args, *, group_shipping_ids=()):
-    """查询订单 → 目标店铺全量（含 NO_VC）→ 登记记录；返回 (records, skip_stats, cred)"""
+    """返回逐行候选（登记字段、留空原因）和真实排除计数。"""
     cred = get_mabang_cred()
     shop_map = cred["shop_map"]
     print(f"[配置] 目标店铺: {'、'.join(f'{k}→{v}' for k, v in shop_map.items())}")
@@ -150,10 +155,10 @@ def build_records(args, *, group_shipping_ids=()):
         print(f"\n[查询] 待处理订单（{scope}）...")
         orders = fetch_pending_orders(cred, days=args.days, page_size=args.page_size)
     if not orders:
-        return [], {"空": 0}, {}, cred
+        return [], {}
 
     vc2cn, vc2sku, vc2mode = mabang_load_local_mapping()
-    resolve_cn = _cn_resolver(vc2cn)      # 登记填名三级回退（映射表 → vc_known → 前缀码）
+    resolve_cn = _cn_resolver(vc2cn)
 
     # 各店快照 vendorCode→nmId（wb编号=下单店铺自己的码）
     shop_ids = {}
@@ -179,32 +184,31 @@ def build_records(args, *, group_shipping_ids=()):
             canceled |= ids
             if ids:
                 print(f"  [取消单] 店{sid}: {len(ids)} 单已取消")
-        except Exception as e:
-            print(f"  [警告] 店{sid} 取消单查询失败（跳过排除）: {e}")
+        except Exception as error:
+            print(f"  [警告] 店{sid} 取消单查询失败（{type(error).__name__}），跳过排除")
 
-    records, skip, notice = [], {}, {}
+    candidates, skip = [], Counter()
     for o in orders:
         p = mabang_parse_order(o)
         if p["shop"] not in shop_map:
-            skip["非目标店铺"] = skip.get("非目标店铺", 0) + 1
+            skip["非目标店铺"] += 1
             continue
         if str(p["platform_order_id"]) in canceled:
-            skip["已取消"] = skip.get("已取消", 0) + 1
+            skip["已取消"] += 1
             continue
         if not p["platform_order_id"]:
-            skip["无平台单号"] = skip.get("无平台单号", 0) + 1
+            skip["无平台单号"] += 1
             continue
         cn = resolve_cn(p["vc"])
-        if p["vc"] and cn is None:
-            # 仍会登记（用户规则：以本地数据为准，查不到就留空），仅计数提示
-            notice["VC不在映射表(仍登记·中文名留空)"] = notice.get("VC不在映射表(仍登记·中文名留空)", 0) + 1
-        elif not p["vc"]:
-            notice["无BCS编号(仍登记)"] = notice.get("无BCS编号(仍登记)", 0) + 1
+        reasons = []
+        if not p["vc"]:
+            reasons.append(MISSING_VC)
+        elif not cn:
+            reasons.append(UNRESOLVED_NAME)
         stock_sku = vc2sku.get(p['vc']) or None
         if vc2mode.get(p['vc']) == SHIPPING_MODE_WB or str(p["order_id"]) in group_shipping_ids:
             stock_sku = None
-            key = "发货群订单(库存SKU留空)"
-            notice[key] = notice.get(key, 0) + 1
+            reasons.append(WB_SHIPPING)
         wb_code = ""
         if p["vc"]:
             wb_code = str(snaps.get(p["shop"], {}).get(p["vc"]) or "")
@@ -228,21 +232,20 @@ def build_records(args, *, group_shipping_ids=()):
                         if wb_code else None),
             "订单量": parse_qty(p),
         }
-        records.append(rec)
-    return records, skip, notice, cred
+        candidates.append((rec, reasons))
+    return candidates, dict(skip)
 
 CSV_FIELDS = ["订单编号", "日期", "店铺", "BCS编号", "商品中文名", "库存SKU", "wb编号", "订单量", "结果"]
 
-def write_csv(records, existing_ids):
+def write_csv(records, *, written):
     def _w(f):
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
-        for r in records:
+        for r, skipped in records:
             row = {k: r.get(k) for k in CSV_FIELDS[:-1]}
             if r.get("店铺"):
                 row["店铺"] = ";".join(r["店铺"])
-            row["结果"] = "跳过-已登记" if str(r["订单编号"]) in existing_ids else (
-                "已写入" if r.get("_written") else "待写入")
+            row["结果"] = skipped or ("已写入" if written else "待写入")
             w.writerow(row)
 
     return common.write_csv_preferred(str(config.current.exports_dir), "飞书订单登记_{ts}.csv",
@@ -257,38 +260,57 @@ def run(args, *, group_shipping_ids=()):
         return 1
     base_token = resolve_base(url)
     table_id = resolve_table(base_token, args.table)
-    print(f"[表格] base_token={base_token} table_id={table_id}（{args.table}）")
+    print(f"[表格] {args.table}")
 
-    records, skip, notice, _cred = build_records(args, group_shipping_ids=group_shipping_ids)
-    if not records:
-        print("[完成] 无可登记订单")
-        return 0
-
-    scan = scan_order_ids(base_token, table_id)
-    existing = scan["ids"]
-    print(f"\n[去重] 表内记录 {scan['total']} 行 ｜ 唯一订单编号 {scan['unique']} 个"
-          f" ｜ 空编号 {scan['empty']} 行")
-    if scan["dup_ids"]:
-        top = sorted(scan["dup_ids"].items(), key=lambda kv: -kv[1])[:5]
-        print(f"[警告] 表内已存在重复订单编号 {len(scan['dup_ids'])} 个"
-              f"（多余 {scan['dup_rows']} 行）：" + "、".join(f"{k}×{n}" for k, n in top) +
-              " —— 建议执行 `python -m sellerops order deduplicate` 清理")
-    # 双重去重：① 表内已登记（existing）② 本批 records 自身（seen）
-    seen, todo, dup_in_batch = set(), [], 0
-    for r in records:
-        k = str(r["订单编号"])
+    candidates, skip = build_records(args, group_shipping_ids=group_shipping_ids)
+    scan = scan_order_ids(base_token, table_id) if candidates else None
+    existing = scan["ids"] if scan else set()
+    if scan is not None:
+        print(f"\n[去重] 表内记录 {scan['total']} 行 ｜ 唯一订单编号 {scan['unique']} 个"
+              f" ｜ 空编号 {scan['empty']} 行")
+        if scan["dup_ids"]:
+            top = sorted(scan["dup_ids"].items(), key=lambda kv: -kv[1])[:5]
+            print(f"[警告] 表内已存在重复订单编号 {len(scan['dup_ids'])} 个"
+                  f"（多余 {scan['dup_rows']} 行）：" + "、".join(f"{k}×{n}" for k, n in top) +
+                  " —— 建议执行 `python -m sellerops order deduplicate` 清理")
+    seen, todo, csv_rows = set(), [], []
+    existing_rows, duplicate_rows = 0, 0
+    candidate_blanks = dict.fromkeys(BLANK_REASONS, 0)
+    pending_blanks = dict.fromkeys(BLANK_REASONS, 0)
+    for record, reasons in candidates:
+        for reason in reasons:
+            candidate_blanks[reason] += 1
+        k = record["订单编号"]
+        skipped = ""
         if k in existing:
-            continue
-        if k in seen:
-            dup_in_batch += 1
-            continue
-        seen.add(k)
-        todo.append(r)
-    dup = len(records) - len(todo)
-    print(f"[圈定] 目标店铺订单 {len(records)} 单：将登记 {len(todo)} 单，"
-          f"已登记跳过 {dup - dup_in_batch} 单，本批内重复 {dup_in_batch} 单；真排除: " +
-          (" / ".join(f"{k}={v}" for k, v in sorted(skip.items())) or "无") +
-          ("；字段留空: " + " / ".join(f"{k}={v}" for k, v in sorted(notice.items())) if notice else ""))
+            existing_rows += 1
+            skipped = "跳过-已登记"
+        elif k in seen:
+            duplicate_rows += 1
+            skipped = "跳过-本批重复"
+        else:
+            seen.add(k)
+            todo.append(record)
+            for reason in reasons:
+                pending_blanks[reason] += 1
+        csv_rows.append((record, skipped))
+    scanned = len(candidates) + sum(skip.values())
+    args.output = {"scanned_rows": scanned, "excluded_rows": skip, "candidate_rows": len(candidates),
+                   "existing_rows": existing_rows, "duplicate_rows": duplicate_rows,
+                   "pending_orders": len(todo), "candidate_blank_counts": candidate_blanks,
+                   "pending_blank_counts": pending_blanks, "written_orders": 0}
+    if scan is not None:
+        args.output["table_scan"] = {key: scan[key] for key in ("total", "unique", "empty", "dup_rows")}
+    excluded = " / ".join(f"{reason}={count}" for reason, count in sorted(skip.items())) or "无"
+    print(f"[扫描] 进入登记筛选 {scanned} 行，排除 {sum(skip.values())} 行（{excluded}），"
+          f"去重前候选 {len(candidates)} 行，已登记跳过 {existing_rows} 行，本批重复 {duplicate_rows} 行")
+    print("[去重前候选行留空] " + " / ".join(f"{reason}={count}" for reason, count in candidate_blanks.items()))
+    print(f"[本次待登记] {len(todo)} 单，字段留空 " +
+          " / ".join(f"{reason}={count}" for reason, count in pending_blanks.items()))
+    if not candidates:
+        args.summary = "无可登记订单"
+        print(f"[完成] {args.summary}")
+        return 0
     # 供调用方（如 mabang-process / 人工）读取本次新登记订单
     for r in todo[:15]:
         print(f"  {r['订单编号']} | {r['店铺'][0] if r['店铺'] else '-'} | "
@@ -303,12 +325,13 @@ def run(args, *, group_shipping_ids=()):
         # 写入按日期从上到下（升序），自然追加到表尾
         todo.sort(key=lambda r: (r.get("日期") or "", str(r["订单编号"])))
         n = batch_create(base_token, table_id, todo)
+        args.output["written_orders"] = n
         print(f"\n[写入] 成功登记 {n} 条记录")
-        for r in todo:
-            r["_written"] = True
     else:
         print("\n[写入] 无新增（全部已登记）")
 
-    csv_path = write_csv(records, existing)
+    csv_path = write_csv(csv_rows, written=bool(args.output["written_orders"]))
+    if csv_path:
+        args.output["artifacts"] = {"csv": csv_path}
     print(f"[汇总] 明细: {csv_path or '（未生成，见上方警告）'}")
     return 0

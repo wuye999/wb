@@ -71,3 +71,25 @@ class TestPendingOrderScope(unittest.TestCase):
             {'BCS-AAAA-123':'fixture'}, {'BCS-AAAA-123':'SKU'},
             {'BCS-AAAA-123': SHIPPING_MODE_MABANG}, {'configured':'configured(1)'})
         self.assertEqual([r['status'] for r in classified],['REPLACE','SKIP_SHOP'])
+
+    def test_match_uses_mabang_warehouse_configuration_in_messages_and_writes(self):
+        order = {'id': 1, 'shopIdText': 'configured', 'order_ellipsis_other_title': '数量:BCS-AAAA-123'}
+        vc = 'BCS-AAAA-123'
+        for warehouse in (None, '42'):
+            output = io.StringIO()
+            cred = {'shop_map': {'configured': '测试店(1)'}, 'warehouse_id': warehouse}
+            with self.subTest(warehouse=warehouse), contextlib.redirect_stdout(output), \
+                    patch.object(matching, 'get_mabang_cred', return_value=cred), \
+                    patch.object(matching, 'fetch_pending_orders', return_value=[order]), \
+                    patch.object(matching, 'load_local_mapping',
+                                 return_value=({vc: '测试品'}, {vc: 'SKU'}, {vc: SHIPPING_MODE_MABANG})), \
+                    patch.object(matching, 'api_ready', return_value=True), patch.object(matching, 'write_csv'), \
+                    patch.object(matching, 'apply_replace', return_value=(1, 0)) as replace:
+                result = matching.match_orders(days=1, page_size=100, apply=True)
+            self.assertIn('马帮仓库 ID（mabang.warehouse_id）', output.getvalue())
+            self.assertNotIn('莫斯科', output.getvalue())
+            self.assertEqual(result.stopped, warehouse is None)
+            if warehouse is None:
+                replace.assert_not_called()
+            else:
+                self.assertEqual(replace.call_args.args[2], 42)

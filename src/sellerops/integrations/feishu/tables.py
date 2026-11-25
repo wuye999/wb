@@ -31,9 +31,12 @@ def invoke(args: list[str], payload: Any = None, timeout: float = 120) -> dict:
             payload_path = Path(directory) / 'payload.json'
             payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf8')
             command += ['--json', '@' + str(payload_path)]
-        result = subprocess.run(command, capture_output=True, text=True, encoding='utf8',
-                                errors='replace', timeout=timeout,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, encoding='utf8',
+                                    errors='replace', timeout=timeout,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('lark-cli 执行超时') from None
         if result.returncode:
             raise RuntimeError(f'lark-cli 执行失败，退出码 {result.returncode}')
         try:

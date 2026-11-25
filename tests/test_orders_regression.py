@@ -317,10 +317,96 @@ class TestRegression(unittest.TestCase):
                 with self.subTest(mode=mode, group_shipping_ids=group_shipping_ids), \
                         mock.patch.object(feishu_register, 'mabang_load_local_mapping',
                                           return_value=({vc: '测试品'}, {vc: 'SKU-LOCAL-1'}, {vc: mode})):
-                    records, _skip, notice, _cred = feishu_register.build_records(args, group_shipping_ids=group_shipping_ids)
-                    self.assertEqual(len(records), 1)
-                    self.assertEqual(records[0]['库存SKU'], expected)
-                    self.assertEqual(notice.get('发货群订单(库存SKU留空)', 0), int(expected is None))
+                    candidates, _ = feishu_register.build_records(args, group_shipping_ids=group_shipping_ids)
+                    [(record, reasons)] = candidates
+                    self.assertEqual(record['库存SKU'], expected)
+                    self.assertEqual(feishu_register.WB_SHIPPING in reasons, expected is None)
+
+    def test_feishu_register_counts_only_pending_rows_for_pending_blanks(self):
+        from contextlib import redirect_stderr, redirect_stdout
+        import csv
+        from io import StringIO
+        import json
+        from pathlib import Path
+        import tempfile
+        from unittest.mock import patch
+        from sellerops.cli.main import main
+        from sellerops.features.orders import feishu_register as register
+        from sellerops.persistence.price_book import SHIPPING_MODE_WB
+        from sellerops.settings import paths
+
+        def order(local_id, platform_id, vc="", shop="1"):
+            return {"id": local_id, "platformOrderId": platform_id, "shopIdText": shop,
+                    "paidTime": "2026-11-01 13:05:00",
+                    "order_ellipsis_other_title": f"数量:{vc}*1" if vc else ""}
+
+        wb_vc = "BCS-WBBB-123"
+        orders = [order("a", "new", wb_vc), order("b", "new"), order("c", "registered", "BCS-NAME-456"),
+                  order("d", "registered"), order("e", "outside", shop="2"), order("f", "canceled", wb_vc)]
+        self.addCleanup(paths.configure, paths.current.data_dir)
+        for apply in (False, True):
+            out, err = StringIO(), StringIO()
+            with self.subTest(apply=apply), tempfile.TemporaryDirectory() as temporary, \
+                    redirect_stdout(out), redirect_stderr(err), \
+                    patch.object(register, 'get_mabang_cred', return_value={'shop_map': {'1': '示例店(1)'}}), \
+                    patch.object(register, 'fetch_pending_orders', return_value=orders), \
+                    patch.object(register.ProductSnapshotRepository, 'load_snapshot_document', return_value=None), \
+                    patch('sellerops.integrations.wildberries.client.fetch_canceled_ids', return_value={'canceled'}), \
+                    patch.object(register, 'mabang_load_local_mapping',
+                                 return_value=({wb_vc: '示例品'}, {wb_vc: 'SKU1'}, {wb_vc: SHIPPING_MODE_WB})), \
+                    patch.object(register, 'resolve_base', return_value='private-fixture-base'), \
+                    patch.object(register, 'resolve_table', return_value='fixture-table'), \
+                    patch.object(register, 'list_records', return_value=[{'订单编号': 'registered'}]), \
+                    patch.object(register, 'batch_create', side_effect=lambda base, table, records: len(records)) as create:
+                args = ['--data-dir', temporary, 'order', 'register', '--scope', 'pending',
+                        '--url', 'https://fixture.invalid', '--json']
+                self.assertEqual(main(args + (['--apply'] if apply else [])), 0)
+                data = json.loads(out.getvalue())['data']
+                self.assertEqual([data[key] for key in ('scanned_rows', 'candidate_rows', 'existing_rows',
+                                                        'duplicate_rows', 'pending_orders', 'written_orders')],
+                                 [6, 4, 2, 1, 1, int(apply)])
+                self.assertEqual(data['excluded_rows'], {'非目标店铺': 1, '已取消': 1})
+                self.assertEqual(list(data['pending_blank_counts'].values()), [1, 0, 0])
+                self.assertEqual(list(data['candidate_blank_counts'].values()), [1, 1, 2])
+                self.assertEqual(data['table_scan']['total'], 1)
+                self.assertNotIn('private-fixture-base', out.getvalue() + err.getvalue())
+                self.assertIn('[本次待登记] 1 单', err.getvalue())
+                with Path(data['artifacts']['csv']).open(encoding='utf-8-sig', newline='') as file:
+                    csv_rows = list(csv.DictReader(file))
+                self.assertEqual([row['结果'] for row in csv_rows],
+                                 ['已写入' if apply else '待写入', '跳过-本批重复', '跳过-已登记', '跳过-已登记'])
+                if apply:
+                    create.assert_called_once()
+                    [fields] = create.call_args.args[2]
+                    self.assertEqual(fields['订单编号'], 'new')
+                    self.assertIsNone(fields['库存SKU'])
+                    self.assertEqual(set(fields), set(register.CSV_FIELDS[:-1]) | {'商品链接'})
+                else:
+                    create.assert_not_called()
+
+    def test_feishu_register_has_zero_pending_blanks_with_no_candidates_or_all_registered(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from sellerops.features.orders import feishu_register as register
+
+        existing = {'ids': {'history'}, 'total': 1, 'unique': 1, 'empty': 0, 'dup_ids': {}, 'dup_rows': 0}
+        candidate = ({'订单编号': 'history'}, [register.MISSING_VC])
+        for candidates in ([], [candidate]):
+            args = SimpleNamespace(url='https://fixture.invalid', table='Orders', apply=True)
+            with self.subTest(candidates=candidates), redirect_stdout(StringIO()), \
+                    patch.object(register, 'resolve_base'), patch.object(register, 'resolve_table'), \
+                    patch.object(register, 'build_records', return_value=(candidates, {'已取消': 1})), \
+                    patch.object(register, 'scan_order_ids', return_value=existing) as scan, \
+                    patch.object(register, 'write_csv'), patch.object(register, 'batch_create') as create:
+                self.assertEqual(register.run(args), 0)
+            self.assertEqual(scan.call_count, len(candidates))
+            self.assertEqual(args.output['pending_orders'], 0)
+            self.assertEqual(sum(args.output['pending_blank_counts'].values()), 0)
+            self.assertEqual(args.output['existing_rows'], len(candidates))
+            self.assertEqual(args.output['scanned_rows'], len(candidates) + 1)
+            create.assert_not_called()
 
     def test_mabang_process_skips_feishu_when_address_or_cli_is_missing(self):
         from contextlib import redirect_stdout

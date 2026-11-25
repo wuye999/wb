@@ -257,6 +257,8 @@ python run.py order register --scope all --date 2026-10-01
 
 用户确认后再加 --apply。去重命令只清已有重复记录，库存全量登记则会清空并重建库存表；都不能当作每天的无害初始化。`order stock-days` 默认补今天和更新现有日期列，显式 --begin/--date 会进入可删除旧日期列的区间模式，详见 [数据契约](DATA.md)。
 
+`order register` 和 `order process` 的登记步骤分别显示「本次待登记」和「去重前候选行」的留空量。本次待登记按订单编号去除表内已登记及本批重复后计数。扫描汇总另列候选行、真实排除、表内已登记跳过和本批重复。CSV 的重复行标为「跳过-本批重复」。`--json` 可读 `data.pending_orders`、`data.pending_blank_counts`、`data.candidate_blank_counts` 和导出路径 `data.artifacts.csv`。
+
 ### WB 发货群供货与 PDF
 
 `order group-ship` 单独查询 BCS 配置店铺的 WB FBS 新增订单。逐店按完整 VC 匹配商品价格表，在本店已确认的默认业务仓内为「WB发货」商品组建供货。同店同名合为一个供货。目标仓订单未认领或发货方式留空、无效时列为阻止项。店铺无法确认唯一可用的默认业务仓时停止该店，「WB发货」订单缺少可确认的仓库 ID 时阻止该单，明确属于其他仓库的订单跳过。
@@ -286,6 +288,16 @@ python run.py report products --shops 1001,1002 --feedback-days 365 --out export
 ```
 
 报告按 UTC+8 下单日统计，含今天。`--order-days` 控制退货统计窗口，默认 30 天。实际采集至少近 14 天，有效出单固定展示近 7/14 天，口径 A 仅计在途和买断，每行一件。评价默认取接口可访问的历史。默认输出本机目标店存在的低评分（≤3.5）、高退货率（完单口径≥30%）商品，以及排除已知风险且中文名可匹配价格表的近期出单候选。简洁表中的风险和缺口按 VC 最长数字段判断。加 `--details` 可查看订单明细和各项汇总。缺失数据会标为未知，报告有错误时仍导出并返回非零。[报告说明](PRODUCT_REPORT.md)
+
+`report ratings` 使用 BCS 店铺对应的 WB Open API 令牌读取未处理、已处理和归档评价，按评价 ID 去重后以 UTC+8 的创建日筛选。默认近 365 天，含今天。`--days 0` 取接口可访问的全部历史。`--wb-region` 可选 `ru`（默认）或 `cn`。BCS 会话失效时通过 `login bcs` 更新。
+
+```powershell
+python run.py report ratings --shops 1001 --days 7 --stars 4,5 --json
+python run.py report ratings --shops 1001 --days 30 --negative
+python run.py report ratings --shops 1001 --days 7 --min-feedbacks 0
+```
+
+同店同一 `nmId` 汇总评价数、五档星数和窗口平均分（每条评价同权）。好评用 `--stars 4,5`，差评用 `--negative` 或 `--bad`（1 或 2 星）。命中商品仍展示全星级分布。可按完整中文名、名称子串、前缀或 VC 子串组合筛选。`--limit` 在每店完整聚合并排序后截取送入筛选的商品。`--min-feedbacks 0` 按同店在架快照补入零评价商品，零评价行的评分列为 0。评分条件仅匹配至少有一条评价的商品。返回非零时查看 `data.failed_shops`，可确认的结果仍导出，文件路径见 `data.artifacts`。
 
 ```powershell
 python run.py report vc-sales --json

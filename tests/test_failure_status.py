@@ -225,6 +225,16 @@ class TestWarehouseAndParameters(unittest.TestCase):
 
 
 class TestOrderFailures(unittest.TestCase):
+    def test_feishu_timeout_does_not_leak_cli_arguments(self):
+        from subprocess import TimeoutExpired
+        from sellerops.integrations.feishu import tables
+        command = ['synthetic-cli', 'base', '+table-list', '--base-token', 'private-fixture']
+        with patch.object(tables, 'find_lark_cli', return_value='synthetic-cli'), \
+                patch.object(tables.subprocess, 'run', side_effect=TimeoutExpired(command, 1)):
+            with self.assertRaisesRegex(RuntimeError, '^lark-cli 执行超时$') as error:
+                tables.invoke(command[2:], timeout=1)
+            self.assertNotIn('private-fixture', str(error.exception))
+
     def test_feishu_creation_requires_complete_unique_record_ids(self):
         from sellerops.features.orders import feishu_register as register
         for response in [{}, {'record_id_list': ['r1']}, {'record_id_list': ['r1', 'r1']}]:

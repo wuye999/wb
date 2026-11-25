@@ -79,6 +79,8 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
     p.add_argument("--apply", action="store_true", help="兼容保留；确认价格审核计划单后，用 apply --plan 提交")
     add_shop_scope(p)
     p.add_argument("--limit", type=int, default=0, help="每店最多审核 N 个（0=全部）")
+    if not planned_only:
+        p.add_argument("--json", action="store_true", help="输出单个 JSON 对象")
     bind(p, 'sellerops.features.products.price_review', 'run')
 
 

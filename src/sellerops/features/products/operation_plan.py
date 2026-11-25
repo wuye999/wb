@@ -47,7 +47,7 @@ def preview(args: Namespace, prepare: Callable[[Namespace], int]) -> int:
     args.plan_id = plan_id
     args.summary = f'已保存计划单 {plan_id}'
     if answer:
-        args.summary += '，部分商品未通过检查'
+        args.summary += '，部分店铺待审核清单读取失败' if action == 'review-price' else '，部分商品未通过检查'
     args.next_action = f'展示商品、店铺和目标值，运营确认后运行 apply --plan {plan_id}'
     print(f'计划单 {plan_id}。{args.next_action}')
     return answer

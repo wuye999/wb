@@ -1,35 +1,30 @@
-"""
-sellerops 商品链接评分与买家评价查询 (ratings)
-
-通过 WB 卖家后台官方「内容分析 - 商品评分与评价」接口查询各店铺在架商品的评分、
-评价数及各星级分布，并与权威商品价格表（data/商品价格表.xlsx）级联匹配，
-导出包含 BCS编号、wb编号、中文名、最低售价、尺寸、前缀码等维度的统计报表。
-
-用法：
-    python -m sellerops report ratings [--shops 9352] [--rating 1] [--one-star] [--max-rating 2] [--out path.xlsx]
-"""
+"""从 WB Open API 三路评价明细统计商品链接的窗口评分。"""
+from collections import Counter, defaultdict
+from contextlib import closing
 import csv
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from math import isfinite
 import os
-import time
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, List
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from sellerops.core import utils as common
-from sellerops.settings import paths as config
-from sellerops.settings import credentials
-from sellerops.integrations.wildberries import client as wb_api
-from sellerops.integrations.wildberries import feedback as fbc
+from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
 from sellerops.domain.models import ProductRatingItem
+from sellerops.domain.snapshot_values import positive_id
 from sellerops.domain.vendor_codes import extract_vc_prefix
+from sellerops.features.catalog.shops import archive_set
+from sellerops.features.reports.product_report_data import TZ, timestamp
+from sellerops.integrations.bcs.client import BCSClient, OpenAPIShop, sync_failure_reason
+from sellerops.integrations.wildberries.open_api import WBOpenAPI, OpenAPIResponseError
 from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
-from sellerops.persistence.product_index import NmResolver
-
-SHOP_SLEEP = 0.5
+from sellerops.persistence.snapshots import ProductSnapshotRepository
+from sellerops.settings import paths as config
 
 # 报表表头定义（严格对齐用户需求前8列，后续附加详细分析列）
 REPORT_HEADERS = [
@@ -53,10 +48,7 @@ REPORT_HEADERS = [
 ]
 
 
-def _match_price_table(vc: str, nm_id: int, entries: dict, nm_resolver: Optional[NmResolver] = None) -> dict:
-    """Use confirmed ownership and only use a shop-local reverse lookup for an absent VC."""
-    if not vc and nm_resolver:
-        vc = nm_resolver.resolve(nm_id)['vc']
+def _match_price_table(vc: str, entries: dict) -> dict:
     if not vc:
         return {}
     row = db.resolve_vc(vc, entries)
@@ -66,75 +58,45 @@ def _match_price_table(vc: str, nm_id: int, entries: dict, nm_resolver: Optional
             'prefix': extract_vc_prefix(vc) or ''}
 
 
-def _item_matches_filter(item: ProductRatingItem, args: Any) -> bool:
+def _item_matches_filter(item: ProductRatingItem, args: Any, stars: set[int]) -> bool:
     """判定单个商品是否满足全部筛选条件"""
     # 评价数门槛 (默认 >= 1)
-    min_feedbacks = getattr(args, "min_feedbacks", 1)
-    if min_feedbacks is not None and item.feedback_count < min_feedbacks:
+    if item.feedback_count < args.min_feedbacks:
         return False
 
     # 差评筛选 (1星 或 2星)
-    if getattr(args, "negative", False):
-        if item.one_star <= 0 and item.two_star <= 0:
-            return False
+    if args.negative and item.one_star + item.two_star == 0:
+        return False
 
     # 1 星筛选
-    if getattr(args, "one_star", False) and item.one_star <= 0:
-        return False
-    min_one_star = getattr(args, "min_one_star", 0)
-    if min_one_star > 0 and item.one_star < min_one_star:
+    if item.one_star < max(args.min_one_star, int(args.one_star)):
         return False
 
     # 2 星筛选
-    if getattr(args, "two_star", False) and item.two_star <= 0:
+    if args.two_star and item.two_star == 0:
         return False
 
     # 指定星级评论筛选 (如 --stars 1,2)
-    stars_opt = getattr(args, "stars", "")
-    if stars_opt:
-        want_stars = {int(x.strip()) for x in str(stars_opt).split(",") if x.strip().isdigit()}
-        matched_star = False
-        if 1 in want_stars and item.one_star > 0:
-            matched_star = True
-        if 2 in want_stars and item.two_star > 0:
-            matched_star = True
-        if 3 in want_stars and item.three_star > 0:
-            matched_star = True
-        if 4 in want_stars and item.four_star > 0:
-            matched_star = True
-        if 5 in want_stars and item.five_star > 0:
-            matched_star = True
-        if not matched_star:
-            return False
-
-    # 评分精确匹配 (如 --rating 1 或 1.0)
-
-    exact_rating = getattr(args, "rating", None)
-    if exact_rating is not None:
-        if abs(item.feedback_rating - float(exact_rating)) > 0.05:
-            return False
-
-    # 评分区间
-    min_rating = getattr(args, "min_rating", None)
-    if min_rating is not None and item.feedback_rating < float(min_rating):
-        return False
-    max_rating = getattr(args, "max_rating", None)
-    if max_rating is not None and item.feedback_rating > float(max_rating):
+    counts = (item.one_star, item.two_star, item.three_star, item.four_star, item.five_star)
+    if stars and not any(counts[star - 1] for star in stars):
         return False
 
-    # 中文名模糊筛选
-    name_kw = getattr(args, "name", "")
-    if (name_kw and name_kw != item.cn_name) or (getattr(args, "name_contains", None) and args.name_contains not in (item.cn_name or "")):
+    if not item.feedback_count and any(value is not None for value in (args.rating, args.min_rating, args.max_rating)):
+        return False
+    if args.rating is not None and round(abs(item.feedback_rating - args.rating), 12) > 0.05:
+        return False
+    if args.min_rating is not None and item.feedback_rating < args.min_rating:
+        return False
+    if args.max_rating is not None and item.feedback_rating > args.max_rating:
         return False
 
-    # 前缀码筛选
-    prefix_kw = getattr(args, "prefix", "")
-    if prefix_kw and prefix_kw.upper() != (item.prefix or "").upper():
+    if args.name and args.name != item.cn_name:
         return False
-
-    # vc 筛选
-    vc_kw = getattr(args, "vc", "")
-    if vc_kw and vc_kw.upper() not in (item.vendor_code or "").upper():
+    if args.name_contains and args.name_contains not in item.cn_name:
+        return False
+    if args.prefix and args.prefix.upper() != item.prefix.upper():
+        return False
+    if args.vc and args.vc.upper() not in item.vendor_code.upper():
         return False
 
     return True
@@ -227,148 +189,231 @@ def _export_excel(items: List[ProductRatingItem], xlsx_path: str) -> None:
     wb.save(xlsx_path)
 
 
+class RatingsDataError(ValueError):
+    """评价明细结构无效，消息不含远端字段内容。"""
+
+
+@dataclass(slots=True)
+class FeedbackCounts:
+    stars: Counter[int] = field(default_factory=Counter)
+    vendor_codes: set[str] = field(default_factory=set)
+    title: str = ""
+    title_date: datetime | None = None
+
+
+def _feedback_window(days: int, now: datetime | None = None) -> tuple[datetime | None, datetime]:
+    if days < 0:
+        raise ValueError("--days 必须大于或等于 0")
+    today = timestamp(now or datetime.now(TZ)).replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        return (today - timedelta(days=days - 1) if days else None, today + timedelta(days=1))
+    except OverflowError:
+        raise ValueError("--days 超出可表示的日期范围") from None
+
+
+def _text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _group_feedbacks(rows: list[dict], start: datetime | None, end: datetime) -> dict[int, FeedbackCounts]:
+    grouped: dict[int, FeedbackCounts] = defaultdict(FeedbackCounts)
+    for raw in rows:
+        try:
+            created = timestamp(raw.get("createdDate"))
+        except (AttributeError, ValueError, TypeError, OverflowError, OSError):
+            raise RatingsDataError("评价缺少可解析的创建时间") from None
+        if created >= end or (start is not None and created < start):
+            continue
+        details = raw.get("productDetails")
+        nm_id = positive_id(details.get("nmId")) if isinstance(details, dict) else None
+        stars = raw.get("productValuation")
+        if nm_id is None or isinstance(stars, bool) or stars not in (1, 2, 3, 4, 5):
+            raise RatingsDataError("窗口内评价缺少有效商品码或星级")
+        group = grouped[nm_id]
+        group.stars[int(stars)] += 1
+        vc = _text(details.get("supplierArticle"))
+        if vc:
+            group.vendor_codes.add(vc)
+        title = _text(details.get("productName"))
+        if title and (group.title_date is None or created > group.title_date):
+            group.title, group.title_date = title, created
+    return grouped
+
+
+def _snapshot_index(sid: int) -> tuple[dict[int, dict], str, str]:
+    try:
+        document = ProductSnapshotRepository.load_snapshot_document(sid)
+    except Exception as error:
+        return {}, "", f"本店快照读取失败（{type(error).__name__}）"
+    if document is None:
+        return {}, "", "本店商品快照缺失"
+    indexed = {}
+    invalid = 0
+    for row in document["rows"]:
+        nm_id = positive_id(row.get("nmId") or row.get("nmID"))
+        if nm_id is not None:
+            indexed[nm_id] = row
+        elif not row.get("trashedAt"):
+            invalid += 1
+    issue = f"本店快照有 {invalid} 个在架商品缺少有效商品码" if invalid else ""
+    return indexed, str(document.get("fetchedAt") or "未记录"), issue
+
+
+def _shop_ratings(shop: OpenAPIShop, grouped: dict[int, FeedbackCounts], entries: dict,
+                  include_zero: bool) -> tuple[list[ProductRatingItem], str]:
+    snapshot = {}
+    snapshot_issue = ""
+    if include_zero or any(not group.vendor_codes or not group.title for group in grouped.values()):
+        snapshot, fetched_at, snapshot_issue = _snapshot_index(shop.id)
+        if include_zero:
+            print(f"  [零评价范围] 本店在架快照时间 {fetched_at or '不可用'}")
+        if snapshot_issue:
+            print(f"  [警告] {snapshot_issue}")
+    nm_ids = set(grouped)
+    if include_zero:
+        nm_ids.update(nm for nm, row in snapshot.items() if not row.get("trashedAt"))
+    items = []
+    conflicts = 0
+    for nm_id in sorted(nm_ids):
+        group = grouped.get(nm_id) or FeedbackCounts()
+        local = snapshot.get(nm_id, {})
+        if len(group.vendor_codes) > 1:
+            conflicts += 1
+            vc = ""
+        else:
+            vc = next(iter(group.vendor_codes), "") or _text(local.get("vendorCode") or local.get("goodsCode"))
+        title = group.title or _text(local.get("title"))
+        counts = group.stars
+        count = sum(counts.values())
+        average = sum(star * amount for star, amount in counts.items()) / count if count else 0.0
+        info = _match_price_table(vc, entries)
+        items.append(ProductRatingItem(
+            shop_id=shop.id, shop_name=shop.name, nm_id=nm_id, vendor_code=vc, name=title,
+            feedback_rating=average, feedback_count=count, one_star=counts[1], two_star=counts[2],
+            three_star=counts[3], four_star=counts[4], five_star=counts[5], cn_name=info.get("cn") or "",
+            price=info.get("minimum_price"), dimensions=info.get("dim") or "", prefix=info.get("prefix") or "",
+            source_wb="WB Open API 评价" if count else "本店快照",
+        ))
+    if conflicts:
+        print(f"  [警告] {conflicts} 个商品在评价中有冲突的完整 VC，归属字段留空")
+    return items, snapshot_issue if include_zero else ""
+
+
+def _read_failure(error: Exception) -> str:
+    if isinstance(error, AuthenticationError):
+        return "WB 令牌失效或评价类别权限不足"
+    if isinstance(error, RateLimitError):
+        return "WB 评价接口限流"
+    if isinstance(error, NetworkError):
+        return "WB 评价接口网络读取失败"
+    if isinstance(error, OpenAPIResponseError):
+        return error.public_reason
+    if isinstance(error, RatingsDataError):
+        return str(error)
+    return f"评分查询失败（{type(error).__name__}）"
+
+
+def _product_order(args: Any) -> str:
+    if args.negative or args.two_star or args.stars:
+        return "feedback_count"
+    if args.one_star or args.min_one_star > 0 or (args.rating is not None and args.rating <= 1.0):
+        return "one_star"
+    return "feedback_rating"
+
+
 def run(args: Any) -> int:
-    """商品链接评分查询与报表导出主入口"""
+    """商品链接评分查询与报表导出主入口。"""
     common.ensure_utf8_stdout()
+    start, end = _feedback_window(args.days)
+    through = (end - timedelta(days=1)).date().isoformat()
+    since = start.date().isoformat() if start else None
+    if args.limit < 0 or args.min_feedbacks < 0:
+        raise ValueError("--limit 和 --min-feedbacks 必须大于或等于 0")
+    if any(value is not None and not isfinite(value) for value in (args.rating, args.min_rating, args.max_rating)):
+        raise ValueError("评分筛选须使用有限数值")
+    star_tokens = [part.strip() for part in args.stars.split(",")] if args.stars else []
+    if any(part not in {"1", "2", "3", "4", "5"} for part in star_tokens):
+        raise ValueError("--stars 必须为 1–5 的逗号分隔星级")
+    stars = {int(part) for part in star_tokens}
+    shop_tokens = [part.strip() for part in args.shops.split(",")] if args.shops else []
+    if any(not part.isascii() or not positive_id(part) for part in shop_tokens):
+        raise ValueError("--shops 必须为逗号分隔的正整数店铺 ID")
+    wanted = {int(part) for part in shop_tokens}
+    failed_shops: list[dict] = []
+    args.output = {"rows": 0, "failed_shops": failed_shops, "wb_region": args.wb_region,
+                   "period": {"from": since, "through": through, "timezone": "UTC+8"}}
 
-    cred = credentials.get()
-    wb_shops = cred.wb_shops()
-    if not wb_shops:
-        args.summary = "凭证文件中没有已配置 WB 会话的店铺"
+    try:
+        directory = BCSClient(auto_refresh=False).fetch_open_api_shops()
+    except Exception as error:
+        args.summary = f"BCS 店铺目录读取失败：{sync_failure_reason(error)}"
+        if isinstance(error, AuthenticationError):
+            args.next_action = "通过 login bcs 更新本机 BCS 会话后再查询"
         print(f"[错误] {args.summary}")
         return 1
 
-    pairs = [(s, common.to_int(s.get("shopId"))) for s in wb_shops]
-    if getattr(args, "shops", ""):
-        want = {int(x.strip()) for x in args.shops.split(",") if x.strip()}
-        pairs = [p for p in pairs if p[1] in want]
-
-    if not pairs:
-        args.summary = "没有匹配的店铺，请核对 --shops 或店铺凭证"
+    archived = archive_set()
+    shops = [shop for shop in directory if shop.id not in archived and (not wanted or shop.id in wanted)]
+    for sid in sorted(wanted - {shop.id for shop in shops}):
+        reason = "本地店铺已归档" if sid in archived else "BCS 店铺目录未找到该店"
+        failed_shops.append({"shop_id": sid, "error": reason})
+        print(f"[警告] 店铺 {sid}：{reason}")
+    if not shops:
+        args.summary = "BCS 目录中没有符合条件的在营店铺"
         print(f"[错误] {args.summary}")
         return 1
+    shop_desc = ", ".join(f"{shop.name}({shop.id})" for shop in shops)
+    period = f"{since} 至 {through}（近 {args.days} 天，含今天）" if since else f"接口可访问的全部历史至 {through}"
+    print(f"==== WB 商品链接评分查询（{args.wb_region}） ====")
+    print(f"目标店铺 ({len(shops)} 个): {shop_desc}")
+    print(f"统计周期（UTC+8）: {period}")
 
-    shop_desc = ", ".join(f"{s['shopName']}({sid})" for s, sid in pairs)
-    days = getattr(args, "days", 365) or 365
-    start_d, end_d = fbc.default_period_dates(days)
-    print(f"==== WB 商品链接评分查询 ====")
-    print(f"目标店铺 ({len(pairs)} 个): {shop_desc}")
-    print(f"统计周期: {start_d} 至 {end_d} (近 {days} 天)")
-
-    # 预载入价格表与名称解析器
     MappingRepository.load_price_book(require_price=False)
     entries = db.vc_entries()
-
-    # 智能排序优化：若筛选 1 星，则按 oneStar desc 排序拉取；若看评价数，按 feedbackCount desc
-    order_field = "feedbackRating"
-    order_mode = "desc"
-    stop_one_star = False
-    stop_feedback = False
-
-    if getattr(args, "negative", False) or getattr(args, "two_star", False) or getattr(args, "stars", ""):
-        order_field = "feedbackCount"
-        order_mode = "desc"
-        stop_feedback = True
-    elif getattr(args, "one_star", False) or getattr(args, "min_one_star", 0) > 0:
-        order_field = "oneStar"
-        order_mode = "desc"
-        stop_one_star = True
-    elif getattr(args, "rating", None) is not None and float(args.rating) <= 1.0:
-        # 评分为 1 的商品
-        order_field = "oneStar"
-        order_mode = "desc"
-
-
-    matched_items: List[ProductRatingItem] = []
-    failed_shops = []
-    total_scanned = 0
-
-    for shop, sid in pairs:
-        name = shop.get("shopName") or f"shop_{sid}"
-        print(f"\n正在查询店铺: {name} (ID: {sid})...")
+    order_field = _product_order(args)
+    date_from = int(start.timestamp()) - 1 if start is not None else None
+    date_to = int(end.timestamp())
+    matched_items: list[ProductRatingItem] = []
+    total_scanned, complete_shops = 0, 0
+    for shop in shops:
+        print(f"\n正在查询店铺: {shop.name} (ID: {shop.id})...")
+        if not shop.api_key:
+            reason = "BCS 未配置本店 WB apiKey"
+            failed_shops.append({"shop_id": shop.id, "error": reason})
+            print(f"  [警告] {reason}")
+            continue
         try:
-            session = wb_api.make_session(shop, cred.root_version)
-            nm_resolver = NmResolver(sid)
-
-            shop_scanned = 0
-            shop_matched = 0
-
-            for raw in fbc.iter_feedback_products(
-                session=session,
-                start_date=start_d,
-                end_date=end_d,
-                order_by_field=order_field,
-                order_by_mode=order_mode,
-                page_size=100,
-                limit=getattr(args, "limit", 0) or 0,
-                stop_on_zero_one_star=stop_one_star,
-                stop_on_zero_feedback=stop_feedback,
-            ):
-                shop_scanned += 1
-                total_scanned += 1
-
-                nm_id = common.to_int(raw.get("nmId"))
-                vc = str(raw.get("vendorCode") or "").strip()
-                p_name = str(raw.get("name") or "").strip()
-                fb_rating = float(raw.get("feedbackRating", {}).get("current", 0) or 0)
-                fb_count = common.to_int(raw.get("feedbackCount", {}).get("current", 0))
-                one_s = common.to_int(raw.get("oneStar", {}).get("current", 0))
-                two_s = common.to_int(raw.get("twoStar", {}).get("current", 0))
-                three_s = common.to_int(raw.get("threeStar", {}).get("current", 0))
-                four_s = common.to_int(raw.get("fourStar", {}).get("current", 0))
-                five_s = common.to_int(raw.get("fiveStar", {}).get("current", 0))
-                quality_rating = float(raw.get("rating") or 0)
-                is_shadowed = bool(raw.get("isShadowed", False))
-
-                # 匹配价格表
-                p_info = _match_price_table(vc, nm_id, entries, nm_resolver)
-
-                item = ProductRatingItem(
-                    shop_id=sid,
-                    shop_name=name,
-                    nm_id=nm_id,
-                    vendor_code=vc,
-                    name=p_name,
-                    rating=quality_rating,
-                    feedback_rating=fb_rating,
-                    feedback_count=fb_count,
-                    one_star=one_s,
-                    two_star=two_s,
-                    three_star=three_s,
-                    four_star=four_s,
-                    five_star=five_s,
-                    is_shadowed=is_shadowed,
-                    cn_name=p_info.get("cn") or "",
-                    price=p_info.get("minimum_price"),
-                    dimensions=p_info.get("dim") or "",
-                    prefix=p_info.get("prefix") or "",
-                    source_wb="商品评分API",
-                )
-
-                if _item_matches_filter(item, args):
-                    matched_items.append(item)
-                    shop_matched += 1
-
-            print(f"  → 本店扫描: {shop_scanned} 件，命中筛选: {shop_matched} 件")
-            time.sleep(SHOP_SLEEP)
-
-        except common.CookieExpiredError as e:
-            failed_shops.append({'shop_id': sid, 'error': 'WB 会话已失效'})
-            print(f"  [警告] 店铺 {name} Cookie 已失效: {e}（跳过该店）")
+            with closing(WBOpenAPI(shop.api_key, region=args.wb_region)) as api:
+                raw_feedbacks = api.feedbacks(date_from=date_from, date_to=date_to)
+            grouped = _group_feedbacks(raw_feedbacks, start, end)
+            shop_items, snapshot_issue = _shop_ratings(shop, grouped, entries, args.min_feedbacks == 0)
+        except Exception as error:
+            reason = _read_failure(error)
+            failed_shops.append({"shop_id": shop.id, "error": reason})
+            print(f"  [警告] {reason}（该店中止）")
             continue
-        except Exception as e:
-            failed_shops.append({'shop_id': sid, 'error': '评分查询失败'})
-            print(f"  [警告] 店铺 {name} 查询失败: {e}（跳过该店）")
-            continue
+        if snapshot_issue:
+            failed_shops.append({"shop_id": shop.id, "error": f"零评价商品覆盖不完整：{snapshot_issue}"})
+        else:
+            complete_shops += 1
+        feedback_count = sum(item.feedback_count for item in shop_items)
+        shop_items.sort(key=lambda item: (-getattr(item, order_field), item.nm_id))
+        if args.limit:
+            shop_items = shop_items[:args.limit]
+        selected = [item for item in shop_items if _item_matches_filter(item, args, stars)]
+        matched_items.extend(selected)
+        total_scanned += len(shop_items)
+        print(f"  → 本店窗口评价 {feedback_count} 条，进入筛选 {len(shop_items)} 件，命中 {len(selected)} 件")
 
-    print(f"\n==========================================")
-    print(f"【汇总统计】共扫描 {total_scanned} 件商品，命中筛选 {len(matched_items)} 件")
-    print(f"==========================================")
-
+    print(f"\n[汇总] 进入筛选 {total_scanned} 件商品，命中 {len(matched_items)} 件，覆盖异常 {len(failed_shops)} 店")
     if not matched_items:
-        args.summary = "部分店铺评分读取失败" if failed_shops else "没有符合条件的评分记录"
-        args.output = {"rows": 0, 'failed_shops': failed_shops}
-        print("未检索到符合条件的商品。")
+        if not failed_shops:
+            args.summary = "没有符合条件的评分记录"
+        elif complete_shops:
+            args.summary = "部分店铺覆盖不完整，已取得的数据无筛选命中"
+        else:
+            args.summary = "所选店铺均未取得完整评分数据"
+        print(args.summary)
         return int(bool(failed_shops))
 
     # 控制台预览前 10 条
@@ -408,6 +453,6 @@ def run(args: Any) -> int:
         print(f"  - CSV : {csv_file}")
         print(f"  - Excel: {xlsx_file}")
 
-    args.summary = "已导出商品评分报表，部分店铺读取失败" if failed_shops else "已导出商品评分报表"
-    args.output = {"rows": len(matched_items), "artifacts": artifacts, 'failed_shops': failed_shops}
+    args.summary = "已导出商品评分报表，部分店铺覆盖不完整" if failed_shops else "已导出商品评分报表"
+    args.output.update(rows=len(matched_items), artifacts=artifacts)
     return int(bool(failed_shops))

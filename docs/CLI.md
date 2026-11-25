@@ -271,6 +271,7 @@
 - `--shops` 目标店铺 ID，多个用逗号分隔
 - `--all-shops` 本动作的全部目标店铺
 - `--limit` 每店最多审核 N 个（0=全部）
+- `--json` 输出单个 JSON 对象
 
 ## listing replicate
 
@@ -527,6 +528,7 @@ WB Open API：按相同完整 VC 将源店商品内容同步到其他店
 - `--page-size` 订单列表每页条数
 - `--apply` 真正写入（默认 dry-run 只列出将登记订单）
 - `--no-pending` 不合并「待处理订单」数据源（默认 scope=latest 会合并 orderalllist + 待处理订单，让只匹配但未进预报/上传/交运流程的订单也能登记）
+- `--json` 输出包含登记计数的 JSON 回执
 
 ## order deduplicate
 
@@ -589,6 +591,7 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 - `--table` 飞书订单登记表名（默认 订单登记）
 - `--no-pending` 飞书登记时不合并「待处理订单」数据源（默认合并，覆盖只匹配未进预报/上传/交运的订单）
 - `--apply` 真正执行（默认 dry-run 预览）
+- `--json` 输出 JSON 回执，尝试登记时包含登记计数
 
 ## report mapping
 
@@ -679,27 +682,28 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 
 ## report ratings
 
-查询商品链接评分与评价情况（只读；支持按评分/店铺/1星评论筛选，导出包含价格表数据的报表）
+只读：按 WB Open API 评价明细统计商品窗口评分与星级分布，导出报表
 
 实现入口 [run](../src/sellerops/features/reports/ratings.py)
 
 - 最多选一项 --name / --name-contains
-- `--shops` 限定店铺 id 逗号分隔（默认全部）
-- `--rating` 精确筛选指定评分（如 1 或 1.0）
+- `--shops` BCS 店铺 ID，逗号分隔（默认本机账号全部未归档店铺）
+- `--wb-region` WB 官方评价主机区域（默认 ru）（ru / cn）
+- `--rating` 匹配窗口平均分（容差 ±0.05）
 - `--min-rating` 最低评分（>=）
 - `--max-rating` 最高评分（<=，如 1 或 2 筛选低分商品）
 - `--one-star` 筛选存在 1 星评论的商品（oneStar >= 1）
 - `--two-star` 筛选存在 2 星评论的商品（twoStar >= 1）
 - `--negative, --bad` 筛选存在差评的商品（即 1 星或 2 星差评数 >= 1）
-- `--stars` 指定星级评论筛选（逗号分隔，如 1,2 筛选含 1 星或 2 星差评的商品）
+- `--stars` 匹配含任一指定星级的商品（1–5，逗号分隔，例如好评用 4,5）
 - `--min-one-star` 筛选 1 星评论数 >= N 的商品
-- `--min-feedbacks` 最低评价总数（默认 1，仅看有评价商品；设为 0 含无评价）
-- `--days` 统计天数跨度（默认 365 天）
+- `--min-feedbacks` 最低评价总数（默认 1；0 从本店在架快照补入零评价商品）
+- `--days` 近 N 天（UTC+8 含今天，默认 365；0 为接口可访问的全部历史）
 - `--name` 完整中文商品名
 - `--name-contains` 中文商品名包含指定文字
 - `--prefix` 按 4 位前缀码筛选
-- `--vc` 按 vendorCode 筛选
-- `--limit` 每店最多拉取商品条数（0=不限）
+- `--vc` 按 vendorCode 子串筛选（忽略大小写）
+- `--limit` 每店聚合排序后送入筛选的商品上限（0=不限）
 - `--out` 自定义导出文件路径（支持 .csv / .xlsx）
 - `--json` 输出单个 JSON 对象
 

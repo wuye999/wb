@@ -41,6 +41,74 @@ def accepted(task=700):
     return {"error": False, "data": {"id": task}}
 
 
+def quarantine(items, **fields):
+    return {"error": False, "errorText": "", "data": {"quarantineGoods": items}, **fields}
+
+
+class TestQuarantine(unittest.TestCase):
+    def test_accepts_explicit_empty_page_and_documented_empty_additional_errors(self):
+        for items in (None, [], [{"id": 7}]):
+            for fields in ({}, {"additionalErrors": None}, {"additionalErrors": {}}, {"additionalErrors": ""}):
+                response = quarantine(items, **fields)
+                with self.subTest(response=response), patch.object(wb, "request", return_value=response):
+                    self.assertEqual(price_review.fetch_quarantine(Mock()), items or [])
+        with patch.object(wb, "request", return_value={"error": False, "data": {"quarantineGoods": None}}):
+            self.assertEqual(price_review.fetch_quarantine(Mock()), [])
+
+    def test_rejects_business_errors_and_incomplete_shapes(self):
+        for response in (quarantine(None, error=True), quarantine([], errorText="business rejection"),
+                         *(quarantine(None, additionalErrors=value)
+                           for value in ({"message": "error"}, "error", ["error"], [], True, False, 1, 0))):
+            with self.subTest(response=response), patch.object(wb, "request", return_value=response):
+                with self.assertRaisesRegex(price_review.QuarantineListError, "业务错误"):
+                    price_review.fetch_quarantine(Mock())
+        for response in (None, [], {"data": {"quarantineGoods": []}}, {"error": False},
+                         quarantine([], data=None), quarantine([], data={}), quarantine([], errorText=None),
+                         quarantine([], error=0), quarantine([], error=None), quarantine([], error="false"),
+                         quarantine(""), quarantine({})):
+            with self.subTest(response=response), patch.object(wb, "request", return_value=response):
+                with self.assertRaisesRegex(price_review.QuarantineListError, "回执不完整"):
+                    price_review.fetch_quarantine(Mock())
+
+    def test_checks_terminal_page_offsets_and_invalid_pages(self):
+        full = [{"id": 1}, {"id": 2}]
+        for terminal, last in ((None, []), ([], []), ([{"id": 3}], [{"id": 3}])):
+            with self.subTest(terminal=terminal), patch.object(
+                    wb, "request", side_effect=[quarantine(full), quarantine(terminal)]) as request:
+                self.assertEqual(price_review.fetch_all_quarantine(Mock(), limit=2, max_pages=2), full + last)
+            self.assertEqual([call.args[2].rsplit("?", 1)[1] for call in request.call_args_list],
+                             ["limit=2&offset=0", "limit=2&offset=2"])
+
+        for page, message in (([{"id": 2}], "重复"), ([{"id": True}], "无效"),
+                              ([{"id": 3}, {"id": 4}, {"id": 5}], "超过请求条数"),
+                              ([{"id": 3}, {"id": 4}], "安全分页上限")):
+            with self.subTest(page=page), patch.object(wb, "request", side_effect=[quarantine(full), quarantine(page)]):
+                with self.assertRaisesRegex(price_review.QuarantineListError, message):
+                    price_review.fetch_all_quarantine(Mock(), limit=2, max_pages=2)
+
+    def test_auto_review_distinguishes_empty_unmatched_and_failed_reads(self):
+        item = {"nmID": 101, "cur_price": 100, "price": 60}
+        cases = [
+            (quarantine(None), "本次目标价尚未出现在待审列表"),
+            (quarantine([{"id": 7, "nmID": 101, "newPrice": 61}]), "尚无唯一匹配"),
+            (quarantine([], data={}), "价格审核准备失败"),
+            (wb.common.CookieExpiredError("fixture-auth"), "WB 会话失效或权限不足"),
+        ]
+        for response, reason in cases:
+            result, session = Mock(), Mock()
+            with self.subTest(reason=reason), patch.object(wb.credentials, "get"), \
+                    patch.object(wb, "make_session", return_value=session), \
+                    patch.object(wb, "request", side_effect=[response]) as request:
+                price_review.review_submitted_prices(1, [item], result)
+            request.assert_called_once()
+            self.assertEqual(request.call_args.args[1], "GET")
+            result.record.assert_called_once()
+            self.assertEqual(result.record.call_args.args[:3], (1, item, "blocked"))
+            self.assertIn(reason, result.record.call_args.args[3])
+            self.assertTrue(result.record.call_args.kwargs["review"])
+            session.close.assert_called_once()
+
+
 class TestWorkBuddyProducts(unittest.TestCase):
     def setUp(self):
         stack = ExitStack()

@@ -305,7 +305,7 @@ def match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
         from sellerops.domain.snapshot_values import positive_id
         warehouse_id = positive_id(cred.get("warehouse_id"))
         if warehouse_id is None:
-            print("[中止] 请在马帮配置中填写经核实的莫斯科业务仓 warehouse_id")
+            print("[中止] 请在马帮配置中填写经核实的马帮仓库 ID（mabang.warehouse_id）")
             result.stopped = True
             return result
         if not api_ready(cred):
@@ -313,7 +313,7 @@ def match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
             write_csv(recs)
             result.stopped = True
             return result
-        print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；仓库 {warehouse_id}）...")
+        print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；马帮仓库 ID（mabang.warehouse_id）为 {warehouse_id}）...")
         try:
             ok, fail = apply_replace(cred, recs, warehouse_id)
         except MabangAuthError:

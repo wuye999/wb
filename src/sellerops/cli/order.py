@@ -51,6 +51,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--no-pending", action="store_true",
                        help="不合并「待处理订单」数据源（默认 scope=latest 会合并 orderalllist + 待处理订单，"
                             "让只匹配但未进预报/上传/交运流程的订单也能登记）")
+    p.add_argument("--json", action="store_true", help="输出包含登记计数的 JSON 回执")
     bind(p, 'sellerops.features.orders.feishu_register', 'run')
 
     p = sub.add_parser('deduplicate',
@@ -103,4 +104,5 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--no-pending", action="store_true",
                        help="飞书登记时不合并「待处理订单」数据源（默认合并，覆盖只匹配未进预报/上传/交运的订单）")
     p.add_argument("--apply", action="store_true", help="真正执行（默认 dry-run 预览）")
+    p.add_argument("--json", action="store_true", help="输出 JSON 回执，尝试登记时包含登记计数")
     bind(p, 'sellerops.features.orders.mabang_process', 'run')
