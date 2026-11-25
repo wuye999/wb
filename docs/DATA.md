@@ -26,6 +26,8 @@
 
 `report products` 在 `exports/` 生成商品运营工作簿，使用现有快照、归属、提交记录及本轮 WB Open API 订单。订单明细保留实际采集窗口，退货统计按 `--order-days` 过滤。近 7/14 天采用口径 A，仅统计在途和买断，每行一件。报告无需飞书或 `lark-cli`，旧参数 `--url` 和 `--table` 已移除。BCS 提供对应店铺的官方令牌，`--extra-bcs-stdin` 接收的临时账号仅驻留本轮内存。报告按账号标注来源，链接缺口仅针对本机目标店。[报告说明](PRODUCT_REPORT.md)
 
+`order mabang-void-wb` 读取 `state/WB_FBS发货群供货.json` 的版本 1 供货记录。`state/mabang-void-wb.json` 是版本 1 作废账本，按 WB 店铺 ID 和平台订单 ID 记录供货号、马帮内部订单 ID、运行号及提交状态。匹配、预报交运和作废应用都使用同一数据目录的履约锁。状态先落为 `SUBMITTING`，收到回执后记录 `ACCEPTED`、`FAILED` 或 `UNKNOWN`，损坏的账本会阻止继续提交。勿删除或编辑提交中及结果未知的记录来重跑。逐单 UTF-8 BOM CSV 回执保存在日志目录，按 `data.artifacts.csv` 查找。
+
 ## 商品价格表
 
 商品价格表使用工作表名 `Sheet1`，第 1 行是表头。列按名称定位，允许调整顺序。读取价格时要求「产品中文名」「最低售价」两个表头。只读取归属、尺寸或物流资料时要求「产品中文名」。卖家 SKU 可留空，此时中文名须在全表唯一。首次建表可复制 [商品价格表样例](../examples/商品价格表.example.xlsx)，改名为 `data/商品价格表.xlsx` 并替换示例数据。

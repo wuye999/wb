@@ -117,6 +117,29 @@ class TestStep2(unittest.TestCase):
         self.assertEqual(reply['data']['online'], {'bcs': 'authentication_failed'})
         online.assert_called_once_with()
 
+    def test_doctor_reports_mabang_warehouse_configuration_without_values(self):
+        self.populate()
+        receipt = self.data / 'credentials.json'
+        for warehouse, mode, valid in (
+                ({}, 'missing', True),
+                ({'warehouse_id': '42'}, 'id', True),
+                ({'warehouse_keyword': '示例仓'}, 'keyword', True),
+                ({'warehouse_keyword': '示例仓', 'warehouse_id': 42}, 'keyword_and_id', True),
+                ({'warehouse_keyword': 5, 'warehouse_id': True}, 'invalid', False)):
+            with self.subTest(mode=mode), patch.object(doctor, 'online_checks') as online:
+                receipt.write_text(json.dumps({'mabang': warehouse}), encoding='utf8')
+                _, reply, output = self.cli('doctor')
+            data = reply['data']
+            summary = data['platforms']['mabang']
+            self.assertEqual(summary['warehouse_mode'], mode)
+            self.assertEqual(summary['warehouse_configured'], mode not in ('missing', 'invalid'))
+            self.assertEqual(data['credentials']['structure_valid'], valid)
+            self.assertNotIn('示例仓', json.dumps(reply, ensure_ascii=False) + output)
+            self.assertFalse(data['online_checked'])
+            online.assert_not_called()
+        self.assertEqual({i['code'] for i in data['credentials']['issues']},
+                         {'expected_string', 'invalid_warehouse_id'})
+
     def test_price_preview_keeps_skip_csv_and_plan_in_json(self):
         write_book([('', '唯一中文名', 38, 'AAAA', '')])
         snapshot(1, [row(A, 101, 1001)], fetchedAt='2000-01-01T00:00:00+00:00')

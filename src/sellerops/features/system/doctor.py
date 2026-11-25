@@ -46,7 +46,8 @@ def _print_summary(output: dict) -> None:
     print(f"[配置] credentials.json {settings[cred['status']]}")
     for issue in cred['issues'][:10]:
         reason = {'expected_object': '须为对象', 'expected_string': '须为字符串', 'expected_array': '须为列表',
-                  'invalid_shop_id': '须为正整数', 'duplicate_shop_id': '店铺 ID 重复'}[issue['code']]
+                  'invalid_shop_id': '须为正整数', 'duplicate_shop_id': '店铺 ID 重复',
+                  'invalid_warehouse_id': '须为正整数、十进制数字字符串或 null'}[issue['code']]
         print(f"  {issue['path']} {reason}")
     if len(cred['issues']) > 10:
         print(f"  另有 {len(cred['issues']) - 10} 项，见 JSON 结果。")
@@ -59,10 +60,14 @@ def _print_summary(output: dict) -> None:
     platforms = output['platforms']
     bcs, wb, mabang, feishu = (platforms[name] for name in ('bcs', 'wb', 'mabang', 'feishu'))
     endpoint = '默认' if bcs['endpoint'] == 'default' else '自定义'
+    warehouse_label = {'missing': '未配，请填关键词或已核实 ID', 'invalid': '配置有误',
+                       'keyword': '按关键词解析', 'id': '使用已核实 ID',
+                       'keyword_and_id': '关键词与 ID 交叉核对'}
     print(f"[平台] BCS 登录账号{configured(bcs['login_configured'])}、会话{configured(bcs['session_configured'])}、{endpoint}端点"
           f" | WB 仓库关键词{configured(wb['warehouse_keyword_configured'])}"
           f" | 马帮账号{configured(mabang['login_configured'])}、会话{configured(mabang['session_configured'])}、"
           f"API {configured(mabang['api_configured'])}、店铺映射 {mabang['mapped_shops']} 项"
+          f"、库存仓{warehouse_label[mabang['warehouse_mode']]}"
           f" | 飞书表入口{configured(feishu['configured'])}")
 
     runtime = output['browser']

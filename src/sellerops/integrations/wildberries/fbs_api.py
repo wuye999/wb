@@ -95,6 +95,26 @@ class WBFBSAPI(WBOpenAPI):
             raise OpenAPIResponseError('订单必填标识响应未覆盖请求的全部订单')
         return rows
 
+    def supply_order_ids(self, supply_id: str) -> set[int]:
+        if not valid_supply_id(supply_id):
+            raise ValueError('供货号无效')
+        data = self._fbs('GET', f'/api/marketplace/v3/supplies/{supply_id}/order-ids')
+        ids = data.get('orderIds')
+        if (not isinstance(ids, list) or any(type(oid) is not int or oid < 1 for oid in ids)
+                or len(set(ids)) != len(ids)):
+            raise FBSRequestError('WB 供货订单清单无效')
+        return set(ids)
+
+    def order_statuses(self, ids: list[int]) -> dict[int, dict]:
+        if (not 1 <= len(ids) <= BATCH_SIZE or any(type(oid) is not int or oid < 1 for oid in ids)
+                or len(set(ids)) != len(ids)):
+            raise ValueError('WB 查询订单状态的 ID 或批量大小无效')
+        data = self._fbs('POST', '/api/v3/orders/status', json={'orders': ids})
+        rows = _order_rows(data, 'orders', 'id')
+        if not set(rows).issubset(ids):
+            raise FBSRequestError('WB 状态响应包含未请求订单')
+        return rows
+
     def create_supply(self, name: str) -> str:
         data = self._fbs('POST', '/api/v3/supplies', json={'name': name}, status=201, write=True)
         supply_id = data.get('id')

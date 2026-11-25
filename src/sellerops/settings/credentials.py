@@ -17,6 +17,7 @@ import re
 
 from sellerops.settings import paths as config
 from sellerops.core.files import safe_load_json
+from sellerops.domain.mabang_warehouse import warehouse_config
 DEFAULT_ROOT_VERSION = "v1.108.1"
 DEFAULT_BCS_URL = 'https://wb.bcserp.com/prod-api'
 
@@ -75,6 +76,8 @@ def inspect_credentials(path) -> dict:
     check_strings(bcs_login, 'bcs.login', ('username', 'password'))
     check_strings(mabang_login, 'mabang.login', ('username', 'password'))
     shop_map = object_section(mabang, 'shop_map', 'mabang.shop_map')
+    warehouse = warehouse_config(mabang)
+    issues.extend({'path': f'mabang.{field}', 'code': code} for field, code in warehouse.issues)
     rows = wb.get('shops', [])
     ids, complete = set(), set()
     session_keys = ('authorizev3', 'wb_seller_lk', 'cookie')
@@ -104,7 +107,6 @@ def inspect_credentials(path) -> dict:
                     or diagnosis['status'] == 'missing')
     root = wb.get('root_version', DEFAULT_ROOT_VERSION if 'wb' in data else None)
     root_version = root if isinstance(root, str) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', root) else None
-    warehouse_id = mabang.get('warehouse_id')
     platforms = {
         'bcs': {'configured': bool(bcs), 'session_configured': all(_configured(bcs, k) for k in ('token', 'limit_key')),
                 'login_configured': _configured(bcs_login, 'username'),
@@ -114,7 +116,10 @@ def inspect_credentials(path) -> dict:
         'mabang': {'configured': bool(mabang), 'login_configured': _configured(mabang_login, 'username'),
                    'session_configured': any(mabang.get(k) for k in ('www_cookie', 'aamz_cookie', 'cookies', 'cookie_jar')),
                    'api_configured': all(_configured(mabang, k) for k in ('api_bearer', 'api_key')),
-                   'warehouse_configured': type(warehouse_id) is int and warehouse_id > 0,
+                   'warehouse_configured': warehouse.mode not in ('missing', 'invalid'),
+                   'warehouse_keyword_configured': bool(warehouse.keyword),
+                   'warehouse_id_configured': warehouse.warehouse_id is not None,
+                   'warehouse_mode': warehouse.mode,
                    'mapped_shops': len(shop_map)},
         'feishu': {'configured': _configured(feishu, 'base_url')},
     }

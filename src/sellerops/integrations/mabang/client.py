@@ -12,7 +12,7 @@ from sellerops.integrations.mabang.auth import (
     MabangKeyRejected, api_profile, auto_enabled, refresh_bearer, refresh_login,
 )
 from sellerops.integrations.mabang.session import (
-    AAMZ_BASE, API_BASE, WWW_BASE, MabangAuthError, auth_expired, auth_signature,
+    AAMZ_BASE, API_BASE, API_HOSTS, WAREHOUSE_API_HOST, WWW_BASE, MabangAuthError, auth_expired, auth_signature,
     cookie_header, cookie_key, dump_cookies, expires_soon, headers, new_session,
     request, response_json,
 )
@@ -91,11 +91,11 @@ def _prepare(cred: dict, host: str) -> _Connection:
     if 'login' in cred or 'cookie_jar' in cred:
         reload_auth(cred)
     conn = _connection(cred)
-    web_host = 'www.mabangerp.com' if host == 'api.mabangerp.com' else host
+    web_host = 'www.mabangerp.com' if host in API_HOSTS else host
     if auto_enabled(cred) and (expires_soon(conn.session, web_host)
             or not cookie_key(cookie_header(conn.session, 'https://' + web_host + '/index.php'))):
         conn = _recover(cred, conn, api=False)
-    if host == 'api.mabangerp.com':
+    if host in API_HOSTS:
         key = cookie_key(cookie_header(conn.session, WWW_BASE))
         if (not cred.get('api_bearer') or (key and cred.get('api_key') and key != cred['api_key'])):
             conn = _recover(cred, conn, api=True)
@@ -117,11 +117,14 @@ def _record_cookies(cred: dict, conn: _Connection) -> None:
 def _send(cred: dict, conn: _Connection, method: str, url: str, *,
           params: dict | None, data: object, timeout: float) -> requests.Response:
     host = urlsplit(url).hostname
-    if host == 'api.mabangerp.com':
+    if host in API_HOSTS:
         key = cookie_key(cookie_header(conn.session, WWW_BASE)) or cred.get('api_key')
         if not key or not cred.get('api_bearer') or (cred.get('api_key') and key != cred['api_key']):
             raise MabangAuthError('马帮 API 缺少匹配的 key 和 Bearer，已停止请求。')
         request_headers = {**api_profile(cred), 'key': key, 'Authorization': 'Bearer ' + cred['api_bearer']}
+        if host == WAREHOUSE_API_HOST:
+            origin = 'https://fe-public.mabangerp.com'
+            request_headers.update(Origin=origin, Referer=origin + '/')
     else:
         request_headers = headers(cred, host, navigation=method == 'GET')
     return request(conn.session, method, url, headers=request_headers, params=params,
@@ -147,8 +150,10 @@ def _checked_response(cred: dict, conn: _Connection, response: requests.Response
 def _request(cred: dict, method: str, url: str, *, read_only: bool,
              params: dict | None = None, data: object = None, timeout: float = 60) -> requests.Response:
     host = urlsplit(url).hostname
+    if host == WAREHOUSE_API_HOST and not read_only:
+        raise ValueError('马帮仓库列表只允许读取')
     conn = _prepare(cred, host)
-    if not read_only and host != 'api.mabangerp.com' and host not in conn.verified:
+    if not read_only and host not in API_HOSTS and host not in conn.verified:
         if host == 'www.mabangerp.com':
             probe = form_request(cred, WWW_BASE, 'ordera.getForecastLogistics', read_only=True, data='')
         else:
@@ -163,7 +168,7 @@ def _request(cred: dict, method: str, url: str, *, read_only: bool,
         if auth_expired(response):
             if not read_only:
                 raise MabangAuthError('马帮写入收到会话失效响应，未重放；请核对该笔状态后再处理。')
-            conn = _recover(cred, conn, api=host == 'api.mabangerp.com')
+            conn = _recover(cred, conn, api=host in API_HOSTS)
             response = _send(cred, conn, method, url, params=params, data=data, timeout=timeout)
             if auth_expired(response):
                 raise MabangAuthError('马帮续期后读取仍提示会话失效，已停止。')
@@ -181,6 +186,11 @@ def form_request(cred: dict, base: str, mod: str, *, read_only: bool, data: obje
 
 def api_post(cred: dict, path: str, body: dict, *, read_only: bool = False) -> requests.Response:
     return _request(cred, 'POST', API_BASE + path, data=json.dumps(body), read_only=read_only)
+
+
+def post_warehouse_list(cred: dict, body: dict) -> requests.Response:
+    url = f'https://{WAREHOUSE_API_HOST}/mas-erp-system-service/warehouse/list'
+    return _request(cred, 'POST', url, data=json.dumps(body), read_only=True)
 
 
 def parse_json(response: requests.Response) -> dict:

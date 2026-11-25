@@ -151,6 +151,8 @@ def _submit(api: WBFBSAPI, record: dict, save: Callable[[], None]) -> None:
         _attempt(record, save, 'add', 204, lambda: api.add_orders(supply_id, ids), ids=ids)
     _attempt(record, save, 'deliver', 204, lambda: api.deliver(supply_id))
     print(f'  提交配送已受理 {supply_id}', flush=True)
+    print(f"  马帮待处理单作废预览：order mabang-void-wb --shops {record['shop_id']} --supply-id {supply_id}",
+          flush=True)
 
 
 def _export(api: WBFBSAPI, record: dict) -> None:
@@ -283,8 +285,10 @@ def run(args) -> int:
             print(f"  [{row['stage']}] {row.get('name') or row.get('product_name') or row['shop_id']}｜{row['reason']}")
     now = datetime.now(SINGAPORE)
     report = paths.daily_log_dir(now) / f'WB_FBS发货群_{now:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}.json'
-    atomic_dump_json(report, {'apply': args.apply, 'resume': args.resume, 'results': results},
-                     use_lock=False)
+    receipt = {'apply': args.apply, 'resume': args.resume, 'results': results}
+    if not args.resume and any(row['stage'] in ('delivered', 'complete') for row in results):
+        receipt['next_action'] = '可用 order mabang-void-wb 预览马帮待处理单作废'
+    atomic_dump_json(report, receipt, use_lock=False)
     print(f"完成 {sum(r['stage'] == 'complete' for r in results)} 组，"
           f"预览 {sum(r['stage'] == 'preview' for r in results)} 组，"
           f"待处理或失败 {len(failures)} 项｜明细 {report}")

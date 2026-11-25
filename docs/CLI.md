@@ -590,6 +590,17 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 - `--resume` 查看已受理配送的待导出供货；加 --apply 补取 PDF
 - `--apply` 执行供货和导出（默认预览）；与 --resume 同用时仅补取 PDF
 
+## order mabang-void-wb
+
+预览并作废 WB 已供货订单在马帮的待处理副本
+
+实现入口 [run](../src/sellerops/features/orders/mabang_void_wb.py)
+
+- `--shops` 限定 WB 店铺 ID，逗号分隔（默认全部）
+- `--supply-id` 限定供货号（省略时扫描范围内已受理配送的供货）
+- `--apply` 提交通过校验的订单（默认只预览）
+- `--json` 输出逐单状态、计数和 CSV 路径
+
 ## order process
 
 处理新增订单。按发货方式分流，马帮发货进入匹配、预报上传和交运。有飞书地址和 lark-cli 时登记。

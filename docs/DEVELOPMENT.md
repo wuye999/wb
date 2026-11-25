@@ -23,7 +23,7 @@
 报告默认筛选由 [product_report_screening](../src/sellerops/features/reports/product_report_screening.py) 纯计算：最长数字段合并风险，完整VC去重输出，当前本店快照判断缺口并区分未知/回收站/已有提交。名称输入由 [report_catalog](../src/sellerops/persistence/report_catalog.py) 按表头仅读取价格表商品名、当前映射VC及中文名，不依赖价格公式、图片或库存。`--details` 才展开原证据；[离线筛选测试](../tests/test_product_report_screening.py) 覆盖边界、加权、跨店标识与缺口。
 
 - 所有 WB 仓库操作仅使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓），包括库存读取、修改和清零、下架前清库存、回收站归零、上架和临时脚本。全店或全部商品只扩大商品范围。未配置、匹配不到、匹配多个或无法核实仓库名称和 ID 时中止该店操作，不得猜测、跨店复用 ID 或回退至未配置的仓库。
-- 库存使用 WB 仓库列表的 `id`，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对。马帮库存使用在马帮账户中单独核实并配置的 `mabang.warehouse_id`。
+- 库存使用 WB 仓库列表的 `id`，同一响应中的 `warehouseId` 是 office 标识。每店独立解析和核对。马帮库存使用本账号的 `mabang.warehouse_keyword` 唯一匹配启用仓，或沿用已单独核实的 `mabang.warehouse_id`。两项都填时须一致。
 - 浏览器登录由用户显式发起 `login`，业务命令不启动浏览器。平台登录和续期见 [配置说明](CONFIGURATION.md#通过-workbuddy-连接平台)。
 - 这些是现行操作约定，不能因重组代码、压缩文档或删除历史记录而丢失。将来变更运行方案时，必须同步修改 AGENTS、配置、操作指南及生成参考，不能只改某一处说明。
 

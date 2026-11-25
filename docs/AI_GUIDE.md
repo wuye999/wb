@@ -19,7 +19,7 @@
 ## 当前仓库与凭证约定
 
 - 凡涉及 WB 仓库的读写，包括库存、下架清零、回收站清理和上架，仅允许使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓）。全店或全部商品只扩大商品范围。
-- 先用本店仓库列表核对仓库名称和 `id`。未配置、匹配不到、匹配多个或无法核实时中止该店操作，不得猜测、跨店复用 ID 或回退至未配置的仓库。库存使用列表中的 `id`，office 字段 `warehouseId` 不得代用。已有预览或底层结果出现其他仓库 ID 时不得提交。马帮库存匹配只使用本账号独立核实的 `mabang.warehouse_id`。
+- 先用本店仓库列表核对仓库名称和 `id`。未配置、匹配不到、匹配多个或无法核实时中止该店操作，不得猜测、跨店复用 ID 或回退至未配置的仓库。库存使用列表中的 `id`，office 字段 `warehouseId` 不得代用。已有预览或底层结果出现其他仓库 ID 时不得提交。马帮库存匹配按本账号 `mabang.warehouse_keyword` 唯一选择启用仓，也可沿用已核实的 `mabang.warehouse_id`。两项都填时须一致。
 - 用户明确要求连接或恢复会话时运行 `login wb`、`login bcs` 或 `login mabang`。WB 后台会话出错（包括 401/403）时立即停止该店操作，提示用户另行发起 `login wb`。日常业务命令不自行启动浏览器。BCS 和马帮已配账号密码时先直连，遇到网页验证或连接 WB 时再按需安装专用浏览器。见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
 - WB 直连时，页面连接上限 3 分钟，店铺列表恢复上限 4 分钟，人工登录上限 20 分钟。保持命令运行，由用户按窗口提示完成验证，然后等待连接结果。已登录但恢复超时时，可用 `login wb --resume` 检查专用浏览器会话。
 - 已配置 `bcs.login` 自动续期的 BCS 命令可在会话缺失或失效时更新本地会话。已发出的业务写请求保留原结果。遇到滑块或网关校验时，由用户发起 `login bcs` 并在官网完成验证。见 [BCS 配置](CONFIGURATION.md#bcsbcs)。
@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | BCS | `bcs.login.username`、`bcs.login.password` | 使用账号密码直连时填写。已有有效会话可沿用。自有服务地址按需配置 `bcs.base_url`。 |
 | WB | `wb.warehouse_keyword` | 涉及 WB 仓库业务时填写，须唯一匹配各店默认业务仓。后台会话用 `login wb` 建立，官方 `apiKey` 在 BCS 对应店铺维护。 |
-| 马帮 | `mabang.login.username`、`mabang.login.password`、`mabang.shop_map`、`mabang.warehouse_id`、`mabang.handover_keyword` | 账号密码用于直连，处理新增订单时配置本账号的店铺映射、库存仓和交运渠道。已知完整 `mabang.handover_channel_value` 时可以填写该值并将关键词留空。 |
+| 马帮 | `mabang.login.username`、`mabang.login.password`、`mabang.shop_map`、`mabang.warehouse_keyword` 或 `mabang.warehouse_id`、`mabang.handover_keyword` | 账号密码用于直连，处理新增订单时配置本账号的店铺映射、库存仓和交运渠道。已知完整 `mabang.handover_channel_value` 时可以填写该值并将关键词留空。 |
 | 飞书 | `feishu.base_url` | 需要登记或读取飞书表格时填写，也可用 `--url` 指定。还需已登录的 `lark-cli` 和对应表权限。 |
 | AI | `ai.api_key`、`ai.base_url`、`ai.model` | 使用 AI 功能时填服务密钥，按所选服务配置完整请求地址和模型。 |
 
@@ -72,7 +72,7 @@ python run.py doctor --check-updates --json
 | 更新快照或映射 | 用户明确要求更新时用 `sync`。归属用 `map` 查看候选、确认或排除。 |
 | 筛查货不对板 | `map check-mismatch --json`。可按 `--cn` 精确限定中文名，按 `--begin`、`--end` 或 `--days` 限定创建日期。 |
 | 新建商品、跨店补齐、导入标准表 | 分别用 `ops create-cards`、`ops replicate`、`listing import-publish`。 |
-| 处理新增订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。缺飞书地址或 `lark-cli` 时自动跳过飞书登记。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
+| 处理新增订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。缺飞书地址或 `lark-cli` 时自动跳过飞书登记。「WB发货」用 `order group-ship`。WB 配送已受理后可用 `order mabang-void-wb` 预览马帮待处理单作废，确认范围和逐单结果后加 `--apply`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
 | 汇报修改结果 | 核对店铺、商品与规格数、受理任务号、阻止原因和完整明细路径。预览与提交沿用同样的目标。 |
 

@@ -5,6 +5,7 @@ import time
 
 
 from sellerops.core import utils as common
+from sellerops.persistence.mabang_voids import fulfillment_lock
 from sellerops.integrations.mabang.client import get_mabang_cred
 from sellerops.integrations.mabang.forecast import get_forecast_logistics
 from sellerops.integrations.mabang.forecast import batch_create_forecast
@@ -60,6 +61,15 @@ def _print_forecast_rows(rows):
             print(f"     [⚠ 告警] 该批次失败 {fl} 单，请核查")
 
 def run_forecast(args, *, failed_ids=(), group_shipping_ids=(), matched_ids=None):
+    if args.apply and not getattr(args, 'check', False):
+        with fulfillment_lock():
+            return _run_forecast(args, failed_ids=failed_ids, group_shipping_ids=group_shipping_ids,
+                                 matched_ids=matched_ids)
+    return _run_forecast(args, failed_ids=failed_ids, group_shipping_ids=group_shipping_ids,
+                         matched_ids=matched_ids)
+
+
+def _run_forecast(args, *, failed_ids, group_shipping_ids, matched_ids):
     common.ensure_utf8_stdout()
     cred_check = get_mabang_cred()
 

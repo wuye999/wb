@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | BCS | `bcs.login.username`、`bcs.login.password` | 使用账号密码直连时填写。已有有效会话可沿用。自有服务地址按需配置 `bcs.base_url`。 |
 | WB | `wb.warehouse_keyword` | 涉及 WB 仓库业务时填写，须唯一匹配各店默认业务仓。后台会话用 `login wb` 建立，官方 `apiKey` 在 BCS 对应店铺维护。 |
-| 马帮 | `mabang.login.username`、`mabang.login.password`、`mabang.shop_map`、`mabang.warehouse_id`、`mabang.handover_keyword` | 账号密码用于直连，处理新增订单时配置本账号的店铺映射、库存仓和交运渠道。已知完整 `mabang.handover_channel_value` 时可以填写该值并将关键词留空。 |
+| 马帮 | `mabang.login.username`、`mabang.login.password`、`mabang.shop_map`、`mabang.warehouse_keyword` 或 `mabang.warehouse_id`、`mabang.handover_keyword` | 账号密码用于直连，处理新增订单时配置本账号的店铺映射、库存仓和交运渠道。已知完整 `mabang.handover_channel_value` 时可以填写该值并将关键词留空。 |
 | 飞书 | `feishu.base_url` | 需要登记或读取飞书表格时填写，也可用 `--url` 指定。还需已登录的 `lark-cli` 和对应表权限。 |
 | AI | `ai.api_key`、`ai.base_url`、`ai.model` | 使用 AI 功能时填服务密钥，按所选服务配置完整请求地址和模型。 |
 
@@ -23,6 +23,7 @@
 | `order list`、默认来源的 `sync` 和 `catalog fetch`、`ops` 的 BCS 通道 | BCS 凭证，按用例准备本地表格和快照 |
 | `sync`、`catalog fetch` 的 `--source wb-openapi` | BCS 凭证和 BCS 各店保存的官方 apiKey，具备 Content、Prices and Discounts、Marketplace 读取权限 |
 | `ops publish-openapi`、`ops normalize-vc`、`listing sync-cards` | BCS 保存的各店中国区官方 apiKey，具备 Content 读写权限。上架另需 Marketplace 仓库读取和库存写入权限。见 [专门说明](OPEN_API_LISTINGS.md) |
+| `order mabang-void-wb` | 本地 WB 供货日志、BCS 各店中国区 Marketplace apiKey、马帮会话和店铺映射、最新价格表 |
 | `order group-ship` | BCS 保存的各店中国区 Marketplace apiKey、本地商品映射及价格表。提交供货需要写权限，导出 PDF 需要可选依赖 |
 | `ops price`、`ops stock`、`ops trash`、`ops discount`、`ops review-price` 的默认 WB 通道，`marketing enroll`、WB 后台客服及订单报表 | 对应 WB 店铺完整 Cookie 三件套，商品匹配还需本地数据 |
 | `ops publish`、`ops create-cards`、`ops replicate`、BCS 库存和下架的仓库解析 | BCS 与对应店铺 WB 凭证，以及本地价格、归属和快照。默认仓库解析走 WB |
@@ -86,7 +87,7 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 - 通过各店的 WB 仓库列表核实匹配仓库的名称，业务请求使用对应行的 `id`。同一行的 `warehouseId` 是另一套 office 标识，不能互换。
 - 每家店单独确认 ID，不得猜测、取列表第一条、跨店复用 ID 或回退至未配置的仓库。
 - 关键词未配置、匹配不到、匹配多个或匹配到的仓库无法使用时，中止该店操作。匹配不到或匹配多个时，根据报错所列仓库名称核对并填写更具体的 `wb.warehouse_keyword`。
-- 临时脚本和底层调用也要先校验 ID，库存读取将本店已确认的仓库 ID 传入 `store_id` / `warehouse_id`，写入前再次核对计划中的仓库 ID。马帮库存匹配使用从马帮账户单独核实并配置的 `mabang.warehouse_id`。
+- 临时脚本和底层调用也要先校验 ID，库存读取将本店已确认的仓库 ID 传入 `store_id` / `warehouse_id`，写入前再次核对计划中的仓库 ID。马帮库存匹配独立读取本账号的仓库目录，按 `mabang.warehouse_keyword` 解析或沿用已核实的 `mabang.warehouse_id`。
 
 业务仓库解析器按名称包含关系匹配，排除正在删除的仓库，并检查唯一命中的仓库是否正在处理及其 ID 是否有效。底层库存调用也必须传入核对过的仓库 ID。开发要求和私有协议资料入口见 [开发指南](DEVELOPMENT.md#当前必须保留的运行约定)。
 
@@ -147,7 +148,8 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 | --- | --- |
 | `www_cookie` | www 域登录 Cookie，读取订单和鉴权使用 |
 | `shop_map` | JSON 对象：键是马帮订单中的店铺标识文本，值是本地店铺标签，例如 `示例店铺(1001)`；不能假设键总是 WB ID |
-| `warehouse_id` | 马帮库存匹配使用的真实仓库 ID；新账户必须明确填写，不依赖代码中的历史缺省值 |
+| `warehouse_keyword` | 马帮启用仓库名称的字面包含关键词，须唯一命中。示例「示例库存仓」 |
+| `warehouse_id` | 已核实的马帮库存仓 ID，兼容正整数及十进制数字字符串。可留空或填 `null` |
 | `aamz_cookie` | aamz 域会话；未填时代码回退 www_cookie，实际是否可用取决于会话 |
 | `api_bearer` | api 域 Bearer 值，不加 Bearer 前缀；可由程序续期 |
 | `api_key` | api 域 key；也可从 www_cookie 的指定登录 Cookie 中提取 |
@@ -157,6 +159,8 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 | `handover_channel_id` / `handover_channel_value` | 按账户设置渠道识别 ID 和完整渠道值。交运关键词为空时直接使用已配置的完整渠道值 |
 | `upload_timeout_seconds` | 预报等待超时，缺省 900 秒；CLI 可覆盖 |
 | `upload_poll_interval` | 预报状态轮询间隔，缺省 20 秒；CLI 可覆盖 |
+
+库存匹配有待更换订单时才解析马帮库存仓。仅填 ID 时沿用已确认配置。填关键词时完整读取马帮启用仓列表，如果另填了 ID，命中 ID 必须一致。两项都缺、命中零个或多个、仓库无效或 ID 冲突时，查看命令列出的候选名称后修正配置。列表读取失败时先核对会话、权限和接口响应。`doctor --json` 显示 `warehouse_configured`、两项字段的配置标志和 `warehouse_mode`，本地检查不验证服务器的实际命中结果。
 
 首次配置或遇到验证码、短信验证时，运行 `python run.py login mabang`，按提示在官网操作。程序在会话完整且归属核对通过后更新认证字段，失败时保留原配置。连接只检查登录和预报页面权限，无需先配置 `shop_map`。
 

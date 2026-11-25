@@ -89,6 +89,13 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--apply", action="store_true", help="执行供货和导出（默认预览）；与 --resume 同用时仅补取 PDF")
     bind(p, 'sellerops.features.orders.fbs_group_ship', 'run')
 
+    p = sub.add_parser('mabang-void-wb', help="预览并作废 WB 已供货订单在马帮的待处理副本")
+    p.add_argument("--shops", default="", help="限定 WB 店铺 ID，逗号分隔（默认全部）")
+    p.add_argument("--supply-id", default="", help="限定供货号（省略时扫描范围内已受理配送的供货）")
+    p.add_argument("--apply", action="store_true", help="提交通过校验的订单（默认只预览）")
+    p.add_argument("--json", action="store_true", help="输出逐单状态、计数和 CSV 路径")
+    bind(p, 'sellerops.features.orders.mabang_void_wb', 'run')
+
     process_help = ("处理新增订单。按发货方式分流，马帮发货进入匹配、预报上传和交运。"
                     "有飞书地址和 lark-cli 时登记。")
     p = sub.add_parser('process', help=process_help, description=process_help)

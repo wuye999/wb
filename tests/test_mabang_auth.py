@@ -276,6 +276,31 @@ class TestMabangAuth(unittest.TestCase):
         self.assertEqual(bearers, ['Bearer old-token', 'Bearer old-key-token'])
         self.assertEqual(len(self.calls), 1)
 
+    def test_warehouse_domain_uses_paired_api_headers_without_web_cookie_or_redirect(self):
+        cred = self.seed(managed=False)
+        bearers = []
+
+        def send(session, prepared, **kwargs):
+            if urlsplit(prepared.url).hostname != 'mas-oapi.mabangerp.com':
+                return self.fake(session, prepared, **kwargs)
+            self.assertEqual(prepared.url, 'https://mas-oapi.mabangerp.com/mas-erp-system-service/warehouse/list')
+            self.assertEqual(prepared.headers['Origin'], 'https://fe-public.mabangerp.com')
+            self.assertEqual(prepared.headers['Referer'], 'https://fe-public.mabangerp.com/')
+            self.assertEqual(prepared.headers['key'], 'old-key')
+            self.assertNotIn('Cookie', prepared.headers)
+            self.assertFalse(kwargs['allow_redirects'])
+            self.assertEqual(json.loads(prepared.body), {'status': 1})
+            bearers.append(prepared.headers['Authorization'])
+            if len(bearers) == 1:
+                return _response(prepared, {'code': 401}, 401)
+            return _response(prepared, '', 307, {'Location': 'https://untrusted.invalid/'})
+
+        with patch.object(requests.Session, 'send', autospec=True, side_effect=send):
+            with self.assertRaisesRegex(RuntimeError, '跳转'):
+                client.post_warehouse_list(cred, {'status': 1})
+        self.assertEqual(bearers, ['Bearer old-token', 'Bearer old-key-token'])
+        self.assertEqual(len(self.calls), 1)
+
     def test_redirect_cannot_send_credentials_to_another_origin(self):
         def send(_session, prepared, **_kwargs):
             return _response(prepared, '', 307, {'Location': 'https://untrusted.invalid/receive?secret=private'})

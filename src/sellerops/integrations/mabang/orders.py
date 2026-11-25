@@ -6,6 +6,7 @@ import urllib.parse
 import requests
 
 
+from sellerops.domain.snapshot_values import positive_id
 from sellerops.integrations.mabang.client import AAMZ_BASE
 from sellerops.integrations.mabang.client import REQUEST_INTERVAL
 from sellerops.integrations.mabang.client import WWW_BASE
@@ -58,6 +59,7 @@ def fetch_pending_orders(cred: dict, days: int = 0, page_size: int = 100,
     }
     orders, page = [], 1
     seen_ids = set()
+    expected_total = None
     while page <= max_pages:
         form = dict(base_form)
         form["page"] = str(page)
@@ -70,6 +72,16 @@ def fetch_pending_orders(cred: dict, days: int = 0, page_size: int = 100,
         batch = d.get("orderDataList")
         if not isinstance(batch, list):
             raise RuntimeError("order.oTc 缺少有效订单列表，不能当作无待处理订单")
+        if (len(batch) > page_size
+                or ('page' in d and positive_id(d['page']) != page)
+                or ('rowsPerPage' in d and positive_id(d['rowsPerPage']) != page_size)):
+            raise RuntimeError('order.oTc 返回的页码或每页条数不符，已中止')
+        if 'pageCount' in d:
+            count = d['pageCount']
+            total = 0 if str(count) == '0' else positive_id(count)
+            if total is None or (expected_total is not None and total != expected_total):
+                raise RuntimeError('order.oTc 分页总单数无效或已变化，已中止')
+            expected_total = total
         ids = [str(o.get("id") or "") for o in batch if isinstance(o, dict)]
         if len(ids) != len(batch) or any(not oid for oid in ids):
             raise RuntimeError("order.oTc 返回无效订单行或缺少订单ID")
@@ -78,13 +90,56 @@ def fetch_pending_orders(cred: dict, days: int = 0, page_size: int = 100,
         seen_ids.update(ids)
         orders.extend(batch)
         print(f"  第 {page} 页: +{len(batch)} 单（累计 {len(orders)}）")
-        if len(batch) < page_size:
+        if expected_total is not None and len(orders) > expected_total:
+            raise RuntimeError('order.oTc 累计单数超过分页总单数，已中止')
+        if len(batch) < page_size or len(orders) == expected_total:
+            if expected_total is not None and len(orders) != expected_total:
+                raise RuntimeError('order.oTc 累计单数与分页总单数不符，结果不完整')
             return orders
         if page == max_pages:
             raise RuntimeError(f"待处理订单超出分页上限 {max_pages}，结果不完整，未放行处理")
         page += 1
         time.sleep(REQUEST_INTERVAL)
     return orders
+
+class CancelRejected(RuntimeError):
+    """马帮明确拒绝单笔作废。"""
+
+
+def invoiced_orders(cred: dict, order_ids: list[int]) -> set[int]:
+    requested = set(order_ids)
+    if (not requested or len(requested) != len(order_ids)
+            or any(type(oid) is not int or oid <= 0 for oid in order_ids)):
+        raise ValueError('发票校验需要不重复的马帮内部订单 ID')
+    data = [('orderIds[]', str(oid)) for oid in order_ids]
+    data.append(('tableBase', '1'))
+    response = form_request(cred, WWW_BASE, 'order.getDoCancelOrder', read_only=True, data=data)
+    response.raise_for_status()
+    result = parse_json(response)
+    values = result.get('orderIdList')
+    if response.status_code != 200 or result.get('success') is not True or not isinstance(values, list):
+        raise RuntimeError('发票校验回执无效')
+    ids = [positive_id(value) for value in values]
+    if len(set(ids)) != len(ids) or not set(ids).issubset(requested):
+        raise RuntimeError('发票校验无法确认订单归属')
+    return set(ids)
+
+
+def cancel_pending_order(cred: dict, internal_order_id: int) -> None:
+    if type(internal_order_id) is not int or internal_order_id <= 0:
+        raise ValueError('作废需要马帮内部订单 ID')
+    response = form_request(cred, WWW_BASE, 'order.doCancelOrders', read_only=False, data={
+        'orderIds': str(internal_order_id), 'type': '2', 'remark': 'WB发货群供货已受理',
+    })
+    response.raise_for_status()
+    if response.status_code != 200:
+        raise RuntimeError('马帮作废返回非预期 HTTP 状态')
+    result = parse_json(response)
+    if result.get('success') is False:
+        raise CancelRejected('马帮明确拒绝作废')
+    if result.get('success') is not True:
+        raise RuntimeError('马帮作废回执缺少成功标志')
+
 
 def fetch_all_orders(cred, page_size=500, max_pages=60):
     """查询全部状态订单（order.oTc 全量变体：isNewOrder=2 / a=orderalllist / tabId=222）。"""

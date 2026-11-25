@@ -15,7 +15,9 @@ AAMZ_BASE = 'https://aamz.mabangerp.com/index.php'
 API_BASE = 'https://api.mabangerp.com/v2'
 SSO_GET_TOKEN_URL = 'https://api.mabangerp.com/sso/api/v1/getTokenByKey'
 LOGIN_KEY = 'MABANG_ERP_PRO_MEMBERINFO_LOGIN_COOKIE'
-HOSTS = {'www.mabangerp.com', 'aamz.mabangerp.com', 'passport.mabangerp.com', 'api.mabangerp.com'}
+WAREHOUSE_API_HOST = 'mas-oapi.mabangerp.com'
+API_HOSTS = {'api.mabangerp.com', WAREHOUSE_API_HOST}
+HOSTS = {'www.mabangerp.com', 'aamz.mabangerp.com', 'passport.mabangerp.com'} | API_HOSTS
 PROFILE_HEADERS = {
     'user-agent', 'accept-language', 'sec-ch-ua', 'sec-ch-ua-mobile',
     'sec-ch-ua-platform', 'cache-control', 'pragma',

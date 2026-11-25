@@ -295,6 +295,23 @@ python run.py order group-ship --shops 1001 --resume --apply
 
 配送已受理但 PDF 未导出时，用 `--resume --apply` 按原供货号和文件名补取；只加 `--resume` 查看记录。部分加入失败或写入结果不明时，按 `data/state/WB_FBS发货群供货.json` 中的批次回执人工处理。两份 PDF 是配送后的业务产物，结束后不附加回读验证或同步。
 
+### WB 已供货订单的马帮侧作废
+
+WB 配送受理后，马帮仍滞留的待处理单可用 `order mabang-void-wb` 清理。需要飞书登记时，先用 `order register --apply` 或现有 `order process --apply` 完成登记，以免该单从马帮待处理列表移除后被漏登。
+
+```powershell
+python run.py order mabang-void-wb --supply-id WB-GI-1234567 --json
+python run.py order mabang-void-wb --shops 1001,1002 --json
+python run.py order mabang-void-wb --json
+python run.py order mabang-void-wb --supply-id WB-GI-1234567 --apply --json
+```
+
+默认只预览，核对范围和逐单明细后加 `--apply`。供货号可搭配 `--shops`，省略店铺时按本地日志确认唯一归属。只填 `--shops` 时扫描指定店铺，两项均省略时扫描所有已受理供货。批量模式先按马帮待处理订单缩小范围，指定供货时会列出该供货的全部订单，包括未在马帮待处理查到的单。
+
+供货日志的加单和转配送必须有受理记录，WB 同店实时状态须证明订单仍在原供货且已转配送。马帮内按店铺和平台单号核对，要求价格表完整 VC 仍为「WB发货」、中文名一致，且未预报、未选渠道、未交运、未开票。只向马帮配货库提交作废。作废命令独立执行，飞书登记、WB 供货及 `--resume` 补 PDF 各走原入口。
+
+预览和提交都在 `data/logs/YYYY-MM-DD/` 生成逐单 CSV，`data.artifacts.csv` 返回实际路径。`BLOCKED` 表示未通过校验，`FAILED` 表示马帮拒绝，`ACCEPTED` 表示马帮已受理，`UNKNOWN` 表示须人工核对。出现未知结果时先核对马帮实际状态，保留本地账本，勿重发。
+
 ## 查询报表与客服
 
 商品运营综合报告使用 BCS、WB Open API 和已有本地快照生成 Excel，无需飞书或 `lark-cli`。旧参数 `--url` 和 `--table` 已移除。

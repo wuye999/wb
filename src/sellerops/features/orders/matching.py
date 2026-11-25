@@ -6,7 +6,10 @@ import time
 import requests
 from sellerops.settings import paths as config
 from sellerops.core import utils as common
+from sellerops.domain.mabang_warehouse import select_enabled_warehouse, warehouse_config
 from sellerops.integrations.mabang.client import get_mabang_cred
+from sellerops.integrations.mabang.warehouses import fetch_enabled_warehouses
+from sellerops.persistence.mabang_voids import fulfillment_lock
 from sellerops.integrations.mabang.orders import fetch_pending_orders
 from sellerops.integrations.mabang.client import REQUEST_INTERVAL
 from sellerops.integrations.mabang.client import api_ready
@@ -270,6 +273,13 @@ class MatchResult:
 
 
 def match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
+    if apply:
+        with fulfillment_lock():
+            return _match_orders(days=days, page_size=page_size, apply=apply)
+    return _match_orders(days=days, page_size=page_size, apply=apply)
+
+
+def _match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
     common.ensure_utf8_stdout()
     # 保留本轮分流和更换失败的订单 ID，供组合流程复用。
     result = MatchResult()
@@ -301,19 +311,32 @@ def match_orders(*, days: int, page_size: int, apply: bool) -> MatchResult:
                   f"{r['vc'] or '(无VC)'} {r['cn_name']} | {r['note']}")
 
     n = stat.get("REPLACE", 0)
+    if n:
+        warehouse = warehouse_config(cred)
+        warehouse_id = warehouse.warehouse_id
+        if warehouse.mode != 'id':
+            try:
+                selected = select_enabled_warehouse(fetch_enabled_warehouses(cred), warehouse)
+            except (ValueError, RuntimeError, requests.RequestException) as exc:
+                detail = str(exc) if type(exc) is ValueError else (
+                    '候选启用仓库不可用，请核对马帮会话、仓库列表权限与分页响应')
+                print(f'[中止] 马帮库存仓（mabang.warehouse_keyword / mabang.warehouse_id）：{detail}')
+                csv_path = write_csv(recs)
+                if csv_path:
+                    print(f'[汇总] 明细: {csv_path}')
+                result.stopped = True
+                return result
+            warehouse_id = selected['id']
+            print(f"  马帮库存仓 {selected['name']}｜ID {warehouse_id}｜关键词解析")
+        else:
+            print(f'  马帮仓库 ID（mabang.warehouse_id）为 {warehouse_id}｜已核实 ID 配置')
     if apply and n:
-        from sellerops.domain.snapshot_values import positive_id
-        warehouse_id = positive_id(cred.get("warehouse_id"))
-        if warehouse_id is None:
-            print("[中止] 请在马帮配置中填写经核实的马帮仓库 ID（mabang.warehouse_id）")
-            result.stopped = True
-            return result
         if not api_ready(cred):
             print("[错误] 更换订单商品需要马帮 API 凭证，请先运行 sellerops login mabang 更新会话。")
             write_csv(recs)
             result.stopped = True
             return result
-        print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；马帮仓库 ID（mabang.warehouse_id）为 {warehouse_id}）...")
+        print(f"\n[执行] 强制更换 {n} 个订单商品（含系统匹配一致者；马帮库存仓 ID {warehouse_id}）...")
         try:
             ok, fail = apply_replace(cred, recs, warehouse_id)
         except MabangAuthError:
