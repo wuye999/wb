@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable
 from argparse import Namespace
 
-from sellerops.features.catalog.shops import require_active
+from sellerops.features.catalog.shops import print_snapshot_reminder, require_active, selected_snapshot_freshness
 from sellerops.features.products.plan_preview import preview_output
 from sellerops.features.products.plans import validate_price_intent
 from sellerops.persistence import db
@@ -28,6 +28,14 @@ def preview(args: Namespace, prepare: Callable[[Namespace], int]) -> int:
     answer = prepare(args)
     frozen = getattr(args, 'prepared', None)
     args.output = {'action': args.action, 'scope': frozen or [], 'result': getattr(args, 'outcome', {})}
+    uses_snapshot = args.action in {'price', 'stock', 'trash'} or (
+        args.action == 'discount' and getattr(args, 'channel', 'wb') == 'wb'
+        and not getattr(args, 'all_products', False)
+    )
+    if uses_snapshot and isinstance(frozen, list) and frozen:
+        freshness = selected_snapshot_freshness({str(plan['shopId']) for plan in frozen})
+        args.output['snapshot_freshness'] = freshness
+        print_snapshot_reminder(freshness)
     if getattr(args, 'cmd', None) == 'ops' and args.action != 'review-price':
         preview_output(args.output, compact=getattr(args, 'json', False) and not getattr(args, 'full_preview', False))
     if not has_work(frozen):

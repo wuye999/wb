@@ -2,13 +2,19 @@
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
+from sellerops.features.system import repository_update
 from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository, save_snapshot
 from sellerops.settings import paths
+
+
+def mock_non_git_checkout(test):
+    test.enterContext(patch.object(repository_update, '_main_head', return_value=None))
 
 
 def write_book(rows, headers=('卖家SKU', '产品中文名', '最低售价', 'vendorCode前缀码', '马帮库存SKU', '发货方式')):

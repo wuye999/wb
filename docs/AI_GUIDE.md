@@ -28,13 +28,16 @@
 ```powershell
 python run.py doctor --json
 python run.py doctor --check-online --json
+python run.py doctor --check-updates --json
 ```
 
-`doctor` 默认只检查本机 Python、SQLite、依赖、凭证文件是否存在、价格表表头、快照时间和待认领数。只有用户需要核对会话时才加 `--check-online`，用已有凭证做联网只读探测。即使退出码为 0，也要核对 `data` 中价格表、凭证和其他分项的结果。
+`doctor` 检查本机依赖、配置、价格表、快照和待认领数。仓库更新缓存缺失或过期时会短时检查公开 GitHub 仓库，`--check-updates` 可强制重新检查。依据 `data.repository_update` 转述更新提醒，由用户决定何时拉取。只有用户需要核对平台会话时才加 `--check-online`，用已有凭证做联网只读探测。即使退出码为 0，也要核对各分项结果。
+
+`data.snapshot_freshness` 报告范围内的在营店铺，默认在本地快照满 24 小时时提示。向运营说明涉及的店和快照时间，有需要时请运营明确确认更新范围。阈值可用 `SELLEROPS_SNAPSHOT_MAX_AGE_HOURS` 覆盖。
 
 用户明确要求更新快照时才单独运行 `sync`。`sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，根据 `missing_shops` 提示运营核对。经确认才按店铺 ID 运行 `shop archive` 软归档，需要恢复时运行 `shop restore`。见 [商品映射与人工审核的命令示例](USAGE.md#商品映射与人工审核)。
 
-`map workbench` 在 `exports/workbench/` 更新 HTML，返回 `data.artifacts.html` 和各分类组数 `data.counts`。引导运营打开 HTML，按图片、店铺、完整 VC 核对归属，再导出 JSON。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
+`map workbench` 在 `exports/workbench/` 更新 HTML，返回 `data.artifacts.html` 和各分类组数 `data.counts`。引导运营打开 HTML，按图片、店铺、完整 VC 核对归属，再导出 JSON 并连同页面里的交接话术交回。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
 
 归属完成后用 `map check-mismatch --json` 生成货不对板大图画廊。打开 `data.artifacts.html`，按中文名看图并核对前缀冲突和非最低价倍数。价格检查覆盖各活跃店铺有现价的在架快照，允许各店采用不同的合理正整数倍。`data.counts` 给出商品总条数、中文名组数及异常条数。运营勾选并导出 JSON 或复制完整 VC 后，按确认的店铺和 VC 用 `ops trash` 预览下架计划。
 

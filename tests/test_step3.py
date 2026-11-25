@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import PropertyMock, patch
 
-from catalog_fixture import map_vcs, snapshot, write_book
+from catalog_fixture import map_vcs, mock_non_git_checkout, snapshot, write_book
 from sellerops.cli.main import build_parser, leaf_commands, main
 from sellerops.features.catalog import products
 from sellerops.features.products import warehouse
@@ -25,6 +25,7 @@ FAMILIES = {'doctor', 'sync', 'shop', 'map', 'ops', 'apply', 'report'}
 
 class Step3Tests(unittest.TestCase):
     def setUp(self):
+        mock_non_git_checkout(self)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.addCleanup(paths.configure, paths.current.data_dir)

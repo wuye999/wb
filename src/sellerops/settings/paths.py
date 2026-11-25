@@ -22,6 +22,7 @@ class DataPaths:
         self.exports_dir = root.parent / 'exports'
         self.products_dir = str(root / 'products')
         self.state_dir = str(root / 'state')
+        self.repository_update_json = str(root / 'state' / 'repository-update.json')
         self.workbench_dir = str(self.exports_dir / 'workbench')
         self.log_dir = str(root / 'logs')
         self.shops_dir = str(root / 'shops')

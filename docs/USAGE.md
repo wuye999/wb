@@ -12,7 +12,7 @@
 
 | 操作类型 | 命令 | 执行行为 |
 | --- | --- | --- |
-| 本机检查与预览 | 任意 `--help`、`doctor`、不加 `--apply` 的 `task run` 和 `task schedule` | 检查本机或列出步骤。`doctor --check-online` 才联网探测 |
+| 本机检查与预览 | 任意 `--help`、`doctor`、不加 `--apply` 的 `task run` 和 `task schedule` | 检查本机或列出步骤。`doctor` 在缓存失效时短时检查 GitHub，平台鉴权使用 `--check-online` |
 | 本地查询、工作台与导出 | `shop list`、`catalog product-summary`、`map workbench`、`map check-mismatch`、`report mapping` | 前两项查询本地快照，其他命令按需生成 HTML 或 Excel |
 | 本地归属 | `map batch-set`、`catalog merge`、`catalog rename` | 前两者导入审核 JSON，后者修正归属 |
 | 平台查询与报表 | `report products`、`order list`、`product check-dimensions`、`marketing ads`、`marketing audit`、`report vc-sales`、`report delivery`、`report orders`、`report ratings`、`support chats`、`support appeals` | 读取对应平台，按命令生成本地输出。`order list` 默认先同步订单 |
@@ -30,11 +30,14 @@
 - 涉及 WB 仓库的读写只用本店已核实的默认业务仓。配置和 ID 核对见 [仓库范围](CONFIGURATION.md#仓库范围仅允许配置的本店默认业务仓)。
 - WB 后台鉴权失败时停止该店操作。会话恢复见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
 - 操作限制与续期边界见 [AI 日常操作指南](AI_GUIDE.md)。
+- `doctor` 在本机 `main` 分支优先使用仓库更新缓存，缺失或过期时短时检查 GitHub。`doctor --check-updates` 可跳过缓存。发现可快进的更新时显示手动拉取命令。
 
 ## 商品映射与人工审核
 
 `shop list` 显示每店快照来源、同步时间、在架和回收站留存条数。空快照计 0，未同步店的计数为未知。
 `catalog product-summary` 按中文名查询活跃店铺的已归属、在架货盘商品，逐店展示条数、各规格原价区间、商品折扣区间及默认业务仓库存。原价按币种分组。无采集时核实的本店仓库证据或规格库存记录缺失时，库存显示未知。两条命令均仅查本地库。
+
+`doctor`、`shop list`、`catalog product-summary` 和依赖本地快照的计划预览会提醒范围内的在营店铺。默认满 24 小时提示快照过久，并区分无快照和时间无法确认。JSON 详情见 `data.snapshot_freshness`。需要最新数据时按店单独运行 `sync --shop-id`。
 
 ```powershell
 python run.py shop list --json
@@ -50,7 +53,7 @@ python run.py map workbench --json
 
 待认领商品按同源码或同图归组，先看图和出现店铺，再用前缀、倍数参考或中文名确认。点击缩略图放大，使用分类、处理状态及 VC／中文名／价格搜索定位商品。倍数参考按最接近的正整数倍计算，误差在 1 元内或相对误差在 2% 内时展示。
 
-一键采纳只填入尚未选择的前缀命中组。浏览器保存审核进度。点击「导出审核结果 JSON」展开已处理组的全部 VC，使用以下任一导入命令。
+一键采纳只填入尚未选择的前缀命中组，包括筛选隐藏的组。浏览器保存审核进度。可以分批导出，文件每次包含所有已处理组的完整 VC。导出后把 JSON 和页面上的交接话术发给 WorkBuddy，或自行使用以下任一命令导入。
 
 ```powershell
 python run.py map batch-set --file "_scratch/待认领审核.json" --json

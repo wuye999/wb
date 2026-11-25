@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import Mock, patch
 
-from catalog_fixture import document, map_vcs, snapshot, write_book
+from catalog_fixture import document, map_vcs, mock_non_git_checkout, snapshot, write_book
 from sellerops.cli.main import main
 from sellerops.features.catalog import products
 from sellerops.features.catalog.vc_mapping import multiplier_candidates
@@ -34,6 +34,7 @@ def row(vc, nm, chrt):
 
 class TestStep2(unittest.TestCase):
     def setUp(self):
+        mock_non_git_checkout(self)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.addCleanup(paths.configure, paths.current.data_dir)
@@ -118,8 +119,9 @@ class TestStep2(unittest.TestCase):
 
     def test_price_preview_keeps_skip_csv_and_plan_in_json(self):
         write_book([('', '唯一中文名', 38, 'AAAA', '')])
-        snapshot(1, [row(A, 101, 1001)])
+        snapshot(1, [row(A, 101, 1001)], fetchedAt='2000-01-01T00:00:00+00:00')
         snapshot(2, [])
+        snapshot(3, [])
         rc, _, _ = self.confirm({'vc': A, 'action': 'map', 'cn': '唯一中文名'})
         self.assertEqual(rc, 0)
         rc, reply, err = self.cli('ops', 'price', '--shops', '1,2', '--name', '唯一中文名', '--price', '55')
@@ -127,13 +129,20 @@ class TestStep2(unittest.TestCase):
         self.assertTrue(reply['ok'])
         self.assertEqual(reply['plan_id'], 'P001')
         self.assertEqual(reply['data']['scope'][0]['items'][0]['cn'], '唯一中文名')
+        freshness = reply['data']['snapshot_freshness']
+        self.assertEqual([(row['shop_id'], row['status']) for row in freshness['shops']],
+                         [('1', 'stale'), ('2', 'unknown_age')])
+        self.assertIn('[快照提醒]', err)
+        self.assertIn('apply --plan P001', reply['next_action'])
         skip_csv = reply['data']['scope'][0]['skip_report']
         self.assertTrue(Path(skip_csv).is_file())
         self.assertEqual(reply['data']['result']['artifacts']['skips_csv'], skip_csv)
         self.assertEqual(reply['data']['artifacts']['skips_csv'], skip_csv)
         with db.connect() as connection:
             plan = connection.execute('SELECT payload_json FROM plans WHERE plan_id=?', (reply['plan_id'],)).fetchone()
-        self.assertEqual(json.loads(plan['payload_json'])['scope'], reply['data']['scope'])
+        frozen = json.loads(plan['payload_json'])
+        self.assertEqual(frozen['scope'], reply['data']['scope'])
+        self.assertNotIn('snapshot_freshness', frozen['arguments'])
 
     def test_large_stock_preview_keeps_full_csv_and_frozen_apply_scope(self):
         from sellerops.features.products import plans
@@ -157,6 +166,7 @@ class TestStep2(unittest.TestCase):
             self.assertEqual(data['preview']['counts']['planned'], 100)
             self.assertEqual(data['preview']['omitted'], 90)
             self.assertEqual(data['preview']['per_shop'][0]['planned_cards'], 1)
+            self.assertIn('snapshot_freshness', data)
             self.assertEqual(data['preview']['per_shop'][0]['planned_specs'], 100)
             self.assertEqual(len(data['preview']['samples']), 10)
             for key in ('receipts_csv', 'plan_csv'):
@@ -372,6 +382,8 @@ class TestStep2(unittest.TestCase):
         for text in ('前缀命中', '倍数参考', '待手动归属', '3 个 VC', '猫碗 · 最低价¥60 ×2',
                      'width:150px;height:150px', 'list="products"', '<dialog id="lightbox"',
                      'localStorage.setItem', '导出审核结果 JSON', '已处理', '未处理',
+                     '<progress id="progress"', '已排除 · 非货盘', '已归属 · ', '当前被筛选隐藏的组',
+                     '请先归属或排除至少一组商品', '发给 WorkBuddy 的话术', 'map batch-set --file',
                      img.replace('/tm/', '/c246x328/'), img.replace('/tm/', '/big/'), img,
                      f'{wb.basket_base(123456)}/images/c246x328/1.webp'):
             self.assertIn(text, html)

@@ -1,7 +1,9 @@
 """Offline verification of browser setup, BCS sync/first binding and doctor."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from datetime import datetime
 import hashlib
+import os
 import io
 import json
 from pathlib import Path
@@ -13,16 +15,17 @@ from zipfile import ZipFile
 
 import requests
 
-from catalog_fixture import document, snapshot, write_book
+from catalog_fixture import document, mock_non_git_checkout, snapshot, write_book
 from sellerops.cli.main import main
 from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError
-from sellerops.features.catalog import products
+from sellerops.features.catalog import products, shops
 from sellerops.features.system import doctor, login
 from sellerops.integrations.bcs import client as bcs_client
 from sellerops.integrations.bcs.session import BCSSession
 from sellerops.integrations.sessions import browser, browser_install
 from sellerops.integrations.wildberries import browser_session, session_update
 from sellerops.persistence import db
+from sellerops.persistence.snapshots import save_shop
 from sellerops.settings import paths
 
 
@@ -139,6 +142,7 @@ class BrowserInstallTest(TestCase):
 
 class OnboardingWorkflowTest(TestCase):
     def setUp(self):
+        mock_non_git_checkout(self)
         self.data = Path(self.enterContext(TemporaryDirectory()))
         self.addCleanup(paths.configure, paths.current.data_dir)
         paths.configure(self.data)
@@ -277,6 +281,56 @@ class OnboardingWorkflowTest(TestCase):
         self.assertNotIn('private fixture', json.dumps(reply) + terminal)
         self.assertNotIn('private-fixture', json.dumps(reply) + terminal)
         self.assertEqual([file.read_bytes() for file in files], before)
+
+    def test_snapshot_freshness_uses_age_and_selected_active_stores(self):
+        now = datetime.fromisoformat('2026-11-26T06:00:00+08:00').timestamp()
+        snapshot(1, [], fetchedAt='2026-11-25T06:00:00+08:00')
+        snapshot(2, [], fetchedAt='2026-11-25T06:00:01+08:00')
+        snapshot(3, [], fetchedAt='2026-11-24')
+        snapshot(4, [], fetchedAt='2026-11-26T16:00:00+08:00')
+        snapshot(5, [], fetchedAt='invalid')
+        snapshot(6, [], fetchedAt='2026-11-20T13:00:00+08:00')
+        snapshot(8, [])
+        with db.connect(write=True) as connection:
+            connection.execute("UPDATE shops SET last_sync_error='last fetch failed' WHERE shop_id='1'")
+            connection.execute("UPDATE shops SET status='archived' WHERE shop_id='6'")
+            save_shop(connection, 7)
+
+        with (patch.object(shops, 'time', return_value=now),
+              patch.dict(os.environ, {'SELLEROPS_SNAPSHOT_MAX_AGE_HOURS': '0'}),
+              patch.object(products, 'fetch_all', side_effect=AssertionError('unexpected sync')) as fetch):
+            code, reply, stderr = self.cli('doctor')
+            freshness = reply['data']['snapshot_freshness']
+            self.assertEqual((code, freshness['status'], freshness['max_age_hours'], freshness['active_shop_count']),
+                             (0, 'checked', 24, 7))
+            self.assertEqual({row['shop_id']: row['status'] for row in freshness['shops']},
+                             {'1': 'stale', '3': 'stale', '4': 'unknown_age', '5': 'unknown_age',
+                              '8': 'unknown_age', '7': 'never_synced'})
+            self.assertEqual(freshness['shops'][0]['age_hours'], 24)
+            self.assertEqual(reply['data']['shops'][0]['last_sync_error'], 'last fetch failed')
+            self.assertNotIn('snapshot_present', reply['data']['shops'][0])
+            self.assertIn('[快照提醒]', stderr)
+
+            code, reply, stderr = self.cli('catalog', 'product-summary', '--shops', '1,2,7')
+            freshness = reply['data']['snapshot_freshness']
+            self.assertEqual((code, freshness['active_shop_count']), (0, 3))
+            self.assertEqual([row['shop_id'] for row in freshness['shops']], ['1', '7'])
+            self.assertIn('[快照提醒]', stderr)
+
+            code, reply, stderr = self.cli('shop', 'list', '--name', 'shop6')
+            self.assertEqual((code, reply['data']['snapshot_freshness']['active_shop_count']), (0, 0))
+            self.assertNotIn('[快照提醒]', stderr)
+
+            with patch.dict(os.environ, {'SELLEROPS_SNAPSHOT_MAX_AGE_HOURS': '48'}):
+                code, reply, stderr = self.cli('shop', 'list', '--name', 'shop1')
+                freshness = reply['data']['snapshot_freshness']
+                self.assertEqual((code, freshness['max_age_hours'], freshness['shops']), (0, 48, []))
+                self.assertNotIn('[快照提醒]', stderr)
+
+            code, terminal, _ = self.cli('shop', 'list', '--name', 'shop7', use_json=False)
+            self.assertEqual(code, 0)
+            self.assertIn('sync --shop-id 7', terminal)
+            fetch.assert_not_called()
 
     def test_doctor_distinguishes_invalid_json_and_invalid_structure(self):
         config = Path(paths.current.credentials_json)

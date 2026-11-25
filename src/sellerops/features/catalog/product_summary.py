@@ -5,6 +5,7 @@ import json
 
 from sellerops.domain.snapshot_values import positive_id, price_value, stock_at, valid_sizes
 from sellerops.domain.warehouses import select_warehouse
+from sellerops.features.catalog.shops import print_snapshot_reminder, snapshot_freshness
 from sellerops.persistence import db
 from sellerops.settings import credentials
 
@@ -148,9 +149,12 @@ def run(args) -> int:
             'shops': lambda row: (-row['shop_count'], row['name'])}
     groups.sort(key=keys[args.sort])
     selected = groups[:args.limit] if args.limit else groups
+    freshness = snapshot_freshness([{**shop, 'status': 'active'} for shop in shops])
     args.output = {'shops': shops, 'groups': selected, 'sort': args.sort, 'limit': args.limit,
+                   'snapshot_freshness': freshness,
                    'totals': {'selected_shops': len(shops), 'snapshot_shops': sum(s['snapshot_present'] for s in shops),
                               'unmapped_items': sum(s['unmapped_item_count'] or 0 for s in shops),
                               'matched_groups': len(groups), 'returned_groups': len(selected)}}
     _print(shops, selected, len(groups))
+    print_snapshot_reminder(freshness)
     return 0

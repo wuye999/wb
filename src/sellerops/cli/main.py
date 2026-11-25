@@ -34,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser('doctor', help='快速体检')
     doctor.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
     doctor.add_argument('--check-online', action='store_true', help='显式进行只读鉴权')
+    doctor.add_argument('--check-updates', action='store_true', help='跳过缓存，立即检查 GitHub 仓库更新')
     bind(doctor, 'sellerops.features.system.doctor', 'run')
     sync = sub.add_parser('sync', help='同步商品快照')
     catalog.add_fetch_args(sync, all_scope=True)

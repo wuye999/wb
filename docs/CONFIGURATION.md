@@ -26,6 +26,12 @@
 
 表中是主要依赖。dry-run 也可能调用这些平台的读取接口，不能等同离线检查。
 
+## 快照与仓库更新提醒
+
+`SELLEROPS_SNAPSHOT_MAX_AGE_HOURS` 可设为正整数小时，缺省或无效时使用 24 小时。以本地已保存快照的时间计算，仅核对命令范围内的在营店铺。
+
+`doctor` 在缓存缺失或过期时用公开 GitHub 接口检查项目的 `main`，无需配置 GitHub 凭证。结果写入当前数据目录的 `state/repository-update.json`，成功保留 24 小时，失败保留 1 小时。`doctor --check-updates` 可立即重新检查。更新检查只提供手动拉取提示。
+
 ## 通过 WorkBuddy 连接平台
 
 运营可说「连接 BCS」「连接马帮」或「连接 WB」。首次需要打开专用浏览器时，在项目现有 Python 环境安装一次可选依赖并初始化：

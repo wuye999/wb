@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
-from catalog_fixture import document, map_vcs, shop_summary, snapshot, write_book
+from catalog_fixture import document, map_vcs, mock_non_git_checkout, shop_summary, snapshot, write_book
 from sellerops.cli.main import main
 from sellerops.core.files import atomic_dump_json
 from sellerops.features.catalog import products
@@ -34,6 +34,7 @@ def row(vc=LIVE, nm=101, chrt=201):
 
 class TestCatalogWorkflow(unittest.TestCase):
     def setUp(self):
+        mock_non_git_checkout(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.addCleanup(paths.configure, paths.current.data_dir)

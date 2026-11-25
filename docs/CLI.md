@@ -878,6 +878,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 - `--json` 输出单个 JSON 对象
 - `--check-online` 显式进行只读鉴权
+- `--check-updates` 跳过缓存，立即检查 GitHub 仓库更新
 
 ## sync
 

@@ -4,7 +4,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from sellerops.features.catalog.shops import shop_status
+from sellerops.features.catalog.shops import print_snapshot_reminder, shop_status, snapshot_freshness
+from sellerops.features.system import repository_update
 from sellerops.integrations.sessions import browser
 from sellerops.persistence import db
 from sellerops.persistence.price_book import inspect_price_book as check_book
@@ -127,7 +128,7 @@ def run(args) -> int:
     if sqlite_status in {'ready', 'empty'}:
         try:
             with db.connect(read_only=True) as connection:
-                shops = shop_status(connection)
+                shops = shop_status(connection, include_snapshot=True)
                 pending = active_pending(connection)
         except (ValueError, sqlite3.Error):
             sqlite_status = 'unreadable'
@@ -142,7 +143,12 @@ def run(args) -> int:
             online = online_checks() if present and deps['requests'] else {}
         except Exception:
             online = {'credentials': 'unreadable'}
+    freshness = snapshot_freshness(shops if checked_db else None)
+    for shop in shops:
+        shop.pop('snapshot_present', None)
+    update = repository_update.check(force=getattr(args, 'check_updates', False))
     args.output = {'python': sys.version.split()[0], 'sqlite': sqlite3.sqlite_version, 'dependencies': deps,
+                   'snapshot_freshness': freshness, 'repository_update': update,
                    'credentials_file_exists': present, 'price_book': book, 'database': sqlite_status,
                    'shops': shops, 'pending_vcs': pending, 'online_checked': args.check_online, 'online': online,
                    'browser': runtime, **settings}
@@ -165,6 +171,8 @@ def run(args) -> int:
         args.next_action = '用 map workbench 生成带图待认领工作台'
     print(args.summary)
     _print_summary(args.output)
+    print_snapshot_reminder(freshness)
+    repository_update.print_reminder(update)
     if args.next_action:
         print(args.next_action)
     return int(not all(deps.values()) or sqlite_status == 'unreadable')
