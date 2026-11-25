@@ -592,7 +592,7 @@ WB 中国区 FBS 发货群供货：按店铺和中文名建供货、转配送并
 
 ## order process
 
-马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运；有飞书地址和 lark-cli 时登记
+处理新增订单。按发货方式分流，马帮发货进入匹配、预报上传和交运。有飞书地址和 lark-cli 时登记。
 
 实现入口 [run](../src/sellerops/features/orders/mabang_process.py)
 

@@ -254,7 +254,8 @@ class TestOrderFailures(unittest.TestCase):
                     from sellerops.features.orders.matching import MatchResult
                     return MatchResult(failures={'failed-order': '更换失败'} if replace_failed else {},
                                        group_ids={'group-order'})
-                with self.subTest(replace_failed=replace_failed, registration=registration), redirect_stdout(io.StringIO()), \
+                output = io.StringIO()
+                with self.subTest(replace_failed=replace_failed, registration=registration), redirect_stdout(output), \
                         patch.object(pipeline, 'match_orders', side_effect=match), \
                         patch.object(pipeline, 'mabang_run_forecast', return_value=0) as forecast, \
                         patch.object(pipeline, 'find_lark_cli', return_value='fixture-cli'), \
@@ -262,6 +263,8 @@ class TestOrderFailures(unittest.TestCase):
                                      side_effect=registration if isinstance(registration, Exception) else None) as register:
                     code = pipeline.run(parser.parse_args(['order', 'process', '--url', 'https://fixture.invalid', '--apply']))
                     self.assertEqual(code, int(replace_failed or registration != 0))
+                    if registration:
+                        self.assertIn('可单独运行 order register 补登记', output.getvalue())
                     self.assertEqual(sorted(forecast.call_args.kwargs['failed_ids']),
                                      ['failed-order'] if replace_failed else [])
                     self.assertEqual(forecast.call_args.kwargs['group_shipping_ids'], {'group-order'})

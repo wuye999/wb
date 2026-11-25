@@ -2,7 +2,17 @@
 
 配置由 [路径模块](../src/sellerops/settings/paths.py)、[凭证访问器](../src/sellerops/settings/credentials.py) 和各平台集成读取。常驻凭证只放自己的 `data/credentials.json`，不要贴入源码、文档或公开提交。商品报告的临时BCS账号按下文通过标准输入传入，仅留在本次进程内存。可参考 [空值配置样例](../examples/credentials.example.json)，其中示例店铺和空字段不能直接用于生产。
 
-首次配置时，在 `data/credentials.json` 中填写 `wb.warehouse_keyword`（例如「莫斯科」或具体仓库全名）和 `mabang.handover_keyword`（例如「七库海外仓」）。如已明确填写 `mabang.handover_channel_value`，可直接使用该渠道值并将交运关键词留空。
+首次配置时，按使用的平台在本机 `data/credentials.json` 手填所需项。
+
+| 平台 | 按需手填 | 何时填写 |
+| --- | --- | --- |
+| BCS | `bcs.login.username`、`bcs.login.password` | 使用账号密码直连时填写。已有有效会话可沿用。自有服务地址按需配置 `bcs.base_url`。 |
+| WB | `wb.warehouse_keyword` | 涉及 WB 仓库业务时填写，须唯一匹配各店默认业务仓。后台会话用 `login wb` 建立，官方 `apiKey` 在 BCS 对应店铺维护。 |
+| 马帮 | `mabang.login.username`、`mabang.login.password`、`mabang.shop_map`、`mabang.warehouse_id`、`mabang.handover_keyword` | 账号密码用于直连，处理新增订单时配置本账号的店铺映射、库存仓和交运渠道。已知完整 `mabang.handover_channel_value` 时可以填写该值并将关键词留空。 |
+| 飞书 | `feishu.base_url` | 需要登记或读取飞书表格时填写，也可用 `--url` 指定。还需已登录的 `lark-cli` 和对应表权限。 |
+| AI | `ai.api_key`、`ai.base_url`、`ai.model` | 使用 AI 功能时填服务密钥，按所选服务配置完整请求地址和模型。 |
+
+各平台会话字段可由对应 `login` 命令更新，已有有效会话可以沿用。修改凭证时只在 `data/` 内备份或原子替换。
 
 ## 功能需要哪些配置
 
@@ -16,13 +26,13 @@
 | `order group-ship` | BCS 保存的各店中国区 Marketplace apiKey、本地商品映射及价格表。提交供货需要写权限，导出 PDF 需要可选依赖 |
 | `ops price`、`ops stock`、`ops trash`、`ops discount`、`ops review-price` 的默认 WB 通道，`marketing enroll`、WB 后台客服及订单报表 | 对应 WB 店铺完整 Cookie 三件套，商品匹配还需本地数据 |
 | `ops publish`、`ops create-cards`、`ops replicate`、BCS 库存和下架的仓库解析 | BCS 与对应店铺 WB 凭证，以及本地价格、归属和快照。默认仓库解析走 WB |
-| `order match`、`order forecast`、`order process` | 马帮凭证、店铺映射、本地商品和库存 SKU 映射。取消单过滤可能读取 WB |
+| `order match`、`order forecast`、处理新增订单（`order process`） | 马帮凭证、店铺映射、本地商品和库存 SKU 映射。取消单过滤可能读取 WB |
 | `report vc-sales` | 各目标店的 WB 后台会话，商品中文名使用本地映射。默认在 `exports/` 导出 Excel，可独立于飞书使用 |
 | `order register`、`order deduplicate`、`order stock-register`、`order stock-days`、`marketing audit` | 已登录的 lark-cli 用户、目标表和对应权限。登记与库存操作还需马帮配置，推广审计还需店铺快照和推广信息 |
 | `report products` | BCS 各店官方 apiKey、各店默认业务仓、本地快照和商品归属。无需飞书或 `lark-cli` |
 | `report ratings` | 本机已保存的 BCS 会话、BCS 各店具备评价权限的官方 apiKey。本地映射提供中文名和价格，在架快照用于补入零评价商品 |
 | `support ai-test`、客服草稿 | LLM key、完整请求端点和模型。自动发送还需 WB 凭证与显式 `--apply` |
-| `login bcs`、`login mabang`、`login wb` | 浏览器连接使用本机专用浏览器。BCS、马帮须先在本机配置对应登录名 |
+| `login bcs`、`login mabang`、`login wb` | BCS、马帮配置对应登录名和密码后可直连。连接 WB 或需要网页登录验证时使用专用浏览器 |
 
 表中是主要依赖。dry-run 也可能调用这些平台的读取接口，不能等同离线检查。
 
@@ -30,11 +40,18 @@
 
 `SELLEROPS_SNAPSHOT_MAX_AGE_HOURS` 可设为正整数小时，缺省或无效时使用 24 小时。以本地已保存快照的时间计算，仅核对命令范围内的在营店铺。
 
-`doctor` 在缓存缺失或过期时用公开 GitHub 接口检查项目的 `main`，无需配置 GitHub 凭证。结果写入当前数据目录的 `state/repository-update.json`，成功保留 24 小时，失败保留 1 小时。`doctor --check-updates` 可立即重新检查。更新检查只提供手动拉取提示。
+在本机 `main` 分支，`doctor` 在缓存缺失或过期时用公开 GitHub 接口检查远端 `main`，无需配置 GitHub 凭证。结果写入当前数据目录的 `state/repository-update.json`，成功保留 24 小时，失败保留 1 小时。`doctor --check-updates` 可立即重新检查。更新检查只提供手动拉取提示。
 
 ## 通过 WorkBuddy 连接平台
 
-运营可说「连接 BCS」「连接马帮」或「连接 WB」。首次需要打开专用浏览器时，在项目现有 Python 环境安装一次可选依赖并初始化：
+运营可说「连接 BCS」「连接马帮」或「连接 WB」。BCS 或马帮已配本机账号密码时，可以直接运行对应的连接命令。
+
+```powershell
+python run.py login bcs
+python run.py login mabang
+```
+
+遇到网页验证或需要连接 WB 时，在项目现有 Python 环境安装一次可选依赖并初始化。
 
 ```powershell
 python -m pip install -e ".[browser-login]"
@@ -45,14 +62,14 @@ python run.py login setup
 
 Windows x64 的 `SELLEROPS_BROWSER_SOURCE` 默认是 `auto`，官方源下载失败时回退到已核验的 npmmirror。可设为 `npmmirror` 直接用国内镜像，或设为 `official` 仅尝试官方源。`SELLEROPS_BROWSER_TIMEOUT_SECONDS` 接受 30–600 的整数，默认每个来源累计 180 秒。安装先校验 Chromium、FFmpeg 和 Windows 依赖工具的 SHA-256，再在暂存目录解包和启动专用浏览器，核对版本后发布。首次从旧安装升级时会补齐校验回执。也可用 `doctor` 查看包版本、构建目录和安装回执状态。
 
+浏览器就绪后，重跑需要网页验证的平台连接命令，或连接 WB。
+
 ```powershell
-python run.py login bcs
-python run.py login mabang
 python run.py login wb
 python run.py login wb --resume
 ```
 
-BCS、马帮分别需要先在本机配置 `bcs.login.username` 和 `mabang.login.username`，使用浏览器连接时也需要。配置了密码时优先用本机账号密码，人工登录或验证在官网完成。WB 先检查专用浏览器原有会话，需要登录时由用户在官网输入手机号和验证码。登录成功后正常关窗，工具重新打开后台并检查业务凭证。`login <平台> --resume` 使用已保存的浏览器会话，连接成功时仍可更新本机凭证。如果关窗重开无法恢复完整凭证，可用 `--keep-open`，在浏览器内登录后等候连接结果。登录账号、验证码和密钥内容留在本机，WorkBuddy 只转述结果与下一步。
+BCS、马帮的网页验证也需要已配置的对应登录名。人工登录或验证在平台官网完成。WB 先检查专用浏览器原有会话，需要登录时由用户在官网输入手机号和验证码。登录成功后正常关窗，工具重新打开后台并检查业务凭证。`login <平台> --resume` 使用已保存的浏览器会话，连接成功时仍可更新本机凭证。如果关窗重开无法恢复完整凭证，可用 `--keep-open`，在浏览器内登录后等候连接结果。登录账号、验证码和密钥内容留在本机，WorkBuddy 只转述结果与下一步。
 
 WB 直连时每次页面连接最多等待 3 分钟，恢复店铺列表最多等待 4 分钟，页面接通后人工登录最多等待 20 分钟。后台明确跳回 WB 官网登录页时会进入人工登录流程。BCS 和马帮的人工登录窗口最多等待 10 分钟。已登录但 WB 恢复超时，可运行 `login wb --resume` 检查原浏览器资料。
 
@@ -134,7 +151,7 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 | `aamz_cookie` | aamz 域会话；未填时代码回退 www_cookie，实际是否可用取决于会话 |
 | `api_bearer` | api 域 Bearer 值，不加 Bearer 前缀；可由程序续期 |
 | `api_key` | api 域 key；也可从 www_cookie 的指定登录 Cookie 中提取 |
-| `login` | 本地登录配置，包括 `username`、`password`、`timezone`、`headers`、`auto_refresh` 和可选的 `passport_sso` |
+| `login` | 本地登录配置，包括 `username`、`password`、`timezone`、`headers`、`auto_refresh` 和可选的 `passport_sso`。自动续期需显式启用 `auto_refresh` |
 | `cookie_jar` / `auth_updated_at` | 程序维护的分域 Cookie 状态和最近认证更新时间；已有的四个凭证字段仍保留 |
 | `handover_keyword` | 交运渠道名称的匹配关键词，例如「七库海外仓」。未直接配置渠道值时必填 |
 | `handover_channel_id` / `handover_channel_value` | 按账户设置渠道识别 ID 和完整渠道值。交运关键词为空时直接使用已配置的完整渠道值 |
@@ -147,7 +164,7 @@ WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 
 
 马帮业务仍要求 `shop_map`。更换马帮账户或物流方案时，应先核对目标店铺、所配置的马帮仓库及物流渠道。
 
-订单处理默认只覆盖 `shop_map` 配置店铺的全部新增待处理订单。`--days 0`（默认）不发送日期限制，显式正数才限制最近 N 天；不将其他店铺或历史已完成订单纳入履约。
+处理新增订单（`order process`）默认只覆盖 `shop_map` 配置店铺的全部新增待处理订单。`--days 0`（默认）不发送日期限制，显式正数才限制最近 N 天；不将其他店铺或历史已完成订单纳入履约。
 
 ## 飞书：feishu 与本机 lark-cli
 

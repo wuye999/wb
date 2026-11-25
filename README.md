@@ -34,7 +34,7 @@ python -m venv .venv
 
 下文的 `python` 应替换为实际使用的解释器，或先激活环境。也可以使用已装基础依赖的 Python 执行 `python run.py --help`。
 
-在 WorkBuddy 里说「连接 WB」「连接 BCS」或「连接马帮」即可进入对应的 `login` 流程。BCS、马帮优先使用本机账号密码，平台要求验证时在官网操作；WB 从专用浏览器恢复会话。首次安装和登录步骤见 [平台连接配置](docs/CONFIGURATION.md#通过-workbuddy-连接平台)。飞书功能另需已登录的配套 lark-cli。
+在 WorkBuddy 里说「连接 WB」「连接 BCS」或「连接马帮」即可进入对应的 `login` 流程。已配账号密码时可直接运行 `login bcs` 或 `login mabang`。遇到网页验证或连接 WB 时再按需安装专用浏览器。飞书功能另需已登录的配套 `lark-cli`。首次连接步骤见 [平台连接配置](docs/CONFIGURATION.md#通过-workbuddy-连接平台)。
 
 ## 更新已有环境
 
@@ -52,7 +52,7 @@ git pull --ff-only
 
 当前源码入口是 `run.py`，旧的 `python wb.py ...` 调用需改为 `python run.py ...`。原脚本、快捷方式及计划任务若引用旧入口或目录，应同步更新；安装包后也可使用 `python -m sellerops ...`。持续运行的任务在更新后按原授权范围手动恢复，更新代码不会自动启动任务、同步平台或执行业务写入。
 
-Git 只分发源码、说明和空值样例，自己的凭证、商业表格、快照、状态、日志、运行环境及本地归档不上传。更新代码保留这些用户数据；飞书 CLI 路径、登录状态及平台凭证继续由各用户自己的环境维护。
+Git 只分发源码、说明和脱敏样例，自己的凭证、商业表格、快照、状态、日志、运行环境及本地归档不上传。更新代码保留这些用户数据；飞书 CLI 路径、登录状态及平台凭证继续由各用户自己的环境维护。
 
 ## 准备自己的数据
 
@@ -69,11 +69,19 @@ wb/
     state/
 ```
 
-首次配置时，在 `data/credentials.json` 中填写 `wb.warehouse_keyword`（例如「莫斯科」或具体仓库全名）和 `mabang.handover_keyword`（例如「七库海外仓」）。请根据本店仓库列表和马帮账户的实际渠道名称填写。
+首次配置时，按使用的平台在本机 `data/credentials.json` 手填所需项。
+
+| 平台 | 按需手填 | 何时填写 |
+| --- | --- | --- |
+| BCS | `bcs.login.username`、`bcs.login.password` | 使用账号密码直连时填写。已有有效会话可沿用。自有服务地址按需配置 `bcs.base_url`。 |
+| WB | `wb.warehouse_keyword` | 涉及 WB 仓库业务时填写，须唯一匹配各店默认业务仓。后台会话用 `login wb` 建立，官方 `apiKey` 在 BCS 对应店铺维护。 |
+| 马帮 | `mabang.login.username`、`mabang.login.password`、`mabang.shop_map`、`mabang.warehouse_id`、`mabang.handover_keyword` | 账号密码用于直连，处理新增订单时配置本账号的店铺映射、库存仓和交运渠道。已知完整 `mabang.handover_channel_value` 时可以填写该值并将关键词留空。 |
+| 飞书 | `feishu.base_url` | 需要登记或读取飞书表格时填写，也可用 `--url` 指定。还需已登录的 `lark-cli` 和对应表权限。 |
+| AI | `ai.api_key`、`ai.base_url`、`ai.model` | 使用 AI 功能时填服务密钥，按所选服务配置完整请求地址和模型。 |
 
 已有旧快照或映射表的用户，先按 [旧数据迁移说明](docs/MIGRATION.md#迁移旧商品数据) 将商品资料搬入 SQLite。样例凭证为空，不能直接连接平台。基础业务先准备所需平台凭证。真实凭证、浏览器资料和业务数据由 Git 排除，更新代码时保留自己的 data，并单独备份。
 
-在商品价格表的「发货方式」列填写「马帮发货」「WB发货」或「不处理」。「马帮发货」须填写「马帮库存SKU」，其余两种方式让该列留空。详见 [商品价格表](docs/DATA.md#商品价格表)。
+初次准备商品价格表可复制 [商品价格表样例](examples/商品价格表.example.xlsx)，改名为 `data/商品价格表.xlsx` 并填入自己的商品资料。在「发货方式」列填写「马帮发货」「WB发货」或「不处理」。「马帮发货」须填写「马帮库存SKU」，其余两种方式让该列留空。详见 [商品价格表](docs/DATA.md#商品价格表)。
 
 默认 data 路径由项目位置确定，不随终端工作目录变化。只有需要单独存放数据时才使用 `--data-dir` 或 `SELLEROPS_DATA_DIR`。优先级为命令行、环境变量、项目根目录 data。`--data-dir` 可放在子命令前后。
 
@@ -93,11 +101,12 @@ python run.py task run morning --all-shops
 python run.py task schedule
 ```
 
-`doctor` 检查本机环境与配置状态，只有加 `--check-online` 才联网探测会话。`shop list` 查询本地库中的店铺和快照状态。
+`doctor` 检查本机依赖、凭证结构、浏览器、价格表异常行、各平台配置和店铺快照。加 `--check-online` 才探测平台会话。在本机 `main` 分支，仓库更新缓存缺失或过期时会检查公开 GitHub 仓库，`--check-updates` 可跳过缓存立即检查。`shop list` 查询本地店铺、快照和商品条数，`catalog product-summary` 按中文名汇总已归属的在架货盘原价、折扣和默认业务仓库存。
 
 ```powershell
 python run.py doctor --json
 python run.py shop list --json
+python run.py catalog product-summary --name "示例商品" --json
 ```
 
 已有价格表和快照时，按自己的店铺和商品生成操作预览。
@@ -112,7 +121,9 @@ python run.py ops price --shops 1001 --name "示例商品" --price 55 --json
 python run.py apply --plan P018
 ```
 
-用户要求更新快照时单独运行 `sync`。默认通过 BCS 先同步 WB → BCS 再读缓存，已在后台同步时可加 `--no-sync`。显式 `--source wb-openapi` 直读 WB 中国区接口。
+用户要求更新快照时单独运行 `sync`。默认通过 BCS 先同步 WB → BCS 再读缓存，已在后台同步时可加 `--no-sync`。显式 `--source wb-openapi` 直读 WB 中国区接口。首次同步成功后用 `map workbench` 生成带图工作台。
+
+「处理新增订单」使用 `order process`。马帮发货进入库存 SKU 匹配、预报和交运，符合条件时登记飞书。WB 发货使用 `order group-ship`。见 [订单履约与飞书](docs/USAGE.md#订单履约与飞书)。
 
 ## 日常使用边界
 

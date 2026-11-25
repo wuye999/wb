@@ -62,7 +62,7 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | `mabang-stock-register` | `order stock-register` |
 | `mabang-stock-daily` | `order stock-days` |
 | `fbs-group-ship-openapi` | `order group-ship` |
-| `mabang-process` | `order process`。缺少飞书地址或 `lark-cli` 时自动跳过登记 |
+| `mabang-process` | `order process`（处理新增订单）。缺少飞书地址或 `lark-cli` 时自动跳过登记 |
 | `product-report` | `report products`。移除旧参数 `--url` 和 `--table`，无需飞书或 `lark-cli`。近 7/14 天有效出单改用 WB Open API，口径 A 仅计在途和买断，每行一件。退货继续使用 `--order-days`。JSON 中用 `data.orders_complete` 查看订单覆盖，并用 `data.period.orders_collected_from` 查看实际采集起点 |
 | `feishu-vc-stats` | `report vc-sales`。改用 WB 订单动态，按北京时间统计下单件数并在 `exports/` 导出 Excel。迁移时去掉 `--url`、`--table` 和 `--by-prefix`，从 `data.artifacts.workbook` 读取路径 |
 | `fbs-delivery` | `report delivery` |
@@ -95,4 +95,4 @@ python run.py --data-dir _scratch/legacy-copy migrate-legacy
 | 手动运行 `product discount` 并依赖默认目标 50 | 用 `ops discount --target 50` 预览，或填写用户指定的 0 至 100。确认后用 `apply --plan` 提交 |
 | 改价并设折扣 | 用 `ops price --price P --discount D` 预览，确认后用 `apply --plan` 提交 |
 
-只改折扣可用 `ops price --keep-price --discount D` 或 `ops discount --target D` 预览，确认后用 `apply --plan` 提交。库存用 `--amount` 指定数量。每日折扣任务默认走 WB，支持 `--shops`，按目标折扣 50 生成待确认单。自动化使用 `ops`、`apply` 和 `report products` 的 `--json`，分别读取 `data.scope`、`data.receipt` 和 `data.artifacts`。旧命令末行摘要属于兼容输出。
+只改折扣可用 `ops price --keep-price --discount D` 或 `ops discount --target D` 预览，确认后用 `apply --plan` 提交。库存用 `--amount` 指定数量。每日折扣任务默认走 WB，支持 `--shops`，按目标折扣 50 生成待确认单。自动化使用 `ops`、`apply` 和 `report products` 的 `--json`。预览读取 `data.scope`，大批量预览改读 `data.preview` 和 `data.artifacts`，支持的子命令可加 `--full-preview` 恢复完整范围。提交读取 `data.receipt`，报表路径读取 `data.artifacts`。旧命令末行摘要属于兼容输出。

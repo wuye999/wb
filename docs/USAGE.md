@@ -34,10 +34,10 @@
 
 ## 商品映射与人工审核
 
-`shop list` 显示每店快照来源、同步时间、在架和回收站留存条数。空快照计 0，未同步店的计数为未知。
-`catalog product-summary` 按中文名查询活跃店铺的已归属、在架货盘商品，逐店展示条数、各规格原价区间、商品折扣区间及默认业务仓库存。原价按币种分组。无采集时核实的本店仓库证据或规格库存记录缺失时，库存显示未知。两条命令均仅查本地库。
+`shop list` 显示每店快照来源、同步时间、在架和回收站留存条数。JSON 的 `data.shops` 包含 `snapshot_present`、`active_item_count` 和 `trashed_item_count`。空快照计 0，未同步店的计数为 `null`。
+`catalog product-summary` 按中文名查询活跃店铺的已归属、在架货盘商品，逐店展示条数、各规格原价区间、商品折扣区间及默认业务仓库存。原价按币种分组。仓库证据或规格库存记录缺失时，库存显示未知。可用 `--shops` 限定在营店，`--name` 和 `--name-contains` 分别精确或按子串查询。`--sort` 按条数（`count`）、覆盖店数（`shops`）或中文名（`name`）排序，`--limit` 限制返回的中文名组数。两条命令均仅查本地数据。
 
-`doctor`、`shop list`、`catalog product-summary` 和依赖本地快照的计划预览会提醒范围内的在营店铺。默认满 24 小时提示快照过久，并区分无快照和时间无法确认。JSON 详情见 `data.snapshot_freshness`。需要最新数据时按店单独运行 `sync --shop-id`。
+`doctor`、`shop list` 和 `catalog product-summary` 会检查范围内的在营店铺。改价、库存、下架及按商品定向的 WB 折扣预览有准备范围时也会检查。`data.snapshot_freshness` 区分 `stale`（默认满 24 小时）、`never_synced`（无快照）和 `unknown_age`（时间无法确认）。用户要求更新时按店单独运行 `sync --shop-id`。
 
 ```powershell
 python run.py shop list --json
@@ -70,7 +70,7 @@ python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品�
 
 `map check-mismatch` 和 `catalog check-mismatch` 在 `exports/workbench/` 生成同一份 HTML，每次覆盖上次结果。`--cn` 精确匹配中文名，`--begin`、`--end` 和 `--days` 按创建日期筛选。回执含 `data.artifacts.html` 和 `data.counts` 中的总条数、中文名组数及异常条数。
 
-画廊按中文名并排展示大图，异常组排在前面，并标记前缀冲突和非最低价倍数。逐店核对在架快照中的现价。各店可以采用不同的合理正整数倍，卡片会显示主店现价和匹配的倍数，例如「×2/×10」。若有店铺的现价偏离整数倍，标记会注明对应店铺。可以多选中文名，按 VC、中文名或俄文标题搜索，或切换「只看异常」「只看已勾选」。点击放大镜查看大图，点击卡片勾选货不对板，浏览器会保存勾选状态。WB 中尺寸图加载失败时依次尝试高清图、原链接。缺少主图链接时用 WB 商品码尝试加载首图。
+画廊按中文名并排展示大图，异常组排在前面。程序仅标记前缀冲突和售价偏离最低售价合理正整数倍，图片由运营人工比对。逐店核对在架快照中的现价。各店可以采用不同的合理正整数倍，卡片会显示主店现价和匹配的倍数，例如「×2/×10」。若有店铺的现价偏离整数倍，标记会注明对应店铺。可以多选中文名，按 VC、中文名或俄文标题搜索，或切换「只看异常」「只看已勾选」。点击放大镜查看大图，点击卡片勾选货不对板，浏览器会保存勾选状态。WB 中尺寸图加载失败时依次尝试高清图、原链接。缺少主图链接时用 WB 商品码尝试加载首图。
 
 勾选结果可导出 JSON 或复制逗号分隔的完整 VC。要下架时，核对目标店铺后，将复制的 VC 填入 `ops trash --vc` 预览计划单。
 
@@ -80,7 +80,7 @@ python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品�
 python run.py sync --shop-id 1001
 ```
 
-`catalog fetch` 默认等同于 `catalog fetch --source bcs`：先同步 WB → BCS，再按 BASE 读取该店缓存并原子保存快照，保留原有 BCS 行契约。用户已经在 BCS 后台同步过时可加 `--no-sync` 跳过同步直接读取上次结果；同步失败不会中止本次拉取，命令按原流程打印警示后继续读旧缓存。默认读取全部店铺；`--shop-id` 只更新指定店铺。
+`catalog fetch` 默认等同于 `catalog fetch --source bcs`：先同步 WB → BCS，再按 BASE 读取该店缓存并原子保存快照，保留原有 BCS 行契约。用户已经在 BCS 后台同步过时可加 `--no-sync` 跳过同步直接读取上次结果；同步提交或轮询未确认时，命令打印降级提示并继续读旧缓存。全店回执在 `data.sync_warnings` 列出受影响店铺和阶段，BASE 读取或保存失败另见 `data.errors`。降级缓存都成功保存时命令仍可退出 0。默认读取全部店铺，`--shop-id` 只更新指定店铺，单店降级以终端提示为准。
 
 ```powershell
 python run.py catalog fetch --no-sync
@@ -110,9 +110,9 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 
 商品范围与店铺范围各选一项。--shops 接受逗号分隔的明确 ID，--all-shops 表示该通道全部店铺。--name 是完整中文名，--name-contains 才是包含匹配。--all-products 代表全部商品。库存数量必须显式传入，含清零的 --amount 0。
 
-大批量 `ops --json` 预览在 `data.preview` 提供计数、分店汇总和最多 10 条样例。完整 CSV 的绝对路径见 `data.artifacts`。需要完整 JSON 范围时加 `--full-preview`。确认预览后，提交该预览对应的计划单号。
+大批量 `ops --json` 预览可能省略 `data.scope`，在 `data.preview` 提供计数、分店汇总和最多 10 条样例。优先查看命令生成的 `plan_csv`、`receipts_csv` 或 `skips_csv`，绝对路径按实际回执读取 `data.artifacts`。支持的子命令可加 `--full-preview` 取完整范围，`ops review-price` 无此选项。
 
-先用 `ops` 预览生成计划，确认后用 `apply --plan` 提交对应单号。
+范围明确时直接生成计划预览。运营确认一次后用 `apply --plan` 按对应单号整单提交。
 
 ```powershell
 python run.py ops price --shops 1001 --name "示例商品" --price 55
@@ -126,7 +126,7 @@ python run.py ops stock --shops 1001 --vc "BCS-TEST-123456789" --amount 20
 python run.py apply --plan P018 --json
 ```
 
-`ops price`、`ops discount` 和 `ops stock` 默认使用 WB 卖家后台，需指定店铺与商品范围。`ops review-price` 用 `--shops` 或 `--all-shops` 指定要查询待审核商品的店铺。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一价格使用正整数 `--price`。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
+`ops price`、`ops discount` 和 `ops stock` 默认使用 WB 卖家后台，需指定店铺与商品范围。`ops review-price` 用 `--shops` 或 `--all-shops` 指定要查询待审核商品的店铺。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一原价（吊牌价）使用正整数 `--price`。WB 折扣百分比越大，折后价越低，反之越高。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
 
 `ops price` 必须选择正整数 `--price`，或使用 `--keep-price` 搭配折扣。BCS 可用 `--channel bcs --club-discount D` 搭配任一价格意图。
 
@@ -150,7 +150,7 @@ python run.py apply --plan P018 --json
 
 改价与设库存可显式用 `--channel bcs` 选择 BCS 通道。鉴权失败和提交异常的处理见 [AI 日常操作指南](AI_GUIDE.md)。`ops stock --resolve live` 仍先确认完整规格计划，再仅查询已确认的本店默认业务仓当前库存；实时库存缺行保留未知，不减少待修改的规格，也不补成0。返回其他仓记录或读取失败时阻止该店对应商品并报告。
 
-计划阻止目标价低于或等于已知原价一半的商品。规格 ID 同时被本店不同卡认领时，库存与下架清零均阻止涉及的目标卡，即使另一张卡未被选中。需要审核新价格时，用 `ops review-price` 预览，确认后用 `apply --plan` 提交。用户明确要求整合审核时才使用支持它的 `--auto-review`。
+计划阻止目标价低于或等于已知原价一半的商品。规格 ID 同时被本店不同卡认领时，库存与下架清零均阻止涉及的目标卡，即使另一张卡未被选中。需要审核新价格时，用 `ops review-price` 预览，确认后用 `apply --plan` 提交。用户明确要求整合审核时才使用支持它的 `--auto-review`。待审接口成功返回 `quarantineGoods: null` 时视为空清单。鉴权、格式错误或分页不完整会记录到预览中的 `data.result.failed_shops` 并返回非零。
 
 ## 发布商品与跨店补齐
 
@@ -168,7 +168,7 @@ python run.py ops replicate --shops 1001 --name "示例商品" --limit 1
 
 `ops replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次。WB 商品码取自选中的源店快照。上架和复制在每家目标店按完整 VC 或相同的最长连续数字段查重，数字段至少 6 位。BCS 建卡和复制使用目标店全状态本地快照及提交记录，回收站中的卡也会跳过。BCS 批量推送在有本地快照时也用它查重。快照滞后时，结合已有操作回执核对范围，并确认在架源商品仍然有效。
 
-复制以源完整 VC 和目标店组合统计跳过。`data.result.replication` 包含跳过原因和限额前后的候选数。候选为零时也可核对汇总，完整跳过明细见 `data.artifacts.skips_csv`。
+复制先按目标店查重和过滤，`--limit` 限制初筛后准备的候选 VC 数。复制以源完整 VC 和目标店组合统计跳过。`data.result.replication` 包含跳过原因和限额前后的候选数。候选为零时也可核对汇总，完整跳过明细见 `data.artifacts.skips_csv`。
 
 BCS 建卡已停用商品详情代理。`ops create-cards` 和 `ops replicate` 默认用 `card.json` 合成详情，生成一条尺码为 `0` 的规格。`ops create-cards --file` 的 JSON 商品项仍可通过 `extra.wb_detail.sizes` 提供规格，建卡只取第一条并写入目标 VC 和价格。`ops replicate` 使用合成规格，源商品的非零尺码及其他规格不会带入新卡。
 
@@ -192,7 +192,7 @@ python run.py ops replicate --source-shops 1001,1002 --shops 1003 --price-source
 
 在项目根目录运行。导出只读本地快照，生成名为「商品列表」的单 Sheet XLSX，共 13 列，含来源店铺和快照售价。缺少店名时使用店铺 ID，未归属商品的中文名留空。售价取首规格价格，规格库存齐全时汇总库存。`--shops` 可指定单店或逗号分隔的多家店铺，`--all-shops` 选择全部活跃店铺。单店默认写入 `exports/shop_1001_products.xlsx`（以店铺 ID 命名），指定多店或使用 `--all-shops` 默认写入 `exports/shops_products.xlsx`。`--out` 可指定数据目录之外的 `.xlsx` 路径。
 
-导出过滤回收站和人工排除商品。用原 VC 最长的连续数字段（至少 6 位）跨店及表内去重，无满足长度的数字段时使用完整 VC。优先保留售价有效且包装尺寸、毛重齐全的一行，其次按主店优先和店铺 ID 升序选择。终端打印各项条数和导出路径。
+导出过滤回收站和人工排除商品。用原 VC 最长的连续数字段（至少 6 位）跨店及表内去重，无满足长度的数字段时使用完整 VC。优先保留售价有效且包装尺寸、毛重齐全的一行，其次按主店优先和店铺 ID 升序选择。终端打印扫描、过滤、去重和导出条数及路径。导出条数按源数字码汇总，店铺快照条数按店统计。外发时保留原表头及「源数字码」、原 `vendorCode`、本店 `nmId` 等交换列。
 
 ```powershell
 python run.py catalog export-products --shops 1001
@@ -260,7 +260,7 @@ python run.py order stock-days
 
 商品价格表的「发货方式」决定订单分流。「马帮发货」须填写「马帮库存SKU」，才能进入马帮匹配、预报和交运。「WB发货」走下述 WB 供货流程，「不处理」跳过发货。发货方式留空、填错或马帮库存 SKU 缺失时，马帮匹配报告会标记 `NO_SKU` 并列出原因。
 
-`order process --apply` 默认处理 `mabang.shop_map` 配置店铺的全部新增待处理订单，不限日期。处理顺序为库存 SKU 匹配、预报上传、成功状态轮询和交运。有飞书地址（`--url` 或 `feishu.base_url`）且能找到 `lark-cli` 时再登记。缺任一项会提示并跳过登记，马帮流程成功时仍返回 0。马帮处理失败或实际尝试登记失败时返回非零。
+「处理新增订单」用 `order process` 预览，经运营确认后加 `--apply`。默认覆盖 `mabang.shop_map` 配置店铺的全部新增待处理订单，不限日期。处理顺序为库存 SKU 匹配、预报上传、成功状态轮询和交运。有飞书地址（`--url` 或 `feishu.base_url`）且能找到 `lark-cli` 时再登记。缺任一项会提示并跳过登记，马帮流程成功时仍返回 0。马帮处理失败或实际尝试登记失败时返回非零。
 
 `order match`、`order forecast` 及飞书登记合并的待处理单也使用相同日期语义：`--days 0`（默认）不发送起止日期限制；明确要处理最近 N 天时传正数，例如 `--days 7`。仍只处理配置店铺与新增待处理状态，不包含其他店铺或历史已完成订单。列表完整翻页，达到安全上限或重复分页时报错，不用部分结果继续执行。更换失败、缺 SKU、预报失败或未完成的订单会按流程阻断后续履约，依据本次日志处理，不删除状态后盲目重跑。
 
@@ -274,7 +274,7 @@ python run.py order register --scope all --date 2026-10-01
 
 用户确认后再加 --apply。去重命令只清已有重复记录，库存全量登记则会清空并重建库存表；都不能当作每天的无害初始化。`order stock-days` 默认补今天和更新现有日期列，显式 --begin/--date 会进入可删除旧日期列的区间模式，详见 [数据契约](DATA.md)。
 
-`order register` 和 `order process` 的登记步骤分别显示「本次待登记」和「去重前候选行」的留空量。本次待登记按订单编号去除表内已登记及本批重复后计数。扫描汇总另列候选行、真实排除、表内已登记跳过和本批重复。CSV 的重复行标为「跳过-本批重复」。`--json` 可读 `data.pending_orders`、`data.pending_blank_counts`、`data.candidate_blank_counts` 和导出路径 `data.artifacts.csv`。
+`order register` 和 `order process` 的登记步骤分别显示「本次待登记」和「去重前候选行」的留空量。本次待登记按订单编号去除表内已登记及本批重复后计数。扫描汇总另列候选行、真实排除、表内已登记跳过和本批重复。CSV 的重复行标为「跳过-本批重复」。登记步骤生成的 `--json` 回执可读 `data.pending_orders`、`data.pending_blank_counts`、`data.candidate_blank_counts` 和导出路径 `data.artifacts.csv`。`order process` 跳过飞书时没有这些登记字段。
 
 ### WB 发货群供货与 PDF
 
@@ -304,7 +304,7 @@ python run.py report products
 python run.py report products --shops 1001,1002 --feedback-days 365 --out exports/product_report.xlsx
 ```
 
-报告按 UTC+8 下单日统计，含今天。`--order-days` 控制退货统计窗口，默认 30 天。实际采集至少近 14 天，有效出单固定展示近 7/14 天，口径 A 仅计在途和买断，每行一件。评价默认取接口可访问的历史。默认输出本机目标店存在的低评分（≤3.5）、高退货率（完单口径≥30%）商品，以及排除已知风险且中文名可匹配价格表的近期出单候选。简洁表中的风险和缺口按 VC 最长数字段判断。加 `--details` 可查看订单明细和各项汇总。缺失数据会标为未知，报告有错误时仍导出并返回非零。[报告说明](PRODUCT_REPORT.md)
+报告按 UTC+8 下单日统计，含今天。`--order-days` 控制退货统计窗口，默认 30 天。实际采集至少近 14 天，有效出单固定展示近 7/14 天，口径 A 仅计在途和买断，每行一件。评价默认取接口可访问的历史。默认输出本机目标店存在的低评分（≤3.5）、高退货率（完单口径兼容退货率≥30%）商品，以及排除已知风险且中文名可匹配价格表的近期出单候选。简洁表中的风险和缺口按 VC 最长数字段判断。加 `--details` 可查看订单明细和各项汇总。缺失数据会标为未知，报告有错误时仍导出并返回非零。[报告说明](PRODUCT_REPORT.md)
 
 `report ratings` 使用 BCS 店铺对应的 WB Open API 令牌读取未处理、已处理和归档评价，按评价 ID 去重后以 UTC+8 的创建日筛选。默认近 365 天，含今天。`--days 0` 取接口可访问的全部历史。`--wb-region` 可选 `ru`（默认）或 `cn`。BCS 会话失效时通过 `login bcs` 更新。
 

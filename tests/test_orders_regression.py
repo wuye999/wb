@@ -408,6 +408,18 @@ class TestRegression(unittest.TestCase):
             self.assertEqual(args.output['scanned_rows'], len(candidates) + 1)
             create.assert_not_called()
 
+    def test_order_process_help_uses_new_order_wording(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from sellerops.cli.main import build_parser
+
+        for command in (['order'], ['order', 'process']):
+            output = StringIO()
+            with self.subTest(command=command), redirect_stdout(output), self.assertRaises(SystemExit) as exc:
+                build_parser().parse_args([*command, '--help'])
+            self.assertEqual(exc.exception.code, 0)
+            self.assertIn('处理新增订单', output.getvalue())
+
     def test_mabang_process_skips_feishu_when_address_or_cli_is_missing(self):
         from contextlib import redirect_stdout
         from io import StringIO
@@ -438,6 +450,7 @@ class TestRegression(unittest.TestCase):
                 forecast.assert_called_once()
                 register.assert_not_called()
                 self.assertIn(f'{reason}，跳过飞书登记', output.getvalue())
+                self.assertIn('[完成] 处理新增订单耗时', output.getvalue())
 
     def test_mabang_process_uses_configured_feishu_address_and_passes_registration_options(self):
         from contextlib import redirect_stdout
@@ -450,13 +463,16 @@ class TestRegression(unittest.TestCase):
 
         args = build_parser().parse_args(['order', 'process', '--apply', '--table', '测试表', '--no-pending'])
         cred = SimpleNamespace(feishu_base_url=lambda: ' https://fixture.invalid ')
-        with redirect_stdout(StringIO()), \
+        output = StringIO()
+        with redirect_stdout(output), \
                 patch.object(pipeline.credentials, 'get', return_value=cred), \
                 patch.object(pipeline, 'match_orders', return_value=MatchResult(group_ids={'fixture-order'})), \
                 patch.object(pipeline, 'mabang_run_forecast', return_value=0), \
                 patch.object(pipeline, 'find_lark_cli', return_value='fixture-cli'), \
                 patch.object(pipeline, 'feishu_register_run', return_value=0) as register:
             self.assertEqual(pipeline.run(args), 0)
+        self.assertIn('步骤 ③ 新增订单飞书登记', output.getvalue())
+        self.assertIn('[完成] 处理新增订单及飞书登记耗时', output.getvalue())
         register.assert_called_once_with(args, group_shipping_ids={'fixture-order'})
         self.assertEqual((args.url, args.table, args.no_pending), ('https://fixture.invalid', '测试表', True))
 

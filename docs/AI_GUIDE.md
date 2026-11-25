@@ -6,24 +6,38 @@
 
 ## 判断任务边界
 
-1. 确认项目目录、Python 解释器和入口 `run.py`。优先使用内置 CLI，命令与参数以当前帮助为准，禁止写临时脚本直接读 SQLite。
+1. 确认项目目录、Python 解释器和入口 `run.py`。只读任务优先用内置 CLI，如 `shop list --json`、`catalog product-summary`，命令与参数以当前帮助为准。CLI 未覆盖的合理查询或分析，可只读打开当前数据目录中的 SQLite、快照等本地文件。
 2. 明确用户要求的是查询、报表、本地修改、远端提交还是长期自动运行，以及店铺、商品、日期、库存数量等范围。能从用户指令和已有数据明确推断的内容无需重复确认；会实质扩大范围且无法确定的内容需要先澄清。
-3. 普通运营使用已有命令和用户自己的 `data/`，临时脚本与产物放 `_scratch/`。凭证、数据库和运行资料留在各自的 `data/`。《商品价格表.xlsx》由运营维护，程序只读。源码、依赖、文档和项目配置保持只读，遇到项目问题记录后交维护者处理。只有维护者明确授权才开发，先备份数据，改后运行 `python scripts/check.py`。CLI 帮助或参数有变动时重新生成参考并运行 `python scripts/check_docs.py`。见 [开发指南](DEVELOPMENT.md)。
+3. 普通运营使用已有命令和用户自己的 `data/`，临时脚本与产物放 `_scratch/`。凭证、数据库和运行资料留在各自的 `data/`。日常运营只读源码、依赖、文档及项目配置，遇到项目问题记录后交维护者处理。只有维护者明确授权才开发，先备份数据，改后运行 `python scripts/check.py`。CLI 帮助或参数有变动时重新生成参考并运行 `python scripts/check_docs.py`。见 [开发指南](DEVELOPMENT.md)。
 4. 数据目录默认与 `run.py` 同级。只有用户要求使用另一份数据时才覆盖路径。手动操作、备份与计划任务应使用同一个生产数据目录，各店使用自己的快照和状态。
 5. 未归属商品、目标折扣或库存有歧义时先核对。用完整 VC 确认商品，按动作与店铺取本店 `nmId`、`chrtId`。商品有卖家 SKU 时用 SKU，空白时用唯一的产品中文名。
+
+本地分析请注明数据来源和快照时间。统计在架货盘时过滤归档店、回收站及人工排除的非货盘商品，分别统计未归属与已排除。库存按各店已核实的默认业务仓及规格计算，缺少仓库或规格证据时记为未知。原价、折扣、折后价分别标注，价格保留币种。详见 [数据契约](DATA.md#映射快照与标识)。
+
+只有用户明确要求时才编辑《商品价格表.xlsx》。请用户先保存并关闭 Excel，将原表备份到本地数据目录，再用能保留公式和嵌入图片的 Excel 编辑方式修改指定单元格。避免用 `openpyxl` 简单加载并覆写原表。保存后核对公式、图片和目标单元格，涉及公式时用 Excel 重算。`report --out` 会拒绝将报表写入同名价格表。
 
 ## 当前仓库与凭证约定
 
 - 凡涉及 WB 仓库的读写，包括库存、下架清零、回收站清理和上架，仅允许使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓）。全店或全部商品只扩大商品范围。
-- 先用本店仓库列表核对仓库名称和 `id`。未配置、匹配不到、匹配多个或无法核实时中止该店操作，不得猜测、跨店复用 ID 或回退至未配置的仓库。库存使用列表中的 `id`，office 字段 `warehouseId` 不得代用。已有预览或底层结果出现其他仓库 ID 时不得提交。
-- 用户明确要求连接或恢复会话时运行 `login wb`、`login bcs` 或 `login mabang`。WB 后台会话出错（包括 401/403）时立即停止该店操作，提示用户另行发起 `login wb`。日常业务命令不自行启动浏览器。缺少专用浏览器时，在同一 Python 环境完成一次安装。见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
+- 先用本店仓库列表核对仓库名称和 `id`。未配置、匹配不到、匹配多个或无法核实时中止该店操作，不得猜测、跨店复用 ID 或回退至未配置的仓库。库存使用列表中的 `id`，office 字段 `warehouseId` 不得代用。已有预览或底层结果出现其他仓库 ID 时不得提交。马帮库存匹配只使用本账号独立核实的 `mabang.warehouse_id`。
+- 用户明确要求连接或恢复会话时运行 `login wb`、`login bcs` 或 `login mabang`。WB 后台会话出错（包括 401/403）时立即停止该店操作，提示用户另行发起 `login wb`。日常业务命令不自行启动浏览器。BCS 和马帮已配账号密码时先直连，遇到网页验证或连接 WB 时再按需安装专用浏览器。见 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台)。
 - WB 直连时，页面连接上限 3 分钟，店铺列表恢复上限 4 分钟，人工登录上限 20 分钟。保持命令运行，由用户按窗口提示完成验证，然后等待连接结果。已登录但恢复超时时，可用 `login wb --resume` 检查专用浏览器会话。
 - 已配置 `bcs.login` 自动续期的 BCS 命令可在会话缺失或失效时更新本地会话。已发出的业务写请求保留原结果。遇到滑块或网关校验时，由用户发起 `login bcs` 并在官网完成验证。见 [BCS 配置](CONFIGURATION.md#bcsbcs)。
 - WB Open API 令牌失效时，在 BCS 更新对应店的 `apiKey`。
 
 ## 首次体检与计划单
 
-首次接手先运行 `sellerops doctor --json`。未安装 `sellerops` 入口时用 `python run.py doctor --json`。首次配置时，请运营在 `data/credentials.json` 中填写 `wb.warehouse_keyword`（例如「莫斯科」或具体仓库全名）和 `mabang.handover_keyword`（例如「七库海外仓」）。已明确配置 `mabang.handover_channel_value` 时可将交运关键词留空。
+首次接手先运行 `sellerops doctor --json`。未安装 `sellerops` 入口时用 `python run.py doctor --json`。首次配置时，请运营按使用的平台在本机 `data/credentials.json` 手填所需项。
+
+| 平台 | 按需手填 | 何时填写 |
+| --- | --- | --- |
+| BCS | `bcs.login.username`、`bcs.login.password` | 使用账号密码直连时填写。已有有效会话可沿用。自有服务地址按需配置 `bcs.base_url`。 |
+| WB | `wb.warehouse_keyword` | 涉及 WB 仓库业务时填写，须唯一匹配各店默认业务仓。后台会话用 `login wb` 建立，官方 `apiKey` 在 BCS 对应店铺维护。 |
+| 马帮 | `mabang.login.username`、`mabang.login.password`、`mabang.shop_map`、`mabang.warehouse_id`、`mabang.handover_keyword` | 账号密码用于直连，处理新增订单时配置本账号的店铺映射、库存仓和交运渠道。已知完整 `mabang.handover_channel_value` 时可以填写该值并将关键词留空。 |
+| 飞书 | `feishu.base_url` | 需要登记或读取飞书表格时填写，也可用 `--url` 指定。还需已登录的 `lark-cli` 和对应表权限。 |
+| AI | `ai.api_key`、`ai.base_url`、`ai.model` | 使用 AI 功能时填服务密钥，按所选服务配置完整请求地址和模型。 |
+
+字段细节和会话保存方式见 [配置指南](CONFIGURATION.md)。
 
 ```powershell
 python run.py doctor --json
@@ -31,17 +45,17 @@ python run.py doctor --check-online --json
 python run.py doctor --check-updates --json
 ```
 
-`doctor` 检查本机依赖、配置、价格表、快照和待认领数。仓库更新缓存缺失或过期时会短时检查公开 GitHub 仓库，`--check-updates` 可强制重新检查。依据 `data.repository_update` 转述更新提醒，由用户决定何时拉取。只有用户需要核对平台会话时才加 `--check-online`，用已有凭证做联网只读探测。即使退出码为 0，也要核对各分项结果。
+`doctor` 检查本机依赖、凭证结构、平台配置、浏览器构建、价格表异常和店铺快照。在本机 `main` 分支，仓库更新缓存缺失或过期时会短时检查公开 GitHub 仓库，`--check-updates` 可强制重新检查。依据 `data.repository_update` 转述更新提醒，由用户决定何时拉取。只有用户需要核对平台会话时才加 `--check-online`，用已有凭证做联网只读探测。即使退出码为 0，也要核对各分项结果。
 
 `data.snapshot_freshness` 报告范围内的在营店铺，默认在本地快照满 24 小时时提示。向运营说明涉及的店和快照时间，有需要时请运营明确确认更新范围。阈值可用 `SELLEROPS_SNAPSHOT_MAX_AGE_HOURS` 覆盖。
 
 用户明确要求更新快照时才单独运行 `sync`。`sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，根据 `missing_shops` 提示运营核对。经确认才按店铺 ID 运行 `shop archive` 软归档，需要恢复时运行 `shop restore`。见 [商品映射与人工审核的命令示例](USAGE.md#商品映射与人工审核)。
 
-`map workbench` 在 `exports/workbench/` 更新 HTML，返回 `data.artifacts.html` 和各分类组数 `data.counts`。引导运营打开 HTML，按图片、店铺、完整 VC 核对归属，再导出 JSON 并连同页面里的交接话术交回。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
+首次 `sync` 成功保存快照后，主动引导运营生成并打开 `map workbench`。命令在 `exports/workbench/` 更新 HTML，返回 `data.artifacts.html` 和 `data.counts`。汇报前缀命中、倍数参考、待手动归属组数及完整 VC 数。建议运营按图片、店铺、完整 VC 核对归属，再导出 JSON 并连同页面里的交接话术交回。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
 
 归属完成后用 `map check-mismatch --json` 生成货不对板大图画廊。打开 `data.artifacts.html`，按中文名看图并核对前缀冲突和非最低价倍数。价格检查覆盖各活跃店铺有现价的在架快照，允许各店采用不同的合理正整数倍。`data.counts` 给出商品总条数、中文名组数及异常条数。运营勾选并导出 JSON 或复制完整 VC 后，按确认的店铺和 VC 用 `ops trash` 预览下架计划。
 
-改价、价格审核、折扣、库存、下架、上架和改码等商品计划类操作先用 `ops` 预览，展示店铺、商品、规格、目标值、受阻明细与计划单号。运营明确确认后，用 `apply --plan` 提交本次单号。`product` 和 `listing` 中对应的旧入口保留作兼容预览。其余写操作按各自命令规则使用 `--apply`，部分命令还需 `--yes`。见 [改价与库存示例](USAGE.md#改价与库存)。
+改价、价格审核、折扣、库存、下架、上架和改码等商品计划类操作，店铺、商品和目标值已明确时直接用 `ops` 出预览，展示店铺、商品、规格、目标值、受阻明细与计划单号。运营确认该预览一次后，用 `apply --plan` 提交本次整单。`product` 和 `listing` 中对应的旧入口保留作兼容预览。其余写操作按各自命令规则使用 `--apply`，部分命令还需 `--yes`。见 [改价与库存示例](USAGE.md#改价与库存)。
 
 ## 选择与执行命令
 
@@ -53,18 +67,19 @@ python run.py doctor --check-updates --json
 | --- | --- |
 | 中文名改价、设折扣、设库存、下架 | 先用 `shop list --name` 从本地库确认唯一店铺 ID。`ops price`、`ops discount`、`ops stock`、`ops trash` 需要显式店铺及商品范围。`--name` 精确匹配，`--name-contains` 用于用户明确要求包含的任务。库存必须给数量。 |
 | 商品综合报告 | `report products`。WB 订单按 UTC+8 下单日统计，`--order-days` 控制退货窗口。近 7/14 天有效出单采用口径 A，仅计在途和买断。无需飞书或 `lark-cli`，旧参数 `--url` 和 `--table` 已移除。[报告说明](PRODUCT_REPORT.md) |
+| 查询商品评分 | `report ratings` 用 BCS 对应店铺的 WB Open API 令牌读取评价。检查 `data.failed_shops` 后汇报覆盖范围。见 [评分用法](USAGE.md#查询报表与客服)。 |
 | 统计 VC 销量 | `report vc-sales --json`。用 WB 订单动态按北京时间统计下单件数，默认近 7 天（含今天）。可用 `--shops` 选店，在 `data.artifacts.workbook` 查看本地 Excel 路径，有 `data.failed_shops` 时标明结果不完整。无需飞书。 |
 | 更新快照或映射 | 用户明确要求更新时用 `sync`。归属用 `map` 查看候选、确认或排除。 |
 | 筛查货不对板 | `map check-mismatch --json`。可按 `--cn` 精确限定中文名，按 `--begin`、`--end` 或 `--days` 限定创建日期。 |
 | 新建商品、跨店补齐、导入标准表 | 分别用 `ops create-cards`、`ops replicate`、`listing import-publish`。 |
-| 处理新订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。缺飞书地址或 `lark-cli` 时自动跳过飞书登记。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
+| 处理新增订单 | 按商品价格表的「发货方式」分流。「马帮发货」须填写「马帮库存SKU」，使用 `order process`，预报确认后才交运。缺飞书地址或 `lark-cli` 时自动跳过飞书登记。「WB发货」用 `order group-ship`。「不处理」跳过发货。发货方式缺失或无效时，提示运营补填。 |
 | 客服与持续任务 | `support questions`、`support chats` 及同组监听命令。持续回复与 `task schedule` 注册须有明确授权。 |
 | 汇报修改结果 | 核对店铺、商品与规格数、受理任务号、阻止原因和完整明细路径。预览与提交沿用同样的目标。 |
 
 | 用户意图 | WorkBuddy 首选命令 | 修改字段 |
 | --- | --- | --- |
-| 指定价格 | `ops price --price P` | 价格 |
-| 同时指定价格与折扣 | `ops price --price P --discount D` | 价格、折扣 |
+| 指定原价 | `ops price --price P` | 原价（吊牌价） |
+| 同时指定原价与折扣 | `ops price --price P --discount D` | 原价、折扣 |
 | 保持原价并设折扣 | `ops price --keep-price --discount D` | 折扣 |
 | 只设折扣 | `ops discount --target D` | 折扣 |
 | 设置库存 | `ops stock --amount N` | 本店默认业务仓的每个目标规格库存 |
@@ -72,17 +87,17 @@ python run.py doctor --check-updates --json
 
 改价、设折扣和设库存需指定店铺与商品范围，默认走 WB。价格审核按所选店铺查询待审核商品。完整中文名选中归属明确的全部同名链接。点名 SKU 时用 `--sku`，无法确认归属的链接列入阻止。库存必须显式给数量，归零用 `--amount 0`。回收站清理需要归零时先通过 BCS 提交本店默认业务仓的规格清零，再通过 WB 删除已确认的卡。默认 BCS 上架将初始库存随建卡或推送提交。
 
-有 `--threshold` 或 `--below` 时，预览按本店当前折扣固定范围。全店折扣分页未完成的店铺不得提交。
+WB 折扣百分比越大，折后价越低，反之越高。`--price` 写入原价（吊牌价）。有 `--threshold` 或 `--below` 时，预览按本店当前折扣固定范围。全店折扣分页未完成的店铺不得提交。
 
 用户要求为商品报告临时引入其他 BCS 账号时，使用 `report products --extra-bcs-stdin`，将完整 fetch 文本通过子进程标准输入管道以 UTF-8 传入并关闭输入流。多个 fetch 块依次传入。不要将秘密拼进命令行、环境变量或保存到临时脚本或抓包文件，不替换本机凭证。解析只提取认证，不执行原 fetch。`--shops` 仅筛本机目标。临时账号的店铺补充退货和近 7/14 天有效出单等指标，链接缺口仅针对本机目标店铺。查看报告中的账号来源及失败明细，凭证失效不启用浏览器续期。[报告说明](PRODUCT_REPORT.md#临时引入其他bcs账号)
 
-马帮命令默认 `--days 0`，查询新增待处理状态且不发送日期限制，仅处理 `mabang.shop_map` 配置店铺。用户说“处理马帮订单”时不自行缩小为最近1天；正数天数用于明确的最近 N 天范围。分页超限或不完整会中止，不以部分清单宣称全部处理。其他店铺与历史已完成订单不进入匹配、预报或交运。
+「处理新增订单」的 `order process` 默认 `--days 0`，查询 `mabang.shop_map` 配置店铺的新增待处理订单，不发送日期限制。用户明确要求最近 N 天时传入正数。分页超限或不完整会中止，不以部分清单宣称全部处理。其他店铺与历史已完成订单不进入匹配、预报或交运。
 
 已配置自动续期的马帮命令可在预览或执行时更新本地会话。遇到验证码或短信验证时停止，提示用户发起 `login mabang`，在官网完成验证并关窗。可用 `--resume` 续办，或在关窗恢复失败时用 `--keep-open`。不读取或输出账号密码，不把认证失败当成无订单、模板缺失或普通逐单失败。已发出的业务写请求不因续期重放。见 [马帮配置](CONFIGURATION.md#马帮mabang)。
 
 用 `ops create-cards` 上架前确认卖家 SKU 或唯一产品中文名，再展示完整 VC 和编码来源。手工指定完整 VC 时保留原码。无唯一登记前缀时请运营指定前缀，或明确同意使用 `--random-prefix`，再生成计划单。
 
-复制上架使用 `ops replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分。默认库存 999，显式 0 保留。目标店已存在或已提交完整 VC 或相同的最长连续数字段时跳过，数字段至少 6 位。查重覆盖本地全状态快照（含回收站）和提交记录。缺快照时先核对，快照滞后时结合已有回执确认范围。首个写请求前准备好整批详情，并核实各目标店的默认业务仓。
+复制上架使用 `ops replicate --source-shops ... --shops ...`，按完整 VC 合并源店，保留完整 VC 建卡。`--price-source minimum --price-multiplier 10` 表示商品价格表「最低售价」×10，保留到分。默认库存 999，显式 0 保留。目标店已存在或已提交完整 VC 或相同的最长连续数字段时跳过，数字段至少 6 位。查重覆盖本地全状态快照（含回收站）和提交记录。缺快照时先核对，快照滞后时结合已有回执确认范围。`--limit` 限制初筛后准备的候选 VC。即使零候选，也查看 `data.result.replication` 和已生成的 `data.artifacts.skips_csv`。首个写请求前准备好整批详情，并核实各目标店的默认业务仓。
 
 BCS 建卡逐店显示每日限额提醒。今日已提交加本次待提交超过 1000 张时，把 `[警告]` 中的店铺、张数和分批建议一起展示给运营，再确认计划范围。
 
@@ -92,7 +107,7 @@ BCS 建卡逐店显示每日限额提醒。今日已提交加本次待提交超�
 
 用户已经明确授权执行的操作，可按现有命令要求完成，不人为增加反复确认。`--yes` 只表示跳过命令自带确认，不能替代任务授权，也不能保证每个破坏性操作都需要这个参数。
 
-`catalog fetch` 的默认 BCS 快照来源会先触发 WB → BCS 同步（加 `--no-sync` 才跳过并直接读上次同步结果），再按 BASE 读取该店缓存；同步失败不中止本次拉取，按原流程打印警示后继续读旧缓存。显式 `--source wb-openapi` 才改用官方接口，该来源不使用 WB 后台 Cookie；缺 apiKey、401/403、限流或读取失败时保留旧快照并报告失败，不自动改回 `--source bcs`，官方令牌应在 BCS 对应店铺更新。两种来源都不补零缺失的价格或库存，分页不完整不能宣称已完成全量快照。
+`catalog fetch` 的默认 BCS 来源先触发 WB → BCS 同步，再按 BASE 读取各店缓存。同步提交或轮询未确认时降级读取旧缓存，全店降级看 `data.sync_warnings`，单店看终端。全店拉取或保存失败看 `data.errors`。降级缓存保存成功可以退出 0，汇报时注明缓存可能过旧。显式 `--source wb-openapi` 才改用官方接口，该来源不使用 WB 后台 Cookie；缺 apiKey、401/403、限流或读取失败时保留旧快照并报告失败，不自动改回 `--source bcs`，官方令牌应在 BCS 对应店铺更新。两种来源都不补零缺失的价格或库存，分页不完整不能宣称已完成全量快照。
 
 BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 VC 去重；只在非空业务值一致且存在完整原行时保留该整行。快照数量和单店表均按去重结果统计，零值不视为空。标识或业务值冲突时不能手工随意删行、按最新时间覆盖或把失败当空店处理。按 [数据契约](DATA.md#映射快照与标识) 处理，离线整理旧快照前先备份。
 
@@ -100,7 +115,7 @@ BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 
 
 用 `catalog export-products` 从本地店铺快照导出标准 XLSX。用 `--shops` 指定来源店铺，或用 `--all-shops` 导出全部活跃店铺。按终端输出核对扫描、过滤、去重和导出条数及文件路径。列定义、过滤规则和命令示例见 [标准商品表用法](USAGE.md#导出标准商品表与导入他人表格上架)。
 
-`listing import-publish` 默认预览，允许联网读取目标仓和公开商品详情。`--limit` 在查重后选取有效商品。按上架选型规则展示预览并确认提交，提交中或结果未知时按现有回执处理。
+`listing import-publish` 默认预览，允许联网读取目标仓和公开商品详情。预览逐店输出默认业务仓，表格校验及目标店跳过原因见本次 CSV。`--limit` 按查重和载荷校验后的待提交商品计算，提前停止时终端区分已扫描有效行和未扫描行。按上架选型规则展示预览并确认提交，提交中或结果未知时按现有回执处理。
 
 ## 写操作结束规则
 
@@ -121,7 +136,7 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 
 未加 `--json` 时，部分兼容入口和 `report products` 仍在普通输出末行附旧版 JSON 摘要，文件路径见摘要的 `artifacts`。自动化首选支持 `--json` 的入口。
 
-- 商品预览的实际目标见 `data.scope`。商品回执见 `data.receipt`，汇报时区分商品卡数、库存规格数和平台已返回的任务号。
+- 普通商品预览的目标见 `data.scope`。大批量 `ops --json` 可省略该字段，改用 `data.preview` 的计数、分店汇总与最多十条样例。完整路径按实际回执查看 `data.artifacts.plan_csv`、`receipts_csv`、`skips_csv` 等。支持的子命令可附 `--full-preview` 取完整 JSON，`ops review-price` 无此选项。商品提交回执见 `data.receipt`。汇报时区分商品卡数、库存规格数与平台任务号。
 - 报表路径见 `data.artifacts`。`report products` 在 `data.period` 中提供退货统计、实际采集及近 7/14 天出单的起点。数据来源、订单覆盖和缺失分别见 `data.sources`、`data.orders_complete`、`data.issues`。
 
 必须阅读本次日志中的成功、失败、跳过和人工待处理项；退出码 0 不能证明平台已最终生效。非零退出也可能已有部分提交，不能因此盲目重放整批。持续监听会记录本轮异常并继续，单轮 --once 遇到失败则退出。没有执行过的步骤不能声称完成；失败时说明停在匹配、预报、交运、登记还是其他具体阶段。
@@ -130,7 +145,19 @@ WB、BCS 写入均异步处理，BCS 还需先同步再查询更新结果，耗�
 
 按本次回执或终端输出的路径打开逐项明细、报表和日志。默认日志在 `data/logs/YYYY-MM-DD/`，报表在 `exports/`，发货 PDF 在 `exports/fbs_shipments/YYYYMMDD/`。清理先用 `task clean --json` 查看 `data.groups`，默认保留最近 20 天，保护 `exports/workbench/` 和 `_scratch/README.md`。运营明确要求清理时加 `--apply`。汇报被跳过的符号链接和目录联接。清理参数见 [定期清理本地文件](USAGE.md#定期清理本地文件)。
 
-看到候选店铺时只展示所需的名称和编号，由运营确认一对一绑定。排查时只提供脱敏后的命令、错误和计数，不把整份 `credentials.json`、Cookie、抓包或浏览器资料输出到聊天或提交到 Git。见 [排错说明](TROUBLESHOOTING.md)。
+看到候选店铺时只展示所需的名称和编号，由运营确认一对一绑定。排查时只提供脱敏命令、错误和计数。密码只报「已填/未填」，不报字符位数。`credentials.json`、Cookie、抓包和浏览器资料留在本机。编辑 `credentials.json` 时，备份仅存 `data/` 内，也可采用原子替换。禁止将明文副本放到 `_scratch/` 或提交到 Git。见 [排错说明](TROUBLESHOOTING.md)。
+
+## 高频操作口径
+
+| 项目 | 操作口径 |
+| --- | --- |
+| W1 快照与导出计数 | `shop list` 按店统计快照在架和回收站条数。标准商品表过滤回收站和非货盘，再以至少 6 位的最长源数字段跨店及表内去重，缺少该段时使用完整 VC。对照终端的扫描、过滤、去重和导出条数。 |
+| W2 外发标准表 | 保留原表头和交换列，尤其是「源数字码」、原 `vendorCode`、本店 `nmId`、售价和包装字段。 |
+| W3 价格审核 | 用户明确要求将审核并入支持的操作时才加 `--auto-review`。单独审核使用 `ops review-price` 预览。 |
+| W4 建卡查重 | `ops create-cards` 与 `ops replicate` 共用完整 VC 和至少 6 位最长连续源数字段的查重规则，按目标店核对含回收站的本地快照及已提交记录。 |
+| W5 货不对板 | `check-mismatch` 仅标记前缀冲突和售价不符合最低售价合理正整数倍的情况。商品图片由运营人工比对。 |
+| W6 提交后的数据 | 汇报本次回执和日志后结束。`catalog fetch --no-sync` 读取上次 BCS 同步缓存，无法核对 WB 最新值。用户另行要求更新时再按范围同步。 |
+| W7 计划范围 | `apply --plan` 整单提交。大批预览优先提供 `data/logs/YYYY-MM-DD/` 下本次命令生成的完整 CSV 路径和分店汇总。运营只确认部分范围时，按该范围重新生成计划并确认新单。 |
 
 ## 常见禁止误用
 

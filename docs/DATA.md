@@ -28,7 +28,7 @@
 
 ## 商品价格表
 
-商品价格表使用工作表名 `Sheet1`，第 1 行是表头。列按名称定位，允许调整顺序。读取价格时要求「产品中文名」「最低售价」两个表头。只读取归属、尺寸或物流资料时要求「产品中文名」。卖家 SKU 可留空，此时中文名须在全表唯一。
+商品价格表使用工作表名 `Sheet1`，第 1 行是表头。列按名称定位，允许调整顺序。读取价格时要求「产品中文名」「最低售价」两个表头。只读取归属、尺寸或物流资料时要求「产品中文名」。卖家 SKU 可留空，此时中文名须在全表唯一。首次建表可复制 [商品价格表样例](../examples/商品价格表.example.xlsx)，改名为 `data/商品价格表.xlsx` 并替换示例数据。
 
 | 表头 | 用途/格式 |
 | --- | --- |
@@ -53,9 +53,9 @@
 - 马帮库存 SKU：价格表中登记的库存编码，用于马帮商品匹配。
 - WB 仓库操作仅使用各店按 `data/credentials.json` 中 `wb.warehouse_keyword` 唯一匹配并核实的本店默认业务仓（如莫斯科仓或运营配置的其他业务仓）。未配置、匹配不到或匹配多个时中止该店操作，不猜测、不跨店复用 ID、不回退至未配置的仓库。业务请求使用仓库列表的 `id`，office 字段 `warehouseId` 不得代用。若原始快照含有其他仓库 ID，仍按配置核实本店默认业务仓。
 
-快照在库内保留原有 `shopId`、`total`、`rows` 等字段。每家店的最新成功快照与失败原因单独保存，缺快照和已确认的空店是两种情况。
+快照在库内保留原有 `shopId`、`total`、`rows` 等字段。每家店的最新成功快照与失败原因单独保存，缺快照和已确认的空店是两种情况。`shop list --json` 的 `data.shops` 中，`snapshot_present` 表示是否已有快照，`active_item_count` 和 `trashed_item_count` 分别统计在架与回收站条数。缺快照时计数为 `null`。
 
-默认 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存，去重后整店写入 SQLite。显式 `--source wb-openapi` 使用 WB 官方中国区接口，保存来源、时间、本店默认业务仓及缺失统计。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店默认业务仓。库存缺失使用空列表，价格缺失使用 null，保留合法零值。
+默认 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存，去重后整店写入 SQLite。同步未确认时可降级读取旧缓存，全店回执在 `data.sync_warnings` 列出受影响店铺。拉取或保存失败另见 `data.errors`，相应店铺保留旧快照。显式 `--source wb-openapi` 使用 WB 官方中国区接口，保存来源、时间、本店默认业务仓及缺失统计。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店默认业务仓。库存缺失使用空列表，价格缺失使用 null，保留合法零值。
 
 BCS 商品响应先按原始行数核对接口 total，确认完整后才按本店 nmId 和完整 VC 去重。忽略 BCS 记录元信息 `id/createTime/updateTime/createBy/updateBy` 的差异；其余非空字段必须一致，且必须存在一条包含全部已知业务值的完整原行。例如一行有币种/折扣、另一行这些字段为空时保留前者；不跨行拼接，0 和 false 都是有效值。业务值完全一致的完整行再按 BCS updateTime、id 选择代表。同 VC 对应不同或缺失 nmId、同 nmId 对应不同或缺失 VC、在架/回收站状态冲突、非空字段冲突或没有完整原行时，读取失败并保留旧快照。终端报告原始行数和移除条数；快照 `total/fetchedCount` 及同步状态中的店铺 total 均为去重后行数。直接读取 BCS 商品列表的业务也使用去重结果。单店表生成沿用同一规则，避免旧快照重复行进入 Excel。
 
@@ -77,7 +77,7 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 
 ## 工作台与批量输入
 
-首次同步快照后，用 `map workbench` 生成带图待认领工作台。`catalog mapping` 生成相同文件。工作台用浏览器 localStorage 保存进度，导出时将已处理的组展开为每个完整 VC 一条记录的 JSON 数组。`map batch-set --file` 和 `catalog merge` 接受同一份审核文件。归属动作也识别 `mapped`。
+首次同步快照后，用 `map workbench` 生成带图待认领工作台。`catalog mapping` 生成相同文件。JSON 回执在 `data.artifacts.html` 返回路径，`data.counts` 给出 `prefix`、`multiplier`、`unmatched` 分类及 `groups`、`vcs` 总数。看图核对归属后可分批导出，浏览器保存审核进度。每次导出包含全部已处理组（含筛选隐藏的组），展开为每个完整 VC 一条记录的 JSON 数组。`map batch-set --file` 和 `catalog merge` 接受同一份审核文件。归属动作也识别 `mapped`。
 
 ```json
 [
@@ -105,7 +105,7 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 
 「去重前候选行」是本轮查询、合并和日期圈定后，通过目标店铺、取消单及平台订单编号检查的行。候选行按「表内已登记」「本批重复」「本次待登记」计数，先检查表内编号，再保留本批首次出现的编号。「本次待登记」的留空提示只从这批唯一待写入订单计算，另列去重前候选行的同口径计数。三类原因是 WB 发货导致库存 SKU 留空、有 VC 但中文名留空、无 BCS 编号。同一行可命中多类原因，原因量按行计数。飞书表内全量扫描的总行数、唯一编号和空编号为独立统计。
 
-`order process` 有飞书地址且能找到 `lark-cli` 时才登记，缺任一项时自动跳过。
+处理新增订单（`order process`）有飞书地址且能找到 `lark-cli` 时才尝试登记，缺任一项会跳过。`data.pending_orders`、`data.pending_blank_counts`、`data.candidate_blank_counts` 和 `data.artifacts.csv` 按该次登记步骤实际产生的回执提供。
 
 `order stock-register --apply` 会先删除库存表已有记录再全量写入，原日期列对应的历史数据不能因此自动保留。`order stock-days` 的显式日期/区间模式会删除早于起始日期的旧日期列；默认模式和区间模式不能当作同一动作。
 

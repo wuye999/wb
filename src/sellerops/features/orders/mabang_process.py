@@ -1,4 +1,4 @@
-"""匹配、预报、交运及飞书登记。失败订单和发货群订单按本轮结果分流。"""
+"""处理新增订单，按发货方式分流并执行匹配、预报、交运及飞书登记。"""
 import time
 
 from sellerops.core import utils as common
@@ -38,7 +38,7 @@ def run(args):
 
     # ③ 自动登记飞书
     print("\n" + "#" * 72)
-    print("# 步骤 ③ 新订单登记飞书（最近500条去重，只登新增）")
+    print("# 步骤 ③ 新增订单飞书登记（按订单编号去重）")
     print("#" * 72)
     url = args.url.strip() or credentials.get().feishu_base_url().strip()
     fail_tail = (f"；匹配或更换失败 {len(replace_fail_ids)} 单未预报/交运"
@@ -50,7 +50,7 @@ def run(args):
         skip_reason = "未检测到 lark-cli"
     if skip_reason:
         print(f"[提示] {skip_reason}，跳过飞书登记")
-        print(f"\n[完成] 马帮订单处理耗时 {time.time() - t0:.0f}s{fail_tail}")
+        print(f"\n[完成] 处理新增订单耗时 {time.time() - t0:.0f}s{fail_tail}")
         return 1 if replace_fail_ids else 0
     args.url = url
     registration_failed = False
@@ -58,10 +58,11 @@ def run(args):
         code = feishu_register_run(args, group_shipping_ids=group_shipping_ids)
         if code:
             registration_failed = True
-            print("[警告] 飞书登记失败（马帮处理已完成，可单独运行 order register 补登记）")
+            print("[警告] 飞书登记失败，本轮预报与交运步骤已结束。可单独运行 order register 补登记。")
     except Exception as e:
         registration_failed = True
-        print(f"[警告] 飞书登记异常（马帮处理已完成）: {str(e)[:120]}")
+        print("[警告] 飞书登记异常，本轮预报与交运步骤已结束。可单独运行 order register 补登记。"
+              f" 异常摘要 {str(e)[:120]}")
 
-    print(f"\n[完成] 马帮订单处理+飞书登记耗时 {time.time() - t0:.0f}s{fail_tail}")
+    print(f"\n[完成] 处理新增订单及飞书登记耗时 {time.time() - t0:.0f}s{fail_tail}")
     return 1 if registration_failed or replace_fail_ids else 0

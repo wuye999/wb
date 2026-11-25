@@ -89,8 +89,9 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--apply", action="store_true", help="执行供货和导出（默认预览）；与 --resume 同用时仅补取 PDF")
     bind(p, 'sellerops.features.orders.fbs_group_ship', 'run')
 
-    p = sub.add_parser('process',
-                           help="马帮订单处理一体：匹配商品→预报单→上传（自动发货）→物流交运；有飞书地址和 lark-cli 时登记")
+    process_help = ("处理新增订单。按发货方式分流，马帮发货进入匹配、预报上传和交运。"
+                    "有飞书地址和 lark-cli 时登记。")
+    p = sub.add_parser('process', help=process_help, description=process_help)
     p.add_argument("--days", type=int, default=0, help="配置店铺的全部新增待处理订单，0=不限日期（默认）；正数=最近 N 天")
     p.add_argument("--page-size", type=int, default=100, help="订单列表分页大小（默认 100）")
     p.add_argument("--wait", type=int, default=0,
