@@ -1,5 +1,5 @@
 
-from catalog_fixture import map_vcs, snapshot, write_book
+from catalog_fixture import corrupt_snapshot, map_vcs, snapshot, write_book
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from io import StringIO
@@ -58,6 +58,12 @@ class MismatchCheckTest(unittest.TestCase):
         gallery = Gallery()
         gallery.feed(page)
         return page, gallery
+
+    def run_cli(self, command, *filters):
+        output, logs = StringIO(), StringIO()
+        with redirect_stdout(output), redirect_stderr(logs):
+            code = main([command, 'check-mismatch', *filters, '--data-dir', str(self.data)])
+        return code, output.getvalue(), logs.getvalue()
 
     def test_workbench_loads_medium_image_with_same_card_fallbacks(self):
         basket = "https://basket-01.wbbasket.ru/vol1/part100/100123/images"
@@ -168,13 +174,12 @@ class MismatchCheckTest(unittest.TestCase):
         map_vcs({item['vendorCode']: 'S2' if item['vendorCode'] == 'VC-other' else 'S1'
                  for item in snapshots})
 
-        output, logs = StringIO(), StringIO()
-        with redirect_stdout(output), redirect_stderr(logs):
-            code = main(['map', 'check-mismatch', '--cn', '旅行杯', '--days', '1',
-                         '--begin', yesterday, '--end', today, '--data-dir', str(self.data), '--json'])
-        self.assertEqual(code, 0)
-        receipt = json.loads(output.getvalue())
+        code, output, logs = self.run_cli('map', '--cn', '旅行杯', '--days', '1',
+                                          '--begin', yesterday, '--end', today, '--json')
+        self.assertEqual(code, 0, logs)
+        receipt = json.loads(output)
         self.assertTrue(receipt['ok'])
+        self.assertIn('勾选', receipt['next_action'])
         self.assertEqual(receipt['data']['counts'], {'total': 2, 'groups': 1, 'anomalies': 1})
         _, gallery = self.read_gallery(receipt['data'])
         self.assertEqual(set(gallery.cards), {'VC-begin', 'VC-end'})
@@ -182,6 +187,53 @@ class MismatchCheckTest(unittest.TestCase):
         _, gallery = self.read_gallery(mismatch_check.run(cn='旅行杯', days=1))
         self.assertEqual(set(gallery.cards), {'VC-end'})
         self.assertEqual(mismatch_check.run(cn='旅行')['counts'], {'total': 0, 'groups': 0, 'anomalies': 0})
+
+    def test_both_commands_export_empty_gallery_for_readable_snapshots_or_zero_matches(self):
+        write_book([('SKU-A', '示例在架商品', 10), ('SKU-B', '示例目录商品', 20)])
+        active = card('TEST-LISTED-4210', 101, 10, createAt='2026-01-02')
+
+        def assert_empty(*filters):
+            html = paths.current.out_mismatch_html
+            for command in ('map', 'catalog'):
+                with self.subTest(command=command, filters=filters):
+                    Path(html).unlink(missing_ok=True)
+                    flags = ['--json'] if command == 'map' else []
+                    code, output, logs = self.run_cli(command, *filters, *flags)
+                    self.assertEqual(code, 0, logs)
+                    if command == 'map':
+                        receipt = json.loads(output)
+                        self.assertTrue(receipt['ok'])
+                        self.assertEqual(receipt['next_action'], '')
+                        self.assertEqual(receipt['data']['counts'], {'total': 0, 'groups': 0, 'anomalies': 0})
+                        self.assertEqual(receipt['data']['artifacts']['html'], html)
+                    else:
+                        self.assertIn('共 0 条 · 0 个中文名 · 异常 0 条', output)
+                    page, gallery = self.read_gallery({'artifacts': {'html': html}})
+                    self.assertIn('没有符合条件的商品', page)
+                    self.assertFalse(gallery.cards)
+
+        snapshot(1, [])
+        assert_empty()
+        snapshot(1, [active])
+        assert_empty()
+        map_vcs({active['vendorCode']: 'SKU-A'})
+        assert_empty('--cn', '示例目录商品')
+        assert_empty('--begin', '2026-01-03', '--end', '2026-01-04')
+
+    def test_missing_or_corrupt_snapshot_is_still_an_error(self):
+        write_book([('SKU-A', '示例目录商品', 10)])
+        with db.connect(write=True) as connection:
+            save_shop(connection, 1, '示例店')
+        for state in ('missing', 'corrupt'):
+            if state == 'corrupt':
+                snapshot(1, [])
+                corrupt_snapshot(1, snapshot_json='{"total": 1}')
+            for command in ('map', 'catalog'):
+                with self.subTest(command=command, state=state):
+                    code, _, logs = self.run_cli(command)
+                    self.assertEqual(code, 1)
+                    self.assertIn('未找到店铺快照' if state == 'missing' else '商品快照数量不完整', logs)
+                    self.assertFalse(Path(paths.current.out_mismatch_html).exists())
 
     def test_cli_exposes_only_one_screening_workbench(self):
         parser = build_parser()

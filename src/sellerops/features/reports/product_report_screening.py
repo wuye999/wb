@@ -38,10 +38,6 @@ def screen_products(report: ProductReport) -> ProductScreening:
                                       'local': defaultdict(set), 'present': set(), 'trash': set(),
                                       'mapped': set(), 'names': set(), 'pending': set()})
 
-    for vc, name in (report.catalog.mapped_names.items() if report.catalog else []):
-        item = group(vc)
-        if item:
-            item['mapped'].add(name)
     unknown_shops = set()
     for shop in targets:
         sid, name = shop['id'], shop['name']
@@ -63,11 +59,9 @@ def screen_products(report: ProductReport) -> ProductScreening:
                 item['names'].add(str(raw['cn']).strip())
     target_names = {shop['id']: shop['name'] for shop in targets}
     for vc, submitted in report.publish_records.items():
-        item = group(vc)
-        if item:
-            for sid, name in target_names.items():
-                if submitted.get(str(sid)):
-                    item['pending'].add(name)
+        pending_shops = {name for sid, name in target_names.items() if submitted.get(str(sid))}
+        if pending_shops and (item := group(vc)):
+            item['pending'].update(pending_shops)
     for kind, rows in [('orders', return_orders(report)), ('feedbacks', report.feedbacks)]:
         for row in rows:
             item = group(row.get('vc', ''))
@@ -81,6 +75,10 @@ def screen_products(report: ProductReport) -> ProductScreening:
         if item:
             item['names'].update(sale['names'])
             item['sales'][vc] = sale
+    if report.catalog:
+        for vc, name in report.catalog.mapped_names.items():
+            if item := groups.get(product_key(vc.strip())):
+                item['mapped'].add(name)
     orders_complete = report.orders_complete
     incomplete = not orders_complete or any(
         report.coverage.get(shop['id'], {}).get('feedbacks') != '完整' for shop in report.shops)

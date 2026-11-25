@@ -1,7 +1,6 @@
 """mapping excel。"""
 
 
-from sellerops.persistence.mappings import MappingRepository
 from collections import defaultdict
 import openpyxl
 from sellerops.domain.snapshot_values import stock_values
@@ -59,12 +58,10 @@ def row_for(item, vc, c, match="", status="", stock_summary_fn=None):
     ]
 
 def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage=None, shops_meta=None,
-               main_sid=None, stock_summary_fn=None, load_boss_fn=None, out_path=None):
+               main_sid=None, stock_summary_fn=None, out_path=None):
     """生成映射表 xlsx（8 Sheet）。"""
     if stock_summary_fn is None:
         stock_summary_fn = stock_summary
-    if load_boss_fn is None:
-        load_boss_fn = MappingRepository.load_price_book
     if main_sid is None:
         from sellerops.features.catalog import mapping as mapping
         main_sid = mapping.main_shop(config.current)
@@ -79,22 +76,17 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
         shop_coverage.setdefault(c["vc"], {})[sid_main] = {
             "price": c["price"], "stock": stock_summary_fn(c),
             "nmId": c.get("nmId"), "createAt": c.get("createAt"), "updateAt": c.get("updateAt")}
-    picked = set()
-    for item in result_list:
-        picked.update(item.get("vendorCodes") or [])
-    for item in extra_entries:
-        picked.update(item.get("vendorCodes") or [])
+    result_list = [item for item in result_list if item.get("vendorCodes")]
+    extra_entries = [item for item in extra_entries if item.get("vendorCodes")]
+    mapped_entries = result_list + extra_entries
 
     vc2boss = defaultdict(list)
-    for item in list(result_list) + list(extra_entries):
-        for vc in item.get("vendorCodes") or []:
+    for item in mapped_entries:
+        for vc in item["vendorCodes"]:
             vc2boss[vc].append(item.get("cn") or "")
+    picked = set(vc2boss)
     multi = {vc: bs for vc, bs in vc2boss.items() if len(bs) > 1}
-
-    vc_cn = {}
-    for item in list(result_list) + list(extra_entries):
-        for vc in item.get("vendorCodes") or []:
-            vc_cn.setdefault(vc, item.get("cn") or "")
+    vc_cn = {vc: names[0] for vc, names in vc2boss.items()}
 
     def rep(c, key, cov):
         v = c.get(key) if c is not None else None
@@ -128,12 +120,8 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     ws1.title = "映射总表"
     ws1.append(headers + ["店铺覆盖"])
     for item in result_list:
-        vcs = item.get("vendorCodes") or []
-        if not vcs:
-            ws1.append(row_for(item, "", None, "", "未匹配", stock_summary_fn=stock_summary_fn) + [""])
-            continue
         match = "人工确认" if not item.get("auto") else "自动匹配(参考)"
-        for vc in vcs:
+        for vc in item["vendorCodes"]:
             c = enrich(vc, bcs_by_vc.get(vc))
             status = "多重映射冲突" if vc in multi else "已匹配"
             cov = ";".join(str(sid) for sid in sorted(shop_coverage.get(vc, {}).keys())) if vc else ""
@@ -145,7 +133,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
                         f"https://www.wildberries.ru/catalog/{c['nmId']}/detail.aspx?targetUrl=GP"
     for item in extra_entries:
         status = "已补录最低售价" if item.get("minimum_price") is not None else "待补填最低售价"
-        for vc in item.get("vendorCodes") or []:
+        for vc in item["vendorCodes"]:
             c = enrich(vc, bcs_by_vc.get(vc))
             cov = ";".join(str(sid) for sid in sorted(shop_coverage.get(vc, {}).keys())) if vc else ""
             ws1.append(row_for(item, vc, c, "补充条目(价格带识别)", status, stock_summary_fn=stock_summary_fn) + [cov])
@@ -204,18 +192,11 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     # Sheet4 待核查清单
     ws4 = wb.create_sheet("待核查清单")
     ws4.append(["商品SKU", COL_CN, COL_MIN_PRICE, "问题说明"])
-    picked_cn = set()
-    for item in list(result_list) + list(extra_entries):
-        if item.get("vendorCodes"):
-            picked_cn.add(item.get("cn"))
-    boss = load_boss_fn()
-    for b in boss:
-        if b["cn"] not in picked_cn:
-            ws4.append([b["sku"], b["cn"], b["minimum_price"],
-                        "商品价格表有该商品但映射表无归属 vendorCode → 需人工核对补录（可能未上架/价格特殊/漏配）"])
-    for item in extra_entries:
+    for item in mapped_entries:
         if item.get("minimum_price") is None:
-            note = (item.get("note", "") or "") + " → 需补填最低售价并确认型号分组"
+            note = item.get("note") or ""
+            note = f"{note} → " if note else ""
+            note += f"已归属 VC，需补填《商品价格表.xlsx》的「{COL_MIN_PRICE}」"
             ws4.append([item.get("sku"), item.get("cn"), None, note])
     for i, w in enumerate([14, 30, 10, 70], 1):
         ws4.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w

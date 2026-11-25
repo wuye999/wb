@@ -182,8 +182,9 @@ def run_candidates(args) -> int:
         raise ValueError('候选组数应为正整数')
     groups = pending_groups(args.limit)
     args.output = {'groups': groups}
-    args.summary = f'列出 {len(groups)} 组待认领商品'
-    args.next_action = '展示候选并请运营明确确认完整 VC'
+    args.summary = f'列出 {len(groups)} 组待认领商品' if groups else '当前没有待认领商品'
+    if groups:
+        args.next_action = '展示候选并请运营明确确认完整 VC'
     print(args.summary)
     for group in groups:
         for item in group['items']:

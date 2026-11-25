@@ -36,7 +36,7 @@ def export_mapping(shop_id: int | None = None, output: str = '') -> Path:
     else:
         from sellerops.features.catalog.mapping_excel import build_xlsx
 
-        state, excluded = MappingRepository.load_mapping_state()
+        state, excluded = MappingRepository.load_mapping_state(require_price=True)
         shops_data, shops = products.load_all_shops()
         main_id = mapping.main_shop(config.current)
         coverage = {}

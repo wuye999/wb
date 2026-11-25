@@ -118,8 +118,8 @@ class MappingRepository:
         return resolve_cn, names
 
     @classmethod
-    def load_mapping_state(cls) -> tuple[dict, dict]:
-        cls.load_price_book(require_price=False)
+    def load_mapping_state(cls, *, require_price: bool = False) -> tuple[dict, dict]:
+        cls.load_price_book(require_price=require_price)
         entries = db.vc_entries()
         state, excluded = {}, {}
         for vc in entries:

@@ -1,6 +1,7 @@
 """运营报告的离线协议、统计、完整性和工作簿测试；所有数据为合成夹具。"""
-from contextlib import ExitStack
+from contextlib import ExitStack, closing, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
+from io import StringIO
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,7 @@ from unittest.mock import Mock, PropertyMock, patch
 
 from openpyxl import load_workbook
 
+from sellerops.cli.main import main
 from sellerops.core.errors import AuthenticationError, PlatformApiError, RateLimitError
 from sellerops.domain.product_reports import ProductReport, ReportCatalog, ReportIssue
 from sellerops.features.reports import product_report as workflow
@@ -552,3 +554,48 @@ class TestReportWorkflow(unittest.TestCase):
                                    out=str(Path(directory) / 'report.xlsx'))
             self.assertEqual(workflow.run(args), 1)
             self.assertTrue(Path(args.out).exists())
+
+    def test_cli_and_workbook_show_invalid_vc_only_for_target_submission(self):
+        historical = 'TEST-HISTORY'
+        other_shop = 'TEST-421-248'
+        self.fixture(records={other_shop: {'13': 'accepted'}})
+        report = self.collect()
+        self.assertFalse(report.failed)
+        self.assertEqual(report.publish_records, {other_shop: {}})
+        report.catalog.price_names.add('示例仅目录商品')
+        report.catalog.mapped_names[historical] = '示例仅历史归属商品'
+        with tempfile.TemporaryDirectory() as directory, patch.object(workflow, 'collect', return_value=report):
+            target = Path(directory) / 'fixture.xlsx'
+            for partial in (False, True):
+                if partial:
+                    report.publish_records[other_shop]['11'] = 'accepted'
+                for details in (False, True):
+                    with self.subTest(partial=partial, details=details):
+                        flags = ['--details'] if details else []
+                        output, logs = StringIO(), StringIO()
+                        with redirect_stdout(output), redirect_stderr(logs):
+                            code = main(['report', 'products', '--data-dir', str(target.parent / 'data'),
+                                         '--out', str(target), '--json', *flags])
+                        self.assertEqual(code, int(partial), logs.getvalue())
+                        receipt = json.loads(output.getvalue())
+                        self.assertEqual(receipt['ok'], not partial)
+                        data = receipt['data']
+                        self.assertEqual(data['status'], 'partial' if partial else 'completed')
+                        self.assertEqual(data['coverage_complete'], not partial)
+                        self.assertEqual(data['artifacts']['workbook'], str(target.resolve()))
+                        if partial:
+                            issue, = data['issues']
+                            self.assertEqual(issue['severity'], '错误')
+                            self.assertIn('1个VC没有唯一最长数字段', issue['message'])
+                        else:
+                            self.assertEqual(data['issues'], [])
+                        with closing(load_workbook(target, read_only=True)) as book:
+                            self.assertEqual('订单明细' in book.sheetnames, details)
+                            coverage = dict(list(book['数据覆盖说明'].values)[1:])
+                            self.assertEqual(coverage['数据状态'],
+                                             '部分数据缺失，请先查看错误' if partial else '所选数据采集完成')
+                            issues = list(book['异常与缺失'].values)[1:]
+                            if partial:
+                                self.assertEqual(issues, [('错误', '默认筛选', None, issue['message'])])
+                            else:
+                                self.assertEqual(issues, [])

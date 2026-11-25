@@ -14,8 +14,10 @@ from catalog_fixture import document, map_vcs, mock_non_git_checkout, shop_summa
 from sellerops.cli.main import main
 from sellerops.core.files import atomic_dump_json
 from sellerops.features.catalog import products
+from sellerops.features.catalog.mapping_excel import build_xlsx
 from sellerops.persistence import db, migrate_legacy, open_api_publish
 from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.price_book import inspect_price_book
 from sellerops.settings import paths
 
 
@@ -245,6 +247,102 @@ class TestCatalogWorkflow(unittest.TestCase):
         write_book([('SKU-B', '运营改名', 25, 'OTHR', 'STOCK-B')])
         self.assertEqual(self.cli('report', 'mapping'), 0, self.stderr.getvalue())
         self.assertEqual(db.resolve_vc(LIVE)['cn'], '运营改名')
+
+    def test_mapping_report_reconciles_only_current_mapped_vcs_and_keeps_real_issues(self):
+        write_book([('SKU-A', '示例在架商品', 10), ('SKU-B', '示例历史商品', 20),
+                    ('SKU-C', '示例目录商品', 12), ('SKU-D', '示例缺价商品', None),
+                    ('SKU-E', '示例在架商品', 15)])
+        snapshot(1, [row(), row(OTHER, 102, 202), row(UNKNOWN, 103, 203), row(EXCLUDED, 104, 204)])
+        second_shop = row(nm=201, chrt=301)
+        second_shop['sizeList'][0]['price'] = 20
+        snapshot(2, [second_shop])
+        map_vcs({LIVE: 'SKU-A', BACKUP: 'SKU-B', OTHER: 'SKU-D'})
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, EXCLUDED, 'excluded', note='示例非货盘')
+
+        self.assertEqual(self.cli('report', 'mapping', '--json'), 0, self.stderr.getvalue())
+        receipt = json.loads(self.stdout.getvalue())
+        with closing(load_workbook(receipt['data']['artifacts']['workbook'], read_only=True)) as book:
+            self.assertEqual(book.sheetnames, ['映射总表', '多重映射冲突', '未映射商品', '已排除清单',
+                                               '待核查清单', '店铺全量商品', '店铺覆盖矩阵', '多店价格一致性'])
+            self.assertEqual({row[1] for row in list(book['映射总表'].values)[1:]}, {LIVE, OTHER})
+            header, issue = book['待核查清单'].values
+            self.assertEqual(header, ('商品SKU', '产品中文名', '最低售价', '问题说明'))
+            self.assertEqual(issue[:3], ('SKU-D', '示例缺价商品', None))
+            self.assertIn('《商品价格表.xlsx》的「最低售价」', issue[3])
+            self.assertIn(UNKNOWN, {row[1] for row in list(book['未映射商品'].values)[1:]})
+            self.assertEqual(list(book['已排除清单'].values)[1][:2], (EXCLUDED, '示例非货盘'))
+            self.assertEqual(list(book['多店价格一致性'].values)[1][:5], (LIVE, '示例在架商品', 10, 2, 20))
+
+        self.assertEqual(self.cli('report', 'mapping', '--shop-id', '1', '--json'), 0, self.stderr.getvalue())
+        receipt = json.loads(self.stdout.getvalue())
+        with closing(load_workbook(receipt['data']['artifacts']['workbook'], read_only=True)) as book:
+            pending = list(book['未映射在架商品'].values)
+            self.assertEqual(len(pending), 2)
+            self.assertIn(UNKNOWN, pending[1])
+
+    def test_mapping_builder_skips_empty_vcs_and_preserves_conflict_and_missing_price(self):
+        output = self.folder / 'fixture.xlsx'
+        counts = build_xlsx(
+            [{'cn': '示例无链接商品', 'vendorCodes': []},
+             {'cn': '示例归属一', 'sku': 'SKU-A', 'vendorCodes': [LIVE]}],
+            [{'cn': '示例空补充条目'}, {'cn': '示例归属二', 'minimum_price': 20, 'vendorCodes': [LIVE]}],
+            [], main_sid=1, out_path=output,
+        )
+        self.assertEqual(counts, (1, 1, 0, 1))
+        with closing(load_workbook(output, read_only=True)) as book:
+            self.assertEqual([row[:2] for row in list(book['映射总表'].values)[1:]],
+                             [('示例归属一', LIVE), ('示例归属二', LIVE)])
+            self.assertEqual(list(book['多重映射冲突'].values)[1][:3], (LIVE, 2, '示例归属一；示例归属二'))
+            self.assertEqual([row[:3] for row in list(book['待核查清单'].values)[1:]],
+                             [('SKU-A', '示例归属一', None)])
+
+    def test_mapping_report_requires_minimum_price_header_even_with_name_cache(self):
+        write_book([('SKU-A', '示例目录商品')], ('卖家SKU', '产品中文名'))
+        snapshot(1, [])
+        self.assertEqual(len(MappingRepository.load_price_book(require_price=False)), 1)
+        self.assertEqual(self.cli('report', 'mapping', '--json'), 1)
+        receipt = json.loads(self.stdout.getvalue())
+        self.assertFalse(receipt['ok'])
+        self.assertIn('HeaderError', self.stderr.getvalue())
+        self.assertEqual(self.cli('report', 'mapping'), 1)
+        self.assertIn('缺少必需列「最低售价」', self.stderr.getvalue())
+        self.assertFalse(paths.current.exports_dir.exists())
+
+    def test_catalog_only_product_still_passes_price_book_validation(self):
+        write_book([('SKU-A', '示例目录商品', 20, '', '', 'WB发货')])
+        book_path = Path(paths.current.price_book_xlsx)
+        inspected = inspect_price_book(book_path)
+        self.assertEqual(inspected['status'], 'ready')
+        self.assertEqual(inspected['data_rows'], 1)
+        self.assertEqual(inspected['issue_counts'], {})
+        write_book([('SKU-A', '示例目录商品', '无效价格', '', '', 'WB发货')])
+        self.assertEqual(inspect_price_book(book_path)['issue_counts'], {'invalid_price': 1})
+
+    def test_candidate_and_workbench_receipts_guide_only_when_groups_exist(self):
+        snapshot(1, [row()])
+        commands = [('map', 'candidates'), ('map', 'workbench'), ('catalog', 'mapping')]
+        for expected_groups in (1, 0):
+            if not expected_groups:
+                map_vcs({LIVE: 'SKU-A'})
+            for command in commands:
+                with self.subTest(command=command, groups=expected_groups):
+                    self.assertEqual(self.cli(*command, '--json'), 0, self.stderr.getvalue())
+                    receipt = json.loads(self.stdout.getvalue())
+                    if expected_groups:
+                        self.assertIn('完整 VC' if command[1] == 'candidates' else '打开 HTML', receipt['next_action'])
+                    else:
+                        self.assertEqual(receipt['next_action'], '')
+                        self.assertIn('当前没有待认领商品', receipt['summary'])
+                    data = receipt['data']
+                    if command[1] == 'candidates':
+                        self.assertEqual(len(data['groups']), expected_groups)
+                    else:
+                        self.assertEqual(data['counts']['groups'], expected_groups)
+                        self.assertEqual(data['counts']['vcs'], expected_groups)
+                        page = Path(data['artifacts']['html']).read_text(encoding='utf-8')
+                        self.assertEqual(page.count('<article class="card"'), expected_groups)
+                        self.assertIn('目前没有待认领商品', page)
 
     def test_partial_fetch_failure_keeps_previous_shop_and_allows_empty_shop(self):
         snapshot(2, [row(nm=202)])

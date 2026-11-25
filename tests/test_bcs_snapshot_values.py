@@ -170,7 +170,7 @@ class TestBCSWorkbookAndFetch(unittest.TestCase):
                              2: {'stock': 0, 'price': 20, 'nmId': 202}}}
             build_xlsx([], [{'cn': '商品', 'minimum_price': 10, 'vendorCodes': [VC]}], bcs_rows,
                        shop_coverage=coverage, shops_meta=[{'id': 1, 'name': '主店'}, {'id': 2, 'name': '其他店'}],
-                       main_sid=1, load_boss_fn=lambda: [], out_path=self.data / 'report.xlsx')
+                       main_sid=1, out_path=self.data / 'report.xlsx')
             book = load_workbook(self.data / 'report.xlsx', read_only=True, data_only=True)
             try:
                 rows = list(book['映射总表'].iter_rows(values_only=True))

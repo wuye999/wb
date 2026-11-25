@@ -53,7 +53,8 @@ def run_fetch(args):
 def run_mismatch_check(args):
     args.output = catalog_mismatch_check.run(cn=args.cn, begin=args.begin, end=args.end, days=args.days)
     args.summary = '已生成货不对板筛查工作台'
-    args.next_action = '打开 HTML 看图核对，勾选后导出或复制完整 VC'
+    if args.output['counts']['total']:
+        args.next_action = '打开 HTML 看图核对，勾选后导出或复制完整 VC'
     return 0
 
 def run_mapping_rename(args):

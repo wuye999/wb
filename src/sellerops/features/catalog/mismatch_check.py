@@ -213,8 +213,6 @@ def _resolve_window(begin, end, days):
 
 def run(cn='', begin='', end='', days=0) -> dict:
     rows = load_mapping_rows()
-    if not rows:
-        raise ValueError('暂无已归属的在架商品，请先用 map workbench 看图认领并保存归属')
     if begin or end or days:
         start, stop = _resolve_window(begin, end, days)
         rows = [row for row in rows if (created := _to_date(row['create_at'])) and start <= created <= stop]

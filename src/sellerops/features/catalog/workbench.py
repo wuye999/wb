@@ -93,8 +93,11 @@ def run_workbench(args) -> int:
     counts = {key: sum(group['category'] == key for group in groups) for key in CATEGORIES}
     counts.update(groups=len(groups), vcs=sum(len(group['vcs']) for group in groups))
     args.output = {'artifacts': {'html': str(output)}, 'counts': counts}
-    args.summary = f'已生成 {counts["groups"]} 组待认领商品工作台'
-    args.next_action = '打开 HTML 看图归属，导出 JSON 后交回 WorkBuddy 或用 map batch-set --file 保存'
+    if groups:
+        args.summary = f'已生成 {counts["groups"]} 组待认领商品工作台'
+        args.next_action = '打开 HTML 看图归属，导出 JSON 后交回 WorkBuddy 或用 map batch-set --file 保存'
+    else:
+        args.summary = '已生成工作台，当前没有待认领商品'
     print(f'{args.summary}：{output}')
     return 0
 

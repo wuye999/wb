@@ -107,6 +107,42 @@ class TestProductScreening(unittest.TestCase):
         report.catalog.mapped_names = {VC: '新商品', OTHER: '另一个商品'}
         self.assertFalse(screen_products(report).recent)
 
+    def test_catalog_only_names_and_out_of_scope_submissions_do_not_create_issues(self):
+        report = self.report()
+        report.orders = [self.wb_order()]
+        report.catalog.price_names.add('示例目录商品')
+        report.catalog.mapped_names.update({'TEST-HISTORY': '示例历史商品', 'TEST-421-248': '示例历史商品'})
+        report.publish_records = {'TEST-HISTORY': {}, 'TEST-421-248': {'9': 'accepted', '4': ''}}
+        report.snapshots[9] = [{'vendorCode': 'TEST-HISTORY', 'nmId': 901}]
+
+        result = screen_products(report)
+        self.assertEqual(result.issues, [])
+        self.assertEqual([row['vc'] for row in result.recent], [VC])
+        self.assertEqual(result.recent[0]['missing_shops'], report.shops[3]['name'])
+
+    def test_invalid_codes_from_current_evidence_still_fail_screening(self):
+        for source in ('order', 'feedback', 'snapshot', 'submission'):
+            for vc in ('TEST-WITHOUT-DIGITS', 'TEST-421-248'):
+                with self.subTest(source=source, vc=vc):
+                    report = self.report()
+                    report.orders = [self.wb_order()]
+                    if source == 'order':
+                        report.orders.append(self.wb_order(vc=vc, nm=902))
+                    elif source == 'feedback':
+                        report.feedbacks = [{'vc': vc, 'stars': 5}]
+                    elif source == 'snapshot':
+                        report.snapshots[4] = [{'vendorCode': vc, 'nmId': 104}]
+                    else:
+                        report.publish_records = {vc: {'4': 'accepted'}}
+                    result = screen_products(report)
+                    self.assertTrue(result.failed)
+                    issue, = result.issues
+                    self.assertEqual((issue.source, issue.severity), ('默认筛选', '错误'))
+                    self.assertIn('1个VC没有唯一最长数字段', issue.message)
+                    if source == 'snapshot':
+                        self.assertEqual(result.recent[0]['missing_shops'], '')
+                        self.assertIn('快照未知', result.recent[0]['waiting_shops'])
+
     def test_rating_threshold_inclusive_and_missing_catalog_is_visible(self):
         report = self.report()
         report.feedbacks = [{'vc': VC, 'stars': star, 'cn': '', 'nm_id': '', 'shop_name': '外部店'} for star in [3, 4]]
