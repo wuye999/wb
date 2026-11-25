@@ -35,8 +35,12 @@ def _pad_str(s: Any, width: int, align: str = "<") -> str:
     pad = max(0, width - dw)
     return (" " * pad + s) if align == ">" else (s + " " * pad)
 
-def print_publish_preview(items: List[PublishItem], target_shops_default: List[int]):
+def print_publish_preview(items: List[PublishItem], target_shops_default: List[int], *,
+                          warehouses: dict[int, tuple[int, str | None] | None] | None = None):
     """打印格式化预览表格（动态适配中英文字符宽度与原始VC溯源）"""
+    for sid, selected in sorted((warehouses or {}).items()):
+        label = (f'{selected[1] or "名称未知"}（{selected[0]}）' if selected else '无法核实，已阻止')
+        print(f'[默认业务仓] 店{sid} {label}')
     if not items:
         print("\n[预览] 无待上架商品")
         return

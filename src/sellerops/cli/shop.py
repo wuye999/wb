@@ -5,7 +5,7 @@ from sellerops.cli.binding import bind
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser('list', help='查看本地店铺状态和快照时间')
+    p = sub.add_parser('list', help='查看本地店铺、快照来源时间和商品条数')
     p.add_argument('--name', help='精确查找店名')
     p.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
     bind(p, 'sellerops.features.catalog.shops', 'run_list')

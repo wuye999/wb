@@ -64,6 +64,7 @@ def _write_csv(result: ProductResult, names: dict[int, str]) -> None:
                          "status", "taskId", "error"])
         writer.writerows(rows)
     result.artifacts["discount_csv"] = output
+    print(f'[折扣 CSV] {output.resolve()}')
 
 
 def run_cli(args) -> int:

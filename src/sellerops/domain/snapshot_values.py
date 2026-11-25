@@ -68,10 +68,8 @@ def stock_at(size: dict[str, Any], warehouse_id: int) -> int | None:
     return quantity(matches[0].get('amount')) if len(matches) == 1 else None
 
 
-def first_price(row: dict[str, Any]) -> int | float | None:
-    """保留首规格代表价契约；无完整规格时不采用占位价格零。"""
-    sizes = valid_sizes(row)
-    value = sizes[0].get('price') if sizes else None
+def price_value(value: Any) -> int | float | None:
+    """规范化快照里的价格，保留实际零值。"""
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
@@ -81,6 +79,13 @@ def first_price(row: dict[str, Any]) -> int | float | None:
     if not isfinite(number) or number < 0:
         return None
     return int(number) if number.is_integer() else number
+
+
+def first_price(row: dict[str, Any]) -> int | float | None:
+    """保留首规格代表价契约；无完整规格时不采用占位价格零。"""
+    sizes = valid_sizes(row)
+    return price_value(sizes[0].get('price')) if sizes else None
+
 
 def bcs_keep_price(row: dict[str, Any]) -> int | float | None:
     """单一正价格能以 BCS 的商品级金额无损表示时，才允许保价。"""

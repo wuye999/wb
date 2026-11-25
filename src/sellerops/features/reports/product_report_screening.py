@@ -89,12 +89,12 @@ def screen_products(report: ProductReport) -> ProductScreening:
         feedbacks = item['feedbacks']
         rating = sum(row['stars'] for row in feedbacks) / len(feedbacks) if feedbacks else None
         low = rating is not None and rating <= 3.5
-        high = metrics['done_rate'] is not None and metrics['done_rate'] >= 0.3
+        high = metrics['completed_compatible_return_rate'] is not None and metrics['completed_compatible_return_rate'] >= 0.3
         names = item['mapped'] or item['names']
         matches = names & report.catalog.price_names if report.catalog else set()
         cn = next(iter(matches)) if len(matches) == 1 else '、'.join(_sort(names))
         shared = {'key': item['key'], 'cn': cn, 'rating': rating, 'feedback_count': len(feedbacks),
-                  'done_rate': metrics['done_rate'], 'completed': metrics['orders'] - metrics['pending'],
+                  'completed_compatible_return_rate': metrics['completed_compatible_return_rate'], 'completed': metrics['orders'] - metrics['pending'],
                   'combined_returns': metrics['combined_returns']}
         for vc, shops in item['local'].items():
             row = {**shared, 'vc': vc, 'present_shops': '、'.join(_sort(shops))}
@@ -115,7 +115,7 @@ def screen_products(report: ProductReport) -> ProductScreening:
         notes = []
         if rating is None:
             notes.append('评分未知')
-        if metrics['done_rate'] is None:
+        if metrics['completed_compatible_return_rate'] is None:
             notes.append('退货率未知')
         if incomplete:
             notes.append('风险来源部分缺失')
@@ -132,6 +132,6 @@ def screen_products(report: ProductReport) -> ProductScreening:
     if invalid:
         result.issues.append(ReportIssue('默认筛选', f'{len(invalid)}个VC没有唯一最长数字段，未参与筛选'))
     result.low_rating.sort(key=lambda row: (row['rating'], row['vc']))
-    result.high_returns.sort(key=lambda row: (-row['done_rate'], row['vc']))
+    result.high_returns.sort(key=lambda row: (-row['completed_compatible_return_rate'], row['vc']))
     result.recent.sort(key=lambda row: (-row['orders14'], -row['orders7'], row['vc']))
     return result

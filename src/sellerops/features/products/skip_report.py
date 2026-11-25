@@ -12,6 +12,18 @@ YELLOW = "\033[93m"
 RESET = "\033[0m"
 
 
+def write_skip_csv(headers: list[str], rows) -> Path:
+    now = datetime.now()
+    folder = config.daily_log_dir(now)
+    folder.mkdir(parents=True, exist_ok=True)
+    report = folder / f'商品操作跳过_{now:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}.csv'
+    with report.open('x', encoding='utf-8-sig', newline='') as stream:
+        writer = csv.writer(stream)
+        writer.writerow(headers)
+        writer.writerows(rows)
+    return report.resolve()
+
+
 class SkipTracker:
     def __init__(self) -> None:
         self.path: Path | None = None
@@ -27,14 +39,8 @@ class SkipTracker:
     def report(self, action_label: str, show_detail: bool = True) -> list[tuple[int, str, str]] | None:
         if not self.items:
             return
-        now = datetime.now()
-        folder = config.daily_log_dir(now)
-        folder.mkdir(parents=True, exist_ok=True)
-        report = folder / f'商品操作跳过_{now:%Y%m%d_%H%M%S}_{uuid4().hex[:8]}.csv'
-        with report.open('w', encoding='utf-8-sig', newline='') as stream:
-            writer = csv.writer(stream)
-            writer.writerow(['操作', '店铺', 'vendorCode', '原因'])
-            writer.writerows((action_label, sid, vc, reason) for sid, vc, reason in self.items)
+        report = write_skip_csv(['操作', '店铺', 'vendorCode', '原因'],
+                                ((action_label, sid, vc, reason) for sid, vc, reason in self.items))
         reasons = Counter(x[2] for x in self.items)
         print(f"\n{RED}[跳过汇总] {action_label}：共 {len(self.items)} 条未操作{RESET}")
         for reason, n in reasons.most_common():

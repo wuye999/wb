@@ -25,12 +25,28 @@ def require_active(shop_id: int) -> None:
 
 
 def run_list(args) -> int:
-    rows = [row for row in shop_status() if not args.name or row['shop_name'] == args.name]
+    with db.connect(read_only=True) as connection:
+        rows = [dict(row) for row in connection.execute('''
+            SELECT s.shop_id, s.shop_name, s.status, s.last_source, s.last_synced_at,
+                   s.last_sync_error, s.snapshot_json IS NOT NULL AS snapshot_present,
+                   CASE WHEN s.snapshot_json IS NOT NULL THEN coalesce(c.active, 0) END AS active_item_count,
+                   CASE WHEN s.snapshot_json IS NOT NULL THEN coalesce(c.trashed, 0) END AS trashed_item_count
+              FROM shops AS s LEFT JOIN (
+                SELECT shop_id, count(*) FILTER (WHERE is_trashed = 0) AS active,
+                       count(*) FILTER (WHERE is_trashed = 1) AS trashed
+                  FROM shop_items GROUP BY shop_id
+              ) AS c USING (shop_id)
+             WHERE ? IS NULL OR s.shop_name = ? ORDER BY s.rowid
+        ''', (args.name or None, args.name))]
+    for row in rows:
+        row['snapshot_present'] = bool(row['snapshot_present'])
     args.output = {'shops': rows}
     print(f'本地店铺 {len(rows)} 家')
     for row in rows:
         status = '在营' if row['status'] == 'active' else '已归档'
-        print(f"{row['shop_id']} | {row['shop_name']} | {status} | {row['last_synced_at'] or '未同步'}")
+        active, trashed = (row['active_item_count'], row['trashed_item_count']) if row['snapshot_present'] else ('未知', '未知')
+        print(f"{row['shop_id']} | {row['shop_name']} | {status} | 来源 {row['last_source'] or '未知'} | "
+              f"同步 {row['last_synced_at'] or '未同步'} | 快照在架 {active} | 快照回收站 {trashed}")
     return 0
 
 

@@ -1,4 +1,6 @@
 """从本地快照跨店复制，保留完整 VC 并检查同源商品。"""
+from collections import Counter
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -7,26 +9,22 @@ from sellerops.features.catalog import products as catalog_products
 from sellerops.features.publishing import card_publish
 from sellerops.features.publishing.publish_details import resolve_publish_details
 from sellerops.features.publishing.publish_inputs import parse_cn_stock, stock_for
-from sellerops.features.publishing.publish_records import load_records, publish_vc_key, records_by_shop
+from sellerops.features.publishing.publish_records import load_records, records_by_shop
 from sellerops.features.publishing.publish_report import print_publish_preview
+from sellerops.features.publishing.publish_skips import PublishSkipReport, TargetCoverage, target_skip
 from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.settings import paths as config
 
 
-def build_coverage(shops_data):
-    """汇总全状态覆盖范围，并保留按完整 VC 索引的在架源行。"""
-    vc_shops, vc_rows = {}, {}
+def _source_rows(shops_data):
+    vc_rows = {}
     for sid, rows in shops_data.items():
         for row in rows:
             vc = (row.get("vendorCode") or "").strip()
-            if not vc:
-                continue
-            vc_shops.setdefault(vc, set()).add(sid)
-            vc_shops.setdefault(publish_vc_key(vc), set()).add(sid)
-            if not row.get("trashedAt"):
+            if vc and not row.get("trashedAt"):
                 vc_rows.setdefault(vc, {})[sid] = row
-    return vc_shops, vc_rows, sorted(shops_data)
+    return vc_rows
 
 
 def pick_source(vc, vc_rows, sid_main):
@@ -73,6 +71,9 @@ def build_replication_items(
     records: Optional[Dict[str, Any]] = None,
     restrictions: Optional[dict] = None,
     record_vcs: Optional[dict] = None,
+    *,
+    selected: Callable[[str], bool] | None = None,
+    skip_report: PublishSkipReport | None = None,
 ) -> Tuple[List[PublishItem], List[Dict[str, str]]]:
     """零网络生成复制候选；源店和目标店独立，缺快照时明确失败。"""
     sources = set(source_shops if source_shops is not None else shops_data)
@@ -84,17 +85,22 @@ def build_replication_items(
         raise ValueError("源店和目标店都不能为空")
     if isinstance(stock, bool) or not isinstance(stock, int) or stock < 0:
         raise ValueError("库存必须为非负整数")
-    _, source_rows, _ = build_coverage({sid: shops_data[sid] for sid in sources})
-    all_coverage, _, _ = build_coverage(shops_data)
+    source_rows = _source_rows({sid: shops_data[sid] for sid in sources})
+    coverage = {sid: TargetCoverage(shops_data[sid]) for sid in sorted(targets)}
     records = records or {}
+    restrictions = restrictions or {}
     submitted = records_by_shop(records if record_vcs is None else record_vcs)
     items, blocked = [], []
     for vc in sorted(source_rows):
-        key = publish_vc_key(vc)
-        missing = sorted(targets - all_coverage.get(key, set()))
-        missing = [sid for sid in missing if key not in submitted.get(str(sid), {})
-                   and str(sid) not in records.get(vc, {})]
-        missing = [sid for sid in missing if not db.listing_blocked(vc, sid, restrictions or {})]
+        if selected is not None and not selected(vc):
+            continue
+        missing = []
+        for sid, index in coverage.items():
+            skip = target_skip(sid, vc, index, submitted, records, restrictions)
+            if skip is None:
+                missing.append(sid)
+            elif skip_report is not None:
+                skip_report.rows.append(skip)
         if not missing:
             continue
         row_map = source_rows[vc]
@@ -126,11 +132,25 @@ def build_replication_items(
 
 
 def run(args: Any) -> int:
+    limit = getattr(args, 'limit', 0)
+    if limit < 0:
+        raise ValueError('--limit 必须为非负整数（0 表示不限）')
     shops_data, _ = catalog_products.load_all_shops(include_trash=True)
     state, _ = MappingRepository.load_mapping_state()
     book = MappingRepository.load_price_book(
         fresh=getattr(args, 'apply', False) and getattr(args, 'price_source', '') == 'minimum')
     parse_ids = lambda raw: [int(s.strip()) for s in raw.split(",") if s.strip()] if raw else None
+    wanted = {s.strip() for s in (getattr(args, "vc", "") or "").split(",") if s.strip()}
+    prefix = (getattr(args, "prefix", "") or "").upper()
+    name = getattr(args, "name", "")
+    contains = getattr(args, "name_contains", None)
+
+    def selected(vc: str) -> bool:
+        return ((not wanted or vc in wanted)
+                and (not prefix or vc.startswith(f"BCS-{prefix}-"))
+                and (not name or name == (state.get(vc) or {}).get("cn", ""))
+                and (not contains or contains in (state.get(vc) or {}).get("cn", "")))
+    report = PublishSkipReport('跨店复制')
     items, blocked = build_replication_items(
         shops_data, state, book,
         source_shops=parse_ids(getattr(args, "source_shops", "")),
@@ -138,46 +158,58 @@ def run(args: Any) -> int:
         price_source=getattr(args, "price_source", "snapshot"),
         price_multiplier=getattr(args, "price_multiplier", 1.0),
         stock=getattr(args, "stock", 999), records=load_records(), restrictions=db.vc_entries(),
-        record_vcs=load_records(vc_only=True),
+        record_vcs=load_records(vc_only=True), selected=selected, skip_report=report,
     )
-    wanted = {s.strip() for s in (getattr(args, "vc", "") or "").split(",") if s.strip()}
-    prefix = (getattr(args, "prefix", "") or "").upper()
-    name = getattr(args, "name", "")
-    contains = getattr(args, "name_contains", None)
-    def selected(vc: str) -> bool:
-        return ((not wanted or vc in wanted)
-                and (not prefix or vc.startswith(f"BCS-{prefix}-"))
-                and (not name or name == (state.get(vc) or {}).get("cn", ""))
-                and (not contains or contains in (state.get(vc) or {}).get("cn", "")))
-    items = [it for it in items if selected(it.vendor_code)]
-    blocked = [b for b in blocked if selected(b["vc"])]
-    if getattr(args, "limit", 0):
-        items = items[:args.limit]
+    candidate_count = len(items)
+    remaining_vcs = {it.vendor_code for it in items} | {row['vc'] for row in blocked}
+    fully_skipped = {row.vc for row in report.rows} - remaining_vcs
+    selected_count = len(remaining_vcs) + len(fully_skipped)
+    initial_skips = len(report.rows)
+    if limit:
+        items = items[:limit]
     overrides = parse_cn_stock(getattr(args, "cn_stock", ""))
     for it in items:
         it.stock = stock_for(it.cn, overrides, default=it.stock)
     for b in blocked:
         print(f"[阻止] {b['vc']}: {b['reason']}")
-    print_publish_preview(items, sorted(shops_data))
-    print(f"候选 {len(items)} 个 VC，目标商品卡 {sum(len(it.target_shops) for it in items)} 张，阻止 {len(blocked)} 个")
+    candidate_targets = sum(len(it.target_shops) for it in items)
+    print(f"筛选命中 {selected_count} 个源 VC，限额前候选 {candidate_count} 个，"
+          f"本次候选 {len(items)} 个，目标商品卡 {candidate_targets} 张，限额裁剪 {candidate_count - len(items)} 个")
     capture = getattr(args, "capture_plan", False)
-    if not getattr(args, "apply", False) and not capture:
+    apply = getattr(args, 'apply', False)
+    if not apply and not capture:
+        print_publish_preview(items, sorted(shops_data))
         print("[dry-run] 使用本地快照及提交记录；加 --apply 提交。")
-        return 1 if blocked else 0
-    resolved_items = []
-    cache = {}
-    for it in items:
-        resolved, err = resolve_publish_details(it, state, card_cache=cache)
-        if err or not resolved:
-            blocked.append({"vc": it.vendor_code, "reason": err})
-            print(f"[阻止] {it.vendor_code}: {err}")
-        else:
-            resolved_items.append(resolved)
-    result = card_publish.execute_publish(resolved_items, apply=args.apply,
-                                         interval=getattr(args, "interval", 1.0),
-                                         **({'capture': True} if capture else {}))
+        report.write()
+        result = {'fail': 0, 'prepared_targets': 0}
+    else:
+        resolved_items = []
+        cache = {}
+        for it in items:
+            resolved, err = resolve_publish_details(it, state, card_cache=cache)
+            if err or not resolved:
+                blocked.append({"vc": it.vendor_code, "reason": err})
+                print(f"[阻止] {it.vendor_code}: {err}")
+            else:
+                resolved_items.append(resolved)
+        result = card_publish.execute_publish(resolved_items, apply=apply, skip_report=report,
+                                              interval=getattr(args, "interval", 1.0), capture=capture)
+        additional = Counter(row.vc for row in report.rows[initial_skips:])
+        fully_skipped.update(it.vendor_code for it in resolved_items
+                             if additional[it.vendor_code] == len(it.target_shops))
+        blocked.extend({'vc': row['vc'], 'reason': row['msg']} for row in result['details'] if not row['ok'])
     if result.get('prepared'):
         args.prepared = result['prepared']
+    replication = {'selected_vcs': selected_count, 'candidate_vcs_before_limit': candidate_count,
+                   'candidate_vcs': len(items), 'candidate_targets': candidate_targets,
+                   'limited_vcs': candidate_count - len(items), 'prepared_targets': result['prepared_targets'],
+                   'blocked_vcs': len({row['vc'] for row in blocked}), 'fully_skipped_vcs': len(fully_skipped),
+                   **report.summary()}
+    print(f"最终待提交 {replication['prepared_targets']} 张，阻止 {replication['blocked_vcs']} 个 VC，"
+          f"跳过 {replication['skipped_targets']} 个目标，全部目标跳过 {len(fully_skipped)} 个 VC")
+    args.outcome = {'replication': replication}
+    if report.path:
+        args.outcome['artifacts'] = {'skips_csv': str(report.path)}
     if result.get('daily_limit_warnings'):
-        args.outcome = {'daily_limit_warnings': result['daily_limit_warnings']}
+        args.outcome['daily_limit_warnings'] = result['daily_limit_warnings']
     return 1 if blocked or result["fail"] else 0

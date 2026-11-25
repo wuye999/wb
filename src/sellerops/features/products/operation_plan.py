@@ -5,6 +5,7 @@ from collections.abc import Callable
 from argparse import Namespace
 
 from sellerops.features.catalog.shops import require_active
+from sellerops.features.products.plan_preview import preview_output
 from sellerops.features.products.plans import validate_price_intent
 from sellerops.persistence import db
 
@@ -27,6 +28,8 @@ def preview(args: Namespace, prepare: Callable[[Namespace], int]) -> int:
     answer = prepare(args)
     frozen = getattr(args, 'prepared', None)
     args.output = {'action': args.action, 'scope': frozen or [], 'result': getattr(args, 'outcome', {})}
+    if getattr(args, 'cmd', None) == 'ops' and args.action != 'review-price':
+        preview_output(args.output, compact=getattr(args, 'json', False) and not getattr(args, 'full_preview', False))
     if not has_work(frozen):
         args.summary = getattr(args, 'summary', '') or '没有可提交的商品'
         return answer
@@ -34,7 +37,7 @@ def preview(args: Namespace, prepare: Callable[[Namespace], int]) -> int:
     action_type = ('price' if action == 'review-price' else action.replace('-', '_')
                    if action in PRODUCT_ACTIONS or action == 'normalize-vc' else 'publish')
     private = {'handler', 'json', 'cmd', 'output', 'summary', 'next_action', 'plan_id',
-               'apply', 'prepared', 'capture_plan', 'outcome'}
+               'apply', 'prepared', 'capture_plan', 'outcome', 'full_preview'}
     payload = {'route': action, 'arguments': {k: v for k, v in vars(args).items() if k not in private},
                'scope': frozen}
     with db.connect(write=True) as connection:

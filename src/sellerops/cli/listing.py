@@ -18,7 +18,7 @@ def register(sub: argparse._SubParsersAction, *, planned_only: bool = False) -> 
                    help="价格来源：snapshot=源店快照价格；minimum=商品价格表最低售价")
     p.add_argument("--price-multiplier", type=float, default=1.0, help="价格来源乘数，按分四舍五入（默认 1）")
     p.add_argument("--stock", type=int, default=999, help="上架库存（默认999，可显式设为0）")
-    p.add_argument("--limit", type=int, default=0, help="最多处理 N 个 vc（0=不限）")
+    p.add_argument("--limit", type=int, default=0, help="初筛后最多准备 N 个候选 VC（0=不限）")
     p.add_argument("--apply", action="store_true", help="兼容保留；确认预览生成的计划单后，用 apply --plan 提交")
 
 

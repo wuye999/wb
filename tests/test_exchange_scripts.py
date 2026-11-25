@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 from catalog_fixture import map_vcs, snapshot, write_book
 from sellerops.cli.main import build_parser, main
 from sellerops.features.catalog import export_products as exporter
+from sellerops.features.products import warehouse
 from sellerops.features.publishing import card_publish, import_publish as importer
 from sellerops.persistence import db
 from sellerops.settings import paths
@@ -184,7 +185,11 @@ class TestExchangeScripts(TestCase):
                 '--stock', '0', '--data-dir', self.data.data_dir]
         bcs = Mock(base_url='https://bcs.example.test')
         bcs.post.return_value = {'code': 200}
-        with patch.object(card_publish, 'bcs', bcs), patch.object(card_publish, 'resolve_warehouse', return_value=99), \
+        warehouse.clear_cache()
+        self.addCleanup(warehouse.clear_cache)
+        with patch.object(card_publish, 'bcs', bcs), \
+                patch.object(warehouse.credentials, 'get', return_value=Mock(wb_warehouse_keyword='测试仓')), \
+                patch.object(warehouse, 'list_stores', return_value=[{'id': 99, 'name': '测试仓东区'}]) as stores, \
                 patch.object(card_publish, 'fetch_card_json', return_value={'data': {'subject_id': 1}}) as details:
             with redirect_stdout(StringIO()) as preview:
                 self.assertEqual(main(args), 0)
@@ -193,14 +198,38 @@ class TestExchangeScripts(TestCase):
             self.assertIn('表格第 6 行，包装尺寸', preview.getvalue())
             self.assertIn('命中目标店已有同源商品 VC：BCS-ELSE-12345678-1', preview.getvalue())
             self.assertIn('[dry-run] 待提交 1 组，跳过 1', preview.getvalue())
+            self.assertIn('已扫描前 2 / 共 3 条有效商品（达到 --limit 提前停止，另有 1 条未扫描）', preview.getvalue())
+            self.assertIn('[默认业务仓] 店42 测试仓东区（99）', preview.getvalue())
             self.assertIn('BCS-TEST-23456789', preview.getvalue())
             self.assertNotIn('BCS-TEST-34567890', preview.getvalue())
             bcs.post.assert_not_called()
             details.assert_called_once_with(991002)
+            [report] = list(Path(self.data.log_dir).rglob('商品操作跳过_*.csv'))
+            self.assertIn(str(report), preview.getvalue())
+            with report.open(encoding='utf-8-sig', newline='') as file:
+                rows = list(csv.DictReader(file))
+            self.assertEqual([row['表格行号'] for row in rows], ['5', '6', '2'])
+            self.assertEqual([row['原因码'] for row in rows], ['table_invalid', 'table_invalid', 'target_same_source'])
+            self.assertEqual(rows[-1]['命中VC'], 'BCS-ELSE-12345678-1')
+            stores.assert_called_once_with(42)
             with redirect_stdout(StringIO()):
                 self.assertEqual(main([*args, '--apply']), 0)
+            self.assertEqual([call.args for call in stores.call_args_list], [(42,), (42,)])
 
         bcs.post.assert_called_once()
         payload = bcs.post.call_args.args[1]
         self.assertEqual(payload['shopDatas'][0]['vendorCode'], 'BCS-TEST-23456789')
         self.assertEqual(json.loads(payload['shop']), [{'id': 42, 'warehouseId': 99, 'warehouseQuantity': 0}])
+
+    def test_import_all_invalid_limits_terminal_samples_and_keeps_every_csv_row(self):
+        table = self.root / 'invalid.csv'
+        table.write_text('nmId\n' + 'bad\n' * 12, encoding='utf8')
+        with redirect_stdout(StringIO()) as preview, patch.object(card_publish, 'publish_cards_simple') as publish:
+            code = main(['listing', 'import-publish', '--file', str(table), '--shops', '42', '--prefix', 'TEST',
+                         '--data-dir', self.data.data_dir])
+        self.assertEqual(code, 1)
+        self.assertEqual(preview.getvalue().count('[跳过]'), 5)
+        publish.assert_not_called()
+        [report] = list(Path(self.data.log_dir).rglob('商品操作跳过_*.csv'))
+        with report.open(encoding='utf-8-sig', newline='') as file:
+            self.assertEqual(len(list(csv.DictReader(file))), 12)

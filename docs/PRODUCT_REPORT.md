@@ -70,6 +70,8 @@ python run.py report products --shops 1001 --extra-bcs-stdin --wb-region cn
 
 JSON 回执的 `data.period.orders_from` 是退货统计起点，`data.period.orders_collected_from` 是订单实际采集起点，`sales_7_from` 和 `sales_14_from` 是有效出单起点，终点均为 `through`。订单覆盖见 `data.orders_complete`，工作簿路径见 `data.artifacts.workbook`。
 
+`data.return_metrics.completed_compatible_return_rate` 为完单口径兼容退货率，计算式为（取消＋退货＋瑕疵退货）÷（商品件数－未完结件数），分母为零时返回 `null`。读取旧键 `done_rate` 的脚本请切换到此字段。
+
 默认输出 `exports/商品运营报告_时间.xlsx`。它是用户商业数据，不应提交Git。仓库及人工凭证维护约束继续遵守 [配置](CONFIGURATION.md) 和 [AI指南](AI_GUIDE.md)。
 
 ## 官方接口

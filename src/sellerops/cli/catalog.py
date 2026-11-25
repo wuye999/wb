@@ -1,6 +1,6 @@
 """命令定义：catalog。"""
 import argparse
-from sellerops.cli.arguments import shop_ids
+from sellerops.cli.arguments import nonempty, shop_ids
 from sellerops.cli.binding import bind
 
 
@@ -37,6 +37,17 @@ def register(sub: argparse._SubParsersAction) -> None:
     shops.add_argument('--all-shops', action='store_true', help='导出全部活跃店铺')
     p.add_argument('--out', help='输出路径 .xlsx（单店默认 exports/shop_<shop_id>_products.xlsx，多店或 --all-shops 默认 exports/shops_products.xlsx）')
     bind(p, 'sellerops.features.catalog.export_products', 'run')
+
+    p = sub.add_parser('product-summary', help='离线按商品中文名汇总在架货盘的价格、折扣和默认业务仓库存')
+    p.add_argument('--shops', type=shop_ids, help='店铺 ID，逗号分隔（默认全部在营店铺）')
+    names = p.add_mutually_exclusive_group()
+    names.add_argument('--name', type=nonempty, help='精确匹配完整中文名')
+    names.add_argument('--name-contains', type=nonempty, help='匹配中文名子串')
+    p.add_argument('--sort', choices=('count', 'shops', 'name'), default='count',
+                   help='按商品条数降序、覆盖店数降序或中文名升序（默认 count）')
+    p.add_argument('--limit', type=int, default=0, help='最多返回 N 个中文名组（0=不限）')
+    p.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
+    bind(p, 'sellerops.features.catalog.product_summary', 'run')
 
 
 def add_mismatch_args(p: argparse.ArgumentParser) -> None:

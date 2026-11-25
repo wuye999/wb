@@ -62,7 +62,7 @@ class TestProductScreening(unittest.TestCase):
             for status in ['cancel'] * 3 + ['buyout'] * 7 + ['created'] * 10]
         result = screen_products(report)
         self.assertEqual(len(result.high_returns), 2)
-        self.assertEqual(result.high_returns[0]['done_rate'], 0.3)
+        self.assertEqual(result.high_returns[0]['completed_compatible_return_rate'], 0.3)
         self.assertEqual(result.high_returns[0]['completed'], 10)
         self.assertFalse(result.recent)
 

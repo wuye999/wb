@@ -171,9 +171,9 @@ class TestReportRules(unittest.TestCase):
         result = return_metrics(rows)
         self.assertEqual((result['cancel'], result['returned'], result['defective'], result['unknown']), (1, 1, 1, 1))
         self.assertEqual(result['return_rate'], 3 / 6)
-        self.assertEqual(result['done_rate'], 3 / 5)
+        self.assertEqual(result['completed_compatible_return_rate'], 3 / 5)
         self.assertEqual(result['actual_rate'], 2 / 6)
-        self.assertIsNone(return_metrics([{'status': 'created'}])['done_rate'])
+        self.assertIsNone(return_metrics([{'status': 'created'}])['completed_compatible_return_rate'])
         self.assertIsNone(return_metrics([])['return_rate'])
 
     def test_weighted_cn_and_same_vc_different_shop_nm(self):
@@ -400,6 +400,8 @@ class TestReportWorkflow(unittest.TestCase):
             })
             self.assertEqual(args.output['return_metrics']['orders'], 2)
             self.assertEqual(args.output['return_metrics']['return_rate'], 0)
+            self.assertEqual(args.output['return_metrics']['completed_compatible_return_rate'], 0)
+            self.assertNotIn('done_rate', args.output['return_metrics'])
             with open(args.out, 'rb') as stream:
                 wb = load_workbook(stream)
                 self.assertNotIn('飞书出单明细', wb.sheetnames)
@@ -537,6 +539,10 @@ class TestReportWorkflow(unittest.TestCase):
             headers = [cell.value for cell in wb['VC退货汇总'][1]]
             rate_col = headers.index('兼容退货率') + 1
             self.assertEqual(wb['VC退货汇总'].cell(2, rate_col).number_format, '0.00%')
+            completed_col = headers.index('完单口径兼容退货率') + 1
+            completed = wb['VC退货汇总'].cell(2, completed_col)
+            self.assertEqual(completed.number_format, '0.00%')
+            self.assertIsInstance(completed.value, (int, float))
             self.assertFalse(list(target.parent.glob('.product-report-*')))
 
     def test_cli_exit_is_nonzero_when_report_partial(self):

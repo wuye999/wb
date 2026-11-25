@@ -9,8 +9,10 @@ from sellerops.features.products import operation_plan
 def register(sub: argparse._SubParsersAction) -> None:
     product.register(sub, planned_only=True)
     listing.register(sub, planned_only=True)
-    for parser in sub.choices.values():
+    for action, parser in sub.choices.items():
         parser.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
+        if action != 'review-price':
+            parser.add_argument('--full-preview', action='store_true', help='与 --json 一起返回完整预览范围')
 
 
 def register_apply(sub: argparse._SubParsersAction) -> None:

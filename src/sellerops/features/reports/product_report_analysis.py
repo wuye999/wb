@@ -16,7 +16,7 @@ def return_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             'combined_returns': combined, 'pending': pending, 'buyout': counts['buyout'],
             'unknown': sum(n for status, n in counts.items() if status not in data.KNOWN_STATUSES),
             'return_rate': combined / orders if orders else None,
-            'done_rate': combined / (orders - pending) if orders > pending else None,
+            'completed_compatible_return_rate': combined / (orders - pending) if orders > pending else None,
             'actual_rate': (returned + defective) / orders if orders else None,
             'cancel_rate': cancel / orders if orders else None}
 

@@ -12,7 +12,7 @@ from sellerops.features.reports.product_report_analysis import analyze
 from sellerops.features.reports.product_report_screening import screen_products
 
 RETURN_COLUMNS = [('orders', '商品件数'), ('combined_returns', '取消及退货合计'),
-                  ('return_rate', '兼容退货率'), ('done_rate', '完单口径兼容退货率'),
+                  ('return_rate', '兼容退货率'), ('completed_compatible_return_rate', '完单口径兼容退货率'),
                   ('cancel', '取消数'), ('cancel_rate', '取消率'), ('returned', '退货数'),
                   ('defective', '瑕疵退货数'), ('actual_rate', '实际退货数/商品件数'),
                   ('pending', '未完结数'), ('buyout', '买断数'), ('unknown', '未知状态数')]
@@ -63,7 +63,7 @@ def _screened(wb: Workbook, result: ProductScreening) -> None:
     common = [('vc', '完整VC'), ('cn', '商品中文名')]
     _sheet(wb, '低评分VC', [*common, ('rating', '合并评分'), ('feedback_count', '评价数'),
                             ('present_shops', '存在店铺')], result.low_rating)
-    _sheet(wb, '高退货率VC', [*common, ('done_rate', '完单口径兼容退货率'),
+    _sheet(wb, '高退货率VC', [*common, ('completed_compatible_return_rate', '完单口径兼容退货率'),
                               ('combined_returns', '取消及退货合计'), ('completed', '完单分母'),
                               ('present_shops', '存在店铺')], result.high_returns)
     _sheet(wb, '近期出单筛选', [*common, *RECENT_COLUMNS, ('present_shops', '已存在店铺'),

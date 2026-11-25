@@ -13,7 +13,7 @@
 | 操作类型 | 命令 | 执行行为 |
 | --- | --- | --- |
 | 本机检查与预览 | 任意 `--help`、`doctor`、不加 `--apply` 的 `task run` 和 `task schedule` | 检查本机或列出步骤。`doctor --check-online` 才联网探测 |
-| 本地查询、工作台与导出 | `shop list`、`map workbench`、`map check-mismatch`、`report mapping` | `shop list` 查本地店铺和快照状态，其他命令按需生成 HTML 或 Excel |
+| 本地查询、工作台与导出 | `shop list`、`catalog product-summary`、`map workbench`、`map check-mismatch`、`report mapping` | 前两项查询本地快照，其他命令按需生成 HTML 或 Excel |
 | 本地归属 | `map batch-set`、`catalog merge`、`catalog rename` | 前两者导入审核 JSON，后者修正归属 |
 | 平台查询与报表 | `report products`、`order list`、`product check-dimensions`、`marketing ads`、`marketing audit`、`report vc-sales`、`report delivery`、`report orders`、`report ratings`、`support chats`、`support appeals` | 读取对应平台，按命令生成本地输出。`order list` 默认先同步订单 |
 | 商品快照更新 | `sync`、`catalog fetch` | 默认先同步 BCS 快照再读缓存，使用 `--source wb-openapi` 从 WB 官方接口采集商品、价格及各店默认业务仓库存 |
@@ -32,6 +32,14 @@
 - 操作限制与续期边界见 [AI 日常操作指南](AI_GUIDE.md)。
 
 ## 商品映射与人工审核
+
+`shop list` 显示每店快照来源、同步时间、在架和回收站留存条数。空快照计 0，未同步店的计数为未知。
+`catalog product-summary` 按中文名查询活跃店铺的已归属、在架货盘商品，逐店展示条数、各规格原价区间、商品折扣区间及默认业务仓库存。原价按币种分组。无采集时核实的本店仓库证据或规格库存记录缺失时，库存显示未知。两条命令均仅查本地库。
+
+```powershell
+python run.py shop list --json
+python run.py catalog product-summary --shops 1001,1002 --name-contains "示例" --sort shops --limit 10 --json
+```
 
 首次配置且运营要求获取快照时，先运行 `sync --all`，再进入 `map workbench`。`catalog mapping` 打开同一套流程。
 
@@ -99,6 +107,8 @@ python run.py catalog fetch --source wb-openapi --parallel 6
 
 商品范围与店铺范围各选一项。--shops 接受逗号分隔的明确 ID，--all-shops 表示该通道全部店铺。--name 是完整中文名，--name-contains 才是包含匹配。--all-products 代表全部商品。库存数量必须显式传入，含清零的 --amount 0。
 
+大批量 `ops --json` 预览在 `data.preview` 提供计数、分店汇总和最多 10 条样例。完整 CSV 的绝对路径见 `data.artifacts`。需要完整 JSON 范围时加 `--full-preview`。确认预览后，提交该预览对应的计划单号。
+
 先用 `ops` 预览生成计划，确认后用 `apply --plan` 提交对应单号。
 
 ```powershell
@@ -155,6 +165,8 @@ python run.py ops replicate --shops 1001 --name "示例商品" --limit 1
 
 `ops replicate` 使用建卡协议保留原始完整 VC，同一 VC 在不同源店只选一次。WB 商品码取自选中的源店快照。上架和复制在每家目标店按完整 VC 或相同的最长连续数字段查重，数字段至少 6 位。BCS 建卡和复制使用目标店全状态本地快照及提交记录，回收站中的卡也会跳过。BCS 批量推送在有本地快照时也用它查重。快照滞后时，结合已有操作回执核对范围，并确认在架源商品仍然有效。
 
+复制以源完整 VC 和目标店组合统计跳过。`data.result.replication` 包含跳过原因和限额前后的候选数。候选为零时也可核对汇总，完整跳过明细见 `data.artifacts.skips_csv`。
+
 BCS 建卡已停用商品详情代理。`ops create-cards` 和 `ops replicate` 默认用 `card.json` 合成详情，生成一条尺码为 `0` 的规格。`ops create-cards --file` 的 JSON 商品项仍可通过 `extra.wb_detail.sizes` 提供规格，建卡只取第一条并写入目标 VC 和价格。`ops replicate` 使用合成规格，源商品的非零尺码及其他规格不会带入新卡。
 
 BCS 独立建卡在预览和提交前逐店检查本机今日已提交张数与本次待提交张数。合计超过 1000 张会显示 `[警告]` 和建议分天或分批上架，计划商品仍可提交。计数按本机提交记录汇总，同店同 VC 只计一次。
@@ -184,6 +196,8 @@ python run.py catalog export-products --shops 1001
 python run.py catalog export-products --all-shops
 python run.py listing import-publish --file exports/shop_1001_products.xlsx --shops 1002,1003 --prefix ABCD --price-multiplier 1.2 --stock 999 --limit 50
 ```
+
+导入预览按店显示核实后的默认业务仓名称和 ID。表格校验和目标店跳过明细写入同一份 `商品操作跳过_*.csv`，绝对路径见终端。`--limit` 提前停止时，终端另列已扫描的有效行及未扫描行数。
 
 导入支持标准 `.xlsx` 和同表头的 UTF-8 `.csv`。`--prefix` 使用 4 位大写英文字母，目标编码为 `BCS-ABCD-源数字码`，依次取表中有效的源数字码、原 VC 的最长数字段（至少 6 位）或本店 nmId。`--price` 可覆盖整批售价，金额四舍五入到分。无有效 nmId、售价或包装资料的行会逐条列出并跳过。导入按同源商品和目标 VC 去除表内重复行。上架库存由 `--stock` 指定，默认 999。
 

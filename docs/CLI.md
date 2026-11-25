@@ -5,7 +5,7 @@
 
 ## shop list
 
-查看本地店铺状态和快照时间
+查看本地店铺、快照来源时间和商品条数
 
 实现入口 [run_list](../src/sellerops/features/catalog/shops.py)
 
@@ -100,6 +100,20 @@
 - `--shops` 来源店铺 ID，逗号分隔
 - `--all-shops` 导出全部活跃店铺
 - `--out` 输出路径 .xlsx（单店默认 exports/shop_<shop_id>_products.xlsx，多店或 --all-shops 默认 exports/shops_products.xlsx）
+
+## catalog product-summary
+
+离线按商品中文名汇总在架货盘的价格、折扣和默认业务仓库存
+
+实现入口 [run](../src/sellerops/features/catalog/product_summary.py)
+
+- 最多选一项 --name / --name-contains
+- `--shops` 店铺 ID，逗号分隔（默认全部在营店铺）
+- `--name` 精确匹配完整中文名
+- `--name-contains` 匹配中文名子串
+- `--sort` 按商品条数降序、覆盖店数降序或中文名升序（默认 count）（count / shops / name）
+- `--limit` 最多返回 N 个中文名组（0=不限）
+- `--json` 输出单个 JSON 对象
 
 ## product price
 
@@ -292,7 +306,7 @@
 - `--price-source` 价格来源：snapshot=源店快照价格；minimum=商品价格表最低售价（snapshot / minimum）
 - `--price-multiplier` 价格来源乘数，按分四舍五入（默认 1）
 - `--stock` 上架库存（默认999，可显式设为0）
-- `--limit` 最多处理 N 个 vc（0=不限）
+- `--limit` 初筛后最多准备 N 个候选 VC（0=不限）
 - `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--interval` 批次上架请求间隔秒
 - `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
@@ -907,6 +921,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--interval` 批/店间请求间隔秒
 - `--channel` WB 支持设置批次，BCS 使用固定批次；俱乐部折扣仅 BCS 支持（wb / bcs）
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops stock
 
@@ -933,6 +948,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--resolve` snapshot=本地完整规格（默认，缺标识时官方API定向补齐）；live=另读莫斯科当前库存，缺库存记录不减少规格（snapshot / live）
 - `--channel` WB 支持实时库存；BCS 仅支持快照和固定批次（wb / bcs）
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops trash
 
@@ -956,6 +972,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--interval` 批间间隔秒
 - `--channel` 提交平台，默认 WB 后台（wb / bcs）
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops discount
 
@@ -981,6 +998,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--limit` 每店最多处理的商品数
 - `--chunk` 每批商品数（仅 WB，默认 100）
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops review-price
 
@@ -1014,11 +1032,12 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--price-source` 价格来源：snapshot=源店快照价格；minimum=商品价格表最低售价（snapshot / minimum）
 - `--price-multiplier` 价格来源乘数，按分四舍五入（默认 1）
 - `--stock` 上架库存（默认999，可显式设为0）
-- `--limit` 最多处理 N 个 vc（0=不限）
+- `--limit` 初筛后最多准备 N 个候选 VC（0=不限）
 - `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--interval` 批次上架请求间隔秒
 - `--cn-stock` 按中文名指定上架库存：'中文名:库存,...'（未指定默认 999）
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops publish
 
@@ -1048,6 +1067,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--interval` 批次/商品请求间隔秒（默认 1.0）
 - `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops create-cards
 
@@ -1077,6 +1097,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--interval` 批次/商品请求间隔秒（默认 1.0）
 - `--apply` 兼容保留；确认预览生成的计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops publish-openapi
 
@@ -1099,6 +1120,7 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--wait-interval` 标识查询轮次间隔秒（默认15，范围1..60；仍遵守接口限流）
 - `--apply` 兼容保留；确认上架或续办计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## ops normalize-vc
 
@@ -1116,6 +1138,7 @@ WB Open API：纠正历史 VC 前缀，保留原尾部，冲突时追加跨店�
 - `--all-shops` 本动作的全部目标店铺
 - `--apply` 兼容保留；确认改码计划单后，用 apply --plan 提交
 - `--json` 输出单个 JSON 对象
+- `--full-preview` 与 --json 一起返回完整预览范围
 
 ## apply
 

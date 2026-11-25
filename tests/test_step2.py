@@ -1,6 +1,7 @@
 """WorkBuddy 入门命令和固定计划单的离线验收。"""
 import io
 import json
+import csv
 import tempfile
 import unittest
 from argparse import Namespace
@@ -10,7 +11,7 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import Mock, patch
 
-from catalog_fixture import document, snapshot, write_book
+from catalog_fixture import document, map_vcs, snapshot, write_book
 from sellerops.cli.main import main
 from sellerops.features.catalog import products
 from sellerops.features.catalog.vc_mapping import multiplier_candidates
@@ -129,9 +130,153 @@ class TestStep2(unittest.TestCase):
         skip_csv = reply['data']['scope'][0]['skip_report']
         self.assertTrue(Path(skip_csv).is_file())
         self.assertEqual(reply['data']['result']['artifacts']['skips_csv'], skip_csv)
+        self.assertEqual(reply['data']['artifacts']['skips_csv'], skip_csv)
         with db.connect() as connection:
             plan = connection.execute('SELECT payload_json FROM plans WHERE plan_id=?', (reply['plan_id'],)).fetchone()
         self.assertEqual(json.loads(plan['payload_json'])['scope'], reply['data']['scope'])
+
+    def test_large_stock_preview_keeps_full_csv_and_frozen_apply_scope(self):
+        from sellerops.features.products import plans
+        from sellerops.integrations.wildberries import stocks as wb_stocks
+
+        specs = [{'chrtId': i, 'price': 38} for i in range(1100, 1200)]
+        snapshot(1, [dict(row(A, 101, 1001), sizeList=specs)])
+        options = ('ops', 'stock', '--shops', '1', '--vc', A, '--amount', '7')
+        credentials = Mock(root_version='fixture')
+        credentials.wb_shop.return_value = {'shopId': 1}
+        with patch.object(plans.warehouse, 'resolve_warehouse', return_value=42), \
+                patch.object(wb.credentials, 'get', return_value=credentials), \
+                patch.object(wb, 'make_session', return_value=Mock()), \
+                patch.object(wb_stocks, 'post_stocks', return_value={'error': False}) as send, \
+                patch.object(wb.time, 'sleep'):
+            code, compact, err = self.cli(*options)
+            self.assertEqual(code, 0, (compact, err))
+            data = compact['data']
+            self.assertNotIn('scope', data)
+            self.assertNotIn('receipts', data['result'])
+            self.assertEqual(data['preview']['counts']['planned'], 100)
+            self.assertEqual(data['preview']['omitted'], 90)
+            self.assertEqual(data['preview']['per_shop'][0]['planned_cards'], 1)
+            self.assertEqual(data['preview']['per_shop'][0]['planned_specs'], 100)
+            self.assertEqual(len(data['preview']['samples']), 10)
+            for key in ('receipts_csv', 'plan_csv'):
+                with Path(data['artifacts'][key]).open(encoding='utf-8-sig', newline='') as file:
+                    self.assertEqual(len(list(csv.reader(file))), 101)
+            code, full, err = self.cli(*options, '--full-preview')
+            self.assertEqual(code, 0, err)
+            self.assertGreater(len(json.dumps(full)), 4 * len(json.dumps(compact)))
+            with db.connect() as connection:
+                stored = connection.execute('SELECT payload_json FROM plans WHERE plan_id=?', (compact['plan_id'],)).fetchone()
+            self.assertEqual(json.loads(stored[0])['scope'], full['data']['scope'])
+            self.assertNotIn('full_preview', json.loads(stored[0])['arguments'])
+            send.assert_not_called()
+            code, applied, err = self.cli('apply', '--plan', compact['plan_id'])
+            self.assertEqual(code, 0, (applied, err))
+            self.assertEqual(len(applied['data']['receipt']['receipts']), 100)
+            self.assertEqual([item for call in send.call_args_list for item in call.args[2]],
+                             [{'chrtId': spec['chrtId'], 'amount': 7} for spec in specs])
+
+    def test_publish_preview_byte_limit_keeps_frozen_payload_out_of_summary(self):
+        fields = {'nm_id': 101, 'vendor_code': A, 'price': 38, 'stock': 100,
+                  'length': 1, 'width': 2, 'height': 3, 'weight': 0.5}
+        payload = {'shop': json.dumps([{'id': 1, 'warehouseId': 42, 'warehouseQuantity': 0}]),
+                   'media': 'fixture-' * 5000}
+        frozen = {'items': [(fields, [1], payload)], 'warehouses': {1: 42}}
+        args = Namespace(cmd='ops', action='create-cards', json=True)
+
+        def prepare(options):
+            options.prepared = frozen
+            return 0
+
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(operation_plan.preview(args, prepare), 0)
+        [example] = args.output['preview']['samples']
+        self.assertEqual((example['vc'], example['warehouse_id'], example['targets']['stock']), (A, 42, 0))
+        self.assertEqual(example['targets']['package'], {'length': 1, 'width': 2, 'height': 3, 'weight': 0.5})
+        self.assertNotIn('scope', args.output)
+        self.assertNotIn('fixture-', json.dumps(args.output))
+        with Path(args.output['artifacts']['plan_csv']).open(encoding='utf-8-sig', newline='') as file:
+            [entry] = list(csv.DictReader(file))
+        self.assertEqual(json.loads(entry['目标值'])['stock'], 0)
+        with db.connect() as connection:
+            stored = connection.execute('SELECT payload_json FROM plans WHERE plan_id=?', (args.plan_id,)).fetchone()
+        self.assertEqual(json.loads(stored[0])['scope']['items'][0][2], payload)
+
+    def test_local_product_summary_uses_spec_original_prices_and_verified_stock(self):
+        write_book([('S1', '旅行杯', 38), ('S2', '玻璃杯', 40)])
+        timestamps = ['2026-01-01', '2026-01-02', '2026-01-03']
+        first = dict(row(A, 101, 111), currencyIsoCode='CNY', discount=0, sizeList=[
+            {'chrtId': 111, 'price': 40, 'discountedPrice': 10, 'stockList': [{'warehouseId': 11, 'amount': 2},
+                                                                              {'warehouseId': 12, 'amount': 8}]},
+            {'chrtId': 112, 'price': 55, 'stockList': [{'warehouseId': 11, 'amount': 3}]}])
+        snapshot(1, [first, dict(row('TRASHED', 102, 113), trashedAt='date'), row('UNMAPPED', 103, 114),
+                     row('EXCLUDED', 104, 115), row(C, 105, 116)], source='bcs', fetchedAt=timestamps[0])
+        for sid, wid, quantities in ((2, 22, [0, 0]), (3, 33, [4, None])):
+            sizes = [{'chrtId': i, 'price': price, 'discountedPrice': 1,
+                      'stockList': [] if amount is None else [{'warehouseId': wid, 'amount': amount}]}
+                     for i, price, amount in zip((211, 212), (60, 65), quantities)]
+            snapshot(sid, [dict(row(A, sid * 100 + 1, 211), currencyIsoCode='CNY', discount=True, sizeList=sizes)],
+                     source='wb-openapi', warehouse={'id': wid, 'name': '业务仓'}, fetchedAt=timestamps[sid - 1])
+        snapshot(4, [row(A, 401, 411)])
+        snapshot(5, [])
+        map_vcs({A: 'S1', C: 'S2', 'TRASHED': 'S1'})
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, 'EXCLUDED', 'excluded')
+            connection.execute("UPDATE shops SET status='archived' WHERE shop_id='4'")
+            connection.execute("INSERT INTO shops (shop_id, shop_name, status) VALUES ('6', '未同步', 'active')")
+        (self.data / 'credentials.json').write_text('{"wb":{"warehouse_keyword":"业务仓"}}', encoding='utf8')
+        database = Path(paths.current.database)
+        before = database.read_bytes()
+        rc, reply, err = self.cli('shop', 'list')
+        self.assertEqual(rc, 0, err)
+        stores = {s['shop_id']: s for s in reply['data']['shops']}
+        self.assertEqual((stores['1']['active_item_count'], stores['1']['trashed_item_count']), (4, 1))
+        self.assertEqual(stores['4']['active_item_count'], 1)
+        self.assertEqual(stores['5']['active_item_count'], 0)
+        self.assertIsNone(stores['6']['active_item_count'])
+        rc, reply, err = self.cli('catalog', 'product-summary', '--sort', 'shops', '--limit', '1')
+        self.assertEqual(rc, 0, (reply, err))
+        data = reply['data']
+        self.assertEqual(data['totals']['matched_groups'], 2)
+        self.assertEqual(data['totals']['unmapped_items'], 1)
+        [group] = data['groups']
+        self.assertEqual((group['name'], group['item_count']), ('旅行杯', 3))
+        self.assertEqual(group['original_price_by_currency'], [{'currency': 'CNY', 'min': 40, 'max': 65, 'known_specs': 6}])
+        self.assertEqual(group['discount_pct'], {'min': 0, 'max': 0, 'known_items': 1, 'unknown_items': 2})
+        self.assertEqual([entry['stock']['total_quantity'] for entry in group['per_shop']], [None, 0, None])
+        self.assertEqual([s['warehouse']['id'] for s in data['shops']], [None, 22, 33, None, None])
+        self.assertIn('来源 bcs | 同步 2026-01-01', err)
+        rc, reply, _ = self.cli('catalog', 'product-summary', '--shops', '1', '--name-contains', '玻璃')
+        self.assertEqual(rc, 0)
+        self.assertEqual([group['name'] for group in reply['data']['groups']], ['玻璃杯'])
+        self.assertEqual(self.cli('catalog', 'product-summary', '--shops', '4')[0], 1)
+        self.assertEqual(database.read_bytes(), before)
+
+    def test_replicate_zero_candidates_reports_target_reasons_with_csv(self):
+        from sellerops.features.publishing import replicate
+
+        snapshot(1, [row(A, 101, 111), row(C, 102, 112)])
+        snapshot(2, [row(A, 201, 211)])
+        snapshot(3, [dict(row(B, 301, 311), trashedAt='date')])
+        snapshot(4, [])
+        snapshot(5, [])
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, A, 'pending', block_listing='5')
+            db.set_vc(connection, C, 'excluded')
+        with patch.object(replicate, 'load_records', return_value={A: {'4': 'date'}}), \
+                patch.object(replicate, 'resolve_publish_details') as details:
+            code, reply, err = self.cli('ops', 'replicate', '--source-shops', '1', '--shops', '2,3,4,5', '--all-products')
+            details.assert_not_called()
+        self.assertEqual(code, 0, (reply, err))
+        self.assertIsNone(reply['plan_id'])
+        summary = reply['data']['result']['replication']
+        self.assertEqual((summary['candidate_vcs'], summary['fully_skipped_vcs'], summary['skipped_targets']), (0, 2, 8))
+        self.assertEqual(summary['skip_reasons'], {'target_exact_vc': 1, 'target_same_source': 1, 'submitted': 1,
+                                                   'listing_restricted': 1, 'excluded': 4})
+        with Path(reply['data']['artifacts']['skips_csv']).open(encoding='utf-8-sig', newline='') as file:
+            rows = list(csv.DictReader(file))
+        self.assertEqual(len(rows), 8)
+        self.assertIn((B, 'trashed'), [(item['命中VC'], item['命中状态']) for item in rows])
 
     def test_sync_alias_reports_missing_and_archive_restore_preserves_rows(self):
         self.populate()

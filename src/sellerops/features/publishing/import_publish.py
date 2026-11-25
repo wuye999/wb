@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 from sellerops.domain.snapshot_values import positive_id
 from sellerops.domain.vendor_codes import extract_vc_source_code
 from sellerops.features.publishing import card_publish
+from sellerops.features.publishing.publish_skips import PublishSkip, PublishSkipReport
 
 
 def _named_rows(values) -> list[dict]:
@@ -70,7 +71,7 @@ def _dimension(value) -> float | None:
 
 
 def build_publish_items(rows, shops: list[int], prefix: str, *, price_multiplier=1.0,
-                        price=None, stock: int = 999) -> tuple[list[dict], list[tuple[int, str]]]:
+                        price=None, stock: int = 999, include_line: bool = False) -> tuple[list[dict], list[tuple[int, str]]]:
     """返回建卡项与 (表格行号, 跳过原因)，纯转换，无平台调用。"""
     if not re.fullmatch(r'[A-Z]{4}', prefix):
         raise ValueError('--prefix 必须为 4 位大写英文字母')
@@ -115,10 +116,12 @@ def build_publish_items(rows, shops: list[int], prefix: str, *, price_multiplier
         if source_key:
             seen_sources.add(source_key)
         seen_vcs.add(target_vc)
-        items.append(dict(nm_id=nm_id, vendor_code=target_vc, price=amount,
-                          target_shops=shops.copy(), stock=stock, **dims,
-                          title=str(row.get('俄文标题') or ''), main_image=str(row.get('主图链接') or ''),
-                          cn=str(row.get('商品中文名') or '')))
+        item = dict(nm_id=nm_id, vendor_code=target_vc, price=amount, target_shops=shops.copy(), stock=stock, **dims,
+                    title=str(row.get('俄文标题') or ''), main_image=str(row.get('主图链接') or ''),
+                    cn=str(row.get('商品中文名') or ''))
+        if include_line:
+            item['extra'] = {'table_line': line}
+        items.append(item)
     return items, skipped
 
 
@@ -127,13 +130,22 @@ def run(args) -> int:
         raise ValueError('--limit 必须为非负整数（0 表示不限）')
     items, skipped = build_publish_items(load_exchange_rows(args.file),
                                          [int(sid) for sid in args.shops.split(',')], args.prefix,
-                                         price_multiplier=args.price_multiplier, price=args.price, stock=args.stock)
+                                         price_multiplier=args.price_multiplier, price=args.price, stock=args.stock,
+                                         include_line=True)
+    report = PublishSkipReport('标准表导入上架')
     for line, reason in skipped:
-        print(f'[跳过] 表格第 {line} 行，{reason}')
+        code = 'table_duplicate' if reason.startswith('表内同源') else 'table_invalid'
+        report.rows.append(PublishSkip(code, reason, line=line))
     print(f'[表格] 有效 {len(items)} 行，跳过 {len(skipped)} 行')
     if not items:
+        report.write()
         return 1
-    result = card_publish.publish_cards_simple(items, apply=args.apply, interval=args.interval, limit=args.limit)
+    try:
+        result = card_publish.publish_cards_simple(items, apply=args.apply, interval=args.interval, limit=args.limit,
+                                                   skip_report=report)
+    except ValueError:
+        report.write()
+        raise
     if result.get('csv'):
         print(f"建卡回执 {result['csv']}")
     return int(bool(result['fail']))
