@@ -1,15 +1,19 @@
 """Explicit login windows using SellerOps' pinned Chromium, isolated from daily browsing."""
 from contextlib import contextmanager
 from importlib import metadata
+import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 
 from sellerops.core.errors import AuthenticationError
 from sellerops.core.files import FileLock
+from sellerops.integrations.sessions import browser_install
 from sellerops.settings import paths
 
 
@@ -52,14 +56,14 @@ def _check_package() -> None:
 
 
 @contextmanager
-def _driver():
+def _driver(runtime: Path | None = None):
     _check_package()
     from playwright.sync_api import sync_playwright
 
     # Only the Playwright child process needs this setting. Restore the caller's environment.
     driver = sync_playwright()
     previous = os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
-    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(paths.BROWSER_RUNTIME_DIR)
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(runtime or paths.BROWSER_RUNTIME_DIR)
     try:
         engine = driver.start()
     finally:
@@ -100,25 +104,136 @@ def _installed_version(browser) -> str | None:
         raise AuthenticationError('无法启动专用 Chromium，请检查本机浏览器运行环境。') from None
 
 
+def _publish_install(stage: Path, runtime: Path) -> None:
+    backup = runtime.with_name(f'.{runtime.name}-previous-{stage.parent.name}')
+    had_runtime = runtime.exists()
+    if had_runtime:
+        runtime.replace(backup)
+    try:
+        stage.replace(runtime)
+    except OSError:
+        if had_runtime:
+            try:
+                backup.replace(runtime)
+            except OSError:
+                raise browser_install.InstallError(f'发布专用 Chromium 失败，原运行目录保留在 {backup.name}。') from None
+        raise
+    if had_runtime:
+        shutil.rmtree(backup, ignore_errors=True)
+
+
+def _setup_verified(runtime: Path, source: str, seconds: int) -> None:
+    if browser_install.complete(runtime) and browser_install.has_receipt(runtime, PLAYWRIGHT_VERSION):
+        with _driver(runtime) as engine:
+            try:
+                if _installed_version(engine) == CHROMIUM_VERSION:
+                    return
+            except AuthenticationError:
+                pass  # Repair through the same verified staging path.
+    with TemporaryDirectory(prefix='.browser-setup-', dir=runtime.parent) as directory:
+        stage = Path(directory) / 'browsers'
+        stage.mkdir()
+        browser_install.stage_install(stage, source, seconds)
+        with _driver(stage) as engine:
+            expected = browser_install.ARTIFACTS[0]
+            if _executable(engine) != stage / expected.directory / expected.executable:
+                raise AuthenticationError(f'专用 Chromium 构建路径不匹配。{INSTALL_HELP}')
+            _check_version(_installed_version(engine) or '')
+        receipt = browser_install.expected_receipt(PLAYWRIGHT_VERSION)
+        (stage / browser_install.RECEIPT).write_text(json.dumps(receipt, indent=2), encoding='utf-8')
+        _publish_install(stage, runtime)
+
+
+def _setup_playwright(runtime: Path, source: str, seconds: int) -> None:
+    if source == 'npmmirror':
+        raise browser_install.InstallError('当前平台没有校验过的国内镜像产物，请使用 official。')
+    with _driver(runtime) as engine:
+        installed = _installed_version(engine)
+        if installed == CHROMIUM_VERSION:
+            return
+        env = {**os.environ, 'PLAYWRIGHT_BROWSERS_PATH': str(runtime),
+               'PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT': '20000'}
+        for key in ('PLAYWRIGHT_DOWNLOAD_HOST', 'PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST', 'npm_config_playwright_download_host',
+                    'npm_config_playwright_chromium_download_host', 'npm_package_config_playwright_download_host',
+                    'npm_package_config_playwright_chromium_download_host', 'NODE_TLS_REJECT_UNAUTHORIZED'):
+            env.pop(key, None)
+        command = [sys.executable, '-m', 'playwright', 'install', '--no-shell', 'chromium']
+        if installed is not None:
+            command.append('--force')
+        subprocess.run(command, env=env, check=True, timeout=seconds, capture_output=True)
+        _check_version(_installed_version(engine) or '')
+
+
 def setup() -> None:
     _check_package()
-    with FileLock(paths.BROWSER_RUNTIME_DIR.parent / 'browser-setup', timeout=5):
-        with _driver() as browser:
-            installed_version = _installed_version(browser)
-            if installed_version != CHROMIUM_VERSION:
-                env = {**os.environ, 'PLAYWRIGHT_BROWSERS_PATH': str(paths.BROWSER_RUNTIME_DIR)}
-                # Project installation must use the same driver and official artifact source.
-                for key in ('PLAYWRIGHT_DOWNLOAD_HOST', 'PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST'):
-                    env.pop(key, None)
-                command = [sys.executable, '-m', 'playwright', 'install', '--no-shell', 'chromium']
-                if installed_version is not None:
-                    command.append('--force')
-                try:
-                    subprocess.run(command, env=env, check=True, timeout=600)
-                except (OSError, subprocess.SubprocessError):
-                    raise AuthenticationError('专用 Chromium 安装失败，请检查网络后重新运行 login setup。') from None
-                _check_version(_installed_version(browser) or '')
+    runtime = paths.BROWSER_RUNTIME_DIR
+    try:
+        source, seconds = browser_install.options()
+        with FileLock(runtime.parent / 'browser-setup', timeout=5):
+            if browser_install.supported():
+                _setup_verified(runtime, source, seconds)
+            else:
+                _setup_playwright(runtime, source, seconds)
+    except browser_install.InstallError as error:
+        raise AuthenticationError(str(error)) from None
+    except (OSError, subprocess.SubprocessError):
+        raise AuthenticationError('专用 Chromium 安装失败，请检查网络、磁盘或专用浏览器是否仍在使用。') from None
     print(f'[已就绪] 专用 Chromium {CHROMIUM_VERSION}（构建 {CHROMIUM_BUILD}）')
+
+
+def installation_status() -> dict:
+    runtime = paths.BROWSER_RUNTIME_DIR
+    windows = browser_install.supported()
+    result = {'status': 'package_missing', 'playwright_version': None, 'expected_playwright_version': PLAYWRIGHT_VERSION,
+              'chromium': {'expected_version': CHROMIUM_VERSION, 'expected_build': CHROMIUM_BUILD,
+                           'manifest_version': None, 'manifest_build': None, 'installed_build': None,
+                           'installed_builds': [],
+                           'executable_present': None, 'install_marker_present': None,
+                           'integrity_verified': False, 'runtime_version': None}}
+    chromium = result['chromium']
+    directory = runtime / f'chromium-{CHROMIUM_BUILD}'
+    installed = sorted(path.name.removeprefix('chromium-') for path in runtime.glob('chromium-*')
+                       if re.fullmatch(r'chromium-[0-9]+', path.name) and path.is_dir())
+    chromium['installed_builds'] = installed
+    if CHROMIUM_BUILD in installed:
+        chromium['installed_build'] = CHROMIUM_BUILD
+    elif len(installed) == 1:
+        chromium['installed_build'] = installed[0]
+    chromium['install_marker_present'] = (directory / 'INSTALLATION_COMPLETE').is_file()
+    if windows:
+        chromium['executable_present'] = (directory / browser_install.ARTIFACTS[0].executable).is_file()
+        chromium['integrity_verified'] = (browser_install.complete(runtime)
+                                          and browser_install.has_receipt(runtime, PLAYWRIGHT_VERSION))
+    try:
+        bundle = metadata.distribution('playwright')
+    except metadata.PackageNotFoundError:
+        return result
+    version = bundle.version
+    result['playwright_version'] = version if isinstance(version, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version) else None
+    if version != PLAYWRIGHT_VERSION:
+        result['status'] = 'package_mismatch'
+        return result
+    try:
+        manifest = bundle.locate_file('playwright/driver/package/browsers.json')
+        entry = next(row for row in json.loads(manifest.read_text(encoding='utf-8'))['browsers']
+                     if row['name'] == 'chromium')
+        version, build = entry['browserVersion'], entry['revision']
+        chromium['manifest_version'] = version if isinstance(version, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){3}', version) else None
+        chromium['manifest_build'] = build if isinstance(build, str) and build.isascii() and build.isdecimal() else None
+    except (OSError, ValueError, KeyError, StopIteration, TypeError):
+        result['status'] = 'manifest_unreadable'
+        return result
+    if (version, build) != (CHROMIUM_VERSION, CHROMIUM_BUILD):
+        result['status'] = 'build_mismatch'
+    elif installed and CHROMIUM_BUILD not in installed:
+        result['status'] = 'installed_build_mismatch'
+    elif not chromium['install_marker_present'] or chromium['executable_present'] is False:
+        result['status'] = 'chromium_missing'
+    elif not chromium['integrity_verified']:
+        result['status'] = 'installed_unverified'
+    else:
+        result['status'] = 'ready'
+    return result
 
 
 @contextmanager

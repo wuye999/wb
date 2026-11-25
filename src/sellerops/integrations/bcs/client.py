@@ -2,24 +2,44 @@
 sellerops BCS ERP 云端 API 客户端适配器 (BCSClient)
 封装与 wb.bcserp.com 的全部 HTTP 通信：自动退避、限频处理、店铺列表、商品拉取、批量上品与同步。
 """
-from sellerops.core.errors import NetworkError
-
 import time
-import requests
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
-from sellerops.settings import paths as config
-from sellerops.settings import credentials
-from sellerops.core.errors import AuthenticationError
-from sellerops.core.errors import RateLimitError
-from sellerops.core.errors import PlatformApiError
+from threading import Lock
+from typing import Any, Dict, List, Optional
+
+import requests
+
+from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError, RateLimitError
 from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.integrations.bcs.auth import auto_refresh_enabled, refresh_login
 from sellerops.integrations.bcs.session import BCS_BASE_URL, BCSSession
+from sellerops.settings import credentials, paths as config
 
 RETRY_MAX = 3
 PAGE_SIZE_BIG = 10000
 READ_METHODS = {'GET', 'HEAD', 'OPTIONS'}
+_SYNC_TASK_LOCK = Lock()
+_last_sync_task_ms = 0
+
+
+class _SyncTimeout(PlatformApiError):
+    pass
+
+
+def sync_failure_reason(error: Exception) -> str:
+    if isinstance(error, AuthenticationError):
+        return 'BCS 会话无效或缺少权限'
+    if isinstance(error, RateLimitError):
+        return 'BCS 请求受到限流'
+    if isinstance(error, NetworkError):
+        return 'BCS 网络请求失败'
+    if isinstance(error, _SyncTimeout):
+        return '等待 BCS 同步进度超时'
+    if isinstance(error, PlatformApiError):
+        code = error.status_code
+        return f'BCS 请求失败（错误码 {code}）' if type(code) is int else 'BCS 响应不完整或请求被拒绝'
+    return 'BCS 请求异常'
 
 
 class _SessionExpired(AuthenticationError):
@@ -79,16 +99,18 @@ class BCSClient:
         return self._send_json(method, url, updated.bcs_headers(), 1, **kwargs)
 
     def _send_json(self, method: str, url: str, headers: Dict[str, str], attempts: int,
-                   **kwargs) -> Dict[str, Any]:
+                   *, timeout=60, **kwargs) -> Dict[str, Any]:
         if method == 'POST':
             headers = {**headers, 'Content-Type': 'application/json;charset=UTF-8'}
         for attempt in range(attempts):
             try:
-                response = requests.request(method, url, headers=headers, timeout=60, **kwargs)
+                response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
                 if response.status_code == 401:
                     raise _SessionExpired('BCS 凭证无效或已过期')
                 if response.status_code == 403:
                     raise AuthenticationError('BCS 请求被拒绝，请检查账号权限或网关状态')
+                if kwargs.get('allow_redirects') is False and 300 <= response.status_code < 400:
+                    raise PlatformApiError('BCS 返回意外重定向', status_code=response.status_code)
                 if response.status_code == 429:
                     if attempt + 1 < attempts:
                         time.sleep(3 * (attempt + 1))
@@ -133,26 +155,52 @@ class BCSClient:
 
     def fetch_open_api_shops(self) -> List[OpenAPIShop]:
         """完整分页读取店铺访问资料，供显式 Open API 集成内部使用，不打印原始行。"""
-        shops: List[OpenAPIShop] = []
+        return self._fetch_shops(lambda shop_id, row: OpenAPIShop(
+            shop_id, str(row.get('shopName') or shop_id), str(row.get('apiKey') or '').strip()))
+
+    def fetch_binding_shops(self) -> list[dict]:
+        """Project BCS identities from an explicit saved session without renewing it."""
+        if self._session is None:
+            raise AuthenticationError('BCS 暂无已保存会话')
+        def identity(shop_id: int, row: dict) -> dict:
+            name, sid = row.get('shopName'), row.get('sid')
+            return {'id': shop_id, 'name': name if isinstance(name, str) and name.strip() else str(shop_id),
+                    'sid': sid if isinstance(sid, str) else None}
+
+        return self._fetch_shops(identity, deadline=time.monotonic() + 15)
+
+    def _fetch_shops(self, project, *, deadline: float | None = None) -> list:
+        shops = []
         seen = set()
         for page in range(1, 1001):
-            d = self.get(f"{self.base_url}/system/wbShop/user/list?pageNum={page}&pageSize=100")
+            url = f"{self.base_url}/system/wbShop/user/list?pageNum={page}&pageSize=100"
+            if deadline is None:
+                d = self.get(url)
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise NetworkError('读取 BCS 店铺列表超时')
+                timeout = min(3, remaining / 2)
+                d = self.request_json('GET', url, retry=1, timeout=(timeout, timeout), allow_redirects=False)
+                if isinstance(d, dict) and d.get('code') in (401, '401', 403, '403'):
+                    raise AuthenticationError('BCS 会话无效或缺少权限')
             if not isinstance(d, dict) or d.get('code') != 200 or not isinstance(d.get('rows'), list):
                 raise PlatformApiError('BCS 店铺列表响应不完整')
             rows = d['rows']
             for row in rows:
                 raw_id = row.get('id') if isinstance(row, dict) else None
-                if isinstance(raw_id, bool) or not str(raw_id).isdigit() or int(raw_id) <= 0:
+                text_id = str(raw_id)
+                if not text_id.isascii() or not text_id.isdecimal() or int(text_id) <= 0:
                     raise PlatformApiError('BCS 店铺列表含无效 ID')
-                sid = int(raw_id)
-                if sid in seen:
+                shop_id = int(text_id)
+                if shop_id in seen:
                     raise PlatformApiError('BCS 店铺列表分页重复，无法确认完整性')
-                seen.add(sid)
-                shops.append(OpenAPIShop(sid, str(row.get('shopName') or sid),
-                                         str(row.get('apiKey') or '').strip()))
+                seen.add(shop_id)
+                shops.append(project(shop_id, row))
             total = d.get('total')
             if total is not None:
-                if isinstance(total, bool) or not str(total).isdigit() or int(total) < len(shops):
+                text_total = str(total)
+                if not text_total.isascii() or not text_total.isdecimal() or int(text_total) < len(shops):
                     raise PlatformApiError('BCS 店铺列表 total 无效或不一致')
                 if len(shops) == int(total):
                     return shops
@@ -221,38 +269,51 @@ class BCSClient:
         return self.post(url, body)
 
     def sync_shop(self, shop_id: int, filter_type: str = "ALL") -> str:
-        task_id = f"TASK_{int(time.time() * 1000)}"
+        global _last_sync_task_ms
+        with _SYNC_TASK_LOCK:
+            _last_sync_task_ms = max(time.time_ns() // 1_000_000, _last_sync_task_ms + 1)
+            task_id = f'TASK_{_last_sync_task_ms}'
         url = f"{self.base_url}/shopKeeper/product/sync?taskId={task_id}&shopId={shop_id}&filter={filter_type}"
         # This GET submits a synchronization task and must not be replayed as a read.
         d = self.request_json('GET', url, mutating=True)
-        if d.get("code") != 200:
-            raise PlatformApiError(f"触发同步失败 shop={shop_id} code={d.get('code')} msg={d.get('msg')}")
+        code = d.get('code') if isinstance(d, dict) else None
+        if code != 200:
+            raise PlatformApiError('BCS 未确认同步已受理', status_code=code if type(code) is int else None)
         return task_id
 
     def wait_sync_done(self, task_id: str, shop_id: Optional[int] = None, timeout: int = 600, interval: float = 2.5, quiet: bool = False):
-        start = time.time()
-        while time.time() - start < timeout:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             d = self.get(f"{self.base_url}/shopKeeper/product/sync/progress/{task_id}")
-            data = d.get("data") or {}
-            pct = data.get("completedCount")
-            if not quiet and pct is not None:
+            code = d.get('code') if isinstance(d, dict) else None
+            data = d.get('data') if isinstance(d, dict) else None
+            if code not in (None, 200) or not isinstance(data, dict):
+                raise PlatformApiError('BCS 同步进度响应异常', status_code=code if type(code) is int else None)
+            pct = data.get('completedCount')
+            if not quiet and type(pct) in (int, float):
                 print(f"  [同步 店{shop_id}] {pct}%", end="\r" if pct < 100 else "\n", flush=True)
             if data.get("status") == 1:
                 return
             time.sleep(interval)
-        raise PlatformApiError(f"同步超时 task={task_id}")
+        raise _SyncTimeout('等待 BCS 同步进度超时')
 
-
-    def sync_shops_parallel(self, shop_ids: list[int], workers: int = 2) -> None:
-        """Synchronize explicitly requested shops with bounded concurrency."""
-        from concurrent.futures import ThreadPoolExecutor
-
-        def synchronize(shop_id: int) -> None:
+    def synchronize_shop(self, shop_id: int, *, quiet: bool = False) -> dict | None:
+        stage = 'submit'
+        try:
             task_id = self.sync_shop(shop_id)
-            self.wait_sync_done(task_id, shop_id=shop_id)
+            stage = 'poll'
+            self.wait_sync_done(task_id, shop_id=shop_id, quiet=quiet)
+        except Exception as error:
+            reason = sync_failure_reason(error)
+            label = '提交同步' if stage == 'submit' else '轮询进度'
+            print(f'[同步警告] 店铺 {shop_id} | {label} | {reason}', flush=True)
+            return {'id': shop_id, 'stage': stage, 'reason': reason}
+        return None
 
+    def sync_shops_parallel(self, shop_ids: list[int], workers: int = 2) -> list[dict]:
+        """Return per-shop failures in input order after waiting for all shops."""
         with ThreadPoolExecutor(max_workers=max(1, min(workers, 4))) as pool:
-            list(pool.map(synchronize, shop_ids))
+            return [failure for failure in pool.map(self.synchronize_shop, shop_ids) if failure]
 
 
 client = BCSClient()

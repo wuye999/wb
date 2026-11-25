@@ -41,7 +41,12 @@ def run_fetch(args):
         args.next_action = '\u8bf7\u8fd0\u8425\u786e\u8ba4\u7f3a\u5931\u5e97\u94fa\u540e\u518d\u5f52\u6863'
     elif args.output.get('errors'):
         args.next_action = '根据失败店铺的原因核对权限或连接，确认后只同步受影响的店铺'
-    args.summary = '\u540c\u6b65\u90e8\u5206\u5931\u8d25' if args.output.get('errors') else '\u5feb\u7167\u540c\u6b65\u5b8c\u6210'
+    if args.output.get('errors'):
+        args.summary = '同步部分失败'
+    elif warnings := args.output.get('sync_warnings'):
+        args.summary = f'快照已保存，{len(warnings)} 家店铺使用 BCS 缓存'
+    else:
+        args.summary = '快照同步完成'
     return int(bool(args.output.get('errors')))
 
 

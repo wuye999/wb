@@ -36,6 +36,8 @@ python run.py login setup
 
 项目固定使用 Playwright 1.65.2 配套的 Chromium 159.0.8154.6（构建 1255）。`login setup` 将 Windows x64 浏览器安装到**项目根目录的 `.runtime/browsers/`**，可重复运行。首次安装需联网下载约 207 MiB，浏览器程序由 Git 忽略。已在上一版配置过浏览器的用户更新后运行一次 `login setup` 即可。登录资料继续保存在当前数据目录的 `browser_profiles/<平台>/`，更换浏览器安装位置时可直接沿用。
 
+Windows x64 的 `SELLEROPS_BROWSER_SOURCE` 默认是 `auto`，官方源下载失败时回退到已核验的 npmmirror。可设为 `npmmirror` 直接用国内镜像，或设为 `official` 仅尝试官方源。`SELLEROPS_BROWSER_TIMEOUT_SECONDS` 接受 30–600 的整数，默认每个来源累计 180 秒。安装先校验 Chromium、FFmpeg 和 Windows 依赖工具的 SHA-256，再在暂存目录解包和启动专用浏览器，核对版本后发布。首次从旧安装升级时会补齐校验回执。也可用 `doctor` 查看包版本、构建目录和安装回执状态。
+
 ```powershell
 python run.py login bcs
 python run.py login mabang
@@ -47,7 +49,7 @@ BCS、马帮分别需要先在本机配置 `bcs.login.username` 和 `mabang.logi
 
 WB 直连时每次页面连接最多等待 3 分钟，恢复店铺列表最多等待 4 分钟，页面接通后人工登录最多等待 20 分钟。后台明确跳回 WB 官网登录页时会进入人工登录流程。BCS 和马帮的人工登录窗口最多等待 10 分钟。已登录但 WB 恢复超时，可运行 `login wb --resume` 检查原浏览器资料。
 
-WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 展示候选，用户确认需要接入的店铺对应关系后，由 WorkBuddy 使用 `--bind BCS_ID=WB_UUID` 提交，可重复指定。用户可按店名确认，UUID 由 WorkBuddy 从候选结果读取，WB 编号与 BCS ID 各自使用。全部已选店铺通过归属和只读鉴权后一次保存。无店账号显示「已登录，暂无店铺」。若列表中缺少一个已登记店铺，或绑定不一致，保留本机凭证。
+WB 已配置并确认 UUID 的店铺可直接续期。首次连接时 WorkBuddy 展示 WB 候选，有已保存 BCS 会话时同时读取 BCS 清单。BCS `sid` 与 WB UUID 唯一匹配时会显示推荐和可复制的 `login wb --resume --bind …` 命令。缺少 `sid`、归属冲突或清单不可用时，按提示人工核对或先连接 BCS。用户确认后由 WorkBuddy 使用 `--bind BCS_ID=WB_UUID` 提交，可重复指定。全部已选店铺通过归属和只读鉴权后一次保存。无店账号显示「已登录，暂无店铺」。若列表中缺少一个已登记店铺，或绑定不一致，保留本机凭证。
 
 更新项目后可直接使用已有的 `credentials.json` 和仍有效的会话。平台连接通过独立的 `login` 命令完成。业务命令认证失败时停止相应操作，已提交请求按原业务回执处理。
 

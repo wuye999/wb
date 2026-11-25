@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sellerops.persistence.headers import COL_CN
@@ -43,6 +44,106 @@ SHIPPING_MODE_MABANG = "马帮发货"
 SHIPPING_MODE_WB = "WB发货"
 SHIPPING_MODE_SKIP = "不处理"
 VALID_SHIPPING_MODES = (SHIPPING_MODE_MABANG, SHIPPING_MODE_WB, SHIPPING_MODE_SKIP)
+
+
+def inspect_price_book(path: Path) -> dict:
+    """Report read-only Sheet1 diagnostics without emitting customer data."""
+    from openpyxl import load_workbook
+
+    required = [BOSS_COLUMNS[key] for key in ('cn', 'price')]
+    result = {'status': 'missing', 'missing_headers': required, 'data_rows': None,
+              'issue_counts': {}, 'row_samples': {}, 'skipped_checks': []}
+    if not path.is_file():
+        return result
+    workbook = load_workbook(path, read_only=True, keep_links=False)
+    cached = None
+    try:
+        if 'Sheet1' not in workbook:
+            result['status'] = 'missing_sheet'
+            return result
+        rows = workbook['Sheet1'].iter_rows(values_only=True)
+        headers = [str(value or '').strip() for value in next(rows, ())]
+        header_counts = Counter(headers)
+        missing = [label for label in required if not header_counts[label]]
+        duplicate = [label for label in required if header_counts[label] > 1]
+        checked = ('sku', 'cn', 'price', 'shipping_mode', 'stock_sku')
+        columns = {key: headers.index(BOSS_COLUMNS[key]) for key in checked if header_counts[BOSS_COLUMNS[key]] == 1}
+        body_columns = [index for index, label in enumerate(headers) if label in BOSS_COLUMNS.values()]
+        result.update(status='invalid' if missing or duplicate else 'ready', missing_headers=missing,
+                      duplicate_headers=duplicate, data_rows=0,
+                      duplicate_optional_headers=[BOSS_COLUMNS[k] for k in ('sku', 'shipping_mode', 'stock_sku')
+                                                  if header_counts[BOSS_COLUMNS[k]] > 1])
+        rules = {'product_identity': {'cn'}, 'duplicate_sku': {'sku'}, 'minimum_price': {'price'},
+                 'shipping_mode': {'shipping_mode'}, 'shipping_stock_sku': {'shipping_mode', 'stock_sku'}}
+        skipped = {rule for rule, fields in rules.items() if fields - columns.keys()}
+        if header_counts[BOSS_COLUMNS['sku']] > 1:
+            skipped.add('product_identity')
+        result['skipped_checks'] = sorted(skipped)
+
+        def note(code: str, row_number: int) -> None:
+            counts, samples = result['issue_counts'], result['row_samples']
+            counts[code] = counts.get(code, 0) + 1
+            examples = samples.setdefault(code, [])
+            if len(examples) < 10:
+                examples.append(row_number)
+
+        def cell(row: tuple, column: int | None):
+            return row[column] if column is not None and column < len(row) else None
+
+        def text(value) -> str:
+            return '' if value is None else str(value).strip()
+
+        price_column = columns.get('price')
+        cached_rows = None
+        cache_row_number = 1
+        identities = []
+        for number, row in enumerate(rows, start=2):
+            if not any(text(cell(row, index)) for index in body_columns):
+                continue
+            result['data_rows'] += 1
+            sku, cn, mode, stock_sku = (
+                text(cell(row, columns.get(key))) for key in ('sku', 'cn', 'shipping_mode', 'stock_sku'))
+            identities.append((number, sku, cn))
+            if 'product_identity' not in skipped and not sku and not cn:
+                note('missing_product_identity', number)
+            if price_column is not None:
+                value = cell(row, price_column)
+                if isinstance(value, str) and value.startswith('='):
+                    if cached_rows is None:
+                        cached = load_workbook(path, read_only=True, data_only=True, keep_links=False)
+                        cached_rows = cached['Sheet1'].iter_rows(min_row=2, min_col=price_column + 1,
+                                                               max_col=price_column + 1, values_only=True)
+                    while cache_row_number < number:
+                        (value,) = next(cached_rows, (None,))
+                        cache_row_number += 1
+                    if value is None:
+                        note('price_formula_without_cache', number)
+                elif not text(value):
+                    note('missing_price', number)
+                if text(value):
+                    price = to_number(value)
+                    if price is None or not math.isfinite(price) or price <= 0:
+                        note('invalid_price', number)
+            if 'shipping_mode' not in skipped and mode not in VALID_SHIPPING_MODES:
+                note('invalid_shipping_mode' if mode else 'missing_shipping_mode', number)
+            if 'shipping_stock_sku' not in skipped:
+                if mode == SHIPPING_MODE_WB and stock_sku:
+                    note('wb_shipping_with_mabang_sku', number)
+                elif mode == SHIPPING_MODE_MABANG and not stock_sku:
+                    note('mabang_shipping_without_stock_sku', number)
+
+        skus = Counter(sku for _, sku, _ in identities if sku)
+        names = Counter(cn for _, _, cn in identities if cn)
+        for number, sku, cn in identities:
+            if sku and skus[sku] > 1:
+                note('duplicate_seller_sku', number)
+            if 'product_identity' not in skipped and not sku and cn and (names[cn] > 1 or cn in skus):
+                note('ambiguous_product_name', number)
+        return result
+    finally:
+        if cached is not None:
+            cached.close()
+        workbook.close()
 
 
 def price_book_columns(ws, path: str, required=("cn", "price")):

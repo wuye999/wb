@@ -1,12 +1,14 @@
 """Explicit, authentication-only WorkBuddy entry point."""
+from collections import Counter
 from pathlib import Path
 import time
 
-from sellerops.core.errors import AuthenticationError, ValidationError
+from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError, RateLimitError, ValidationError
 from sellerops.core.files import FileLock, safe_load_json
 from sellerops.integrations.bcs import auth as bcs
 from sellerops.integrations.bcs import browser_session as bcs_browser
 from sellerops.integrations.bcs.client import BCSClient
+from sellerops.integrations.bcs.session import BCS_BASE_URL, BCSSession
 from sellerops.integrations.mabang import auth as mabang
 from sellerops.integrations.mabang import browser_session as mabang_browser
 from sellerops.integrations.mabang.session import MabangVerificationRequired
@@ -138,7 +140,81 @@ def _wb_targets(existing: list, bindings: dict[int, str], available: dict, usern
     return targets
 
 
-def _connect_wb(path: Path, expected: dict, session: wb_browser.WBSession, bindings: dict[int, str]) -> int:
+def _display_name(name: str) -> str:
+    return ''.join(ch for ch in name if ch.isprintable()).replace('|', '｜')
+
+
+def _preview_wb_bindings(existing: list, available: dict, cred: credentials.Credentials) -> None:
+    print('[待确认店铺] 请核对 BCS 与 WB 对应关系，再用 --bind 连接。')
+    print('  WB 店铺 | WB 编号 | UUID')
+    for shop in available.values():
+        print(f'  {_display_name(shop.name)} | {shop.old_id} | {shop.uuid}')
+
+    if not (cred.token and cred.limit_key):
+        print('[配对提示] BCS 暂无已保存会话，请运行 login bcs 后重新查看。')
+        return
+    if cred.base_url != BCS_BASE_URL:
+        print('[配对提示] 当前 BCS 地址不支持自动读取，请人工核对店铺。')
+        return
+    try:
+        saved = BCSSession(cred.token, cred.limit_key, cred.bcs_headers()['Cookie'])
+        candidates = BCSClient(saved).fetch_binding_shops()
+    except (AuthenticationError, TypeError, ValueError):
+        print('[配对提示] BCS 会话不可用，请运行 login bcs 后重新查看。')
+        return
+    except (NetworkError, PlatformApiError, RateLimitError):
+        print('[配对提示] 暂时无法取得完整 BCS 店铺清单，请人工核对或稍后重试。')
+        return
+    if not candidates:
+        print('[配对提示] BCS 当前账号未返回店铺，请核对登录账号。')
+        return
+
+    sids = [session_update.shop_uuid((shop['sid'] or '').strip()) for shop in candidates]
+    sid_counts = Counter(sid for sid in sids if sid)
+    local_counts = Counter(shop['shopId'] for shop in existing)
+    local_bound = set()
+    local_uuids = set()
+    for shop in existing:
+        cookie_uuid, _ = session_update.shop_cookie(shop.get('cookie') or '')
+        token_uuid = session_update.token_shop_uuid(shop.get('wb_seller_lk'))
+        if cookie_uuid or token_uuid:
+            local_bound.add(shop['shopId'])
+            local_uuids.update(uuid for uuid in (cookie_uuid, token_uuid) if uuid)
+
+    recommendations = {}
+    print('  BCS 店铺 ID | BCS 店铺 | WB 配对或原因')
+    for shop, sid in zip(candidates, sids):
+        shop_id = shop['id']
+        if not sid:
+            reason = '缺少有效 sid'
+        elif sid_counts[sid] != 1:
+            reason = 'sid 对应多个 BCS 店铺'
+        elif sid not in available:
+            reason = '当前 WB 账号无对应 UUID'
+        elif local_counts[shop_id] > 1 or shop_id in local_bound or sid in local_uuids:
+            reason = '涉及本机已有绑定或配置冲突'
+        elif len(str(shop_id)) > 16:
+            reason = 'BCS 店铺 ID 超出 --bind 支持范围'
+        else:
+            wb_shop = available[sid]
+            reason = f'推荐 {_display_name(wb_shop.name)} / {wb_shop.old_id} / {sid}'
+            recommendations[shop_id] = sid
+        print(f'  {shop_id} | {_display_name(shop["name"])} | {reason}')
+
+    if recommendations:
+        missing = sorted(local_counts.keys() - local_bound - recommendations.keys())
+        if missing:
+            print(f'[部分推荐] 仍需确认本机待绑定店铺 {", ".join(map(str, missing))}，请补齐参数后运行。')
+        elif len(recommendations) != len(candidates) or len(recommendations) != len(available):
+            print('[部分推荐] 请根据上表人工核对其余店铺。')
+        command = ' '.join(f'--bind {shop_id}={sid}' for shop_id, sid in recommendations.items())
+        print(f'  login wb --resume {command}')
+    else:
+        print('[配对提示] 暂无可唯一确认的推荐，请根据候选人工核对。')
+
+
+def _connect_wb(path: Path, expected: dict, session: wb_browser.WBSession,
+                bindings: dict[int, str], cred: credentials.Credentials) -> int:
     available = {shop.uuid: shop for shop in session.shops}
     existing = expected.get('shops', [])
     if not isinstance(existing, list):
@@ -153,10 +229,7 @@ def _connect_wb(path: Path, expected: dict, session: wb_browser.WBSession, bindi
         raise ValidationError('选择的 WB 店铺不在当前账号的可用店铺列表中，原凭证保留。')
     targets = _wb_targets(existing, bindings, available, session_update.account_id(session.authorize))
     if not targets:
-        print('[待确认店铺] 请向运营展示候选、确认 BCS 与 WB 的对应关系后，用 --bind 连接。')
-        for shop in available.values():
-            name = ''.join(ch for ch in shop.name if ch.isprintable())
-            print(f'  {name} | WB 编号 {shop.old_id} | UUID {shop.uuid}')
+        _preview_wb_bindings(existing, available, cred)
         return 2
     updated = session_update.update_shops(path, expected, targets, session.authorize, session.cookie)
     credentials.reload()
@@ -209,6 +282,6 @@ def run(args) -> int:
     elif platform == 'mabang':
         mabang.connect_browser_session(cred, session.username, session.cookies)
     else:
-        return _connect_wb(path, baseline.wb, session, bindings)
+        return _connect_wb(path, baseline.wb, session, bindings, baseline)
     print(f'[已连接] {_NAMES[platform]}。')
     return 0

@@ -3,12 +3,14 @@ from sellerops.persistence import db
 from sellerops.domain.snapshot_values import positive_id
 
 
-def shop_status() -> list[dict]:
-    with db.connect() as connection:
-        return [dict(row) for row in connection.execute("""
-            SELECT shop_id, shop_name, status, last_source, last_synced_at, last_sync_error
-            FROM shops ORDER BY rowid
-        """)]
+def shop_status(connection=None) -> list[dict]:
+    if connection is None:
+        with db.connect() as local:
+            return shop_status(local)
+    return [dict(row) for row in connection.execute("""
+        SELECT shop_id, shop_name, status, last_source, last_synced_at, last_sync_error
+        FROM shops ORDER BY rowid
+    """)]
 
 
 def archive_set() -> set[int]:

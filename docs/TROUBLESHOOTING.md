@@ -25,6 +25,7 @@
 | 马帮缺少 www_cookie/shop_map | 按 CONFIGURATION 准备真实字段；shop_map 键须与马帮订单中的店铺文本一致 |
 | 马帮要求腾讯验证码或短信验证 | 运行 `login mabang` 并在官网验证。认证失败前已有业务提交时先核对状态。|
 | 专用浏览器缺少、版本不符或资料被占用 | 关闭占用资料的专用窗口，按 [平台连接配置](CONFIGURATION.md#通过-workbuddy-连接平台) 检查依赖并运行 `login setup` |
+| `login setup` 下载失败或超时 | 核对终端所列来源和产物。Windows x64 可设置 `SELLEROPS_BROWSER_SOURCE=npmmirror` 或按需调高 `SELLEROPS_BROWSER_TIMEOUT_SECONDS`。遇到证书、重定向或 SHA-256 校验失败时，保留原安装并将该产物和错误交维护者核对 |
 | 马帮 NO_SKU / 匹配失败 | 查看本次报表并核对中文归属。「发货方式」填写「马帮发货」「WB发货」或「不处理」，选「马帮发货」时补齐「马帮库存SKU」。更换失败单须处理后才能推进预报和交运 |
 | `order process` 跳过飞书登记 | 缺少飞书地址或 `lark-cli` 时会提示跳过，马帮步骤成功则返回 0。需要登记时补齐地址、CLI 和表权限，按需用 `order register` 补登 |
 | `report products` 拒绝 `--url` / `--table`，或有效出单少于订单明细 | 移除旧参数。商品报告无需飞书或 `lark-cli`。近 7/14 天按 WB 下单日统计，口径 A 仅计在途和买断，缺 VC 的订单跳过候选匹配。退货统计按 `--order-days` 计算，采集失败时查看 `data.orders_complete` 和「数据覆盖说明」 |
@@ -38,11 +39,13 @@
 | 现象 | 处理 |
 | --- | --- |
 | 商品价格表缺列 | 在 Sheet1 第一行补齐「产品中文名」「最低售价」表头，再重试预览 |
+| `doctor` 提示价格表有填表异常 | 查看终端的类型、计数和示例 Excel 行号。JSON 的 `data.price_book` 提供同一组行号、计数和跳过的校验。公式无缓存时可用 Excel 重算并保存 |
 | 公式无法解析/无缓存 | 用 Excel 等表格软件重算并保存，或明确填写有效售价；不把空价补零提交 |
 | Excel PermissionError | 关闭占用目标表的 Excel/预览程序，保留备份，重试原本地操作；不用删除映射表解决 |
 | `report vc-sales` 结果不完整或 Excel 中零单 | 该命令独立读取 WB 订单动态。重复游标、达到翻页上限仍有下一页或店铺读取失败时，核对 `data.failed_shops` 和日志，已有 Excel 属于部分结果。若完整采集但零单，仍会导出空汇总表，可核对店铺和北京时间下单日期。文件路径见 `data.artifacts.workbook` |
 | JSON 损坏 | 从自己的备份恢复或交维护者定位；不要清空 state。跨进程锁文件长期存在是正常现象 |
 | `sync` 或 `catalog fetch` 部分店铺失败、退出码非零 | 查看本次逐店错误。成功店铺已更新，失败店铺保留原快照。默认 BCS 来源已在后台同步时可加 `--no-sync` 读取缓存 |
+| `sync --all` 提示部分店铺使用 BCS 缓存 | 对照 `data.sync_warnings` 的店铺 ID、提交或轮询阶段和原因。本次 BASE 均成功保存时退出 0。BASE 读取或保存失败的店铺另见 `data.errors`，其原快照保留 |
 | BCS 商品重复、快照或单店表行数偏大 | 新读取会对同店相同 nmId/完整 VC 的兼容记录去重，保留完整原行；旧文件不会因升级自动改写。非空业务字段冲突、标识歧义或没有完整原行时会报错，不随意保留第一/最后一行。规则见 [数据契约](DATA.md#映射快照与标识)；整理旧文件前先备份 |
 | 更新后单店表变空 | 有效空快照会清除该店旧商品明细和总表中的该店覆盖，历史归属仍保留。核对本次 `sync` 结果和 `report mapping` 导出 |
 | `report mapping` 提示缺少快照 | 用 `shop list` 核对该店的快照状态，经运营要求再单独运行 `sync`。审核结果用 `catalog merge` 或 `map batch-set --file` 导入 |

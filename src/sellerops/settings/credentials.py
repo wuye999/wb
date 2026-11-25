@@ -12,9 +12,115 @@ BCS 三件套（token/limit_key/cookie_extra）+ WB 全部店铺 cookie 全在�
 
 
 from functools import lru_cache
+import json
+import re
+
 from sellerops.settings import paths as config
 from sellerops.core.files import safe_load_json
 DEFAULT_ROOT_VERSION = "v1.108.1"
+DEFAULT_BCS_URL = 'https://wb.bcserp.com/prod-api'
+
+
+def _configured(section: dict, key: str) -> bool:
+    value = section.get(key)
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _invalid_json_constant(_value: str):
+    raise ValueError('non-JSON numeric constant')
+
+
+def inspect_credentials(path) -> dict:
+    """Check the local structure and project configuration flags without copying credentials."""
+    diagnosis = {'status': 'missing', 'json_valid': None, 'structure_valid': None, 'issues': []}
+    issues = diagnosis['issues']
+    missing = raw = object()
+    try:
+        with open(path, encoding='utf-8-sig') as stream:
+            raw = json.load(stream, parse_constant=_invalid_json_constant)
+    except FileNotFoundError:
+        pass
+    except (UnicodeError, ValueError):
+        diagnosis.update(status='invalid_json', json_valid=False)
+    except OSError:
+        diagnosis['status'] = 'unreadable'
+
+    def object_section(parent: dict, key: str, location: str) -> dict:
+        value = parent.get(key, {})
+        if not isinstance(value, dict):
+            issues.append({'path': location, 'code': 'expected_object'})
+            return {}
+        return value
+
+    def check_strings(section: dict, location: str, keys: tuple[str, ...]) -> None:
+        for key in keys:
+            if key in section and not isinstance(section[key], str):
+                issues.append({'path': f'{location}.{key}', 'code': 'expected_string'})
+
+    parsed = raw is not missing
+    data = raw if isinstance(raw, dict) else {}
+    if parsed and not isinstance(raw, dict):
+        issues.append({'path': '$', 'code': 'expected_object'})
+    bcs = object_section(data, 'bcs', 'bcs')
+    wb = object_section(data, 'wb', 'wb')
+    mabang = object_section(data, 'mabang', 'mabang')
+    feishu = object_section(data, 'feishu', 'feishu')
+    object_section(data, 'ai', 'ai')
+    bcs_login = object_section(bcs, 'login', 'bcs.login')
+    mabang_login = object_section(mabang, 'login', 'mabang.login')
+    check_strings(bcs, 'bcs', ('base_url', 'token', 'limit_key', 'cookie_extra'))
+    check_strings(wb, 'wb', ('warehouse_keyword', 'root_version'))
+    check_strings(mabang, 'mabang', ('www_cookie', 'aamz_cookie', 'api_bearer', 'api_key'))
+    check_strings(feishu, 'feishu', ('base_url',))
+    check_strings(bcs_login, 'bcs.login', ('username', 'password'))
+    check_strings(mabang_login, 'mabang.login', ('username', 'password'))
+    shop_map = object_section(mabang, 'shop_map', 'mabang.shop_map')
+    rows = wb.get('shops', [])
+    ids, complete = set(), set()
+    session_keys = ('authorizev3', 'wb_seller_lk', 'cookie')
+    if not isinstance(rows, list):
+        issues.append({'path': 'wb.shops', 'code': 'expected_array'})
+    else:
+        for index, row in enumerate(rows, start=1):
+            location = f'wb.shops[{index}]'
+            if not isinstance(row, dict):
+                issues.append({'path': location, 'code': 'expected_object'})
+                continue
+            shop_id = row.get('shopId')
+            if type(shop_id) is not int or shop_id <= 0:
+                issues.append({'path': f'{location}.shopId', 'code': 'invalid_shop_id'})
+                continue
+            if shop_id in ids:
+                issues.append({'path': f'{location}.shopId', 'code': 'duplicate_shop_id'})
+            ids.add(shop_id)
+            check_strings(row, location, ('shopName', *session_keys))
+            if all(_configured(row, key) for key in session_keys):
+                complete.add(shop_id)
+
+    if parsed:
+        diagnosis.update(status='invalid_structure' if issues else 'ready', json_valid=True,
+                         structure_valid=not issues)
+    counts_known = ((isinstance(raw, dict) and isinstance(data.get('wb', {}), dict) and isinstance(rows, list))
+                    or diagnosis['status'] == 'missing')
+    root = wb.get('root_version', DEFAULT_ROOT_VERSION if 'wb' in data else None)
+    root_version = root if isinstance(root, str) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', root) else None
+    warehouse_id = mabang.get('warehouse_id')
+    platforms = {
+        'bcs': {'configured': bool(bcs), 'session_configured': all(_configured(bcs, k) for k in ('token', 'limit_key')),
+                'login_configured': _configured(bcs_login, 'username'),
+                'endpoint': 'default' if bcs.get('base_url', DEFAULT_BCS_URL) == DEFAULT_BCS_URL else 'custom'},
+        'wb': {'configured': bool(wb), 'root_version': root_version,
+               'warehouse_keyword_configured': _configured(wb, 'warehouse_keyword')},
+        'mabang': {'configured': bool(mabang), 'login_configured': _configured(mabang_login, 'username'),
+                   'session_configured': any(mabang.get(k) for k in ('www_cookie', 'aamz_cookie', 'cookies', 'cookie_jar')),
+                   'api_configured': all(_configured(mabang, k) for k in ('api_bearer', 'api_key')),
+                   'warehouse_configured': type(warehouse_id) is int and warehouse_id > 0,
+                   'mapped_shops': len(shop_map)},
+        'feishu': {'configured': _configured(feishu, 'base_url')},
+    }
+    return {'credentials': diagnosis, 'platforms': platforms,
+            'shop_counts': {'credential_configured': len(ids) if counts_known else None,
+                            'credential_session_complete': len(complete) if counts_known else None}}
 
 
 class Credentials:
@@ -37,7 +143,7 @@ class Credentials:
     # ---- BCS 云端 API 凭证 ----
     @property
     def base_url(self):
-        return self.bcs.get("base_url", "https://wb.bcserp.com/prod-api")
+        return self.bcs.get('base_url', DEFAULT_BCS_URL)
 
     @property
     def token(self):

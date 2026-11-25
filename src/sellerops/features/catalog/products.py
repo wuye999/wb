@@ -5,11 +5,12 @@ sellerops 店铺商品拉取与快照管理（原 fetch_products.py + sync_shops
 显式 source=wb-openapi 时改为用 BCS 保存的 apiKey 直接读取 WB Open API。
 """
 
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from sellerops.integrations.bcs.client import OpenAPIShop, client as bcs
+from sellerops.integrations.bcs.client import OpenAPIShop, client as bcs, sync_failure_reason
 from sellerops.persistence import db
 from sellerops.persistence.snapshots import ProductSnapshotRepository, save_shop, save_snapshot
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
@@ -66,14 +67,12 @@ def fetch_shop(shop_id: int, no_sync: bool = False,
 
 def _fetch_bcs(shop_id: int, no_sync: bool) -> list[dict]:
     if not no_sync:
-        try:
-            print(f"[0/3] 店 {shop_id}：同步 WB 数据 ...")
-            t0 = time.time()
-            task_id = bcs.sync_shop(shop_id)
-            bcs.wait_sync_done(task_id, shop_id=shop_id)
-            print(f"      同步完成（{time.time() - t0:.0f}s）")
-        except Exception as e:
-            print(f"  [警告] 同步失败：{e}（降级：直接拉取上次同步数据）")
+        print(f"[0/3] 店 {shop_id}：同步 WB 数据 ...")
+        t0 = time.monotonic()
+        if bcs.synchronize_shop(shop_id):
+            print(f'[降级] 店铺 {shop_id} 同步未确认，读取该店 BCS BASE 缓存。')
+        else:
+            print(f"      同步完成（{time.monotonic() - t0:.0f}s）")
     print("=" * 60)
     print(f"[1/2] 店铺 {shop_id}：拉取在架商品（BASE） ...")
     rows = bcs.fetch_shop_products(shop_id, filter_type="BASE")
@@ -177,30 +176,43 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
             save_shop(connection, shop['id'], shop['name'])
 
     status = {"fetchedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-              "shops": shops, "errors": [], "source": source, "fetched": [], "missing_shops": missing}
+              "shops": shops, "errors": [], "source": source, "fetched": [], "missing_shops": missing,
+              "sync_warnings": []}
 
     if source == 'wb-openapi' and no_sync:
         print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
     if source == 'bcs' and shops and not no_sync:
         t0 = time.time()
         print("\n>>> 并发同步全部店铺（WB → BCS）...")
-        bcs.sync_shops_parallel([s["id"] for s in shops])
-        print(f"    全部同步完成（{time.time() - t0:.0f}s）")
+        status['sync_warnings'] = bcs.sync_shops_parallel([s['id'] for s in shops])
+        count = len(status['sync_warnings'])
+        print(f'    同步完成 {len(shops) - count} 家，待降级 {count} 家（{time.time() - t0:.0f}s）')
 
     if source == 'wb-openapi':
         status['fetched'], status['errors'] = _fetch_open_api_shops(accesses, parallel)
     else:
+        fallback = {warning['id'] for warning in status['sync_warnings']}
         for i, s in enumerate(shops):
             print(f"\n>>> 拉取店铺 {s['id']} ({s['name']})")
+            if s['id'] in fallback:
+                print(f"[降级] 店铺 {s['id']} 同步未确认，读取该店 BCS BASE 缓存。")
             try:
                 _, total = fetch_shop(s['id'], no_sync=True, source=source, name=s['name'])
                 status['fetched'].append({'id': s['id'], 'total': total})
             except Exception as error:
-                reason = str(error)
+                if isinstance(error, (OSError, sqlite3.Error)):
+                    reason = '本地快照保存失败'
+                elif isinstance(error, ValueError):
+                    reason = '快照数据或店铺状态无效'
+                else:
+                    reason = sync_failure_reason(error)
                 print(f"  [店铺{s['id']} 失败] {reason}")
                 status['errors'].append({'id': s['id'], 'name': s['name'], 'error': reason})
             if i < len(shops) - 1:
                 time.sleep(1)
+        cached = sum(shop['id'] in fallback for shop in status['fetched'])
+        print(f"[快照汇总] 已保存 {len(status['fetched'])} 家（降级缓存 {cached} 家），"
+              f"失败 {len(status['errors'])} 家")
 
     with db.connect(write=True) as connection:
         for error in status['errors']:
