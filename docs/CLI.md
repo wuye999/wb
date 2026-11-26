@@ -75,6 +75,8 @@
 
 - `file` 审核结果 JSON 数组文件路径
 - `--json` 输出单个 JSON 对象
+- `--dry-run` 只读校验审核结果并预览变更和剩余待认领数
+- `--full` 与 --json 一起返回完整 VC 列表（默认最多 100 条）
 
 ## catalog rename
 
@@ -873,6 +875,8 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 实现入口 [run_batch_set](../src/sellerops/features/catalog/vc_mapping.py)
 
 - `--file` 审核结果 JSON 数组文件路径，省略时从标准输入读取
+- `--dry-run` 只读校验审核结果并预览变更和剩余待认领数
+- `--full` 与 --json 一起返回完整 VC 列表（默认最多 100 条）
 - `--json` 输出单个 JSON 对象
 
 ## map check-mismatch

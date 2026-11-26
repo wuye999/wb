@@ -17,7 +17,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser('merge', help="保存待认领工作台审核结果（同 map batch-set --file）")
     p.add_argument("file", help="审核结果 JSON 数组文件路径")
     p.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
-    bind(p, 'sellerops.features.catalog.vc_mapping', 'run_batch_set')
+    add_batch_set_args(p)
 
     p = sub.add_parser('rename', help="纠偏/修改商品中文名（按卖家 SKU 重绑）")
     p.add_argument("--vc", default="", help="要改名的 vendorCode")
@@ -48,6 +48,12 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument('--limit', type=int, default=0, help='最多返回 N 个中文名组（0=不限）')
     p.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
     bind(p, 'sellerops.features.catalog.product_summary', 'run')
+
+
+def add_batch_set_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument('--dry-run', action='store_true', help='只读校验审核结果并预览变更和剩余待认领数')
+    p.add_argument('--full', action='store_true', help='与 --json 一起返回完整 VC 列表（默认最多 100 条）')
+    bind(p, 'sellerops.features.catalog.vc_mapping', 'run_batch_set')
 
 
 def add_mismatch_args(p: argparse.ArgumentParser) -> None:

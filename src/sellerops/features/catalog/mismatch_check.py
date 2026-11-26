@@ -2,7 +2,7 @@
 import datetime
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from html import escape
 from pathlib import Path
 
@@ -130,8 +130,10 @@ def _card(row: dict) -> str:
 
 def render_html(rows: list[dict]) -> tuple[str, dict]:
     groups = defaultdict(list)
+    flag_counts = Counter()
     for row in rows:
         groups[row['cn']].append(row)
+        flag_counts.update(kind for kind, _, _ in row['flags'])
     anomalies = {cn: sum(bool(row['flags']) for row in items) for cn, items in groups.items()}
     sections = []
     for cn in sorted(groups, key=lambda name: (not anomalies[name], name)):
@@ -146,7 +148,8 @@ def render_html(rows: list[dict]) -> tuple[str, dict]:
   <div class="gallery">{"".join(map(_card, items))}</div>
 </section>''')
 
-    counts = dict(total=len(rows), groups=len(groups), anomalies=sum(anomalies.values()))
+    counts = dict(total=len(rows), groups=len(groups), anomalies=sum(anomalies.values()),
+                  prefix_conflicts=flag_counts['prefix'], price_anomalies=flag_counts['price'])
     options = ''.join(f'<option value="{escape(cn)}">{escape(cn)}</option>' for cn in sorted(groups))
     stats = f'共 {counts["total"]} 条 · {counts["groups"]} 个中文名 · 异常 {counts["anomalies"]} 条'
     page = (_HEAD + f'''
@@ -224,7 +227,8 @@ def run(cn='', begin='', end='', days=0) -> dict:
     output = Path(paths.current.out_mismatch_html)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(page, encoding='utf-8')
-    print(f'已生成 {output}\n共 {counts["total"]} 条 · {counts["groups"]} 个中文名 · 异常 {counts["anomalies"]} 条')
+    print(f'已生成 {output}\n共 {counts["total"]} 条 · {counts["groups"]} 个中文名 · 异常 {counts["anomalies"]} 条'
+          f' · 前缀冲突 {counts["prefix_conflicts"]} 条 · 价格倍数异常 {counts["price_anomalies"]} 条')
     return {'artifacts': {'html': str(output)}, 'counts': counts}
 
 

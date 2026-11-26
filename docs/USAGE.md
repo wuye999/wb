@@ -53,16 +53,21 @@ python run.py map workbench --json
 
 待认领商品按同源码或同图归组，先看图和出现店铺，再用前缀、倍数参考或中文名确认。点击缩略图放大，使用分类、处理状态及 VC／中文名／价格搜索定位商品。倍数参考按最接近的正整数倍计算，误差在 1 元内或相对误差在 2% 内时展示。
 
+`map candidates --json` 默认返回前 20 组，可用正整数 `--limit` 调整。`data.counts` 统计全部符合范围的商品。`prefix`、`multiplier`、`unmatched` 按组计数，`groups` 为组总数，`vcs` 为跨店去重的完整 VC 总数。`data.limit` 给出本次上限，`returned_groups` 和 `returned_vcs` 对应本次返回的 `data.groups`，`truncated` 表示仍有组未列出。
+
 `map candidates`、`map workbench` 和 `catalog mapping` 在零组时显示当前没有待认领商品，JSON 回执的 `next_action` 为空。两个工作台入口仍会生成可打开的 HTML。
 
 一键采纳只填入尚未选择的前缀命中组，包括筛选隐藏的组。浏览器保存审核进度。可以分批导出，文件每次包含所有已处理组的完整 VC。导出后把 JSON 和页面上的交接话术发给 WorkBuddy，或自行使用以下任一命令导入。
 
 ```powershell
+python run.py map batch-set --file "_scratch/待认领审核.json" --dry-run --json
 python run.py map batch-set --file "_scratch/待认领审核.json" --json
 python run.py catalog merge "_scratch/待认领审核.json"
 ```
 
-`map batch-set` 也可从标准输入读取 JSON 数组，支持 `map`（或 `mapped`）、`rebind`、`exclude`、`block`、`unblock`。禁上架使用 `shops: "ALL"` 或店铺 ID 列表，保留原有归属。审核导入和纠偏直接写入本地库。Excel 占用时，关闭提示中的工作簿后重试。导出单店表时，已确认的空店可生成空表，缺快照会提示无法导出该店。
+`map batch-set` 也可从标准输入读取 JSON 数组，支持 `map`（或 `mapped`）、`rebind`、`exclude`、`block`、`unblock`。禁上架使用 `shops: "ALL"` 或店铺 ID 列表，保留原有归属。两个导入入口都支持 `--dry-run` 只读预检。确认后用同一份审核数据去掉 `--dry-run`，命令重新校验并整批写入本地库。Excel 占用时，关闭提示中的工作簿后重试。导出单店表时，已确认的空店可生成空表，缺快照会提示无法导出该店。
+
+JSON 回执的 `data.counts` 按完整 VC 统计归属（`mapped`）、换绑既有 SKU（`rebound`）、排除（`excluded`）、禁上架（`blocked`）、解除限制（`unblocked`）和业务字段相同（`unchanged`）。`remaining_pending` 为全库在营、在架的唯一待认领 VC 数，`data.dry_run` 为真时是预计值，为假时是本批保存后的值。按顶层 `next_action` 继续核对。`data.updated_vcs` 按输入顺序默认返回前 100 个拟处理或已处理的 VC。`updated_vcs_total` 和 `updated_vcs_truncated` 给出总数和截断状态。预检或保存时可与 `--json` 一起加 `--full`，返回完整列表。
 
 `report mapping` 的映射总表按本地在架快照列出归属。价格表有商品名但目前没有在架归属是正常情况。「待核查清单」列出已归属在架 VC 对应的最低售价缺失项。实际未归属在架商品仍见「未映射商品」或单店表的「未映射在架商品」。总表仍校验价格表的「产品中文名」和「最低售价」表头。
 
@@ -74,9 +79,9 @@ python run.py report mapping --shop-id 1001
 python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品名"
 ```
 
-`map check-mismatch` 和 `catalog check-mismatch` 在 `exports/workbench/` 生成同一份 HTML，每次覆盖上次结果。`--cn` 精确匹配中文名，`--begin`、`--end` 和 `--days` 按创建日期筛选。`map check-mismatch --json` 的回执含 `data.artifacts.html` 和 `data.counts` 中的总条数、中文名组数及异常条数。
+`map check-mismatch` 和 `catalog check-mismatch` 在 `exports/workbench/` 生成同一份 HTML，每次覆盖上次结果。`--cn` 精确匹配中文名，`--begin`、`--end` 和 `--days` 按创建日期筛选。`map check-mismatch --json` 的回执含 `data.artifacts.html` 及 `data.counts`。计数包含总条数、中文名组数、异常 VC 总数（`anomalies`）、前缀冲突（`prefix_conflicts`）和价格倍数异常（`price_anomalies`）。同一 VC 同时命中两类时，每类计一次，异常总数只计一次。两入口的终端摘要都显示细分计数。
 
-快照可读但没有已归属在架商品，或名称、日期筛选命中零条时，命令仍生成 HTML，三项计数均为 0，`next_action` 为空，退出码为 0。没有可用快照或读取到损坏的快照时会报错。
+快照可读但没有已归属在架商品，或名称、日期筛选命中零条时，命令仍生成 HTML，全部计数均为 0，`next_action` 为空，退出码为 0。没有可用快照或读取到损坏的快照时会报错。
 
 画廊按中文名并排展示大图，异常组排在前面。程序仅标记前缀冲突和售价偏离最低售价合理正整数倍，图片由运营人工比对。逐店核对在架快照中的现价。各店可以采用不同的合理正整数倍，卡片会显示主店现价和匹配的倍数，例如「×2/×10」。若有店铺的现价偏离整数倍，标记会注明对应店铺。可以多选中文名，按 VC、中文名或俄文标题搜索，或切换「只看异常」「只看已勾选」。点击放大镜查看大图，点击卡片勾选货不对板，浏览器会保存勾选状态。WB 中尺寸图加载失败时依次尝试高清图、原链接。缺少主图链接时用 WB 商品码尝试加载首图。
 

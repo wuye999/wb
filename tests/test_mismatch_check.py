@@ -119,7 +119,8 @@ class MismatchCheckTest(unittest.TestCase):
 
         result = mismatch_check.run()
         page, gallery = self.read_gallery(result)
-        self.assertEqual(result['counts'], {'total': 6, 'groups': 3, 'anomalies': 1})
+        self.assertEqual(result['counts'], {'total': 6, 'groups': 3, 'anomalies': 1,
+                                            'prefix_conflicts': 1, 'price_anomalies': 1})
         self.assertEqual(gallery.groups, ['Z 异常组', 'A 正常组', '无最低售价'])
         self.assertEqual([vc for vc, attrs in gallery.cards.items() if attrs['data-anomaly'] == '1'],
                          ['BCS-ELSE-100'])
@@ -146,27 +147,29 @@ class MismatchCheckTest(unittest.TestCase):
         snapshot(1, [card(normal, 101, 120), card(deviating, 102, 120)])
         snapshot(2, [card(normal, 201, 600), card(deviating, 202, 600)])
         snapshot(3, [card(normal, 301), card(deviating, 302, 134)])
+        snapshot(4, [card(deviating, 402, 160)])
         map_vcs({normal: 'S1', deviating: 'S1'})
 
         result = mismatch_check.run()
         page, gallery = self.read_gallery(result)
 
-        self.assertEqual(result['counts'], {'total': 2, 'groups': 1, 'anomalies': 1})
+        self.assertEqual(result['counts'], {'total': 2, 'groups': 1, 'anomalies': 1,
+                                            'prefix_conflicts': 0, 'price_anomalies': 1})
         self.assertEqual(gallery.cards[normal]['data-anomaly'], '0')
         self.assertEqual(gallery.cards[deviating]['data-anomaly'], '1')
         self.assertEqual(page.count('¥120 · <span class="multiple">×2/×10</span>'), 2)
-        self.assertIn('badge price" title="最低售价 ¥60 · shop3（3）¥134">非最低价倍数', page)
+        self.assertIn('badge price" title="最低售价 ¥60 · shop3（3）¥134 · shop4（4）¥160">非最低价倍数', page)
 
     def test_time_and_exact_name_filters_and_map_json_receipt(self):
         today = date.today()
         yesterday = (today - timedelta(days=1)).isoformat()
         before = (today - timedelta(days=2)).isoformat()
         today = today.isoformat()
-        write_book([('S1', '旅行杯', 50), ('S2', '旅行杯盖', 48)])
+        write_book([('S1', '旅行杯', 50), ('S2', '旅行杯盖', 48, 'LIDS')])
         snapshots = [
             card('VC-begin', 201, 64, createAt=f'{yesterday}T11:45:30'),
             card('VC-end', 202, 100, createAt=today),
-            card('VC-before', 203, 100, createAt=before),
+            card('BCS-LIDS-203', 203, 100, createAt=before),
             card('VC-other', 204, 48, createAt=today),
             card('VC-undated', 205, 100, createAt='无'),
         ]
@@ -180,13 +183,19 @@ class MismatchCheckTest(unittest.TestCase):
         receipt = json.loads(output)
         self.assertTrue(receipt['ok'])
         self.assertIn('勾选', receipt['next_action'])
-        self.assertEqual(receipt['data']['counts'], {'total': 2, 'groups': 1, 'anomalies': 1})
+        self.assertEqual(receipt['data']['counts'], {'total': 2, 'groups': 1, 'anomalies': 1,
+                                                     'prefix_conflicts': 0, 'price_anomalies': 1})
+        self.assertIn('前缀冲突 0 条 · 价格倍数异常 1 条', logs)
         _, gallery = self.read_gallery(receipt['data'])
         self.assertEqual(set(gallery.cards), {'VC-begin', 'VC-end'})
         self.assertEqual(gallery.groups, ['旅行杯'])
         _, gallery = self.read_gallery(mismatch_check.run(cn='旅行杯', days=1))
         self.assertEqual(set(gallery.cards), {'VC-end'})
-        self.assertEqual(mismatch_check.run(cn='旅行')['counts'], {'total': 0, 'groups': 0, 'anomalies': 0})
+        self.assertEqual(mismatch_check.run(cn='旅行')['counts'], {'total': 0, 'groups': 0, 'anomalies': 0,
+                                                               'prefix_conflicts': 0, 'price_anomalies': 0})
+        code, output, logs = self.run_cli('catalog', '--cn', '旅行杯', '--begin', before, '--end', before)
+        self.assertEqual(code, 0, logs)
+        self.assertIn('异常 1 条 · 前缀冲突 1 条 · 价格倍数异常 0 条', output)
 
     def test_both_commands_export_empty_gallery_for_readable_snapshots_or_zero_matches(self):
         write_book([('SKU-A', '示例在架商品', 10), ('SKU-B', '示例目录商品', 20)])
@@ -204,10 +213,11 @@ class MismatchCheckTest(unittest.TestCase):
                         receipt = json.loads(output)
                         self.assertTrue(receipt['ok'])
                         self.assertEqual(receipt['next_action'], '')
-                        self.assertEqual(receipt['data']['counts'], {'total': 0, 'groups': 0, 'anomalies': 0})
+                        self.assertEqual(receipt['data']['counts'], {'total': 0, 'groups': 0, 'anomalies': 0,
+                                                                     'prefix_conflicts': 0, 'price_anomalies': 0})
                         self.assertEqual(receipt['data']['artifacts']['html'], html)
                     else:
-                        self.assertIn('共 0 条 · 0 个中文名 · 异常 0 条', output)
+                        self.assertIn('共 0 条 · 0 个中文名 · 异常 0 条 · 前缀冲突 0 条 · 价格倍数异常 0 条', output)
                     page, gallery = self.read_gallery({'artifacts': {'html': html}})
                     self.assertIn('没有符合条件的商品', page)
                     self.assertFalse(gallery.cards)

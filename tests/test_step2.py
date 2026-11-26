@@ -336,6 +336,7 @@ class TestStep2(unittest.TestCase):
         _, reply, _ = self.cli('map', 'candidates', '--limit', '1')
         [group] = reply['data']['groups']
         self.assertCountEqual(group['vcs'], [A, B])
+        self.assertEqual((reply['data']['returned_groups'], reply['data']['returned_vcs']), (1, 2))
         item = next(i for i in group['items'] if i['vc'] == A)
         self.assertEqual(len(item['shops']), 2)
         self.assertEqual(item['prefix_candidate']['minimum_price'], 38)
@@ -350,6 +351,12 @@ class TestStep2(unittest.TestCase):
         self.assertFalse(db.listing_blocked(C, 1))
         self.assertEqual(self.confirm({'vc': B, 'action': 'exclude'})[0], 0)
         self.assertEqual(db.resolve_vc(B)['status'], 'excluded')
+        self.assertEqual(db.resolve_vc(C)['status'], 'pending')
+        code, preview, _ = self.cli('map', 'batch-set', '--dry-run',
+                                    stdin=json.dumps([{'vc': C, 'action': 'exclude'}]))
+        self.assertEqual(code, 0)
+        self.assertEqual(preview['data']['counts']['remaining_pending'], 0)
+        self.assertIn('保存后用 map check-mismatch', preview['next_action'])
         self.assertEqual(db.resolve_vc(C)['status'], 'pending')
 
     def test_minimum_price_multiplier_candidates(self):
@@ -400,6 +407,10 @@ class TestStep2(unittest.TestCase):
         code, reply, err = self.cli('map', 'workbench')
         self.assertEqual(code, 0, err)
         self.assertEqual(reply['data']['counts'], {'groups': 3, 'vcs': 5, 'prefix': 1, 'multiplier': 1, 'unmatched': 1})
+        _, limited, _ = self.cli('map', 'candidates', '--limit', '1')
+        self.assertEqual(limited['data']['counts'], reply['data']['counts'])
+        self.assertEqual(limited['data']['returned_vcs'], 3)
+        self.assertTrue(limited['data']['truncated'])
         path = Path(reply['data']['artifacts']['html'])
         self.assertEqual(path.parent, self.root / 'exports' / 'workbench')
         html = path.read_text(encoding='utf8')

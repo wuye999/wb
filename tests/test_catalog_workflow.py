@@ -256,6 +256,155 @@ class TestCatalogWorkflow(unittest.TestCase):
         self.assertEqual(MappingRepository.build_vc_resolver()[0](LIVE), '运营改名')
         self.assertEqual(database.read_bytes(), before)
 
+    def test_review_previews_actual_actions_and_counts_active_pending_vcs_once(self):
+        blocked, unblocked, same = 'BLOCKED', 'UNBLOCKED', 'SAME'
+        trashed, archived = 'TRASHED', 'ARCHIVED'
+        snapshot(1, [row(LIVE, 101), row(OTHER, 102), row(UNKNOWN, 103), row(blocked, 104),
+                     row(unblocked, 105), row(same, 106), dict(row(trashed, 107), trashedAt=1)])
+        snapshot(2, [row(OTHER, 200), row(blocked, 201)])
+        snapshot(3, [row(archived, 301)])
+        self.assertEqual(self.cli('shop', 'archive', '--shop-id', '3'), 0)
+        map_vcs({LIVE: 'SKU-A'})
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, LIVE, 'mapped', sku='SKU-A', source='manual', block_listing='ALL')
+            db.set_vc(connection, unblocked, 'pending', block_listing='ALL', note='保留备注')
+        database = Path(paths.current.database)
+        baseline = database.read_bytes()
+        review = self.folder / 'review.json'
+        records = [{'vc': LIVE, 'action': 'mapped', 'sku': 'SKU-B'},
+                   {'vc': f' {OTHER} ', 'action': 'rebind', 'cn': '新名', 'source': 'prefix'},
+                   {'vc': UNKNOWN, 'action': 'exclude'},
+                   {'vc': blocked, 'action': 'block', 'shops': ['2', '1', 2]},
+                   {'vc': unblocked, 'action': 'unblock'}, {'vc': same, 'action': 'unblock'}]
+        atomic_dump_json(review, records)
+        args = ('map', 'batch-set', '--file', str(review), '--json')
+        self.assertEqual(self.cli(*args, '--dry-run'), 0, self.stderr.getvalue())
+        preview = json.loads(self.stdout.getvalue())
+        self.assertTrue(preview['data']['dry_run'])
+        self.assertIn('只读预检通过', preview['summary'])
+        self.assertIn('--dry-run', preview['next_action'])
+        self.assertIn('保存后用 map workbench', preview['next_action'])
+        self.assertIn('预计保存后剩余待认领 3 个 VC', self.stderr.getvalue())
+        self.assertEqual(preview['data']['counts'], {
+            'mapped': 1, 'rebound': 1, 'excluded': 1, 'blocked': 1, 'unblocked': 1,
+            'unchanged': 1, 'remaining_pending': 3,
+        })
+        self.assertEqual(preview['data']['updated_vcs'], [item['vc'].strip() for item in records])
+        self.assertEqual(database.read_bytes(), baseline)
+
+        self.assertEqual(self.cli(*args), 0, self.stderr.getvalue())
+        saved = json.loads(self.stdout.getvalue())
+        self.assertEqual(saved['data'], {**preview['data'], 'dry_run': False})
+        self.assertIn('已保存 6 条', saved['summary'])
+        self.assertIn('map workbench', saved['next_action'])
+        self.assertEqual((db.resolve_vc(LIVE)['sku'], db.resolve_vc(LIVE)['block_listing']), ('SKU-B', 'ALL'))
+        self.assertEqual(db.resolve_vc(OTHER)['source'], 'prefix')
+        self.assertEqual(db.resolve_vc(UNKNOWN)['status'], 'excluded')
+        self.assertEqual(db.resolve_vc(blocked)['block_listing'], '1,2')
+        self.assertEqual((db.resolve_vc(unblocked)['block_listing'], db.resolve_vc(unblocked)['note']),
+                         ('', '保留备注'))
+        self.assertEqual(self.cli(*args, '--dry-run'), 0, self.stderr.getvalue())
+        self.assertEqual(json.loads(self.stdout.getvalue())['data']['counts'], {
+            'mapped': 0, 'rebound': 0, 'excluded': 0, 'blocked': 0, 'unblocked': 0,
+            'unchanged': 6, 'remaining_pending': 3,
+        })
+
+    def test_review_validation_matches_preflight_and_never_partially_applies(self):
+        snapshot(1, [row(), row(UNKNOWN, 103)])
+        map_vcs({LIVE: 'SKU-A'})
+        database = Path(paths.current.database)
+        before = database.read_bytes()
+        write_book([('SKU-A', '换名', 10, 'TEST'), ('SKU-C', '重名', 12, 'CUPA'),
+                    ('SKU-D', '重名', 14, 'CUPB')])
+        review = self.folder / 'review.json'
+        first = {'vc': LIVE, 'action': 'exclude'}
+        cases = [({'vc': UNKNOWN}, '列表'),
+                 ([first, {'action': 'exclude'}], '缺少完整 VC'),
+                 ([first, {'vc': 'UNKNOWN-VC', 'action': 'exclude'}], '不存在或重复'),
+                 ([first, {**first, 'vc': f' {LIVE} '}], '不存在或重复'),
+                 ([first, {'vc': UNKNOWN, 'action': 'restore'}], '确认动作无效'),
+                 ([first, {'vc': UNKNOWN, 'action': 'map', 'cn': '重名'}], '找不到唯一商品'),
+                 ([first, {'vc': UNKNOWN, 'action': 'map', 'sku': 'SKU-A', 'source': 'publish'}], '确认来源无效'),
+                 ([first, {'vc': UNKNOWN, 'action': 'map', 'sku': 'SKU-C', 'source': 'prefix'}], '前缀与商品不唯一'),
+                 ([first, {'vc': UNKNOWN, 'action': 'block', 'shops': [2]}], '有效店铺 ID'),
+                 ([first, {'vc': UNKNOWN, 'action': 'exclude', 'note': '\ud800'}], 'surrogates')]
+        for records, reason in cases:
+            with self.subTest(reason=reason):
+                review.write_text(json.dumps(records), encoding='utf-8')
+                args = ('map', 'batch-set', '--file', str(review), '--json')
+                self.assertEqual(self.cli(*args, '--dry-run'), 1)
+                preview = json.loads(self.stdout.getvalue())
+                self.assertIn(reason, preview['summary'])
+                self.assertEqual(database.read_bytes(), before)
+                self.assertEqual(self.cli(*args), 1)
+                self.assertEqual(json.loads(self.stdout.getvalue()), preview)
+                self.assertEqual(database.read_bytes(), before)
+
+    def test_review_preflight_empty_input_does_not_create_database(self):
+        review = self.folder / 'review.json'
+        atomic_dump_json(review, [])
+        self.assertEqual(self.cli('catalog', 'merge', str(review), '--dry-run', '--json'), 0)
+        receipt = json.loads(self.stdout.getvalue())
+        self.assertIn('补充审核记录', receipt['next_action'])
+        self.assertEqual(receipt['data']['counts']['remaining_pending'], 0)
+        self.assertEqual(receipt['data']['updated_vcs'], [])
+        self.assertFalse(Path(paths.current.database).exists())
+
+    def test_review_rolls_back_cache_and_vcs_if_price_book_changes_before_commit(self):
+        snapshot(1, [row(), row(UNKNOWN, 103)])
+        map_vcs({LIVE: 'SKU-A'})
+        database = Path(paths.current.database)
+        before = database.read_bytes()
+        write_book([('SKU-A', '读取时名称', 15, 'TEST')])
+        review = self.folder / 'review.json'
+        atomic_dump_json(review, [{'vc': LIVE, 'action': 'exclude'},
+                                  {'vc': UNKNOWN, 'action': 'map', 'sku': 'SKU-A'}])
+        set_vc = db.set_vc
+
+        def change_book_after_update(connection, vc, **update):
+            set_vc(connection, vc, **update)
+            if vc == UNKNOWN:
+                write_book([('SKU-A', '提交前再次编辑', 16, 'TEST'), ('SKU-B', '新增行', 22, 'OTHR')])
+
+        with patch.object(db, 'set_vc', side_effect=change_book_after_update):
+            self.assertEqual(self.cli('map', 'batch-set', '--file', str(review), '--json'), 1)
+        self.assertIn('商品价格表在读取或保存期间被修改', json.loads(self.stdout.getvalue())['summary'])
+        self.assertEqual(database.read_bytes(), before)
+
+    def test_large_review_caps_vc_receipt_only_and_full_works_for_both_paths(self):
+        vcs = [f'BATCH-{1000 + i}' for i in range(101)]
+        snapshot(1, [row(vc, i + 1) for i, vc in enumerate(vcs)])
+        review = self.folder / 'review.json'
+        records = [{'vc': vc, 'action': 'exclude'} for vc in vcs]
+        args = ('map', 'batch-set', '--file', str(review), '--json')
+        atomic_dump_json(review, records[:100])
+        self.assertEqual(self.cli(*args, '--dry-run'), 0)
+        data = json.loads(self.stdout.getvalue())['data']
+        self.assertEqual(data['updated_vcs'], vcs[:100])
+        self.assertEqual(data['updated_vcs_total'], 100)
+        self.assertFalse(data['updated_vcs_truncated'])
+        self.assertEqual(data['counts']['remaining_pending'], 1)
+        atomic_dump_json(review, records)
+        for command, flags, expected_vcs in (
+                (args, ('--dry-run',), vcs[:100]),
+                (('catalog', 'merge', str(review), '--json'), ('--dry-run', '--full'), vcs),
+                (args, (), vcs[:100]),
+                (('catalog', 'merge', str(review), '--json'), ('--full',), vcs)):
+            with self.subTest(command=command, flags=flags):
+                self.assertEqual(self.cli(*command, *flags), 0, self.stderr.getvalue())
+                receipt = json.loads(self.stdout.getvalue())
+                data = receipt['data']
+                self.assertEqual(data['updated_vcs'], expected_vcs)
+                self.assertEqual(data['updated_vcs_total'], 101)
+                self.assertEqual(data['updated_vcs_truncated'], '--full' not in flags)
+                self.assertEqual(data['counts']['remaining_pending'], 0)
+                bucket = 'unchanged' if flags == ('--full',) else 'excluded'
+                self.assertEqual(data['counts'][bucket], 101)
+                self.assertIn('map check-mismatch', receipt['next_action'])
+                self.assertEqual('--dry-run' in receipt['next_action'], '--dry-run' in flags)
+                self.assertEqual('JSON 默认列出前 100 个 VC' in self.stderr.getvalue(), '--full' not in flags)
+        self.assertTrue(all(entry['status'] == 'excluded' for entry in db.vc_entries().values()))
+
     def test_old_database_byte_identical_for_readers_and_migrates_atomically_on_write(self):
         snapshot(1, [row(), row(UNKNOWN, 103)])
         map_vcs({LIVE: 'SKU-A', BACKUP: 'SKU-B'})
@@ -270,10 +419,13 @@ class TestCatalogWorkflow(unittest.TestCase):
         original = database.read_bytes()
         self.assertEqual(db.resolve_vc(LIVE, include_history=True)['cn'], '原名')
         self.assertIsNone(db.resolve_vc(LIVE)['shipping_mode'])
+        review = self.folder / 'review.json'
+        atomic_dump_json(review, [{'vc': UNKNOWN, 'action': 'map', 'sku': 'SKU-A'}])
         for refresh in (False, True):
             if refresh:
                 write_book([('SKU-A', '只读看到的新名称', 10, 'TEST', 'STOCK-A', '马帮发货')])
             for command in (('doctor',), ('shop', 'list'), ('catalog', 'product-summary'), ('map', 'candidates'),
+                            ('map', 'batch-set', '--dry-run', '--file', str(review)),
                             ('map', 'workbench'), ('map', 'check-mismatch'), ('report', 'mapping'),
                             ('report', 'mapping', '--shop-id', '1'), ('catalog', 'export-products', '--all-shops')):
                 with self.subTest(command=command, refresh=refresh):
@@ -494,12 +646,36 @@ class TestCatalogWorkflow(unittest.TestCase):
                     data = receipt['data']
                     if command[1] == 'candidates':
                         self.assertEqual(len(data['groups']), expected_groups)
+                        self.assertEqual(data['counts'], {'prefix': expected_groups, 'multiplier': 0, 'unmatched': 0,
+                                                          'groups': expected_groups, 'vcs': expected_groups})
+                        self.assertEqual((data['limit'], data['returned_groups'], data['returned_vcs'], data['truncated']),
+                                         (20, expected_groups, expected_groups, False))
                     else:
                         self.assertEqual(data['counts']['groups'], expected_groups)
                         self.assertEqual(data['counts']['vcs'], expected_groups)
                         page = Path(data['artifacts']['html']).read_text(encoding='utf-8')
                         self.assertEqual(page.count('<article class="card"'), expected_groups)
                         self.assertIn('目前没有待认领商品', page)
+
+    def test_candidates_default_limit_summarizes_every_group_in_json_and_text(self):
+        vcs = [f'BCS-TEST-{100000 + i}' for i in range(21)]
+        snapshot(1, [row(vc, i + 1) for i, vc in enumerate(vcs)])
+        snapshot(2, [row(vcs[0], 300)])
+        self.assertEqual(self.cli('map', 'candidates', '--json'), 0, self.stderr.getvalue())
+        receipt = json.loads(self.stdout.getvalue())
+        self.assertEqual(receipt['summary'], '共 21 组（21 个 VC），本次列出前 20 组')
+        data = receipt['data']
+        self.assertEqual(data['counts'], {'prefix': 21, 'multiplier': 0, 'unmatched': 0, 'groups': 21, 'vcs': 21})
+        self.assertEqual((data['returned_groups'], data['returned_vcs'], data['truncated']), (20, 20, True))
+        self.assertEqual([group['vcs'][0] for group in data['groups']], vcs[:20])
+        self.assertEqual(self.cli('map', 'candidates'), 0)
+        self.assertEqual(self.stdout.getvalue().splitlines()[0], receipt['summary'])
+        self.assertEqual(self.cli('map', 'candidates', '--limit', '21', '--json'), 0)
+        complete = json.loads(self.stdout.getvalue())
+        self.assertEqual(complete['summary'], '共 21 组（21 个 VC），本次全部列出')
+        self.assertEqual(complete['data']['returned_groups'], 21)
+        self.assertFalse(complete['data']['truncated'])
+        self.assertEqual(self.cli('map', 'candidates', '--limit', '0', '--json'), 1)
 
     def test_partial_fetch_failure_keeps_previous_shop_and_allows_empty_shop(self):
         snapshot(2, [row(nm=202)])
