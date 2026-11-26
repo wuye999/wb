@@ -12,6 +12,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import requests
 
+from sellerops.core.errors import AuthenticationError
+from sellerops.features.system import online_auth
 from sellerops.integrations.mabang import auth, client, forecast
 from sellerops.integrations.mabang.session import (
     AAMZ_BASE, LOGIN_KEY, WWW_BASE, MabangAuthError, MabangVerificationRequired,
@@ -163,6 +165,59 @@ class TestMabangAuth(unittest.TestCase):
                 self.assertIn('PHPSESSID=new-aamz', cred['aamz_cookie'])
                 self.assertEqual(any(c[1] == 'passport.mabangerp.com' for c in self.calls), passport)
                 self.assertEqual(sum(c[2] == 'main.doLogin' for c in self.calls), 1)
+
+    def test_first_login_from_template_writes_session_and_api_fields(self):
+        template = json.loads((paths.PROJECT_ROOT / 'examples' / 'credentials.example.json').read_text(encoding='utf-8'))
+        cred = template['mabang']
+        cred['login'].update(username=USER, password=PASSWORD)
+        self.path.write_text(json.dumps(template), encoding='utf-8')
+
+        def password_login(_candidate, session):
+            for host in ('www.mabangerp.com', 'aamz.mabangerp.com'):
+                _set_cookie(session, LOGIN_KEY, 'new-key', host)
+                _set_cookie(session, 'PHPSESSID', 'new-session', host)
+
+        with (patch.object(auth, '_password_login', side_effect=password_login),
+              patch.object(auth, 'exchange_token', return_value='new-bearer')):
+            auth.refresh_login(cred)
+        stored = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertIn(f'{LOGIN_KEY}=new-key', stored['mabang']['www_cookie'])
+        self.assertIn(f'{LOGIN_KEY}=new-key', stored['mabang']['aamz_cookie'])
+        self.assertEqual(stored['mabang']['api_bearer'], 'new-bearer')
+        self.assertEqual(stored['mabang']['api_key'], 'new-key')
+        self.assertTrue(stored['mabang']['cookie_jar'])
+        self.assertEqual(stored['mabang']['shop_map'], {})
+        self.assertEqual(stored['wb'], template['wb'])
+
+    def test_doctor_probe_uses_scoped_www_cookies_without_refresh(self):
+        for current, status in (
+                ({'cookie_jar': [_cookie('PHPSESSID', 'fixture', 'www.mabangerp.com')]}, 'verified'),
+                ({'www_cookie': 'PHPSESSID=fixture'}, 'verified'),
+                ({'cookie_jar': [_cookie('PHPSESSID', 'fixture', 'www.mabangerp.com', expires=1)]}, 'missing'),
+                ({'aamz_cookie': 'PHPSESSID=fixture'}, 'missing'),
+                ({'cookies': 'PHPSESSID=fixture'}, 'missing')):
+            with self.subTest(fields=tuple(current), status=status):
+                self.path.write_text(json.dumps({'mabang': current}), encoding='utf-8')
+                before = self.path.read_bytes()
+
+                def send(_session, prepared, **kwargs):
+                    self.assertEqual(prepared.method, 'GET')
+                    self.assertTrue(prepared.url.startswith(WWW_BASE + '?'))
+                    self.assertEqual(prepared.headers.get('Cookie'), 'PHPSESSID=fixture')
+                    self.assertFalse(kwargs['allow_redirects'])
+                    return _response(prepared, '<iframe src="uploadforecastorderv2.list">')
+
+                with patch.object(requests.Session, 'send', autospec=True, side_effect=send) as http:
+                    self.assertEqual(online_auth.check_mabang(credentials.Credentials(self.path)), status)
+                self.assertEqual(http.call_count, int(status == 'verified'))
+                self.assertEqual(self.path.read_bytes(), before)
+
+        self.path.write_text('{"mabang":{"www_cookie":"PHPSESSID=fixture"}}', encoding='utf-8')
+        with patch.object(requests.Session, 'send', autospec=True,
+                          side_effect=lambda _, prepared, **kwargs: _response(prepared, {}, 401)) as http:
+            with self.assertRaises(AuthenticationError):
+                online_auth.check_mabang(credentials.Credentials(self.path))
+        http.assert_called_once()
 
     def test_verification_or_token_failure_preserves_previous_complete_credentials(self):
         for code in ('CHECK_VERIFY_CODE', 2001, 'token-failure'):

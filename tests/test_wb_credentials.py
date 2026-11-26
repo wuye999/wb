@@ -1,6 +1,6 @@
 """Exercise WB browser session renewal with synthetic credentials and no platform access."""
 import base64
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
+from catalog_fixture import mock_non_git_checkout
 from sellerops.cli.main import main
 from sellerops.core.errors import AuthenticationError, DataConsistencyError, ValidationError
 from sellerops.core.files import atomic_dump_json, safe_load_json
@@ -166,3 +167,68 @@ class TestWBCredentials(unittest.TestCase):
                 with patch.object(client, 'make_session', return_value=session), self.assertRaises(error):
                     client.WBClient({'shopId': 11}).upload_batch_discount([{}])
                 self.assertEqual(session.request.call_count, 1)
+
+    def test_doctor_skips_template_and_cross_shop_conflicts_and_reports_verified_shops(self):
+        mock_non_git_checkout(self)
+        third = 'aabbccdd-0000-0000-0000-000000000003'
+        shared_token = 'private-shared-seller-lk'
+        authorize = 'private-shared-authorize'
+
+        def shop(shop_id, seller_lk, cookie):
+            return {'shopId': shop_id, 'wb_seller_lk': seller_lk, 'cookie': cookie, 'authorizev3': authorize}
+
+        rows = [
+            {'shopId': 1, 'shopName': '示例店铺'},
+            shop(11, 'private-lk-11', f'x-supplier-id-external={FIRST.upper()}'),
+            shop(12, lk(FIRST), 'session=private-cookie-12'),
+            shop(21, shared_token, f'x-supplier-id-external={SECOND}'),
+            shop(22, shared_token, 'session=private-cookie-22'),
+            shop(31, lk(third), f'x-supplier-id-external={third}'),
+            shop(32, 'private-lk-32', 'session=private-cookie-32'),
+            shop(33, 'private-lk-33', 'session=private-cookie-33'),
+            shop(34, 'private-lk-34', 'session=private-cookie-34'),
+            {'shopId': 35, 'wb_seller_lk': '   '},
+            shop('private-malformed-id', 'private-bad-token', 'session=private-bad'),
+        ]
+        atomic_dump_json(self.path, {'wb': {'shops': rows}})
+        before = self.path.read_bytes()
+
+        def send(session, prepared, **kwargs):
+            self.assertEqual(prepared.method, 'GET')
+            self.assertFalse(kwargs['allow_redirects'])
+            return response({31: 204, 32: 401, 33: 403, 34: 503}[session._sellerops_shop])
+
+        output, terminal = StringIO(), StringIO()
+        with (patch.object(requests.Session, 'send', autospec=True, side_effect=send) as http,
+              redirect_stdout(output), redirect_stderr(terminal)):
+            code = main(['--data-dir', paths.current.data_dir, 'doctor', '--check-online', '--json'])
+        self.assertEqual(code, 0)
+        body = json.loads(output.getvalue())['data']
+        self.assertEqual(body['credentials']['warnings'], [
+            {'path': 'wb.shops', 'code': 'legacy_wb_template_shop', 'shop_ids': [1]},
+            {'path': 'wb.shops', 'code': 'duplicate_wb_supplier_uuid', 'shop_ids': [11, 12]},
+            {'path': 'wb.shops', 'code': 'duplicate_wb_seller_lk', 'shop_ids': [21, 22]},
+        ])
+        self.assertEqual(body['online']['wb'], {
+            '11': 'unavailable', '12': 'unavailable', '21': 'unavailable', '22': 'unavailable',
+            '31': 'verified', '32': 'authentication_failed', '33': 'authentication_failed',
+            '34': 'unavailable', '35': 'missing',
+        })
+        self.assertEqual([call.args[0]._sellerops_shop for call in http.call_args_list], [31, 32, 33, 34])
+        self.assertIn('店铺 ID 11、12', terminal.getvalue())
+        public = output.getvalue() + terminal.getvalue()
+        for secret in (FIRST, FIRST.upper(), SECOND, third, lk(FIRST), shared_token, authorize, 'private-'):
+            self.assertNotIn(secret, public)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_doctor_keeps_real_shop_one_even_with_sample_name(self):
+        mock_non_git_checkout(self)
+        atomic_dump_json(self.path, {'wb': {'shops': [
+            {'shopId': 1, 'shopName': '示例店铺', 'cookie': f'x-supplier-id-external={FIRST}'},
+        ]}})
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(StringIO()):
+            self.assertEqual(main(['--data-dir', paths.current.data_dir, 'doctor', '--json']), 0)
+        body = json.loads(output.getvalue())['data']
+        self.assertEqual(body['credentials']['warnings'], [])
+        self.assertEqual(body['shop_counts']['credential_configured'], 1)

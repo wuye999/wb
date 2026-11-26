@@ -11,20 +11,74 @@ BCS 三件套（token/limit_key/cookie_extra）+ WB 全部店铺 cookie 全在�
 """
 
 
+from collections import defaultdict
 from functools import lru_cache
 import json
 import re
 
-from sellerops.settings import paths as config
+from sellerops.core.errors import ValidationError
 from sellerops.core.files import safe_load_json
 from sellerops.domain.mabang_warehouse import warehouse_config
+from sellerops.domain.wb_identity import shop_cookie, token_shop_uuid
+from sellerops.settings import paths as config
+
+
 DEFAULT_ROOT_VERSION = "v1.108.1"
 DEFAULT_BCS_URL = 'https://wb.bcserp.com/prod-api'
+WB_SESSION_KEYS = ('authorizev3', 'wb_seller_lk', 'cookie')
+_WB_TEMPLATE_FIELDS = {'shopId', 'shopName', *WB_SESSION_KEYS}
+_MABANG_TEMPLATE_ENTRY = ('马帮中的店铺标识', '示例店铺(1)')
 
 
 def _configured(section: dict, key: str) -> bool:
     value = section.get(key)
     return isinstance(value, str) and bool(value.strip())
+
+
+def wb_shop_id(shop: object) -> int | None:
+    shop_id = shop.get('shopId') if isinstance(shop, dict) else None
+    return shop_id if type(shop_id) is int and shop_id > 0 else None
+
+
+def wb_session_configured(shop: dict) -> bool:
+    return all(_configured(shop, key) for key in WB_SESSION_KEYS)
+
+
+def wb_template_shop(shop: dict) -> bool:
+    return (wb_shop_id(shop) == 1 and shop.get('shopName') == '示例店铺'
+            and shop.keys() <= _WB_TEMPLATE_FIELDS
+            and all(isinstance(shop.get(key, ''), str) and not _configured(shop, key) for key in WB_SESSION_KEYS))
+
+
+def wb_credential_warnings(shops: list) -> list[dict]:
+    warnings = []
+    suppliers = defaultdict(set)
+    seller_tokens = defaultdict(set)
+    for shop in shops:
+        shop_id = wb_shop_id(shop)
+        if shop_id is None:
+            continue
+        if wb_template_shop(shop):
+            if not warnings:
+                warnings.append({'path': 'wb.shops', 'code': 'legacy_wb_template_shop', 'shop_ids': [shop_id]})
+            continue
+        token = shop.get('wb_seller_lk')
+        if _configured(shop, 'wb_seller_lk'):
+            seller_tokens[token].add(shop_id)
+        cookie = shop.get('cookie')
+        cookie_supplier = ''
+        if isinstance(cookie, str):
+            try:
+                cookie_supplier, _ = shop_cookie(cookie)
+            except ValidationError:
+                pass
+        for supplier in (cookie_supplier, token_shop_uuid(token)):
+            if supplier:
+                suppliers[supplier].add(shop_id)
+    for groups, code in ((suppliers, 'duplicate_wb_supplier_uuid'), (seller_tokens, 'duplicate_wb_seller_lk')):
+        affected = {tuple(sorted(ids)) for ids in groups.values() if len(ids) > 1}
+        warnings.extend({'path': 'wb.shops', 'code': code, 'shop_ids': list(ids)} for ids in sorted(affected))
+    return warnings
 
 
 def _invalid_json_constant(_value: str):
@@ -33,8 +87,9 @@ def _invalid_json_constant(_value: str):
 
 def inspect_credentials(path) -> dict:
     """Check the local structure and project configuration flags without copying credentials."""
-    diagnosis = {'status': 'missing', 'json_valid': None, 'structure_valid': None, 'issues': []}
+    diagnosis = {'status': 'missing', 'json_valid': None, 'structure_valid': None, 'issues': [], 'warnings': []}
     issues = diagnosis['issues']
+    warnings = diagnosis['warnings']
     missing = raw = object()
     try:
         with open(path, encoding='utf-8-sig') as stream:
@@ -79,8 +134,7 @@ def inspect_credentials(path) -> dict:
     warehouse = warehouse_config(mabang)
     issues.extend({'path': f'mabang.{field}', 'code': code} for field, code in warehouse.issues)
     rows = wb.get('shops', [])
-    ids, complete = set(), set()
-    session_keys = ('authorizev3', 'wb_seller_lk', 'cookie')
+    seen, ids, complete = set(), set(), set()
     if not isinstance(rows, list):
         issues.append({'path': 'wb.shops', 'code': 'expected_array'})
     else:
@@ -89,40 +143,86 @@ def inspect_credentials(path) -> dict:
             if not isinstance(row, dict):
                 issues.append({'path': location, 'code': 'expected_object'})
                 continue
-            shop_id = row.get('shopId')
-            if type(shop_id) is not int or shop_id <= 0:
+            shop_id = wb_shop_id(row)
+            if shop_id is None:
                 issues.append({'path': f'{location}.shopId', 'code': 'invalid_shop_id'})
                 continue
-            if shop_id in ids:
+            if shop_id in seen:
                 issues.append({'path': f'{location}.shopId', 'code': 'duplicate_shop_id'})
+            seen.add(shop_id)
+            check_strings(row, location, ('shopName', *WB_SESSION_KEYS))
+            if wb_template_shop(row):
+                continue
             ids.add(shop_id)
-            check_strings(row, location, ('shopName', *session_keys))
-            if all(_configured(row, key) for key in session_keys):
+            if wb_session_configured(row):
                 complete.add(shop_id)
+        warnings.extend(wb_credential_warnings(rows))
 
-    if parsed:
-        diagnosis.update(status='invalid_structure' if issues else 'ready', json_valid=True,
-                         structure_valid=not issues)
+    if shop_map.get(_MABANG_TEMPLATE_ENTRY[0]) == _MABANG_TEMPLATE_ENTRY[1]:
+        warnings.append({'path': 'mabang.shop_map', 'code': 'legacy_mabang_template_shop_map'})
+    mapped_shops = sum(bool(key.strip()) and isinstance(value, str) and bool(value.strip())
+                       for key, value in shop_map.items() if (key, value) != _MABANG_TEMPLATE_ENTRY)
     counts_known = ((isinstance(raw, dict) and isinstance(data.get('wb', {}), dict) and isinstance(rows, list))
                     or diagnosis['status'] == 'missing')
     root = wb.get('root_version', DEFAULT_ROOT_VERSION if 'wb' in data else None)
     root_version = root if isinstance(root, str) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', root) else None
-    platforms = {
-        'bcs': {'configured': bool(bcs), 'session_configured': all(_configured(bcs, k) for k in ('token', 'limit_key')),
-                'login_configured': _configured(bcs_login, 'username'),
-                'endpoint': 'default' if bcs.get('base_url', DEFAULT_BCS_URL) == DEFAULT_BCS_URL else 'custom'},
-        'wb': {'configured': bool(wb), 'root_version': root_version,
-               'warehouse_keyword_configured': _configured(wb, 'warehouse_keyword')},
-        'mabang': {'configured': bool(mabang), 'login_configured': _configured(mabang_login, 'username'),
-                   'session_configured': any(mabang.get(k) for k in ('www_cookie', 'aamz_cookie', 'cookies', 'cookie_jar')),
-                   'api_configured': all(_configured(mabang, k) for k in ('api_bearer', 'api_key')),
+    bcs_default = bcs.get('base_url', DEFAULT_BCS_URL) == DEFAULT_BCS_URL
+    bcs_user = _configured(bcs_login, 'username')
+    bcs_password = _configured(bcs_login, 'password')
+    bcs_refresh = bcs_login.get('auto_refresh', True) is True
+    bcs_token = _configured(bcs, 'token')
+    bcs_limit_key = _configured(bcs, 'limit_key')
+    wb_warehouse = _configured(wb, 'warehouse_keyword')
+    mabang_user = _configured(mabang_login, 'username')
+    mabang_password = _configured(mabang_login, 'password')
+    mabang_refresh = bool(mabang_login.get('auto_refresh'))
+    cookie_jar = mabang.get('cookie_jar')
+    if isinstance(cookie_jar, list):
+        mabang_session = any(isinstance(cookie, dict) and all(_configured(cookie, k) for k in ('name', 'value', 'domain'))
+                             for cookie in cookie_jar)
+    else:
+        mabang_session = any(_configured(mabang, k) for k in ('www_cookie', 'aamz_cookie'))
+    mabang_bearer = _configured(mabang, 'api_bearer')
+    mabang_key = _configured(mabang, 'api_key')
+    fulfillment = {'shop_map_configured': mapped_shops > 0, 'mapped_shops': mapped_shops,
                    'warehouse_configured': warehouse.mode not in ('missing', 'invalid'),
-                   'warehouse_keyword_configured': bool(warehouse.keyword),
-                   'warehouse_id_configured': warehouse.warehouse_id is not None,
                    'warehouse_mode': warehouse.mode,
-                   'mapped_shops': len(shop_map)},
+                   'handover_configured': any(_configured(mabang, k) for k in ('handover_keyword', 'handover_channel_value'))}
+    platforms = {
+        'bcs': {
+            'configured': bcs_user or bcs_password or bcs_token or bcs_limit_key,
+            'session_configured': bcs_token and bcs_limit_key,
+            'login_configured': bcs_user,
+            'password_configured': bcs_password,
+            'auto_refresh': bcs_refresh,
+            'auto_refresh_enabled': bcs_refresh and bcs_default and bcs_user and bcs_password,
+            'endpoint': 'default' if bcs_default else 'custom',
+        },
+        'wb': {'configured': bool(ids) or wb_warehouse, 'root_version': root_version,
+               'warehouse_keyword_configured': wb_warehouse},
+        'mabang': {
+            'configured': any((mabang_user, mabang_password, mabang_session, mabang_bearer, mabang_key,
+                               fulfillment['shop_map_configured'], fulfillment['warehouse_configured'],
+                               fulfillment['handover_configured'])),
+            'login_configured': mabang_user,
+            'session_configured': mabang_session,
+            'api_configured': mabang_bearer and mabang_key,
+            'warehouse_configured': fulfillment['warehouse_configured'],
+            'warehouse_keyword_configured': bool(warehouse.keyword),
+            'warehouse_id_configured': warehouse.warehouse_id is not None,
+            'warehouse_mode': fulfillment['warehouse_mode'],
+            'mapped_shops': mapped_shops,
+            'login': {'username_configured': mabang_user, 'password_configured': mabang_password,
+                      'auto_refresh': mabang_refresh,
+                      'auto_refresh_enabled': mabang_refresh and mabang_user and mabang_password,
+                      'session_configured': mabang_session},
+            'fulfillment': fulfillment,
+        },
         'feishu': {'configured': _configured(feishu, 'base_url')},
     }
+    if parsed:
+        status = 'ready' if any(platform['configured'] for platform in platforms.values()) else 'unconfigured'
+        diagnosis.update(status='invalid_structure' if issues else status, json_valid=True, structure_valid=not issues)
     return {'credentials': diagnosis, 'platforms': platforms,
             'shop_counts': {'credential_configured': len(ids) if counts_known else None,
                             'credential_session_complete': len(complete) if counts_known else None}}

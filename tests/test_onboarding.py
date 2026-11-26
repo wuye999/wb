@@ -19,7 +19,7 @@ from catalog_fixture import document, mock_non_git_checkout, snapshot, write_boo
 from sellerops.cli.main import main
 from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApiError
 from sellerops.features.catalog import products, shops
-from sellerops.features.system import doctor, login
+from sellerops.features.system import doctor, login, online_auth
 from sellerops.integrations.bcs import client as bcs_client
 from sellerops.integrations.bcs.session import BCSSession
 from sellerops.integrations.sessions import browser, browser_install
@@ -340,3 +340,204 @@ class OnboardingWorkflowTest(TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(reply['data']['credentials']['status'], status)
                 self.assertNotIn('secret', json.dumps(reply) + output)
+
+    def test_doctor_cold_start_prioritizes_credentials_before_sync(self):
+        write_book([('DEMO', '样例', 12, 'DEMO', '', 'WB发货')])
+        config = Path(paths.current.credentials_json)
+        with patch.object(doctor, 'online_checks') as probe:
+            code, reply, terminal = self.cli('doctor', '--check-online')
+        probe.assert_not_called()
+        self.assertEqual(code, 0)
+        self.assertEqual(reply['data']['credentials']['status'], 'missing')
+        self.assertFalse(reply['data']['credentials_file_exists'])
+        self.assertEqual(reply['data']['online'], {})
+        self.assertIn('[在线鉴权] 未运行，缺少凭证文件', terminal)
+        self.assertIn('examples/credentials.example.json', reply['next_action'])
+        self.assertFalse(config.exists())
+
+        template = (paths.PROJECT_ROOT / 'examples' / 'credentials.example.json').read_text(encoding='utf-8')
+        for payload in ('{}', template):
+            with self.subTest(template=payload == template):
+                config.write_text(payload, encoding='utf-8')
+                code, reply, terminal = self.cli('doctor')
+                self.assertEqual(code, 0)
+                data = reply['data']
+                self.assertEqual(data['price_book']['status'], 'ready')
+                self.assertEqual(data['credentials']['status'], 'unconfigured')
+                self.assertTrue(data['credentials']['json_valid'])
+                self.assertTrue(data['credentials']['structure_valid'])
+                self.assertEqual(data['credentials']['warnings'], [])
+                self.assertTrue(all(not platform['configured'] for platform in data['platforms'].values()))
+                self.assertEqual(data['shop_counts']['credential_configured'], 0)
+                self.assertEqual(data['platforms']['mabang']['mapped_shops'], 0)
+                self.assertIn('填写', reply['next_action'])
+                self.assertNotIn('sync', reply['next_action'])
+                self.assertNotIn('[在线鉴权]', terminal)
+                if payload == template:
+                    self.assertTrue(data['platforms']['bcs']['auto_refresh'])
+                    self.assertTrue(data['platforms']['mabang']['login']['auto_refresh'])
+
+        config.write_text(json.dumps({'feishu': {'base_url': 'https://fixture.invalid/bitable'}}), encoding='utf-8')
+        _, reply, _ = self.cli('doctor')
+        self.assertNotIn('sync', reply['next_action'])
+        config.write_text('{"bcs":{"token":"fixture-token","limit_key":"fixture-limit"}}', encoding='utf-8')
+        _, reply, _ = self.cli('doctor')
+        self.assertIn('sync', reply['next_action'])
+
+    def test_doctor_warns_about_legacy_sample_entries_without_counting_them(self):
+        config = Path(paths.current.credentials_json)
+        old_shop = {'shopId': 1, 'shopName': '示例店铺', 'authorizev3': '', 'wb_seller_lk': '', 'cookie': ''}
+        data = {'wb': {'shops': [old_shop]}, 'mabang': {'shop_map': {'马帮中的店铺标识': '示例店铺(1)'}}}
+        config.write_text(json.dumps(data), encoding='utf-8')
+        original = config.read_bytes()
+        _, reply, terminal = self.cli('doctor')
+        credentials = reply['data']['credentials']
+        self.assertEqual(credentials['status'], 'unconfigured')
+        self.assertTrue(credentials['structure_valid'])
+        self.assertEqual(credentials['warnings'], [
+            {'path': 'wb.shops', 'code': 'legacy_wb_template_shop', 'shop_ids': [1]},
+            {'path': 'mabang.shop_map', 'code': 'legacy_mabang_template_shop_map'},
+        ])
+        self.assertIn('移除旧模板', reply['next_action'])
+        self.assertIn('旧模板的示例店铺', terminal)
+        self.assertIn('旧模板的示例映射', terminal)
+        self.assertEqual(config.read_bytes(), original)
+
+        data['wb']['shops'] += [{'shopId': 2, 'shopName': '真实店铺'}, {'shopId': 3, 'shopName': '示例店铺'}]
+        data['mabang']['shop_map']['real-fixture'] = '真实店铺(2)'
+        config.write_text(json.dumps(data), encoding='utf-8')
+        _, reply, _ = self.cli('doctor')
+        self.assertEqual(reply['data']['credentials']['status'], 'ready')
+        self.assertEqual(reply['data']['shop_counts']['credential_configured'], 2)
+        self.assertEqual(reply['data']['platforms']['mabang']['mapped_shops'], 1)
+
+    def test_doctor_reports_password_presence_and_effective_refresh(self):
+        config = Path(paths.current.credentials_json)
+        username = 'account-fixture-private'
+        password = 'password-fixture-private'
+        settings = {'bcs': {'login': {'username': username}}, 'mabang': {'login': {'username': username}}}
+        config.write_text(json.dumps(settings), encoding='utf-8')
+        runtime = {**browser.installation_status(), 'status': 'ready'}
+        with patch.object(browser, 'installation_status', return_value=runtime):
+            code, reply, terminal = self.cli('doctor')
+        self.assertEqual(code, 0)
+        bcs, mabang = (reply['data']['platforms'][key] for key in ('bcs', 'mabang'))
+        self.assertTrue(bcs['login_configured'])
+        self.assertFalse(bcs['password_configured'])
+        self.assertTrue(bcs['auto_refresh'])
+        self.assertFalse(bcs['auto_refresh_enabled'])
+        self.assertEqual(mabang['login'], {'username_configured': True, 'password_configured': False,
+                                          'auto_refresh': False, 'auto_refresh_enabled': False,
+                                          'session_configured': False})
+        self.assertIn('login bcs，', reply['next_action'])
+        self.assertIn('密码未填', terminal)
+        self.assertIn('可使用浏览器登录', terminal)
+        for key, enabled, endpoint in ((None, True, None), (False, False, None), (True, True, None),
+                                       (True, False, 'https://private-endpoint.invalid')):
+            with self.subTest(value=key, endpoint=endpoint):
+                login_section = {'username': username, 'password': password}
+                if key is not None:
+                    login_section['auto_refresh'] = key
+                settings = {'bcs': {'login': login_section}, 'mabang': {'login': login_section}}
+                if endpoint:
+                    settings['bcs']['base_url'] = endpoint
+                config.write_text(json.dumps(settings), encoding='utf-8')
+                _, reply, terminal = self.cli('doctor')
+                bcs, mabang = (reply['data']['platforms'][key] for key in ('bcs', 'mabang'))
+                self.assertTrue(bcs['password_configured'])
+                self.assertTrue(mabang['login']['password_configured'])
+                self.assertIs(bcs['auto_refresh_enabled'], enabled)
+                self.assertIs(mabang['login']['auto_refresh_enabled'], key is True)
+                self.assertIn('密码已填', terminal)
+                public = json.dumps(reply) + terminal
+                for secret in (username, password, 'account-fixture', 'password-fixture', 'private-endpoint'):
+                    self.assertNotIn(secret, public)
+
+    def test_doctor_separates_mabang_fulfillment_from_login(self):
+        config = Path(paths.current.credentials_json)
+        for fields, handover in (({'handover_channel_id': 'private-channel-id'}, False),
+                                 ({'handover_channel_value': 'private-channel-fallback'}, True),
+                                 ({'handover_keyword': 'private-channel-keyword'}, True)):
+            with self.subTest(fields=fields):
+                settings = {'login': {'username': 'private-mabang-user', 'password': 'private-mabang-password'},
+                            'warehouse_id': 42, 'shop_map': {'private-mabang-store': 'fixture(2)'}, **fields}
+                config.write_text(json.dumps({'mabang': settings}), encoding='utf-8')
+                _, reply, terminal = self.cli('doctor')
+                mabang = reply['data']['platforms']['mabang']
+                self.assertEqual(mabang['fulfillment'], {'shop_map_configured': True, 'mapped_shops': 1,
+                                                         'warehouse_configured': True, 'warehouse_mode': 'id',
+                                                         'handover_configured': handover})
+                self.assertFalse(mabang['session_configured'])
+                self.assertIn('login mabang', reply['next_action'])
+                self.assertNotIn('login setup', reply['next_action'])
+                self.assertIn('[马帮登录]', terminal)
+                self.assertIn('[马帮订单履约]', terminal)
+                self.assertNotIn('private-', json.dumps(reply) + terminal)
+
+    def test_doctor_online_summary_and_read_only_bcs_probe(self):
+        config = Path(paths.current.credentials_json)
+        config.write_text(json.dumps({
+            'bcs': {'login': {'username': 'private-account', 'password': 'private-password', 'auto_refresh': True},
+                    'token': 'private-bcs-token', 'limit_key': 'private-bcs-key'},
+            'wb': {'shops': [{'shopId': 12, 'authorizev3': 'private-authorize',
+                             'wb_seller_lk': 'private-seller-lk', 'cookie': 'private-wb-cookie'}]},
+            'feishu': {'base_url': 'https://fixture.invalid/private-feishu-url'},
+        }), encoding='utf-8')
+        before = config.read_bytes()
+        rejected = requests.Response()
+        rejected.status_code = 401
+        rejected._content = b'private-platform-response'
+        with (patch.object(requests, 'request', return_value=rejected) as request,
+              patch.object(bcs_client, 'refresh_login') as refresh,
+              patch.object(online_auth, 'probe_session') as wb,
+              patch.object(online_auth.tables, 'resolve_base', side_effect=RuntimeError('private-feishu-error'))):
+            code, reply, terminal = self.cli('doctor', '--check-online')
+            _, text_output, _ = self.cli('doctor', '--check-online', use_json=False)
+        self.assertEqual(code, 0)
+        self.assertTrue(reply['data']['online_checked'])
+        self.assertEqual(reply['data']['online'], {'bcs': 'authentication_failed', 'wb': {'12': 'verified'},
+                                                   'mabang': 'missing', 'feishu': 'unavailable'})
+        self.assertIn('login bcs', reply['next_action'])
+        self.assertEqual(request.call_count, 2)
+        for call in request.call_args_list:
+            self.assertEqual(call.args[0], 'GET')
+            self.assertFalse(call.kwargs['allow_redirects'])
+        self.assertEqual(wb.call_count, 2)
+        refresh.assert_not_called()
+        expected_lines = ('BCS 鉴权失败', 'WB 店铺 12 通过', '马帮 缺少会话或配置', '飞书 检查不可用')
+        for summary in (terminal, text_output):
+            for line in expected_lines:
+                self.assertIn('[在线鉴权] ' + line, summary)
+            self.assertIn('自动续期开启', summary)
+        self.assertNotIn('private-', json.dumps(reply) + terminal + text_output)
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_doctor_online_custom_bcs_and_invalid_json_do_not_probe(self):
+        config = Path(paths.current.credentials_json)
+        config.write_text('{"bcs":{"base_url":"https://fixture.invalid/private-endpoint","token":"private-token",'
+                          '"limit_key":"private-key"}}', encoding='utf-8')
+        with patch.object(requests, 'request') as request:
+            _, reply, terminal = self.cli('doctor', '--check-online')
+        request.assert_not_called()
+        self.assertEqual(reply['data']['online']['bcs'], 'unavailable')
+        self.assertIn('自定义端点未执行探针', terminal)
+        self.assertNotIn('private-', json.dumps(reply) + terminal)
+
+        config.write_text('{"private-invalid":NaN}', encoding='utf-8')
+        with patch.object(doctor, 'online_checks') as checks:
+            _, reply, terminal = self.cli('doctor', '--check-online')
+        checks.assert_not_called()
+        self.assertEqual(reply['data']['online'], {'credentials': 'unreadable'})
+        self.assertIn('[在线鉴权] 未运行', terminal)
+        self.assertNotIn('private-', json.dumps(reply) + terminal)
+
+        config.write_text('{}', encoding='utf-8')
+        find_spec = doctor.importlib.util.find_spec
+        with (patch.object(doctor.importlib.util, 'find_spec',
+                           side_effect=lambda name: None if name == 'requests' else find_spec(name)),
+              patch.object(doctor, 'online_checks') as checks):
+            code, reply, terminal = self.cli('doctor', '--check-online')
+        checks.assert_not_called()
+        self.assertEqual(code, 1)
+        self.assertEqual(reply['data']['online'], {})
+        self.assertIn('[在线鉴权] 未运行，缺少 requests 依赖', terminal)

@@ -55,6 +55,9 @@ class LoginTest(unittest.TestCase):
         window.assert_not_called()
 
     def test_bcs_verification_stores_validated_browser_session(self):
+        template = json.loads((paths.PROJECT_ROOT / 'examples' / 'credentials.example.json').read_text(encoding='utf-8'))
+        template['bcs']['login'].update(self.platforms['bcs']['login'])
+        self.path.write_text(json.dumps(template), encoding='utf-8')
         session = login_session('fixture-token', 'fixture-limit', {'Gateway': 'fixture'})
         with (patch.object(bcs, 'refresh_login', side_effect=bcs.BrowserVerificationRequired('fixture')),
               patch.object(login, '_browser_session', return_value=session) as window,
@@ -63,8 +66,10 @@ class LoginTest(unittest.TestCase):
         window.assert_called_once_with('bcs', resume=False, keep_open=False)
         verify.assert_called_once_with(session, 'fixture')
         saved = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertEqual(saved['bcs']['token'], 'fixture-token')
         self.assertEqual(saved['bcs']['limit_key'], 'fixture-limit')
-        self.assertEqual(saved['mabang'], self.platforms['mabang'])
+        self.assertEqual(saved['bcs']['cookie_extra'], 'Gateway=fixture')
+        self.assertEqual(saved['mabang'], template['mabang'])
         self.assertNotIn('fixture-token', self.output.getvalue())
 
     def test_generic_auth_error_does_not_open_browser(self):
@@ -188,6 +193,8 @@ class LoginTest(unittest.TestCase):
         response.request.header_value.assert_not_called()
 
     def test_wb_only_saves_confirmed_binding_and_preserves_other_platforms(self):
+        template = json.loads((paths.PROJECT_ROOT / 'examples' / 'credentials.example.json').read_text(encoding='utf-8'))
+        self.path.write_text(json.dumps(template), encoding='utf-8')
         authorize = token({'user': 'fixture'})
         shops = (wb_browser.WBShop(SHOP_ONE, 100, 'selected'),
                  wb_browser.WBShop(SHOP_TWO, 200, 'unselected'))
@@ -200,7 +207,7 @@ class LoginTest(unittest.TestCase):
             verify.assert_not_called()
             self.assertEqual(self.execute('wb', '--bind', f'12={SHOP_TWO}'), 0)
         data = json.loads(self.path.read_text(encoding='utf-8'))
-        self.assertEqual(data['bcs'], self.platforms['bcs'])
+        self.assertEqual(data['bcs'], template['bcs'])
         self.assertEqual([row['shopId'] for row in data['wb']['shops']], [12])
         self.assertIn(SHOP_TWO, data['wb']['shops'][0]['cookie'])
         self.assertNotIn(authorize, self.output.getvalue())
