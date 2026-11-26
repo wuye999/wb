@@ -58,18 +58,21 @@ def add_mismatch_args(p: argparse.ArgumentParser) -> None:
     bind(p, 'sellerops.cli.catalog_handlers', 'run_mismatch_check')
 
 
-def add_fetch_args(p: argparse.ArgumentParser, *, all_scope: bool = False) -> None:
+def add_fetch_args(p: argparse.ArgumentParser) -> None:
     targets = p.add_mutually_exclusive_group()
-    if all_scope:
-        targets.add_argument('--all', action='store_true', help='同步全部在营店铺')
-    targets.add_argument("--shop-id", type=int, default=None, help="店铺ID（默认全部）")
+    targets.add_argument('--all', action='store_true', help='选择全部在营店铺（默认）')
+    targets.add_argument('--shop-id', type=int, help='单个店铺 ID')
+    targets.add_argument('--shops', type=shop_ids, help='目标店铺 ID，多个用逗号分隔')
     p.add_argument('--source', choices=['bcs', 'wb-openapi'], default='bcs',
                    help='快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）')
     p.add_argument('--parallel', type=int, default=4,
-                   help='WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）')
+                   help='WB Open API 并发店铺数（正整数，默认 4，1 为串行）')
     p.add_argument('--bcs-parallel', type=int, choices=(1, 2, 3, 4), default=2,
-                   help='全店 BCS 后台同步并发数（默认2，单店和缓存读取不受影响）')
-    p.add_argument("--no-sync", action="store_true",
-                   help="BCS来源：跳过后台同步，直接读取缓存；Open API来源无需同步")
+                   help='BCS 批量后台同步并发数（默认 2，直接单店同步和缓存读取不受影响）')
+    refresh = p.add_mutually_exclusive_group()
+    refresh.add_argument('--needs-refresh', action='store_true',
+                         help='只补刷本地在营且快照超期、未确认、确认时间未知或尚无快照的店铺')
+    refresh.add_argument('--no-sync', action='store_true',
+                         help='BCS 来源直接读取缓存。Open API 来源无需同步')
     p.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
     bind(p, 'sellerops.cli.catalog_handlers', 'run_fetch')

@@ -10,6 +10,7 @@ import re
 from typing import Dict, Any, List, Optional, Tuple
 
 
+from sellerops.domain.package_dimensions import parse_package_dimensions
 from sellerops.persistence.price_book import price_book_columns
 from sellerops.settings import paths as config
 
@@ -31,22 +32,11 @@ def publish_codes(raw: str, nm_ids: list[int]) -> list[str | None]:
 
 def parse_dims_str(s: str) -> Optional[Tuple[int, int, int, float]]:
     """解析自定义尺寸字符串 '长*宽*高/毛重'（例: 8*14*26/0.3 或 8x14x26/0.3），返回 (L, W, H, weight)。"""
-    if not s:
+    package = parse_package_dimensions(s)
+    if package is None:
         return None
-    s_clean = str(s).strip()
-    m = re.match(r"^([\d.]+)\s*[*xX]\s*([\d.]+)\s*[*xX]\s*([\d.]+)(?:\s*/\s*([\d.]+))?$", s_clean)
-    if not m:
-        return None
-    try:
-        wt = float(m.group(4)) if m.group(4) else 0.0
-        return (
-            math.ceil(float(m.group(1))),
-            math.ceil(float(m.group(2))),
-            math.ceil(float(m.group(3))),
-            round(wt, 3),
-        )
-    except (TypeError, ValueError):
-        return None
+    length, width, height, weight = package
+    return math.ceil(length), math.ceil(width), math.ceil(height), round(weight or 0.0, 3)
 
 def parse_cn_stock(s: str) -> Dict[str, int]:
     """解析 `--cn-stock` 参数："中文名:库存,中文名:库存" → {中文名: 库存}。"""

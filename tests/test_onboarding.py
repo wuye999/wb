@@ -14,6 +14,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 import requests
+from openpyxl import Workbook
 
 from catalog_fixture import document, mock_non_git_checkout, snapshot, write_book
 from sellerops.cli.main import main
@@ -383,6 +384,74 @@ class OnboardingWorkflowTest(TestCase):
         config.write_text('{"bcs":{"token":"fixture-token","limit_key":"fixture-limit"}}', encoding='utf-8')
         _, reply, _ = self.cli('doctor')
         self.assertIn('sync', reply['next_action'])
+
+    def test_doctor_missing_book_guidance_preserves_credential_priority(self):
+        example = 'examples/商品价格表.example.xlsx'
+        code, reply, terminal = self.cli('doctor')
+        self.assertEqual(code, 0)
+        self.assertIn('examples/credentials.example.json', reply['next_action'])
+        self.assertIn(example, terminal)
+        self.assertNotIn('缺少表头', terminal)
+        self.assertEqual(reply['data']['price_book']['status'], 'missing')
+        self.assertEqual(reply['data']['price_book']['missing_headers'], [])
+        self.assertIsNone(reply['data']['price_book']['data_rows'])
+
+        Path(paths.current.credentials_json).write_text(
+            '{"bcs":{"token":"fixture-token","limit_key":"fixture-limit"}}', encoding='utf-8')
+        code, reply, terminal = self.cli('doctor')
+        self.assertEqual(code, 0)
+        self.assertIn(example, reply['next_action'])
+        self.assertIn('首次同步前', reply['next_action'])
+        self.assertIn('唯一四位英文字母前缀可启用自动归属', reply['next_action'])
+        self.assertEqual(terminal.count(example), 1)
+
+    def test_doctor_distinguishes_price_book_failure_states(self):
+        Path(paths.current.credentials_json).write_text(
+            '{"bcs":{"token":"fixture-token","limit_key":"fixture-limit"}}', encoding='utf-8')
+        path = Path(paths.current.price_book_xlsx)
+        workbook = Workbook()
+        workbook.save(path)
+        workbook.close()
+        _, reply, terminal = self.cli('doctor')
+        self.assertEqual(reply['data']['price_book']['status'], 'missing_sheet')
+        self.assertIn('工作表名是否为 Sheet1', reply['next_action'])
+        self.assertNotIn('缺少表头', terminal)
+
+        write_book([], headers=('产品中文名',))
+        _, reply, terminal = self.cli('doctor')
+        self.assertEqual(reply['data']['price_book']['status'], 'invalid')
+        self.assertEqual(reply['data']['price_book']['missing_headers'], ['最低售价'])
+        self.assertIn('缺少表头 最低售价', terminal)
+
+        write_book([], headers=('产品中文名', '最低售价', 'vendorCode前缀码', 'vendorCode前缀码'))
+        _, reply, terminal = self.cli('doctor')
+        self.assertEqual(reply['data']['price_book']['status'], 'invalid')
+        self.assertEqual(reply['data']['price_book']['duplicate_optional_headers'], ['vendorCode前缀码'])
+        self.assertIn('可选表头重复 vendorCode前缀码', terminal)
+
+        path.write_bytes(b'invalid xlsx')
+        _, reply, terminal = self.cli('doctor')
+        self.assertEqual(reply['data']['price_book']['status'], 'unreadable')
+        self.assertIn('读取权限', reply['next_action'])
+        self.assertIn('文件不可读', terminal)
+
+    def test_doctor_prints_price_book_contract_diagnostics_with_row_numbers(self):
+        write_book([
+            ('A', '甲', 10, 'Test', 'stock', '不处理', 'bad'),
+            ('B', '乙', 20, 'TEST', None, 'WB发货', '="1x2x3"'),
+            ('C', '丙', 30, 'A123', None, 'WB发货', None),
+        ], headers=('卖家SKU', '产品中文名', '最低售价', 'vendorCode前缀码', '马帮库存SKU', '发货方式', '尺寸'))
+        code, reply, terminal = self.cli('doctor')
+        self.assertEqual(code, 0)
+        self.assertEqual(reply['data']['price_book']['status'], 'ready')
+        for line in (
+            '尺寸格式或数值无效 1 行（行号示例 2）',
+            '尺寸公式无缓存，待核实 1 行（行号示例 3）',
+            'vendorCode 前缀须为四位英文字母 1 行（行号示例 4）',
+            'vendorCode 前缀重复，无法自动归属 2 行（行号示例 2、3）',
+            '发货方式为「不处理」却填了马帮库存 SKU 1 行（行号示例 2）',
+        ):
+            self.assertIn(line, terminal)
 
     def test_doctor_warns_about_legacy_sample_entries_without_counting_them(self):
         config = Path(paths.current.credentials_json)

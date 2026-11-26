@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument('--check-updates', action='store_true', help='跳过缓存，立即检查 GitHub 仓库更新')
     bind(doctor, 'sellerops.features.system.doctor', 'run')
     sync = sub.add_parser('sync', help='同步商品快照')
-    catalog.add_fetch_args(sync, all_scope=True)
+    catalog.add_fetch_args(sync)
     planned = sub.add_parser('ops', help='预览商品操作并保存固定计划单')
     ops.register(planned.add_subparsers(dest='action', required=True))
     ops.register_apply(sub)

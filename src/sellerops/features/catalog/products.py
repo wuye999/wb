@@ -20,13 +20,14 @@ from sellerops.persistence import db
 from sellerops.persistence.mappings import (
     PRICE_BOOK_ERRORS, PriceBook, PriceBookChanged, read_current_price_book, save_price_book,
 )
+from sellerops.persistence.price_book import is_price_book_prefix
 from sellerops.persistence.snapshots import (
     ProductSnapshotRepository, get_shop, record_sync_error, save_shop, save_snapshot, snapshot_metadata,
 )
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
 from sellerops.integrations.wildberries.open_api import OpenAPIResponseError
 from sellerops.features.catalog import snapshot_open_api
-from sellerops.features.catalog.shops import shop_status
+from sellerops.features.catalog.shops import shop_status, snapshot_freshness
 from sellerops.domain.snapshot_values import first_price, stock_values, valid_sizes
 from sellerops.domain.vendor_codes import extract_vc_prefix
 
@@ -36,14 +37,14 @@ BCS_REMOTE_SECONDS = 30 * 60
 _COMPLETE_PREFIX_VC = re.compile(r'BCS-[A-Za-z]{4}[-/][^\s/-](?:\S*[^\s/-])?')
 
 
-def _book_skip_reason(error: Exception) -> str:
+def _book_skip(error: Exception) -> tuple[str, str]:
     if isinstance(error, FileNotFoundError):
-        return '商品价格表缺失'
+        return 'missing_price_book', '商品价格表缺失'
     if isinstance(error, OSError):
-        return '商品价格表被占用或不可读，请保存并关闭 Excel'
+        return 'unreadable_price_book', '商品价格表被占用或不可读，请保存并关闭 Excel'
     if isinstance(error, PriceBookChanged):
-        return '商品价格表版本已变化'
-    return str(error)
+        return 'price_book_changed', '商品价格表版本已变化'
+    return 'invalid_price_book', str(error)
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class PrefixMapping:
     book: PriceBook | None
     unique: dict[str, dict]
     conflicts: set[str]
+    skip_code: str | None = None
     skip_reason: str | None = None
 
     @classmethod
@@ -58,15 +60,15 @@ class PrefixMapping:
         try:
             book = read_current_price_book(strict_identity=True)
         except PRICE_BOOK_ERRORS as error:
-            return cls(None, {}, set(), _book_skip_reason(error))
-        counts = Counter(row['prefix'] for row in book.rows if re.fullmatch(r'[A-Z]{4}', row['prefix']))
+            return cls(None, {}, set(), *_book_skip(error))
+        counts = Counter(row['prefix'] for row in book.rows if is_price_book_prefix(row['prefix']))
         return cls(book, {row['prefix']: row for row in book.rows if counts[row['prefix']] == 1},
                    {prefix for prefix, count in counts.items() if count > 1})
 
     def save(self, connection, shop_id: int) -> dict:
         result = {'prefix_mapped': 0}
         if self.book is None:
-            return {**result, 'prefix_skip_reason': self.skip_reason}
+            return {**result, 'prefix_skip_code': self.skip_code, 'prefix_skip_reason': self.skip_reason}
         connection.execute('SAVEPOINT prefix_mapping')
         try:
             save_price_book(connection, self.book)
@@ -94,11 +96,14 @@ class PrefixMapping:
             """, updates).rowcount
             self.book.verify()
             result = {'prefix_mapped': changed, 'prefix_skipped': dict(skipped)}
+            if not self.unique:
+                result.update(prefix_skip_code='no_usable_prefix', prefix_skip_reason='价格表没有可用的唯一四位前缀')
         except (OSError, PriceBookChanged) as error:
             connection.execute('ROLLBACK TO prefix_mapping')
-            result['prefix_skip_reason'] = _book_skip_reason(error)
+            result['prefix_skip_code'], result['prefix_skip_reason'] = _book_skip(error)
         connection.execute('RELEASE prefix_mapping')
         return result
+
 
 def is_empty_product(r):
     """空商品三缺判定：价格+库存+名称全空（productType=ERROR 残留），不计入待审核。
@@ -125,18 +130,55 @@ def fetch_single_status(shop_id: int, no_sync: bool = False, source: str = 'bcs'
 def _receipt(source: str, shops: list[dict], missing: list[dict] | None = None) -> dict:
     return {'source': source, 'fetchedAt': db.now(), 'shops': shops, 'fetched': [],
             'sync_warnings': [], 'errors': [], 'missing_shops': missing or [],
-            'prefix_mapping': {'mapped': 0, 'skipped_shops': [], 'skipped_vcs': {}}}
+            'prefix_mapping': {'mapped': 0, 'skipped_shops': [], 'skipped_vcs': {}},
+            'mapping_counts': {'mapped_vcs': 0, 'pending_vcs': 0}}
 
 
-def _summarize_prefixes(receipt: dict) -> None:
+def _finish_receipt(receipt: dict) -> None:
+    fetched = receipt['fetched']
+    if not fetched:
+        return
     counts = Counter()
     summary = receipt['prefix_mapping']
-    for fetched in receipt['fetched']:
-        summary['mapped'] += fetched['prefix_mapped']
-        if reason := fetched.get('prefix_skip_reason'):
-            summary['skipped_shops'].append({'id': fetched['id'], 'reason': reason})
-        counts.update(fetched.get('prefix_skipped', {}))
+    for row in fetched:
+        summary['mapped'] += row['prefix_mapped']
+        if reason := row.get('prefix_skip_reason'):
+            summary['skipped_shops'].append({'id': row['id'], 'reason': reason})
+        counts.update(row.get('prefix_skipped', {}))
     summary['skipped_vcs'] = dict(counts)
+
+    shop_ids = [str(row['id']) for row in fetched]
+    slots = ','.join('?' for _ in shop_ids)
+    try:
+        with db.connect(read_only=True) as connection:
+            totals = {
+                shop_id: {'mapped_vcs': mapped, 'pending_vcs': pending}
+                for shop_id, mapped, pending in connection.execute(f"""
+                    WITH scoped AS (
+                        SELECT i.shop_id, i.vc, coalesce(m.status, 'pending') AS mapping_status
+                        FROM shop_items i JOIN shops s USING (shop_id)
+                        LEFT JOIN vc_map m ON m.vc = i.vc
+                        WHERE i.shop_id IN ({slots}) AND s.status = 'active' AND i.is_trashed = 0
+                          AND i.vc <> '' AND m.status IS NOT 'excluded'
+                    )
+                    SELECT shop_id, count(*) FILTER (WHERE mapping_status = 'mapped'),
+                           count(*) FILTER (WHERE mapping_status = 'pending')
+                    FROM scoped GROUP BY shop_id
+                    UNION ALL
+                    SELECT NULL, count(DISTINCT vc) FILTER (WHERE mapping_status = 'mapped'),
+                           count(DISTINCT vc) FILTER (WHERE mapping_status = 'pending')
+                    FROM scoped
+                """, shop_ids)
+            }
+    except (OSError, sqlite3.Error):
+        unknown = dict.fromkeys(receipt['mapping_counts'])
+        receipt['mapping_counts'] = unknown
+        for row in fetched:
+            row.update(unknown)
+    else:
+        for row, shop_id in zip(fetched, shop_ids):
+            row.update(totals.get(shop_id, receipt['mapping_counts']))
+        receipt['mapping_counts'] = totals[None]
 
 
 def _fetch_single(shop_id: int, no_sync: bool, source: str, *,
@@ -186,7 +228,7 @@ def _fetch_single(shop_id: int, no_sync: bool, source: str, *,
         status['errors'].append(_record_failure(shop, before, source, error))
         return [], status, error
     status['fetched'].append(fetched)
-    _summarize_prefixes(status)
+    _finish_receipt(status)
     return rows, status, None
 
 
@@ -316,7 +358,7 @@ def _fetch_bcs_shops(status: dict, before: dict, no_sync: bool, workers: int, st
                      prefixes: PrefixMapping) -> None:
     shops = status['shops']
     if not no_sync and shops:
-        print(f'>>> 同步全部店铺（WB → BCS），并发上限 {workers}')
+        print(f'>>> 同步 {len(shops)} 家店铺（WB → BCS），并发上限 {workers}')
         status['sync_warnings'] = bcs.sync_shops_parallel(
             [shop['id'] for shop in shops], workers=workers, deadline=start + SYNC_STAGE_SECONDS)
         count = len(status['sync_warnings'])
@@ -344,44 +386,75 @@ def _fetch_bcs_shops(status: dict, before: dict, no_sync: bool, workers: int, st
                 pass
 
 
-def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4, bcs_parallel: int = 2) -> dict:
-    """拉取全店快照，逐店保存结果并在失败时保留旧快照。"""
+def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4, bcs_parallel: int = 2,
+              shop_ids: list[int] | None = None, needs_refresh: bool = False) -> dict:
+    """拉取所选店铺快照，逐店保存结果并在失败时保留旧快照。"""
     if source not in {'wb-openapi', 'bcs'}:
         raise ValueError('未知快照数据来源')
     if type(parallel) is not int or parallel < 1:
         raise ValueError('并发店铺数必须为正整数')
     if type(bcs_parallel) is not int or bcs_parallel not in range(1, 5):
         raise ValueError('BCS 并发店铺数必须为 1–4')
+    if needs_refresh and no_sync:
+        raise ValueError('--needs-refresh 不能与 --no-sync 同时使用')
+    if shop_ids is not None and any(type(shop_id) is not int or shop_id <= 0 for shop_id in shop_ids):
+        raise ValueError('店铺 ID 必须为正整数')
+
+    scope = set(shop_ids) if shop_ids is not None else None
+    previous = shop_status(include_snapshot=needs_refresh)
+    local = {int(shop['shop_id']): shop for shop in previous}
+    archived = {shop_id for shop_id, shop in local.items() if shop['status'] == 'archived'}
+    if scope is not None:
+        if blocked := scope & archived:
+            raise ValueError(f"店铺 {','.join(map(str, sorted(blocked)))} 已归档，请先恢复")
+        if needs_refresh and (untracked := scope - local.keys()):
+            ids = ','.join(map(str, sorted(untracked)))
+            raise ValueError(f'店铺 {ids} 未登记到本地，请去掉 --needs-refresh 执行首次同步')
+    if needs_refresh:
+        due = {int(shop['shop_id']) for shop in snapshot_freshness(previous)['shops']}
+        scope = due if scope is None else scope & due
+        for shop in previous:
+            shop.pop('snapshot_present')
+    if scope is not None and not scope:
+        return _receipt(source, [])
+
     start = time.monotonic()
     accesses = bcs.fetch_open_api_shops() if source == 'wb-openapi' else []
     shops = ([{'id': shop.id, 'name': shop.name} for shop in accesses] if source == 'wb-openapi'
              else bcs.fetch_shop_list(budget=RequestBudget(start + BCS_REMOTE_SECONDS)))
-    print(f"共 {len(shops)} 个店铺: {[(s['id'], s['name']) for s in shops]}")
     present = {shop['id'] for shop in shops}
-    previous = shop_status()
-    archived = {int(shop['shop_id']) for shop in previous if shop['status'] == 'archived'}
-    missing = [shop for shop in previous if shop['status'] == 'active' and int(shop['shop_id']) not in present]
+    selected = present - archived
+    if scope is not None:
+        selected &= scope
+    shops = [shop for shop in shops if shop['id'] in selected]
+    accesses = [shop for shop in accesses if shop.id in selected]
+    print(f"目标店铺 {len(shops)} 家：{[(s['id'], s['name']) for s in shops]}")
+    missing = [shop for shop_id, shop in local.items() if shop['status'] == 'active' and shop_id not in present
+               and (scope is None or shop_id in scope)]
     if missing:
         print('[缺失店铺] ' + '、'.join(f"{shop['shop_name']}({shop['shop_id']})" for shop in missing))
-    shops = [shop for shop in shops if shop['id'] not in archived]
-    accesses = [shop for shop in accesses if shop.id not in archived]
-    before = {}
-    if shops:
-        with db.connect(write=True) as connection:
-            for shop in shops:
-                save_shop(connection, shop['id'], shop['name'])
-                before[shop['id']] = get_shop(connection, shop['id'])
     status = _receipt(source, shops, missing)
+    if scope is not None:
+        for shop_id in sorted(scope - present - local.keys()):
+            reason = '远端店铺清单未找到该 ID'
+            status['errors'].append({'id': shop_id, 'error': reason, 'kind': 'shop_not_found'})
+            print(f'[店铺{shop_id} 失败] {reason}')
     if not shops:
         return status
+    before = {}
+    with db.connect(write=True) as connection:
+        for shop in shops:
+            save_shop(connection, shop['id'], shop['name'])
+            before[shop['id']] = get_shop(connection, shop['id'])
     prefixes = PrefixMapping.prepare()
     if source == 'wb-openapi':
         if no_sync:
             print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
-        status['fetched'], status['errors'] = _fetch_open_api_shops(accesses, parallel, before, prefixes)
+        status['fetched'], errors = _fetch_open_api_shops(accesses, parallel, before, prefixes)
+        status['errors'].extend(errors)
     else:
         _fetch_bcs_shops(status, before, no_sync, bcs_parallel, start, prefixes)
-    _summarize_prefixes(status)
+    _finish_receipt(status)
     return status
 
 

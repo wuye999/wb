@@ -36,12 +36,16 @@
 
 实现入口 [run_fetch](../src/sellerops/cli/catalog_handlers.py)
 
-- 最多选一项 --shop-id
-- `--shop-id` 店铺ID（默认全部）
+- 最多选一项 --all / --shop-id / --shops
+- 最多选一项 --needs-refresh / --no-sync
+- `--all` 选择全部在营店铺（默认）
+- `--shop-id` 单个店铺 ID
+- `--shops` 目标店铺 ID，多个用逗号分隔
 - `--source` 快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）（bcs / wb-openapi）
-- `--parallel` WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
-- `--bcs-parallel` 全店 BCS 后台同步并发数（默认2，单店和缓存读取不受影响）（1 / 2 / 3 / 4）
-- `--no-sync` BCS来源：跳过后台同步，直接读取缓存；Open API来源无需同步
+- `--parallel` WB Open API 并发店铺数（正整数，默认 4，1 为串行）
+- `--bcs-parallel` BCS 批量后台同步并发数（默认 2，直接单店同步和缓存读取不受影响）（1 / 2 / 3 / 4）
+- `--needs-refresh` 只补刷本地在营且快照超期、未确认、确认时间未知或尚无快照的店铺
+- `--no-sync` BCS 来源直接读取缓存。Open API 来源无需同步
 - `--json` 输出单个 JSON 对象
 
 ## catalog mapping
@@ -899,13 +903,16 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 
 实现入口 [run_fetch](../src/sellerops/cli/catalog_handlers.py)
 
-- 最多选一项 --all / --shop-id
-- `--all` 同步全部在营店铺
-- `--shop-id` 店铺ID（默认全部）
+- 最多选一项 --all / --shop-id / --shops
+- 最多选一项 --needs-refresh / --no-sync
+- `--all` 选择全部在营店铺（默认）
+- `--shop-id` 单个店铺 ID
+- `--shops` 目标店铺 ID，多个用逗号分隔
 - `--source` 快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）（bcs / wb-openapi）
-- `--parallel` WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
-- `--bcs-parallel` 全店 BCS 后台同步并发数（默认2，单店和缓存读取不受影响）（1 / 2 / 3 / 4）
-- `--no-sync` BCS来源：跳过后台同步，直接读取缓存；Open API来源无需同步
+- `--parallel` WB Open API 并发店铺数（正整数，默认 4，1 为串行）
+- `--bcs-parallel` BCS 批量后台同步并发数（默认 2，直接单店同步和缓存读取不受影响）（1 / 2 / 3 / 4）
+- `--needs-refresh` 只补刷本地在营且快照超期、未确认、确认时间未知或尚无快照的店铺
+- `--no-sync` BCS 来源直接读取缓存。Open API 来源无需同步
 - `--json` 输出单个 JSON 对象
 
 ## ops price

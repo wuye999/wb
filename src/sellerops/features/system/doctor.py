@@ -8,7 +8,7 @@ from sellerops.features.catalog.shops import print_snapshot_reminder, shop_statu
 from sellerops.features.system import repository_update
 from sellerops.integrations.sessions import browser
 from sellerops.persistence import db
-from sellerops.persistence.price_book import inspect_price_book as check_book
+from sellerops.persistence.price_book import PRICE_BOOK_EXAMPLE, inspect_price_book as check_book
 from sellerops.settings import credentials, paths
 
 
@@ -18,9 +18,21 @@ _BOOK_ISSUES = {
     'ambiguous_product_name': '无 SKU 时中文名无法唯一识别',
     'missing_price': '最低售价为空', 'invalid_price': '最低售价不是有效正数',
     'price_formula_without_cache': '最低售价公式无缓存，待核实',
+    'invalid_dimensions': '尺寸格式或数值无效',
+    'dimensions_formula_without_cache': '尺寸公式无缓存，待核实',
+    'invalid_prefix': 'vendorCode 前缀须为四位英文字母',
+    'duplicate_prefix': 'vendorCode 前缀重复，无法自动归属',
     'missing_shipping_mode': '发货方式为空', 'invalid_shipping_mode': '发货方式无效',
     'wb_shipping_with_mabang_sku': 'WB 发货填了马帮库存 SKU',
+    'skip_shipping_with_mabang_sku': '发货方式为「不处理」却填了马帮库存 SKU',
     'mabang_shipping_without_stock_sku': '马帮发货漏填库存 SKU',
+}
+_BOOK_ACTIONS = {
+    'missing': (f'首次同步前，将 {PRICE_BOOK_EXAMPLE} 复制到本次数据目录并改名为 商品价格表.xlsx。'
+                '填写唯一四位英文字母前缀可启用自动归属'),
+    'missing_sheet': '核对本次数据目录中 商品价格表.xlsx 的工作表名是否为 Sheet1',
+    'invalid': '按体检提示修正本次数据目录中 商品价格表.xlsx 的 Sheet1 表头',
+    'unreadable': '核对 商品价格表.xlsx 的文件格式和读取权限。如被 Excel 占用，请保存并关闭后再检查',
 }
 _PLATFORM_NAMES = {'bcs': 'BCS', 'wb': 'WB', 'mabang': '马帮', 'feishu': '飞书'}
 _LEGACY_TEMPLATE_WARNINGS = {'legacy_wb_template_shop', 'legacy_mabang_template_shop_map'}
@@ -279,8 +291,8 @@ def run(args) -> int:
     else:
         args.next_action = _credential_next_action(args.output)
         if not args.next_action:
-            if book['status'] != 'ready':
-                args.next_action = '核对 data/商品价格表.xlsx 的 Sheet1 和必填表头'
+            if book['status'] in _BOOK_ACTIONS:
+                args.next_action = _BOOK_ACTIONS[book['status']]
             elif sqlite_status == 'legacy':
                 args.next_action = '备份后运行 migrate-legacy'
             elif sqlite_status == 'unreadable':
@@ -293,6 +305,8 @@ def run(args) -> int:
     _print_summary(args.output)
     print_snapshot_reminder(freshness)
     repository_update.print_reminder(update)
+    if book['status'] == 'missing' and args.next_action != _BOOK_ACTIONS['missing']:
+        print(f"[商品价格表] {_BOOK_ACTIONS['missing']}")
     if args.next_action:
         print(args.next_action)
     return int(not all(deps.values()) or sqlite_status == 'unreadable')

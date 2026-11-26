@@ -86,13 +86,19 @@ python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品�
 
 ```powershell
 python run.py sync --shop-id 1001
+python run.py sync --shops 1001,1002 --json
+python run.py sync --needs-refresh --json
 ```
 
 `sync` 和 `catalog fetch` 共用快照流程和 `--json` 回执。默认先同步 WB → BCS，再读取该店 BASE 并保存。普通提交或轮询未确认时会尝试读取 BCS 缓存，`data.sync_warnings` 列出受影响店铺和阶段。`--no-sync` 直接读取缓存。两种情况下，成功保存的店铺均在 `data.fetched` 标注快照状态，摘要明确说明使用了缓存。缓存全部保存成功时退出 0。BASE 读取或保存的失败见 `data.errors`，失败店铺保留原快照。
 
-两条命令按当前价格表唯一四位 ASCII 字母前缀，自动归属本次成功保存且在架、无禁上架限制的 `pending` VC，来源为 `prefix`。查看 `data.fetched[].prefix_mapped` 和 `data.prefix_mapping` 的计数与跳过原因。价格表缺失、占用、无效或版本变化时仍保存合格快照。同步后用 `map check-mismatch` 复核。未命中唯一前缀、前缀冲突、带禁上架限制的待认领 VC，以及人工纠偏和排除，按完整 VC 用 `map batch-set --file`、`catalog merge` 或 `catalog rename` 处理。严禁直接修改 SQLite `vc_map`。
+首次同步前，可将 `examples/商品价格表.example.xlsx` 复制到本次数据目录并改名为 `商品价格表.xlsx`。填写唯一四位 ASCII 字母前缀可启用自动归属。两条命令按该前缀自动归属本次成功保存且在架、无禁上架限制的 `pending` VC，来源为 `prefix`。价格表缺失、占用、无效、版本变化或没有唯一前缀时仍保存合格快照，原因见 `data.fetched[].prefix_skip_code` 和 `data.prefix_mapping.skipped_shops`。
 
-默认处理全部店铺，也可用 `--shop-id` 指定单店。全店 BCS 后台同步默认并发 2，`--bcs-parallel` 可设为 1 至 4。BCS 远程阶段使用 30 分钟协作式预算，其中同步提交和轮询最多占用前 25 分钟，单店轮询最多 600 秒。达到同步阶段截止时间后，剩余预算可用于读取 BASE 缓存。最终鉴权失败会停止后续 BCS 同步和 BASE 请求，已经保存的店铺结果继续列在回执中。
+查看 `data.fetched[].prefix_mapped` 和 `data.prefix_mapping` 了解本轮新增归属和跳过原因，逐 VC 的跳过原因按店计次。每家成功保存店铺的 `mapped_vcs`、`pending_vcs` 为在架完整 VC 数量，跨店去重结果见 `data.mapping_counts`。按回执 `next_action` 用 `map check-mismatch` 复核新增归属，或用 `map workbench` 处理待认领。需要人工归属、纠偏或排除时，按完整 VC 用 `map batch-set --file`、`catalog merge` 或 `catalog rename` 处理。严禁直接修改 SQLite `vc_map`。
+
+范围参数 `--shop-id`、`--shops`、`--all` 互斥，默认同步全部在营店铺。`--needs-refresh` 可叠加范围，按本地状态筛选快照超期、缓存未确认、确认时间未知或尚无快照的在营店铺。默认超期阈值为 24 小时，可用 `SELLEROPS_SNAPSHOT_MAX_AGE_HOURS` 调整。补刷支持 BCS 和 Open API 来源，与 `--no-sync` 互斥。首次同步尚未登记到本地的店铺时，使用普通范围参数。远端清单中缺失的本地目标店见 `data.missing_shops`。
+
+批量 BCS 后台同步默认并发 2，`--bcs-parallel` 可设为 1 至 4。BCS 远程阶段使用 30 分钟协作式预算，其中同步提交和轮询最多占用前 25 分钟，单店轮询最多 600 秒。达到同步阶段截止时间后，剩余预算可用于读取 BASE 缓存。最终鉴权失败会停止后续 BCS 同步和 BASE 请求，已经保存的店铺结果继续列在回执中。
 
 ```powershell
 python run.py catalog fetch --shop-id 1001 --no-sync --json
@@ -104,7 +110,7 @@ python run.py catalog fetch --shop-id 1001 --no-sync --json
 python run.py catalog fetch --source wb-openapi --shop-id 1001
 ```
 
-显式 Open API 来源的全店拉取默认最多 **4 店同时采集**。可用 `--parallel` 调整正整数并发数，`--parallel 1` 改为串行；实际并发不超过店铺数量。每店独立使用自己的令牌、会话和默认业务仓 ID，店内分页与请求仍按原有限流顺序执行。完整采集的店铺立即原子保存，终端按完成顺序显示店铺统计和总进度。`--shop-id` 单店拉取及默认 BCS 来源不受此参数影响。
+显式 Open API 来源的批量拉取默认最多 **4 店同时采集**。可用 `--parallel` 调整正整数并发数，`--parallel 1` 改为串行，实际并发不超过店铺数量。每店独立使用自己的令牌、会话和默认业务仓 ID，店内分页与请求仍按原有限流顺序执行。完整采集的店铺立即原子保存，终端按完成顺序显示店铺统计和总进度。
 
 ```powershell
 python run.py catalog fetch --source wb-openapi --parallel 6
