@@ -47,7 +47,7 @@ python run.py doctor --check-updates --json
 
 `doctor` 检查本机依赖、凭证结构、平台配置、浏览器构建、价格表异常和店铺快照。在本机 `main` 分支，仓库更新缓存缺失或过期时会短时检查公开 GitHub 仓库，`--check-updates` 可强制重新检查。依据 `data.repository_update` 转述更新提醒，由用户决定何时拉取。只有用户需要核对平台会话时才加 `--check-online`，用已有凭证做联网只读探测。即使退出码为 0，也要核对各分项结果。
 
-`data.snapshot_freshness` 报告范围内的在营店铺，默认在本地快照满 24 小时时提示。向运营说明涉及的店和快照时间，有需要时请运营明确确认更新范围。阈值可用 `SELLEROPS_SNAPSHOT_MAX_AGE_HOURS` 覆盖。
+`data.snapshot_freshness` 检查范围内的在营店铺，默认从 `last_confirmed_sync_at` 起满 24 小时报 `stale`。使用 BCS 缓存但未达到阈值或没有确认时间时，报 `cache_unconfirmed`。向运营说明涉及的店、采集时间和最近确认时间，有需要时请运营明确确认更新范围。阈值可用 `SELLEROPS_SNAPSHOT_MAX_AGE_HOURS` 覆盖。
 
 用户明确要求更新快照时才单独运行 `sync`。`sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，根据 `missing_shops` 提示运营核对。经确认才按店铺 ID 运行 `shop archive` 软归档，需要恢复时运行 `shop restore`。见 [商品映射与人工审核的命令示例](USAGE.md#商品映射与人工审核)。
 
@@ -107,7 +107,7 @@ BCS 建卡逐店显示每日限额提醒。今日已提交加本次待提交超�
 
 用户已经明确授权执行的操作，可按现有命令要求完成，不人为增加反复确认。`--yes` 只表示跳过命令自带确认，不能替代任务授权，也不能保证每个破坏性操作都需要这个参数。
 
-`catalog fetch` 的默认 BCS 来源先触发 WB → BCS 同步，再按 BASE 读取各店缓存。同步提交或轮询未确认时降级读取旧缓存，全店降级看 `data.sync_warnings`，单店看终端。全店拉取或保存失败看 `data.errors`。降级缓存保存成功可以退出 0，汇报时注明缓存可能过旧。显式 `--source wb-openapi` 才改用官方接口，该来源不使用 WB 后台 Cookie；缺 apiKey、401/403、限流或读取失败时保留旧快照并报告失败，不自动改回 `--source bcs`，官方令牌应在 BCS 对应店铺更新。两种来源都不补零缺失的价格或库存，分页不完整不能宣称已完成全量快照。
+`sync --json` 和 `catalog fetch --json` 使用同一回执。单店和全店均从 `data.sync_warnings` 核对未确认的同步阶段，从 `data.fetched[].snapshot_status` 核对成功采集的状态，从 `data.errors` 核对失败。降级缓存或显式跳过同步后成功保存可以退出 0，汇报时仍应说明缓存和最近确认同步时间。最终 BCS 鉴权失败后停止本批后续请求，保留已保存结果。显式 `--source wb-openapi` 使用官方接口，缺 apiKey、401/403、限流或读取失败时保留旧快照并报告失败。官方令牌在 BCS 对应店铺更新。价格或库存缺失保留未知，回执只把完整保存的快照列为成功。
 
 BCS 商品读取先校验原始响应数量，再对同店相同 nmId 和完整 VC 去重；只在非空业务值一致且存在完整原行时保留该整行。快照数量和单店表均按去重结果统计，零值不视为空。标识或业务值冲突时不能手工随意删行、按最新时间覆盖或把失败当空店处理。按 [数据契约](DATA.md#映射快照与标识) 处理，离线整理旧快照前先备份。
 

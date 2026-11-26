@@ -38,7 +38,6 @@ def build_parser() -> argparse.ArgumentParser:
     bind(doctor, 'sellerops.features.system.doctor', 'run')
     sync = sub.add_parser('sync', help='同步商品快照')
     catalog.add_fetch_args(sync, all_scope=True)
-    sync.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
     planned = sub.add_parser('ops', help='预览商品操作并保存固定计划单')
     ops.register(planned.add_subparsers(dest='action', required=True))
     ops.register_apply(sub)

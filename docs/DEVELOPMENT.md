@@ -76,11 +76,13 @@
 
 **商品主数据**由运营维护的价格表、SQLite 中的归属与店铺快照组成。业务命令只读取价格表，报表输出须另选路径。归属统一通过 `db.resolve_vc()` 查询，审核导入和纠偏只写库，报表按需导出。
 
-打开旧 SQLite 库时，持久化层会自动补齐缺失的 `products.shipping_mode` 列。
+写入旧 SQLite 库时，持久化层增量补齐 `shops` 快照列。只读查询通过 `pragma_table_info` 兼容旧库，同时兼容缺少 `products.shipping_mode` 的库。快照保存事务同时写入显式列、信封和整店商品行，并清除该店上次失败原因。失败登记依照采集前读到的快照状态和时间更新，避免较晚返回的失败覆盖并发保存的新快照。
 
-`catalog fetch` 默认走 BCS 快照：`features.catalog.products.fetch_all` 先通过 `sync_shops_parallel` 同步 WB → BCS，再逐店 `bcs.fetch_shop_products(filter=BASE)` 读取缓存并原子保存，`--no-sync` 跳过同步直接读取上次结果。显式 `--source wb-openapi` 时改用 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存；`features.catalog.snapshot_open_api` 负责确认各店唯一可用的默认业务仓及转换旧快照字段，`products` 负责原子保存、统计和多店失败汇总。令牌仅在内存中使用，不写入快照或状态。新增接口继续沿用只读端点白名单，禁止将库存 POST 读取改成 PUT/DELETE，也不在失败后自动换区域、Cookie 或缓存。
+`sync` 和 `catalog fetch` 共用编排及回执。BCS 全店后台同步最多并行 4 家，默认 2 家，BASE 按店铺顺序串行采集。调度器只派发当前有空位的任务，最终鉴权失败设置批次停止信号。30 分钟总预算从首次远程阶段开始计时，同步阶段截止于第 25 分钟，单店轮询最多 600 秒。单调时钟截止时间传到请求、退避、轮询和会话恢复锁。预算是协作式边界，DNS、系统阻塞或持续分段传输可能使在途请求超出墙钟预算。
 
-显式 Open API 来源的全店采集使用有界线程池，默认4店并发，`--parallel` 可调整（1为串行）。BCS店铺密钥只在主线程读取一次，任务内各自创建并关闭 `WBOpenAPI` 会话，不共享限流计时或仓库 ID；店内分页、批次和重试规则不变。主线程按完成结果原子保存各店快照、输出进度并汇总状态，状态列表仍按原店铺顺序保存。单店失败及本地保存失败不取消其他店铺，最终返回非零；不把并发扩展到默认 BCS 流程。并发边界、跨店隔离及失败保护使用屏障同步的离线替身验证，不依赖真实接口或耗时对比。
+显式 `--source wb-openapi` 由 BCS `fetch_open_api_shops()` 获取对应店铺 apiKey，再由 `integrations.wildberries.open_api.WBOpenAPI` 读取官方中国区商品卡、规格价格和单仓库存。`features.catalog.snapshot_open_api` 负责确认各店唯一可用的默认业务仓及转换旧快照字段。令牌仅在内存使用。新增接口继续沿用只读端点白名单，库存读取继续用 POST。
+
+显式 Open API 来源的全店采集使用有界线程池，默认 4 店并发，`--parallel` 可调整（1 为串行）。BCS 店铺密钥在主线程读取一次，任务内各自创建并关闭 `WBOpenAPI` 会话。限流计时、仓库 ID、分页和重试按店独立。主线程按完成顺序原子保存各店快照，回执按原店铺顺序排列。采集或保存失败由回执报告，其他店继续处理。并发边界、跨店隔离及失败保护使用离线替身验证。
 
 旧 BCS 行的缺失语义统一使用 `domain.snapshot_values`：完整规格验证、有效非负整数库存、首规格代表价和指定仓库存读取均为纯计算。不要在报表中用0代替缺失，不从别店补本店库存；库存/下架计划遇到规格标识缺失或重复时阻止该商品。BCS 列表的缺失数组和不一致计数属于协议错误，不能规范化为空店。
 

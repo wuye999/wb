@@ -156,7 +156,7 @@ class OnboardingWorkflowTest(TestCase):
     def test_parallel_sync_reports_phases_and_never_reuses_task_id(self):
         client = bcs_client.BCSClient(BCSSession('fixture', 'limit', 'Admin-Token=fixture; Limit-Key=limit'))
 
-        def submit(shop_id):
+        def submit(shop_id, **kwargs):
             if shop_id == 2:
                 raise PlatformApiError('private fixture', status_code=503)
             return str(shop_id)
@@ -277,19 +277,16 @@ class OnboardingWorkflowTest(TestCase):
             'ambiguous_product_name': 1,
         })
         self.assertIsNone(body['browser']['chromium']['runtime_version'])
-        self.assertIn('本地已同步 2 家', terminal)
+        self.assertIn('本地有快照 2 家', terminal)
         self.assertNotIn('private fixture', json.dumps(reply) + terminal)
         self.assertNotIn('private-fixture', json.dumps(reply) + terminal)
         self.assertEqual([file.read_bytes() for file in files], before)
 
     def test_snapshot_freshness_uses_age_and_selected_active_stores(self):
         now = datetime.fromisoformat('2026-11-26T06:00:00+08:00').timestamp()
-        snapshot(1, [], fetchedAt='2026-11-25T06:00:00+08:00')
-        snapshot(2, [], fetchedAt='2026-11-25T06:00:01+08:00')
-        snapshot(3, [], fetchedAt='2026-11-24')
-        snapshot(4, [], fetchedAt='2026-11-26T16:00:00+08:00')
-        snapshot(5, [], fetchedAt='invalid')
-        snapshot(6, [], fetchedAt='2026-11-20T13:00:00+08:00')
+        for sid, stamp in enumerate(('2026-11-25T06:00:00+08:00', '2026-11-25T06:00:01+08:00', '2026-11-24',
+                                     '2026-11-26T16:00:00+08:00', 'invalid', '2026-11-20T13:00:00+08:00'), 1):
+            snapshot(sid, [], fetchedAt=stamp, source='bcs', snapshot_status='bcs_synced')
         snapshot(8, [])
         with db.connect(write=True) as connection:
             connection.execute("UPDATE shops SET last_sync_error='last fetch failed' WHERE shop_id='1'")

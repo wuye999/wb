@@ -5,8 +5,9 @@ import json
 
 from sellerops.domain.snapshot_values import positive_id, price_value, stock_at, valid_sizes
 from sellerops.domain.warehouses import select_warehouse
-from sellerops.features.catalog.shops import print_snapshot_reminder, snapshot_freshness
+from sellerops.features.catalog.shops import print_snapshot_reminder, snapshot_freshness, snapshot_label
 from sellerops.persistence import db
+from sellerops.persistence.snapshots import snapshot_metadata
 from sellerops.settings import credentials
 
 
@@ -78,8 +79,9 @@ def _query(args) -> tuple[list[dict], list[dict]]:
     wanted = set(map(int, args.shops.split(','))) if args.shops else None
     shops, groups = {}, defaultdict(lambda: defaultdict(list))
     with db.connect(read_only=True) as connection:
-        rows = [dict(shop) for shop in connection.execute('''
-            SELECT shop_id, shop_name, last_source, last_synced_at, last_sync_error, snapshot_json
+        columns = db.shop_snapshot_columns(connection)
+        rows = [dict(shop) for shop in connection.execute(f'''
+            SELECT shop_id, shop_name, last_source, last_synced_at, last_sync_error, snapshot_json, {columns}
               FROM shops WHERE status = 'active'
         ''') if wanted is None or int(shop['shop_id']) in wanted]
         if wanted is not None and (missing := wanted - {int(shop['shop_id']) for shop in rows}):
@@ -89,6 +91,7 @@ def _query(args) -> tuple[list[dict], list[dict]]:
         for shop in sorted(rows, key=lambda row: int(row['shop_id'])):
             document = shop.pop('snapshot_json')
             shop['snapshot_present'] = document is not None
+            shop.update(snapshot_metadata(shop))
             shop['unmapped_item_count'] = 0 if document is not None else None
             shop['warehouse'] = _snapshot_warehouse(shop, json.loads(document) if document else {}, keyword)
             shops[shop['shop_id']] = shop
@@ -127,7 +130,7 @@ def _print(shops: list[dict], groups: list[dict], matched: int) -> None:
         label = (f"{warehouse['name']}（{warehouse['id']}，采集时核实）" if warehouse['id'] else
                  f"未知（{warehouse['reason']}）")
         print(f"店{shop['shop_id']} {shop['shop_name']} | 来源 {shop['last_source'] or '未知'} | "
-              f"同步 {shop['last_synced_at'] or '未同步'} | 默认业务仓 {label}")
+              f"{snapshot_label(shop)} | 默认业务仓 {label}")
     print(f'中文名汇总：显示 {len(groups)} / {matched} 组')
     for group in groups:
         print(f"{group['name']} | {group['item_count']} 条 / {group['shop_count']} 店 | {_format_ranges(group)}")

@@ -1,12 +1,58 @@
 """按店保存完整商品行，并保留旧快照的行和封装契约。"""
 import json
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from sellerops.domain.bcs_products import deduplicate_bcs_products
 from sellerops.domain.snapshot_values import first_price, positive_id, stock_at, valid_sizes
 from sellerops.domain.warehouses import select_warehouse
 from sellerops.persistence import db
+
+
+CACHE_STATUSES = {'bcs_cache_fallback', 'bcs_cache_only'}
+CONFIRMED_SOURCES = {'bcs_synced': 'bcs', 'wb_openapi': 'wb-openapi'}
+
+
+def snapshot_timestamp(value: str | None) -> float | None:
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value.strip()).timestamp()
+        except (ValueError, OverflowError, OSError):
+            pass
+    return None
+
+
+def snapshot_metadata(shop: dict | sqlite3.Row) -> dict:
+    """Read current columns or interpret an old snapshot with no recorded status."""
+    fields = {key: shop[key] for key in db.SNAPSHOT_COLUMNS}
+    if fields['snapshot_status'] is None and shop['snapshot_present']:
+        timestamp = shop['last_synced_at']
+        fields.update(snapshot_status='legacy_unverified', last_fetched_at=timestamp)
+        if shop['last_source'] == 'wb-openapi':
+            fields['snapshot_status'] = 'wb_openapi'
+            if snapshot_timestamp(timestamp) is not None:
+                fields.update(last_confirmed_sync_at=timestamp, last_confirmed_source='wb-openapi')
+    return fields
+
+
+def get_shop(connection: sqlite3.Connection, shop_id: int) -> sqlite3.Row | None:
+    columns = db.shop_snapshot_columns(connection)
+    return connection.execute(f"""
+        SELECT shop_name, status, last_source, last_synced_at, snapshot_json IS NOT NULL AS snapshot_present,
+               {columns}
+        FROM shops WHERE shop_id = ?
+    """, (str(shop_id),)).fetchone()
+
+
+def record_sync_error(connection: sqlite3.Connection, shop_id: int, before: sqlite3.Row, reason: str) -> None:
+    connection.execute("""
+        UPDATE shops SET last_sync_error = ?
+        WHERE shop_id = ? AND status = 'active' AND last_source IS ?
+          AND last_fetched_at IS ? AND last_synced_at IS ? AND snapshot_status IS ?
+          AND (snapshot_json IS NOT NULL) = ?
+    """, (reason, str(shop_id), before['last_source'], before['last_fetched_at'], before['last_synced_at'],
+          before['snapshot_status'], before['snapshot_present']))
 
 
 class ShopRows(dict[str, dict]):
@@ -41,12 +87,24 @@ def save_shop(connection: sqlite3.Connection, shop_id: int, name: str = '',
 
 
 def save_snapshot(connection: sqlite3.Connection, shop_id: int, document: dict,
-                  *, name: str = '') -> int:
+                  *, name: str = '', snapshot_status: str | None = None) -> int:
     document = validate_document(shop_id, document)
     rows = document.pop('rows')
     save_shop(connection, shop_id, name)
     source = document.get('source')
     timestamp = document.get('fetchedAt')
+    status = snapshot_status or ('wb_openapi' if source == 'wb-openapi' else 'legacy_unverified')
+    confirmed_at, confirmed_source = None, None
+    if status in CONFIRMED_SOURCES and snapshot_timestamp(timestamp) is not None:
+        confirmed_at, confirmed_source = timestamp, CONFIRMED_SOURCES[status]
+    elif status in CACHE_STATUSES:
+        previous = snapshot_metadata(get_shop(connection, shop_id))
+        previous_time = snapshot_timestamp(previous['last_confirmed_sync_at'])
+        if previous_time is not None and previous_time <= datetime.now().timestamp():
+            confirmed_at = previous['last_confirmed_sync_at']
+            confirmed_source = previous['last_confirmed_source']
+    document.update(snapshotStatus=status, fetchedAt=timestamp,
+                    lastConfirmedSyncAt=confirmed_at, lastConfirmedSource=confirmed_source)
     warehouse = document.get('warehouse')
     warehouse_id = None
     if source == 'wb-openapi' and isinstance(warehouse, dict):
@@ -69,9 +127,11 @@ def save_snapshot(connection: sqlite3.Connection, shop_id: int, document: dict,
     connection.execute('DELETE FROM shop_items WHERE shop_id = ?', (str(shop_id),))
     connection.executemany('INSERT INTO shop_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', items)
     connection.execute("""
-        UPDATE shops SET last_source = ?, last_synced_at = ?, last_sync_error = NULL, snapshot_json = ?
+        UPDATE shops SET last_source = ?, last_synced_at = ?, last_sync_error = NULL, snapshot_json = ?,
+                         snapshot_status = ?, last_fetched_at = ?, last_confirmed_sync_at = ?,
+                         last_confirmed_source = ?
          WHERE shop_id = ?
-    """, (source, timestamp, db.dumps(document), str(shop_id)))
+    """, (source, timestamp, db.dumps(document), status, timestamp, confirmed_at, confirmed_source, str(shop_id)))
     connection.executemany("""
         INSERT OR IGNORE INTO vc_map (vc, source_code, status, updated_at)
         VALUES (?, ?, 'pending', ?)

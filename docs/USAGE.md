@@ -37,7 +37,7 @@
 `shop list` 显示每店快照来源、同步时间、在架和回收站留存条数。JSON 的 `data.shops` 包含 `snapshot_present`、`active_item_count` 和 `trashed_item_count`。空快照计 0，未同步店的计数为 `null`。
 `catalog product-summary` 按中文名查询活跃店铺的已归属、在架货盘商品，逐店展示条数、各规格原价区间、商品折扣区间及默认业务仓库存。原价按币种分组。仓库证据或规格库存记录缺失时，库存显示未知。可用 `--shops` 限定在营店，`--name` 和 `--name-contains` 分别精确或按子串查询。`--sort` 按条数（`count`）、覆盖店数（`shops`）或中文名（`name`）排序，`--limit` 限制返回的中文名组数。两条命令均仅查本地数据。
 
-`doctor`、`shop list` 和 `catalog product-summary` 会检查范围内的在营店铺。改价、库存、下架及按商品定向的 WB 折扣预览有准备范围时也会检查。`data.snapshot_freshness` 区分 `stale`（默认满 24 小时）、`never_synced`（无快照）和 `unknown_age`（时间无法确认）。用户要求更新时按店单独运行 `sync --shop-id`。
+`doctor`、`shop list` 和 `catalog product-summary` 会检查范围内的在营店铺。改价、库存、下架及按商品定向的 WB 折扣预览有准备范围时也会检查。`data.snapshot_freshness` 区分 `stale`（距上次确认同步默认已满 24 小时）、`cache_unconfirmed`（本次使用 BCS 缓存）、`never_synced`（无快照）和 `unknown_age`（确认时间未知）。缓存采集更新 `last_fetched_at`，沿用原来的 `last_confirmed_sync_at`。用户要求更新时按店单独运行 `sync --shop-id`。
 
 ```powershell
 python run.py shop list --json
@@ -86,10 +86,12 @@ python run.py catalog rename --vc "BCS-TEST-123456789" --cn "修正后的商品�
 python run.py sync --shop-id 1001
 ```
 
-`catalog fetch` 默认等同于 `catalog fetch --source bcs`：先同步 WB → BCS，再按 BASE 读取该店缓存并原子保存快照，保留原有 BCS 行契约。用户已经在 BCS 后台同步过时可加 `--no-sync` 跳过同步直接读取上次结果；同步提交或轮询未确认时，命令打印降级提示并继续读旧缓存。全店回执在 `data.sync_warnings` 列出受影响店铺和阶段，BASE 读取或保存失败另见 `data.errors`。降级缓存都成功保存时命令仍可退出 0。默认读取全部店铺，`--shop-id` 只更新指定店铺，单店降级以终端提示为准。
+`sync` 和 `catalog fetch` 共用快照流程和 `--json` 回执。默认先同步 WB → BCS，再读取该店 BASE 并保存。普通提交或轮询未确认时会尝试读取 BCS 缓存，`data.sync_warnings` 列出受影响店铺和阶段。`--no-sync` 直接读取缓存。两种情况下，成功保存的店铺均在 `data.fetched` 标注快照状态，摘要明确说明使用了缓存。缓存全部保存成功时退出 0。BASE 读取或保存的失败见 `data.errors`，失败店铺保留原快照。
+
+默认处理全部店铺，也可用 `--shop-id` 指定单店。全店 BCS 后台同步默认并发 2，`--bcs-parallel` 可设为 1 至 4。BCS 远程阶段使用 30 分钟协作式预算，其中同步提交和轮询最多占用前 25 分钟，单店轮询最多 600 秒。达到同步阶段截止时间后，剩余预算可用于读取 BASE 缓存。最终鉴权失败会停止后续 BCS 同步和 BASE 请求，已经保存的店铺结果继续列在回执中。
 
 ```powershell
-python run.py catalog fetch --no-sync
+python run.py catalog fetch --shop-id 1001 --no-sync --json
 ```
 
 仅在需要绕开 BCS 同步、直接用官方接口重建快照时，显式选择 Open API 来源。该来源使用官方中国区 `.cn` 主机，不要求 WB 后台 Cookie、不触发 BCS 商品同步，也不会在失败时改读 BCS 旧缓存：

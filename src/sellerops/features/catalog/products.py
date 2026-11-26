@@ -6,20 +6,26 @@ sellerops 店铺商品拉取与快照管理（原 fetch_products.py + sync_shops
 """
 
 import sqlite3
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from sellerops.integrations.bcs.client import OpenAPIShop, client as bcs, sync_failure_reason
+from sellerops.integrations.bcs.budget import RequestBudget, SyncInterrupted
+from sellerops.integrations.bcs.client import OpenAPIShop, SYNC_STAGE_SECONDS, client as bcs, sync_failure_reason
 from sellerops.persistence import db
-from sellerops.persistence.snapshots import ProductSnapshotRepository, save_shop, save_snapshot
+from sellerops.persistence.snapshots import (
+    ProductSnapshotRepository, get_shop, record_sync_error, save_shop, save_snapshot, snapshot_metadata,
+)
 from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
 from sellerops.integrations.wildberries.open_api import OpenAPIResponseError
 from sellerops.features.catalog import snapshot_open_api
-from sellerops.features.catalog.shops import require_active, shop_status
+from sellerops.features.catalog.shops import shop_status
 from sellerops.domain.snapshot_values import first_price, stock_values, valid_sizes
 
 _OPEN_API_METHOD = 'wb-openapi(content.cards, prices.nmList, moscow.chrtIds)'
+_BCS_METHOD = 'bcs.fetch_shop_products(filter=BASE, pageSize=10000)'
+BCS_REMOTE_SECONDS = 30 * 60
 
 def is_empty_product(r):
     """空商品三缺判定：价格+库存+名称全空（productType=ERROR 残留），不计入待审核。
@@ -31,86 +37,123 @@ def is_empty_product(r):
 
 def fetch_shop(shop_id: int, no_sync: bool = False,
                source: str = 'bcs', *, access: OpenAPIShop | None = None, name: str = '') -> tuple[list[dict], int]:
-    """完整拉取并原子保存单店快照；默认走 BCS 快照，Open API 失败不回退 BCS。"""
+    """完整拉取并原子保存单店快照，保留 Python 调用方的返回值和异常契约。"""
+    rows, status, error = _fetch_single(shop_id, no_sync, source, access=access, name=name)
+    if error is not None:
+        raise error
+    return rows, status['fetched'][0]['total']
+
+
+def fetch_single_status(shop_id: int, no_sync: bool = False, source: str = 'bcs') -> dict:
+    _, status, _ = _fetch_single(shop_id, no_sync, source)
+    return status
+
+
+def _receipt(source: str, shops: list[dict], missing: list[dict] | None = None) -> dict:
+    return {'source': source, 'fetchedAt': db.now(), 'shops': shops, 'fetched': [],
+            'sync_warnings': [], 'errors': [], 'missing_shops': missing or []}
+
+
+def _fetch_single(shop_id: int, no_sync: bool, source: str, *,
+                  access: OpenAPIShop | None = None, name: str = '') -> tuple[list[dict], dict, Exception | None]:
     if type(shop_id) is not int or shop_id <= 0:
         raise ValueError('店铺 ID 必须为正整数')
-    require_active(shop_id)
     if source not in {'wb-openapi', 'bcs'}:
         raise ValueError('未知快照数据来源')
-    metadata = {}
-    if source == 'wb-openapi':
-        if no_sync:
-            print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
-        if access is None:
-            matches = [shop for shop in bcs.fetch_open_api_shops() if shop.id == shop_id]
-            if len(matches) != 1:
-                raise RuntimeError('BCS 未返回唯一目标店铺，无法读取该店 apiKey')
-            access = matches[0]
-        if access.id != shop_id:
-            raise ValueError('店铺密钥归属与目标快照不一致')
-        print(f'[拉取] 店铺 {shop_id}：WB Open API 商品、价格与莫斯科仓库存 ...')
-        try:
-            rows, metadata = snapshot_open_api.collect_shop(access)
-        except Exception as error:
-            raise OpenAPIResponseError(_safe_error(error)) from None
-        method = _OPEN_API_METHOD
-    else:
-        rows = _fetch_bcs(shop_id, no_sync)
-        method = 'bcs.fetch_shop_products(filter=BASE, pageSize=10000)'
-        metadata['warnings'] = {
-            'missingSpecProducts': sum(valid_sizes(row) is None for row in rows),
-            'missingStockProducts': sum(stock_values(row) is None for row in rows),
-            'missingPriceProducts': sum(first_price(row) is None for row in rows),
-        }
-    return _save_snapshot(shop_id, rows, source, method, metadata, access.name if access else name)
-
-
-def _fetch_bcs(shop_id: int, no_sync: bool) -> list[dict]:
-    if not no_sync:
-        print(f"[0/3] 店 {shop_id}：同步 WB 数据 ...")
-        t0 = time.monotonic()
-        if bcs.synchronize_shop(shop_id):
-            print(f'[降级] 店铺 {shop_id} 同步未确认，读取该店 BCS BASE 缓存。')
+    with db.connect(read_only=True) as connection:
+        before = get_shop(connection, shop_id)
+    if before and before['status'] == 'archived':
+        raise ValueError(f'店铺 {shop_id} 已归档，请先恢复')
+    shop = {'id': shop_id, 'name': name or (before['shop_name'] if before else f'shop{shop_id}')}
+    status = _receipt(source, [shop])
+    try:
+        if source == 'wb-openapi':
+            if no_sync:
+                print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
+            if access is None:
+                matches = [item for item in bcs.fetch_open_api_shops() if item.id == shop_id]
+                if len(matches) != 1:
+                    raise RuntimeError('BCS 未返回唯一目标店铺，无法读取该店 apiKey')
+                access = matches[0]
+            if access.id != shop_id:
+                raise ValueError('店铺密钥归属与目标快照不一致')
+            shop['name'] = access.name
+            print(f'[拉取] 店铺 {shop_id}：WB Open API 商品、价格与莫斯科仓库存 ...')
+            try:
+                rows, metadata = snapshot_open_api.collect_shop(access)
+            except Exception as error:
+                raise OpenAPIResponseError(_safe_error(error)) from None
+            fetched = _save_snapshot(shop, rows, source, 'wb_openapi', _OPEN_API_METHOD, metadata)
         else:
-            print(f"      同步完成（{time.monotonic() - t0:.0f}s）")
-    print("=" * 60)
-    print(f"[1/2] 店铺 {shop_id}：拉取在架商品（BASE） ...")
-    rows = bcs.fetch_shop_products(shop_id, filter_type="BASE")
-    print(f"[2/2] 获取 {len(rows)} 条")
-    return rows
+            start = time.monotonic()
+            budget = RequestBudget(start + BCS_REMOTE_SECONDS)
+            warning = None
+            if not no_sync:
+                print(f'[同步] 店铺 {shop_id}：同步 WB 数据到 BCS')
+                warning = bcs.synchronize_shop(shop_id, budget=RequestBudget(start + SYNC_STAGE_SECONDS))
+                if warning:
+                    status['sync_warnings'].append(warning)
+                else:
+                    print(f'[同步] 店铺 {shop_id}：BCS 已确认同步完成')
+            rows, fetched = _collect_bcs(shop, no_sync, warning, budget)
+    except Exception as error:
+        status['errors'].append(_record_failure(shop, before, source, error))
+        return [], status, error
+    status['fetched'].append(fetched)
+    return rows, status, None
 
 
-def _save_snapshot(shop_id: int, rows: list[dict], source: str,
-                   method: str, metadata: dict, name: str = '') -> tuple[list[dict], int]:
-    total = len(rows)
+def _collect_bcs(shop: dict, no_sync: bool, warning: dict | None,
+                 budget: RequestBudget) -> tuple[list[dict], dict]:
+    shop_id = shop['id']
+    if warning:
+        if warning.get('kind') == 'authentication':
+            raise AuthenticationError()
+        if warning.get('kind') == 'authentication_aborted':
+            raise SyncInterrupted('authentication_aborted', 'BCS 鉴权熔断，已停止后续请求')
+    budget.remaining()
+    if warning:
+        status = 'bcs_cache_fallback'
+        print(f'[降级] 店铺 {shop_id} 同步未确认，读取该店 BCS BASE 缓存。')
+    elif no_sync:
+        status = 'bcs_cache_only'
+        print(f'[缓存] 店铺 {shop_id} 已跳过同步，读取该店 BCS BASE 缓存。')
+    else:
+        status = 'bcs_synced'
+    print(f'[拉取] 店铺 {shop_id}：在架商品（BASE）')
+    rows = bcs.fetch_shop_products(shop_id, filter_type='BASE', budget=budget)
+    metadata = {'warnings': {
+        'missingSpecProducts': sum(valid_sizes(row) is None for row in rows),
+        'missingStockProducts': sum(stock_values(row) is None for row in rows),
+        'missingPriceProducts': sum(first_price(row) is None for row in rows),
+    }}
+    return rows, _save_snapshot(shop, rows, 'bcs', status, _BCS_METHOD, metadata)
+
+
+def _save_snapshot(shop: dict, rows: list[dict], source: str, status: str, method: str, metadata: dict) -> dict:
+    shop_id = shop['id']
+    timestamp = datetime.now().isoformat(' ', timespec='microseconds')
     result = {
-        "shopId": shop_id,
-        "total": total,
-        "fetchedCount": len(rows),
-        "fetchedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "fetchMethod": method,
-        "source": source,
-        "code": 200,
-        "msg": "查询成功",
-        "rows": rows,
-        **metadata,
+        'fetchedAt': timestamp, 'fetchMethod': method, 'source': source,
+        'code': 200, 'msg': '查询成功', 'rows': rows, **metadata,
     }
     with db.connect(write=True) as connection:
-        row = connection.execute('SELECT status FROM shops WHERE shop_id=?', (str(shop_id),)).fetchone()
+        row = get_shop(connection, shop_id)
         if row and row['status'] == 'archived':
             raise ValueError(f'店铺 {shop_id} 已归档，已保留原快照')
-        total = save_snapshot(connection, shop_id, result, name=name)
+        total = save_snapshot(connection, shop_id, result, name=shop['name'], snapshot_status=status)
+        fields = snapshot_metadata(get_shop(connection, shop_id))
     print(f'[店铺{shop_id}] 已保存快照：{total} 条')
-    vcs = len({r.get("vendorCode") for r in rows})
-    n_alive = sum(1 for r in rows if not r.get("trashedAt"))
-    print(f"[店铺{shop_id}] 统计：商品条数={len(rows)}，唯一 vendorCode={vcs}，在架(trashedAt空)={n_alive}")
+    vcs = len({r.get('vendorCode') for r in rows})
+    n_alive = sum(1 for r in rows if not r.get('trashedAt'))
+    print(f'[店铺{shop_id}] 统计：商品条数={len(rows)}，唯一 vendorCode={vcs}，在架(trashedAt空)={n_alive}')
     labels = {'missingPriceSpecs': '缺少价格的规格', 'missingStockSpecs': '未返回库存记录的规格',
               'missingImages': '缺少图片的商品', 'missingSpecProducts': '规格不完整的商品',
               'missingStockProducts': '库存无法确认的商品', 'missingPriceProducts': '价格无法确认的商品'}
     for key, count in metadata.get('warnings', {}).items():
         if count:
             print(f'[店铺{shop_id} 告警] {labels.get(key, key)}={count}（缺失保留为空，不补零）')
-    return rows, total
+    return {'id': shop_id, 'total': total, 'fetchedAt': timestamp, **fields}
 
 
 def _safe_error(error: Exception) -> str:
@@ -125,7 +168,32 @@ def _safe_error(error: Exception) -> str:
     return f'快照采集失败（{type(error).__name__}）'
 
 
-def _fetch_open_api_shops(accesses: list[OpenAPIShop], parallel: int) -> tuple[list[dict], list[dict]]:
+def _record_failure(shop: dict, before: sqlite3.Row | None, source: str, error: Exception) -> dict:
+    if isinstance(error, (OSError, sqlite3.Error)):
+        reason = '本地快照保存失败'
+    elif source == 'wb-openapi':
+        reason = _safe_error(error)
+    elif isinstance(error, ValueError):
+        reason = '快照数据或店铺状态无效'
+    else:
+        reason = sync_failure_reason(error)
+    shop_id = shop['id']
+    print(f'[店铺{shop_id} 失败] {reason}')
+    if before is not None:
+        try:
+            with db.connect(write=True) as connection:
+                record_sync_error(connection, shop_id, before, reason)
+        except (OSError, sqlite3.Error, ValueError):
+            print(f'[店铺{shop_id} 警告] 本地无法登记同步失败', file=sys.stderr)
+    result = {**shop, 'error': reason}
+    if isinstance(error, SyncInterrupted):
+        result['kind'] = error.kind
+    elif source == 'bcs' and isinstance(error, AuthenticationError):
+        result['kind'] = 'authentication'
+    return result
+
+
+def _fetch_open_api_shops(accesses: list[OpenAPIShop], parallel: int, before: dict) -> tuple[list[dict], list[dict]]:
     """有界并发采集；主线程逐店保存快照并汇总，不共享会话或令牌。"""
     fetched, errors = [], []
     if not accesses:
@@ -135,33 +203,64 @@ def _fetch_open_api_shops(accesses: list[OpenAPIShop], parallel: int) -> tuple[l
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='snapshot') as pool:
         pending = {pool.submit(snapshot_open_api.collect_shop, shop): shop for shop in accesses}
         for future in as_completed(pending):
-            shop = pending.pop(future)
+            access = pending[future]
+            shop = {'id': access.id, 'name': access.name}
             try:
                 rows, metadata = future.result()
-                _, total = _save_snapshot(shop.id, rows, 'wb-openapi', _OPEN_API_METHOD, metadata, shop.name)
-                fetched.append({'id': shop.id, 'total': total})
+                fetched.append(_save_snapshot(shop, rows, 'wb-openapi', 'wb_openapi', _OPEN_API_METHOD, metadata))
             except Exception as error:
-                reason = _safe_error(error)
-                print(f'  [店铺{shop.id} ({shop.name}) 失败] {reason}')
-                errors.append({'id': shop.id, 'name': shop.name, 'error': reason})
+                errors.append(_record_failure(shop, before[access.id], 'wb-openapi', error))
             print(f'[进度] 已完成 {len(fetched) + len(errors)}/{len(accesses)} 店，'
                   f'成功 {len(fetched)}，失败 {len(errors)}')
-    # 完成顺序由网络决定，持久化状态仍按 BCS 店铺顺序，便于比较和消费。
     order = {shop.id: i for i, shop in enumerate(accesses)}
     fetched.sort(key=lambda row: order[row['id']])
     errors.sort(key=lambda row: order[row['id']])
     return fetched, errors
 
 
-def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) -> dict:
-    """BCS 默认先同步再读 BASE 缓存；显式 wb-openapi 时最多4店并发；失败保留旧快照，汇总后报错。"""
+def _fetch_bcs_shops(status: dict, before: dict, no_sync: bool, workers: int, start: float) -> None:
+    shops = status['shops']
+    if not no_sync and shops:
+        print(f'>>> 同步全部店铺（WB → BCS），并发上限 {workers}')
+        status['sync_warnings'] = bcs.sync_shops_parallel(
+            [shop['id'] for shop in shops], workers=workers, deadline=start + SYNC_STAGE_SECONDS)
+        count = len(status['sync_warnings'])
+        print(f'[同步汇总] 已确认 {len(shops) - count} 家，未确认 {count} 家')
+    warnings = {warning['id']: warning for warning in status['sync_warnings']}
+    auth_failed = any(warning.get('kind') == 'authentication' for warning in warnings.values())
+    budget = RequestBudget(start + BCS_REMOTE_SECONDS)
+    for i, shop in enumerate(shops):
+        shop_id = shop['id']
+        warning = warnings.get(shop_id)
+        try:
+            if auth_failed and (not warning or warning.get('kind') != 'authentication'):
+                raise SyncInterrupted('authentication_aborted', 'BCS 鉴权熔断，已停止后续请求')
+            _, fetched = _collect_bcs(shop, no_sync, warning, budget)
+            status['fetched'].append(fetched)
+        except Exception as error:
+            if isinstance(error, AuthenticationError):
+                auth_failed = True
+            status['errors'].append(_record_failure(shop, before[shop_id], 'bcs', error))
+        if not auth_failed and i < len(shops) - 1 and time.monotonic() < budget.deadline:
+            try:
+                budget.pause(1)
+            except SyncInterrupted:
+                # Subsequent shops record the exhausted budget in their own error entries.
+                pass
+
+
+def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4, bcs_parallel: int = 2) -> dict:
+    """拉取全店快照，逐店保存结果并在失败时保留旧快照。"""
     if source not in {'wb-openapi', 'bcs'}:
         raise ValueError('未知快照数据来源')
     if type(parallel) is not int or parallel < 1:
         raise ValueError('并发店铺数必须为正整数')
+    if type(bcs_parallel) is not int or bcs_parallel not in range(1, 5):
+        raise ValueError('BCS 并发店铺数必须为 1–4')
+    start = time.monotonic()
     accesses = bcs.fetch_open_api_shops() if source == 'wb-openapi' else []
-    shops = ([{'id': shop.id, 'name': shop.name} for shop in accesses]
-             if source == 'wb-openapi' else bcs.fetch_shop_list())
+    shops = ([{'id': shop.id, 'name': shop.name} for shop in accesses] if source == 'wb-openapi'
+             else bcs.fetch_shop_list(budget=RequestBudget(start + BCS_REMOTE_SECONDS)))
     print(f"共 {len(shops)} 个店铺: {[(s['id'], s['name']) for s in shops]}")
     present = {shop['id'] for shop in shops}
     previous = shop_status()
@@ -171,53 +270,19 @@ def fetch_all(no_sync: bool = False, source: str = 'bcs', *, parallel: int = 4) 
         print('[缺失店铺] ' + '、'.join(f"{shop['shop_name']}({shop['shop_id']})" for shop in missing))
     shops = [shop for shop in shops if shop['id'] not in archived]
     accesses = [shop for shop in accesses if shop.id not in archived]
-    with db.connect(write=True) as connection:
-        for shop in shops:
-            save_shop(connection, shop['id'], shop['name'])
-
-    status = {"fetchedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-              "shops": shops, "errors": [], "source": source, "fetched": [], "missing_shops": missing,
-              "sync_warnings": []}
-
-    if source == 'wb-openapi' and no_sync:
-        print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
-    if source == 'bcs' and shops and not no_sync:
-        t0 = time.time()
-        print("\n>>> 并发同步全部店铺（WB → BCS）...")
-        status['sync_warnings'] = bcs.sync_shops_parallel([s['id'] for s in shops])
-        count = len(status['sync_warnings'])
-        print(f'    同步完成 {len(shops) - count} 家，待降级 {count} 家（{time.time() - t0:.0f}s）')
-
+    before = {}
+    if shops:
+        with db.connect(write=True) as connection:
+            for shop in shops:
+                save_shop(connection, shop['id'], shop['name'])
+                before[shop['id']] = get_shop(connection, shop['id'])
+    status = _receipt(source, shops, missing)
     if source == 'wb-openapi':
-        status['fetched'], status['errors'] = _fetch_open_api_shops(accesses, parallel)
+        if no_sync:
+            print('[提示] Open API 直接读取 WB，无需 BCS 同步；--no-sync 无需生效')
+        status['fetched'], status['errors'] = _fetch_open_api_shops(accesses, parallel, before)
     else:
-        fallback = {warning['id'] for warning in status['sync_warnings']}
-        for i, s in enumerate(shops):
-            print(f"\n>>> 拉取店铺 {s['id']} ({s['name']})")
-            if s['id'] in fallback:
-                print(f"[降级] 店铺 {s['id']} 同步未确认，读取该店 BCS BASE 缓存。")
-            try:
-                _, total = fetch_shop(s['id'], no_sync=True, source=source, name=s['name'])
-                status['fetched'].append({'id': s['id'], 'total': total})
-            except Exception as error:
-                if isinstance(error, (OSError, sqlite3.Error)):
-                    reason = '本地快照保存失败'
-                elif isinstance(error, ValueError):
-                    reason = '快照数据或店铺状态无效'
-                else:
-                    reason = sync_failure_reason(error)
-                print(f"  [店铺{s['id']} 失败] {reason}")
-                status['errors'].append({'id': s['id'], 'name': s['name'], 'error': reason})
-            if i < len(shops) - 1:
-                time.sleep(1)
-        cached = sum(shop['id'] in fallback for shop in status['fetched'])
-        print(f"[快照汇总] 已保存 {len(status['fetched'])} 家（降级缓存 {cached} 家），"
-              f"失败 {len(status['errors'])} 家")
-
-    with db.connect(write=True) as connection:
-        for error in status['errors']:
-            connection.execute('UPDATE shops SET last_sync_error = ? WHERE shop_id = ?',
-                               (error['error'], str(error['id'])))
+        _fetch_bcs_shops(status, before, no_sync, bcs_parallel, start)
     return status
 
 

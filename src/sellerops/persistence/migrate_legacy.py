@@ -212,7 +212,8 @@ def _write_snapshots(connection: Connection, shop_files: dict) -> list[dict]:
         recorded_at = status.get('fetchedAt')
         connection.execute('''
             UPDATE shops SET last_sync_error = ? WHERE shop_id = ?
-             AND (last_synced_at IS NULL OR ? IS NULL OR last_synced_at <= ?)
+             AND (coalesce(last_fetched_at, last_synced_at) IS NULL OR ? IS NULL
+                  OR coalesce(last_fetched_at, last_synced_at) <= ?)
         ''', (str(row.get('error') or ''), str(sid), recorded_at, recorded_at))
     return result
 

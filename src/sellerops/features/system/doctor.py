@@ -52,7 +52,7 @@ def _print_summary(output: dict) -> None:
     if len(cred['issues']) > 10:
         print(f"  另有 {len(cred['issues']) - 10} 项，见 JSON 结果。")
     print(f"[店铺] 凭证已登记 {count('credential_configured')} 家，三件套齐全 {count('credential_session_complete')} 家"
-          f" | 本地已同步 {count('local_synced')} 家（在营 {count('local_synced_active')}，"
+          f" | 本地有快照 {count('local_synced')} 家（在营 {count('local_synced_active')}，"
           f"归档 {count('local_synced_archived')}）")
     db_label = {'ready': '就绪', 'legacy': '有待迁移的旧数据', 'empty': '尚无库', 'unreadable': '不可读'}
     print(f"[本地库] {db_label[output['database']]}")
@@ -138,7 +138,7 @@ def run(args) -> int:
         except (ValueError, sqlite3.Error):
             sqlite_status = 'unreadable'
     checked_db = sqlite_status in {'ready', 'empty'}
-    synced = [shop for shop in shops if shop['last_synced_at']]
+    synced = [shop for shop in shops if shop['snapshot_present']]
     settings['shop_counts'].update(local_synced=len(synced) if checked_db else None,
                                   local_synced_active=sum(s['status'] == 'active' for s in synced) if checked_db else None,
                                   local_synced_archived=sum(s['status'] == 'archived' for s in synced) if checked_db else None)
@@ -170,7 +170,7 @@ def run(args) -> int:
         args.next_action = '备份后运行 migrate-legacy'
     elif sqlite_status == 'unreadable':
         args.next_action = '核对本地 sellerops.db'
-    elif not shops or not any(shop['last_synced_at'] for shop in shops):
+    elif not synced:
         args.next_action = '按需运行 sync 获取商品快照'
     elif pending:
         args.next_action = '用 map workbench 生成带图待认领工作台'

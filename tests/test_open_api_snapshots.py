@@ -447,7 +447,9 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
     def test_explicit_bcs_preserves_no_sync_behavior(self):
         self.legacy.return_value = [self.row]
         self.assertEqual(self.run_cli('catalog', 'fetch', '--source', 'bcs', '--shop-id', '1', '--no-sync'), 0)
-        self.legacy.assert_called_once_with(1, filter_type='BASE')
+        self.legacy.assert_called_once()
+        self.assertEqual((self.legacy.call_args.args, self.legacy.call_args.kwargs['filter_type']), ((1,), 'BASE'))
+        self.assertIn('budget', self.legacy.call_args.kwargs)
         self.sync.assert_not_called()
         doc = document(1)
         self.assertEqual(doc['source'], 'bcs')

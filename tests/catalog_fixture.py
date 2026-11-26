@@ -37,9 +37,9 @@ def map_vcs(mapping, *, source='manual'):
             db.set_vc(connection, vc, 'mapped', sku=sku, source=source)
 
 
-def snapshot(shop, rows, **metadata):
+def snapshot(shop, rows, *, snapshot_status=None, **metadata):
     with db.connect(write=True) as connection:
-        return save_snapshot(connection, shop, {'rows': rows, **metadata})
+        return save_snapshot(connection, shop, {'rows': rows, **metadata}, snapshot_status=snapshot_status)
 
 
 def document(shop):

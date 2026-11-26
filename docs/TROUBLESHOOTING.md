@@ -52,8 +52,8 @@ python -m pip install -e . --timeout 60
 | Excel PermissionError | 关闭占用目标表的 Excel/预览程序，保留备份，重试原本地操作；不用删除映射表解决 |
 | `report vc-sales` 结果不完整或 Excel 中零单 | 该命令独立读取 WB 订单动态。重复游标、达到翻页上限仍有下一页或店铺读取失败时，核对 `data.failed_shops` 和日志，已有 Excel 属于部分结果。若完整采集但零单，仍会导出空汇总表，可核对店铺和北京时间下单日期。文件路径见 `data.artifacts.workbook` |
 | JSON 损坏 | 从自己的备份恢复或交维护者定位；不要清空 state。跨进程锁文件长期存在是正常现象 |
-| `sync` 或 `catalog fetch` 部分店铺失败、退出码非零 | 查看本次逐店错误。成功店铺已更新，失败店铺保留原快照。默认 BCS 来源已在后台同步时可加 `--no-sync` 读取缓存 |
-| `sync --all` 提示部分店铺使用 BCS 缓存 | 对照 `data.sync_warnings` 的店铺 ID、提交或轮询阶段和原因。本次 BASE 均成功保存时退出 0。BASE 读取或保存失败的店铺另见 `data.errors`，其原快照保留 |
+| `sync` 或 `catalog fetch` 店铺失败、退出码非零 | 用 `--json` 回执查看 `data.errors`。成功店铺已更新，失败店铺保留原快照。`authentication` 表示 BCS 鉴权失败，`authentication_aborted` 表示本店受鉴权熔断影响，`batch_timeout` 表示远程阶段已达时间预算 |
+| 快照回执提示 BCS 缓存，或体检提示 `cache_unconfirmed` / `stale` | 对照 `data.fetched[].snapshot_status` 区分同步未确认和显式跳过。未确认的提交、轮询或未启动原因见 `data.sync_warnings`。即使刚保存缓存，店铺的新鲜度仍取决于 `last_confirmed_sync_at` |
 | BCS 商品重复、快照或单店表行数偏大 | 新读取会对同店相同 nmId/完整 VC 的兼容记录去重，保留完整原行；旧文件不会因升级自动改写。非空业务字段冲突、标识歧义或没有完整原行时会报错，不随意保留第一/最后一行。规则见 [数据契约](DATA.md#映射快照与标识)；整理旧文件前先备份 |
 | 更新后单店表变空 | 有效空快照会清除该店旧商品明细和总表中的该店覆盖，历史归属仍保留。核对本次 `sync` 结果和 `report mapping` 导出 |
 | `doctor` 的仓库更新检查不可用 | 平台连接状态与该检查独立。本机 `main` 分支可在网络恢复后按需用 `doctor --check-updates` 跳过缓存重查。更新提示由运营决定是否手动拉取 |

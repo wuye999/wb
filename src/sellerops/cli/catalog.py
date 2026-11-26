@@ -67,6 +67,9 @@ def add_fetch_args(p: argparse.ArgumentParser, *, all_scope: bool = False) -> No
                    help='快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）')
     p.add_argument('--parallel', type=int, default=4,
                    help='WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）')
+    p.add_argument('--bcs-parallel', type=int, choices=(1, 2, 3, 4), default=2,
+                   help='全店 BCS 后台同步并发数（默认2，单店和缓存读取不受影响）')
     p.add_argument("--no-sync", action="store_true",
-                   help="BCS来源：跳过后台同步直接读取已同步快照；Open API来源无需同步")
+                   help="BCS来源：跳过后台同步，直接读取缓存；Open API来源无需同步")
+    p.add_argument('--json', action='store_true', help='输出单个 JSON 对象')
     bind(p, 'sellerops.cli.catalog_handlers', 'run_fetch')

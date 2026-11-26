@@ -142,7 +142,8 @@ class TestStep2(unittest.TestCase):
 
     def test_price_preview_keeps_skip_csv_and_plan_in_json(self):
         write_book([('', '唯一中文名', 38, 'AAAA', '')])
-        snapshot(1, [row(A, 101, 1001)], fetchedAt='2000-01-01T00:00:00+00:00')
+        snapshot(1, [row(A, 101, 1001)], fetchedAt='2000-01-01T00:00:00+00:00',
+                 source='bcs', snapshot_status='bcs_synced')
         snapshot(2, [])
         snapshot(3, [])
         rc, _, _ = self.confirm({'vc': A, 'action': 'map', 'cn': '唯一中文名'})
@@ -278,7 +279,7 @@ class TestStep2(unittest.TestCase):
         self.assertEqual(group['discount_pct'], {'min': 0, 'max': 0, 'known_items': 1, 'unknown_items': 2})
         self.assertEqual([entry['stock']['total_quantity'] for entry in group['per_shop']], [None, 0, None])
         self.assertEqual([s['warehouse']['id'] for s in data['shops']], [None, 22, 33, None, None])
-        self.assertIn('来源 bcs | 同步 2026-01-01', err)
+        self.assertIn('来源 bcs | 采集 2026-01-01 | 确认同步 未知', err)
         rc, reply, _ = self.cli('catalog', 'product-summary', '--shops', '1', '--name-contains', '玻璃')
         self.assertEqual(rc, 0)
         self.assertEqual([group['name'] for group in reply['data']['groups']], ['玻璃杯'])

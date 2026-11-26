@@ -1,22 +1,28 @@
 """本地店铺状态。归档仅改变状态，快照和提交记录随店保留。"""
-from datetime import datetime
 import os
 import sqlite3
 from time import time
 
 from sellerops.persistence import db
+from sellerops.persistence.snapshots import CACHE_STATUSES, snapshot_metadata, snapshot_timestamp
 from sellerops.domain.snapshot_values import positive_id
 
 
 def shop_status(connection=None, *, include_snapshot=False) -> list[dict]:
     if connection is None:
-        with db.connect(read_only=include_snapshot) as local:
+        with db.connect(read_only=True) as local:
             return shop_status(local, include_snapshot=include_snapshot)
-    snapshot_column = ', snapshot_json IS NOT NULL AS snapshot_present' if include_snapshot else ''
-    return [dict(row) for row in connection.execute(f"""
-        SELECT shop_id, shop_name, status, last_source, last_synced_at, last_sync_error{snapshot_column}
+    columns = db.shop_snapshot_columns(connection)
+    rows = [dict(row) for row in connection.execute(f"""
+        SELECT shop_id, shop_name, status, last_source, last_synced_at, last_sync_error,
+               snapshot_json IS NOT NULL AS snapshot_present, {columns}
         FROM shops ORDER BY rowid
     """)]
+    for row in rows:
+        row.update(snapshot_metadata(row))
+        if not include_snapshot:
+            row.pop('snapshot_present')
+    return rows
 
 
 def _snapshot_max_age_hours() -> int:
@@ -31,14 +37,8 @@ def _snapshot_max_age_hours() -> int:
 
 
 def _snapshot_age_hours(value: str | None, now: float) -> int | None:
-    if isinstance(value, str) and value:
-        try:
-            seconds = now - datetime.fromisoformat(value.strip()).timestamp()
-            if seconds >= 0:
-                return int(seconds // 3600)
-        except (ValueError, OverflowError, OSError):
-            pass
-    return None
+    timestamp = snapshot_timestamp(value)
+    return int((now - timestamp) // 3600) if timestamp is not None and timestamp <= now else None
 
 
 def snapshot_freshness(rows: list[dict] | None) -> dict:
@@ -47,18 +47,21 @@ def snapshot_freshness(rows: list[dict] | None) -> dict:
     issues = []
     now = time()
     for shop in active:
-        stamp = shop['last_synced_at']
+        stamp = shop['last_confirmed_sync_at']
         age = _snapshot_age_hours(stamp, now) if shop['snapshot_present'] else None
         if not shop['snapshot_present']:
             status = 'never_synced'
+        elif age is not None and age >= threshold:
+            status = 'stale'
+        elif shop['snapshot_status'] in CACHE_STATUSES:
+            status = 'cache_unconfirmed'
         elif age is None:
             status = 'unknown_age'
-        elif age >= threshold:
-            status = 'stale'
         else:
             continue
         issues.append({'shop_id': shop['shop_id'], 'shop_name': shop['shop_name'], 'status': status,
-                       'last_synced_at': stamp if isinstance(stamp, str) else None, 'age_hours': age})
+                       'last_synced_at': shop['last_synced_at'], 'age_hours': age,
+                       **{key: shop[key] for key in db.SNAPSHOT_COLUMNS}})
     return {'status': 'checked' if rows is not None else 'unavailable',
             'max_age_hours': threshold, 'active_shop_count': len(active) if rows is not None else None,
             'shops': issues}
@@ -73,8 +76,9 @@ def selected_snapshot_freshness(shop_ids: set[str]) -> dict:
 
 
 def print_snapshot_reminder(freshness: dict) -> None:
-    labels = {'stale': f"的本地快照已满 {freshness['max_age_hours']} 小时",
-              'never_synced': '尚无本地商品快照', 'unknown_age': '的本地快照时间无法确认'}
+    labels = {'stale': f"距上次确认同步已满 {freshness['max_age_hours']} 小时",
+              'never_synced': '尚无本地商品快照', 'unknown_age': '的快照确认时间未知',
+              'cache_unconfirmed': '使用 BCS 缓存，本次同步未确认'}
     affected = freshness['shops']
     if not affected:
         return
@@ -93,7 +97,7 @@ def archive_set() -> set[int]:
 
 
 def require_active(shop_id: int) -> None:
-    with db.connect() as connection:
+    with db.connect(read_only=True) as connection:
         row = connection.execute("SELECT status FROM shops WHERE shop_id=?", (str(shop_id),)).fetchone()
         if row and row['status'] == 'archived':
             raise ValueError(f'店铺 {shop_id} 已归档，请先恢复')
@@ -101,9 +105,10 @@ def require_active(shop_id: int) -> None:
 
 def run_list(args) -> int:
     with db.connect(read_only=True) as connection:
-        rows = [dict(row) for row in connection.execute('''
+        columns = db.shop_snapshot_columns(connection, 's')
+        rows = [dict(row) for row in connection.execute(f'''
             SELECT s.shop_id, s.shop_name, s.status, s.last_source, s.last_synced_at,
-                   s.last_sync_error, s.snapshot_json IS NOT NULL AS snapshot_present,
+                   s.last_sync_error, s.snapshot_json IS NOT NULL AS snapshot_present, {columns},
                    CASE WHEN s.snapshot_json IS NOT NULL THEN coalesce(c.active, 0) END AS active_item_count,
                    CASE WHEN s.snapshot_json IS NOT NULL THEN coalesce(c.trashed, 0) END AS trashed_item_count
               FROM shops AS s LEFT JOIN (
@@ -115,15 +120,24 @@ def run_list(args) -> int:
         ''', (args.name or None, args.name))]
     for row in rows:
         row['snapshot_present'] = bool(row['snapshot_present'])
+        row.update(snapshot_metadata(row))
     args.output = {'shops': rows, 'snapshot_freshness': snapshot_freshness(rows)}
     print(f'本地店铺 {len(rows)} 家')
     for row in rows:
         status = '在营' if row['status'] == 'active' else '已归档'
         active, trashed = (row['active_item_count'], row['trashed_item_count']) if row['snapshot_present'] else ('未知', '未知')
         print(f"{row['shop_id']} | {row['shop_name']} | {status} | 来源 {row['last_source'] or '未知'} | "
-              f"同步 {row['last_synced_at'] or '未同步'} | 快照在架 {active} | 快照回收站 {trashed}")
+              f"{snapshot_label(row)} | 快照在架 {active} | 快照回收站 {trashed}")
     print_snapshot_reminder(args.output['snapshot_freshness'])
     return 0
+
+
+def snapshot_label(shop: dict) -> str:
+    labels = {'legacy_unverified': '旧快照，确认情况未知', 'bcs_cache_only': 'BCS 缓存，已跳过同步',
+              'bcs_cache_fallback': 'BCS 缓存，同步未确认'}
+    label = labels.get(shop['snapshot_status'])
+    return (f"采集 {shop['last_fetched_at'] or '未知'} | 确认同步 {shop['last_confirmed_sync_at'] or '未知'}"
+            + (f' | {label}' if label else ''))
 
 
 def run_status(args) -> int:

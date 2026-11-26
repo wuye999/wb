@@ -5,6 +5,7 @@ import requests
 
 from sellerops.core.errors import AuthenticationError, DataConsistencyError
 from sellerops.core.files import FileLock, atomic_dump_json
+from sellerops.integrations.bcs.budget import RequestBudget, refresh_lock
 from sellerops.integrations.bcs.session import (
     BCS_BASE_URL, LOGIN_ORIGIN, LOGIN_URL, BCSSession, cookie_fields, extra_cookie_header, login_session,
 )
@@ -52,10 +53,13 @@ def _same_generation(left: Credentials, right: Credentials) -> bool:
     return _same_config(left, right) and _session_values(left) == _session_values(right)
 
 
-def _request(send, url: str, stage: str, **kwargs) -> requests.Response:
+def _request(send, url: str, stage: str, *, budget: RequestBudget | None = None, **kwargs) -> requests.Response:
+    timeout = budget.timeout(TIMEOUT) if budget else TIMEOUT
     try:
-        response = send(url, timeout=TIMEOUT, allow_redirects=False, **kwargs)
+        response = send(url, timeout=timeout, allow_redirects=False, **kwargs)
     except requests.RequestException:
+        if budget:
+            budget.remaining()
         raise AuthenticationError(f'BCS {stage}请求失败，请检查网络。') from None
     if response.status_code in {403, 405, 412} or 300 <= response.status_code < 400:
         raise BrowserVerificationRequired(f'BCS {stage}遇到网关校验或访问限制。{MANUAL_LOGIN}')
@@ -74,19 +78,19 @@ def _json(response: requests.Response, stage: str) -> dict:
     return data
 
 
-def password_login(username: str, password: str) -> BCSSession:
+def password_login(username: str, password: str, *, budget: RequestBudget | None = None) -> BCSSession:
     """Use ordinary server-issued cookies and submit the password only after an explicit no-slider response."""
     # Both hosts set a host-only cookie with the same name. Keep their jars separate.
     with requests.Session() as business, requests.Session() as login:
-        _request(business.get, BUSINESS_HOME, '打开业务页')
-        _request(login.get, LOGIN_PAGE, '打开登录页', params={'redirect': BUSINESS_HOME})
+        _request(business.get, BUSINESS_HOME, '打开业务页', budget=budget)
+        _request(login.get, LOGIN_PAGE, '打开登录页', budget=budget, params={'redirect': BUSINESS_HOME})
         headers = {'Accept': 'application/json, text/plain, */*', 'Referer': LOGIN_PAGE}
-        check = _request(login.get, LOGIN_URL + '/slider-required', '检查滑块',
+        check = _request(login.get, LOGIN_URL + '/slider-required', '检查滑块', budget=budget,
                          headers=headers, params={'username': username})
         precheck = _json(check, '检查滑块')
         if precheck.get('code') != 200 or precheck.get('needSlider') is not False:
             raise BrowserVerificationRequired(f'BCS 未确认可免滑块登录。{MANUAL_LOGIN}')
-        response = _request(login.post, LOGIN_URL, '密码登录', headers={**headers, 'Origin': LOGIN_ORIGIN},
+        response = _request(login.post, LOGIN_URL, '密码登录', budget=budget, headers={**headers, 'Origin': LOGIN_ORIGIN},
                             json={'username': username, 'password': password, 'captchaVerifyParam': ''})
         data = _json(response, '密码登录')
         if data.get('code') != 200:
@@ -99,8 +103,8 @@ def password_login(username: str, password: str) -> BCSSession:
             raise AuthenticationError('BCS 未签发完整、有效的登录凭证。') from None
 
 
-def verify_account(session: BCSSession, username: str) -> None:
-    response = _request(requests.get, PROFILE_URL, '核对账号', headers=session.headers())
+def verify_account(session: BCSSession, username: str, *, budget: RequestBudget | None = None) -> None:
+    response = _request(requests.get, PROFILE_URL, '核对账号', budget=budget, headers=session.headers())
     result = _json(response, '核对账号')
     data = result.get('data')
     if result.get('code') != 200 or not isinstance(data, dict):
@@ -109,8 +113,9 @@ def verify_account(session: BCSSession, username: str) -> None:
         raise AuthenticationError('BCS 会话归属与配置账号不一致，原凭证保留。')
 
 
-def _save_session(path: Path, baseline: Credentials, session: BCSSession) -> Credentials:
-    with FileLock(path):
+def _save_session(path: Path, baseline: Credentials, session: BCSSession,
+                  *, budget: RequestBudget | None = None) -> Credentials:
+    with refresh_lock(path, 10, budget):
         latest = Credentials(path)
         if not _same_generation(latest, baseline):
             raise AuthenticationError('BCS 配置在登录期间更新，已保留较新的本机凭证。')
@@ -131,10 +136,10 @@ def connect_browser_session(baseline: Credentials, session: BCSSession) -> None:
         _failed_refresh.pop(path, None)
 
 
-def refresh_login(*, expected: Credentials | None = None) -> Credentials:
+def refresh_login(*, expected: Credentials | None = None, budget: RequestBudget | None = None) -> Credentials:
     """Serialize refreshes per data directory and reuse a concurrent successful renewal."""
     path = Path(paths.current.credentials_json).resolve()
-    with FileLock(path.with_name('bcs-auth'), timeout=90):
+    with refresh_lock(path.with_name('bcs-auth'), 90, budget):
         baseline = credentials.reload()
         if not isinstance(baseline.bcs, dict):
             raise DataConsistencyError('credentials.json 的 bcs 必须是对象。')
@@ -153,9 +158,10 @@ def refresh_login(*, expected: Credentials | None = None) -> Credentials:
             raise AuthenticationError('请先在 credentials.json 配置 bcs.login 的账号和密码。')
         username = login['username'].strip()
         try:
-            session = password_login(username, login['password'])
-            verify_account(session, username)
-            updated = _save_session(path, baseline, session)
+            options = {'budget': budget} if budget else {}
+            session = password_login(username, login['password'], **options)
+            verify_account(session, username, **options)
+            updated = _save_session(path, baseline, session, **options)
         except AuthenticationError as error:
             if expected is not None:
                 _failed_refresh[path] = (baseline, str(error))

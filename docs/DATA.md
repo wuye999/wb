@@ -57,7 +57,20 @@
 
 快照在库内保留原有 `shopId`、`total`、`rows` 等字段。每家店的最新成功快照与失败原因单独保存，缺快照和已确认的空店是两种情况。`shop list --json` 的 `data.shops` 中，`snapshot_present` 表示是否已有快照，`active_item_count` 和 `trashed_item_count` 分别统计在架与回收站条数。缺快照时计数为 `null`。
 
-默认 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE 缓存，去重后整店写入 SQLite。同步未确认时可降级读取旧缓存，全店回执在 `data.sync_warnings` 列出受影响店铺。拉取或保存失败另见 `data.errors`，相应店铺保留旧快照。显式 `--source wb-openapi` 使用 WB 官方中国区接口，保存来源、时间、本店默认业务仓及缺失统计。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联；`stockList` 只含本店默认业务仓。库存缺失使用空列表，价格缺失使用 null，保留合法零值。
+默认 `sync` 和 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE，去重后整店写入 SQLite。单店和全店的 JSON 回执均含 `source`、`fetchedAt`、`shops`、`fetched`、`sync_warnings`、`errors`、`missing_shops`。回执顶层 `fetchedAt` 是回执初始化时间，`fetched[].fetchedAt` 是对应店铺成功保存的采集时间。普通同步未确认时可降级读取缓存，警告列入 `sync_warnings`。读取或保存失败列入 `errors`，失败店铺保留旧快照。全店取得完整远程清单后才计算 `missing_shops`。
+
+SQLite 的 `shops` 表提供以下快照字段。整店商品行、快照信封、这些列和失败原因清除使用同一事务。
+
+| 列 | 快照信封字段 | 口径 |
+|---|---|---|
+| `snapshot_status` | `snapshotStatus` | `bcs_synced` 同次 BCS 确认并完整读取 BASE，`bcs_cache_fallback` 同步未确认后读取缓存，`bcs_cache_only` 显式跳过同步，`wb_openapi` 官方直读，`legacy_unverified` 旧快照缺少确认依据 |
+| `last_fetched_at` | `fetchedAt` | 最近一次完整保存的本地采集时间。旧字段 `last_synced_at` 保留为兼容字段，口径同采集时间 |
+| `last_confirmed_sync_at` | `lastConfirmedSyncAt` | 最近一次 BCS 确认后完整采集，或 WB Open API 直读成功的本地采集时间 |
+| `last_confirmed_source` | `lastConfirmedSource` | 上次确认同步的来源 `bcs` 或 `wb-openapi` |
+
+缓存入库沿用本店上次确认时间和来源，缺少依据时两列为 `NULL`。只读命令兼容旧库，旧 BCS 快照显示为 `legacy_unverified`，旧 WB Open API 快照可依据有效采集时间计算新鲜度。旧库在首次成功的写事务补齐列，已有快照在下次保存时写入新字段。快照新鲜度以确认时间作判断。缓存本身会提示 `cache_unconfirmed`，达到阈值时显示 `stale`。
+
+显式 `--source wb-openapi` 使用 WB 官方中国区接口，保存本店默认业务仓及缺失统计。规格 `sizeList[].chrtId` 来自商品卡，价格按规格 ID 关联。`stockList` 仅含本店默认业务仓。库存缺失使用空列表，价格缺失使用 null，保留合法零值。
 
 BCS 商品响应先按原始行数核对接口 total，确认完整后才按本店 nmId 和完整 VC 去重。忽略 BCS 记录元信息 `id/createTime/updateTime/createBy/updateBy` 的差异；其余非空字段必须一致，且必须存在一条包含全部已知业务值的完整原行。例如一行有币种/折扣、另一行这些字段为空时保留前者；不跨行拼接，0 和 false 都是有效值。业务值完全一致的完整行再按 BCS updateTime、id 选择代表。同 VC 对应不同或缺失 nmId、同 nmId 对应不同或缺失 VC、在架/回收站状态冲突、非空字段冲突或没有完整原行时，读取失败并保留旧快照。终端报告原始行数和移除条数；快照 `total/fetchedCount` 及同步状态中的店铺 total 均为去重后行数。直接读取 BCS 商品列表的业务也使用去重结果。单店表生成沿用同一规则，避免旧快照重复行进入 Excel。
 

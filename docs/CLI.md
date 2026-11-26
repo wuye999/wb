@@ -40,7 +40,9 @@
 - `--shop-id` 店铺ID（默认全部）
 - `--source` 快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）（bcs / wb-openapi）
 - `--parallel` WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
-- `--no-sync` BCS来源：跳过后台同步直接读取已同步快照；Open API来源无需同步
+- `--bcs-parallel` 全店 BCS 后台同步并发数（默认2，单店和缓存读取不受影响）（1 / 2 / 3 / 4）
+- `--no-sync` BCS来源：跳过后台同步，直接读取缓存；Open API来源无需同步
+- `--json` 输出单个 JSON 对象
 
 ## catalog mapping
 
@@ -902,7 +904,8 @@ AI 售后客服：买家聊天实时监听（front=前台AI展示/手动，back=
 - `--shop-id` 店铺ID（默认全部）
 - `--source` 快照来源（默认bcs快照；wb-openapi需显式选择官方读取，不自动回退）（bcs / wb-openapi）
 - `--parallel` WB Open API并发店铺数（正整数，默认4；1为串行，单店及BCS来源不受影响）
-- `--no-sync` BCS来源：跳过后台同步直接读取已同步快照；Open API来源无需同步
+- `--bcs-parallel` 全店 BCS 后台同步并发数（默认2，单店和缓存读取不受影响）（1 / 2 / 3 / 4）
+- `--no-sync` BCS来源：跳过后台同步，直接读取缓存；Open API来源无需同步
 - `--json` 输出单个 JSON 对象
 
 ## ops price

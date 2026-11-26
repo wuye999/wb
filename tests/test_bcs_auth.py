@@ -3,14 +3,17 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 from unittest import TestCase
 from unittest.mock import patch
 
 import requests
 
-from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError
+from sellerops.core.errors import AuthenticationError, NetworkError, RateLimitError, StorageLockError
 from sellerops.core.files import atomic_dump_json, safe_load_json
 from sellerops.integrations.bcs import auth
+from sellerops.integrations.bcs import budget as bcs_budget
+from sellerops.integrations.bcs.budget import RequestBudget, SyncInterrupted
 from sellerops.integrations.bcs.session import BCS_BASE_URL, LOGIN_URL, BCSSession
 from sellerops.integrations.bcs.client import BCSClient
 from sellerops.settings import credentials, paths
@@ -64,6 +67,15 @@ class TestPasswordLogin(TestCase):
         with self.assertRaisesRegex(AuthenticationError, '网关校验') as error:
             auth.password_login(USERNAME, PASSWORD)
         self.assertNotIn(PASSWORD, str(error.exception))
+        self.login_post.assert_not_called()
+
+    def test_auth_http_requests_share_remaining_deadline(self):
+        with patch.object(bcs_budget.time, 'monotonic', side_effect=[0, 2, 4, 6]):
+            self.login_get.side_effect = [reply(), reply(code=200, needSlider=False)]
+            with self.assertRaises(SyncInterrupted):
+                auth.password_login(USERNAME, PASSWORD, budget=RequestBudget(5))
+        self.assertEqual(self.business_get.call_args.kwargs['timeout'], (2.5, 2.5))
+        self.assertEqual([c.kwargs['timeout'] for c in self.login_get.call_args_list], [(1.5, 1.5), (0.5, 0.5)])
         self.login_post.assert_not_called()
 
 
@@ -196,6 +208,32 @@ class TestBCSRefresh(TestCase):
         self.assertEqual([cred.token for cred in renewed], ['new-token'] * 4)
         self.password_login.assert_called_once()
         self.verify.assert_called_once()
+
+    def test_expired_read_threads_budget_through_refresh_and_profile(self):
+        window = RequestBudget(monotonic() + 5)
+        with patch('requests.request', side_effect=[reply(status=401), reply(code=200, rows=[])]) as send:
+            self.assertEqual(BCSClient().fetch_shop_list(budget=window), [])
+        self.password_login.assert_called_once_with(USERNAME, PASSWORD, budget=window)
+        self.assertLessEqual(sum(self.verify.call_args.kwargs['timeout']), 5)
+        self.assertLessEqual(sum(send.call_args.kwargs['timeout']), 5)
+
+    def test_refresh_lock_wait_stops_at_budget_after_authentication_rejection(self):
+        clock = [0.0]
+
+        def blocked_acquire():
+            clock[0] += lock.call_args.kwargs['timeout']
+            raise StorageLockError('fixture', 0.25)
+
+        with (patch.object(bcs_budget.time, 'monotonic', side_effect=lambda: clock[0]),
+              patch.object(bcs_budget, 'FileLock') as lock,
+              patch('requests.request', return_value=reply(status=401)) as send):
+            lock.return_value.acquire.side_effect = blocked_acquire
+            with self.assertRaises(AuthenticationError):
+                BCSClient().fetch_shop_list(budget=RequestBudget(0.4))
+        self.assertEqual([c.kwargs['timeout'] for c in lock.call_args_list], [0.25, 0.4 - 0.25])
+        self.assertEqual(clock[0], 0.4)
+        self.password_login.assert_not_called()
+        send.assert_called_once()
 
     def test_account_mismatch_preserves_credentials_and_blocks_further_automatic_attempts(self):
         self.verify.return_value = reply(code=200, data={'userName': 'different-account'})

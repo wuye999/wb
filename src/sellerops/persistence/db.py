@@ -45,7 +45,11 @@ CREATE TABLE IF NOT EXISTS shops (
     last_source TEXT,
     last_synced_at TEXT,
     last_sync_error TEXT,
-    snapshot_json TEXT
+    snapshot_json TEXT,
+    snapshot_status TEXT,
+    last_fetched_at TEXT,
+    last_confirmed_sync_at TEXT,
+    last_confirmed_source TEXT
 );
 CREATE TABLE IF NOT EXISTS shop_items (
     shop_id TEXT NOT NULL REFERENCES shops(shop_id),
@@ -102,6 +106,13 @@ def legacy_exists() -> bool:
 
 
 _SHIPPING_MODE_COLUMN = "SELECT 1 FROM pragma_table_info('products') WHERE name = 'shipping_mode'"
+SNAPSHOT_COLUMNS = ('snapshot_status', 'last_fetched_at', 'last_confirmed_sync_at', 'last_confirmed_source')
+
+
+def shop_snapshot_columns(connection: sqlite3.Connection, alias: str = 'shops') -> str:
+    columns = {row[0] for row in connection.execute("SELECT name FROM pragma_table_info('shops')")}
+    return ', '.join(f'{alias}.{name}' if name in columns else f'NULL AS {name}'
+                     for name in SNAPSHOT_COLUMNS)
 
 
 @contextmanager
@@ -133,6 +144,11 @@ def connect(*, write: bool = False, migration: bool = False, read_only: bool = F
                 if not connection.execute(_SHIPPING_MODE_COLUMN).fetchone():
                     connection.execute('ALTER TABLE products ADD COLUMN shipping_mode TEXT')
         connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
+        if write and exists:
+            columns = {row[0] for row in connection.execute("SELECT name FROM pragma_table_info('shops')")}
+            for name in SNAPSHOT_COLUMNS:
+                if name not in columns:
+                    connection.execute(f'ALTER TABLE shops ADD COLUMN {name} TEXT')
         if not migration and exists and not any(
             connection.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone() for table in TABLES
         ) and legacy_exists():
