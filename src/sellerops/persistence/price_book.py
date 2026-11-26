@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from sellerops.persistence.headers import COL_CN
 from sellerops.persistence.headers import COL_MIN_PRICE
+from sellerops.persistence.headers import HeaderError
 from sellerops.persistence.headers import find_col
 from sellerops.persistence.headers import read_headers
 from sellerops.persistence.headers import require_col
@@ -154,6 +155,8 @@ def price_book_columns(ws, path: str, required=("cn", "price")):
     headers = read_headers(ws)
     cols = {}
     for key, name in BOSS_COLUMNS.items():
+        if (key in required or key in ('sku', 'prefix')) and headers.count(name) > 1:
+            raise HeaderError(f'[表头错误] 商品价格表有重复列「{name}」')
         cols[key] = (require_col(headers, name, "商品价格表", path)
                      if key in required else find_col(headers, name))
     return cols
@@ -239,7 +242,8 @@ def floor_price(v: Any) -> Optional[int]:
     return math.floor(num)
 
 
-def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, Any]]:
+def read_price_book(path: str, *, require_price: bool = True, require_prefix: bool = False,
+                    strict_identity: bool = False) -> List[Dict[str, Any]]:
     """读取商品资料。默认要求中文名和最低售价表头。"""
     if not os.path.exists(path):
         return []
@@ -259,6 +263,8 @@ def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, 
     try:
         ws = wb["Sheet1"]
         required = ("cn", "price") if require_price else ("cn",)
+        if require_prefix:
+            required += ('prefix',)
         cols = price_book_columns(ws, path, required=required)
         i_img, i_sku, i_cn = cols["img"], cols["sku"], cols["cn"]
         i_price, i_dim = cols["price"], cols["dim"]
@@ -267,6 +273,8 @@ def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, 
             sku = str(val(row, i_sku) or "").strip()
             cn = str(val(row, i_cn) or "").strip()
             if not sku and not cn:
+                if strict_identity and any(val(row, col) not in (None, '') for col in cols.values()):
+                    raise ValueError(f'商品价格表第 {row_number} 行缺少卖家 SKU 和产品中文名')
                 continue
             minimum_raw = val(row, i_price)
             minimum = resolve_formula(minimum_raw, ws)
@@ -278,13 +286,14 @@ def read_price_book(path: str, *, require_price: bool = True) -> List[Dict[str, 
             if isinstance(dimensions, str) and dimensions.startswith("="):
                 dimensions = cached_value(row_number, i_dim)
             shipping_mode = val(row, cols["shipping_mode"])
+            prefix = str(val(row, cols["prefix"]) or "").strip()
             items.append({
                 "idx": len(items) + 1,
                 "sku": sku,
                 "cn": cn,
                 "minimum_price": minimum,
                 "img": str(val(row, i_img) or "").strip(),
-                "prefix": str(val(row, cols["prefix"]) or "").strip().upper(),
+                "prefix": prefix.upper() if prefix.isascii() else prefix,
                 "stock_sku": str(val(row, cols["stock_sku"]) or "").strip(),
                 "shipping_mode": str(shipping_mode).strip() if shipping_mode is not None else "",
                 "dimensions": dimensions,

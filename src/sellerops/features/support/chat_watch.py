@@ -34,7 +34,7 @@ from sellerops.features.support.chat_prompts import CHAT_SYSTEM_PROMPT
 from sellerops.features.support.chat_prompts import build_user_prompt
 from sellerops.features.support.chat_prompts import recent_turns
 from sellerops.features.support.questions_watch import product_info_str
-from sellerops.persistence.mappings import MappingRepository
+from sellerops.features.support import product_context
 from sellerops.persistence.product_index import NmResolver
 
 
@@ -94,6 +94,8 @@ def poll_once(args, cn_map, reply_cfg, replied, shown, csv_writer, front_log):
         shops = [s for s in shops if common.to_int(s.get("shopId")) in want]
     if not shops:
         raise RuntimeError("没有匹配且凭证完整的 WB 店铺")
+    if cn_map is None:
+        cn_map = product_context.load_context()
     root_version = cred.root_version
     front = (args.mode != "back")
     limit = common.to_int(getattr(args, "limit", 20)) or 20
@@ -230,12 +232,6 @@ def run(args) -> int:
     since_hours = common.to_int(getattr(args, "since_hours", 72))
     win_txt = f"最近 {since_hours}h 内" if since_hours else "不限时间"
 
-    cn_map = {}
-    try:
-        cn_map, _ = MappingRepository.load_mapping_state()
-    except Exception:
-        pass
-
     if front:
         print(f"监听启动（前台AI/展示+手动）：间隔 {interval}s，检测「{win_txt}最新一条来自买家」的消息，不自动发送")
         shown = load_shown()
@@ -246,7 +242,7 @@ def run(args) -> int:
         print(f"  日志: {front_log.name}")
         if args.once:
             try:
-                poll_once(args, cn_map, None, {}, shown, None, front_log)
+                poll_once(args, None, None, {}, shown, None, front_log)
             finally:
                 front_log.close()
             print("（--once 单轮结束）")
@@ -254,7 +250,7 @@ def run(args) -> int:
         try:
             while True:
                 try:
-                    poll_once(args, cn_map, None, {}, shown, None, front_log)
+                    poll_once(args, None, None, {}, shown, None, front_log)
                 except Exception as e:
                     print(f"  [轮次异常] {e}")
                 time.sleep(interval)
@@ -284,7 +280,7 @@ def run(args) -> int:
           f"已发送 {len(replied)} 条")
     if args.once:
         try:
-            poll_once(args, cn_map, cfg, replied, {}, csv_writer, None)
+            poll_once(args, None, cfg, replied, {}, csv_writer, None)
         finally:
             csv_file.close()
         print("（--once 单轮结束）")
@@ -293,7 +289,7 @@ def run(args) -> int:
     try:
         while True:
             try:
-                poll_once(args, cn_map, cfg, replied, {}, csv_writer, None)
+                poll_once(args, None, cfg, replied, {}, csv_writer, None)
                 csv_file.flush()
             except Exception as e:
                 print(f"  [轮次异常] {e}")

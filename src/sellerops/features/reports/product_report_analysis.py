@@ -159,6 +159,8 @@ def _sales(report: ProductReport) -> list[dict[str, Any]]:
 
 def _gaps(report: ProductReport, sales: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result = []
+    if report.catalog:
+        sales = [sale for sale in sales if sale['vc'] not in report.catalog.historical_vcs]
     for shop in report.shops:
         sid = shop['id']
         if report.target_shop_ids is not None and sid not in report.target_shop_ids:

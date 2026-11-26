@@ -13,7 +13,7 @@ sellerops `order-stats` 的「按供应商代码(VC)」跨店聚合与控制台�
 
 纯只读：不做任何写操作，不触发同步/合并。
 """
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 NO_VC = "(无供应商代码)"      # 以 "(" 开头 ⇒ 排序恒置尾（对齐 NO_CN 惯例）
 
@@ -23,13 +23,11 @@ def _nm_sort_key(nm: str) -> Tuple[int, int, str]:
     return (0, int(nm), "") if nm.isdigit() else (1, 0, nm)
 
 
-def aggregate_by_vc(rows: Sequence[Dict[str, Any]],
-                    cn_stock_sku: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+def aggregate_by_vc(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """按「供应商代码(vendorCode)」跨店聚合。
 
     Args:
         rows: `order_stats.collect()` 的明细行（需含 vc / nm_id / cn / shop_label / kind|status）。
-        cn_stock_sku: {商品中文名: 库存SKU}，用于补「库存SKU」列。
 
     Returns:
         每行 dict：`{rank, vc, cn, orders, returns, pending, unknown,
@@ -46,10 +44,11 @@ def aggregate_by_vc(rows: Sequence[Dict[str, Any]],
     stat: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         vc = str(r.get("vc") or "").strip() or NO_VC
-        d = stat.setdefault(vc, {"cn": "", "nm_ids": set(), "shops": set(),
+        d = stat.setdefault(vc, {"cn": "", "nm_ids": set(), "shops": set(), "skus": set(),
                                  "orders": 0, "returns": 0, "pending": 0, "unknown": 0})
         if r.get("cn") and not d["cn"]:
             d["cn"] = r["cn"]
+        d["skus"].add(r.get("stock_sku") or "")
         nm = str(r.get("nm_id") or "").strip()
         if nm:
             d["nm_ids"].add(nm)
@@ -64,7 +63,6 @@ def aggregate_by_vc(rows: Sequence[Dict[str, Any]],
         elif k == "unknown":
             d["unknown"] += 1
 
-    sku_map = cn_stock_sku or {}
     out: List[Dict[str, Any]] = []
     for vc, d in stat.items():
         done = d["orders"] - d["pending"]
@@ -74,7 +72,7 @@ def aggregate_by_vc(rows: Sequence[Dict[str, Any]],
             "orders": d["orders"], "returns": d["returns"], "pending": d["pending"],
             "unknown": d["unknown"],
             "nm_ids": sorted(d["nm_ids"], key=_nm_sort_key), "shops": sorted(d["shops"]),
-            "stock_sku": sku_map.get(cn, "") if cn else "",
+            "stock_sku": next(iter(d["skus"])) if len(d["skus"]) == 1 else "",
             "rate": (d["returns"] / d["orders"]) if d["orders"] else None,
             "rate_done": (d["returns"] / done) if done > 0 else None,
         })

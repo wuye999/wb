@@ -22,7 +22,8 @@ _WB_IMAGE = re.compile(
 
 
 def load_mapping_rows() -> list[dict]:
-    state, _ = MappingRepository.load_mapping_state()
+    book = MappingRepository.current_products()
+    state, _ = MappingRepository.load_mapping_state(products=book)
     shops_data, shops_meta = products.load_all_shops()
     shop_names = {shop['id']: shop['name'] or str(shop['id']) for shop in shops_meta}
     main_id = paths.MAIN_SHOP or shops_meta[0]['id']
@@ -33,7 +34,7 @@ def load_mapping_rows() -> list[dict]:
                 by_vc[vc][shop_id] = card
 
     prefixes = defaultdict(list)
-    for product in MappingRepository.load_price_book(require_price=False):
+    for product in book:
         prefixes[product['prefix']].append(product)
 
     rows = []

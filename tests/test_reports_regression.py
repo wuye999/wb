@@ -219,7 +219,9 @@ class TestRegression(unittest.TestCase):
         self.assertEqual(ostats.tz_today('America/Los_Angeles', datetime(2026, 10, 27, 6, 0)), date(2026, 10, 26))
         self.assertEqual(ostats.tz_today('Asia/Shanghai', datetime(2026, 10, 27, 6, 0)), date(2026, 10, 27))
         rows = [{'cn': '感应灯', 'vc': 'A', 'shop_label': '袁州1(9352)', 'kind': 'return'}, {'cn': '感应灯', 'vc': 'B', 'shop_label': '袁州2(9353)', 'kind': 'done'}, {'cn': '感应灯', 'vc': 'B', 'shop_label': '袁州2(9353)', 'kind': 'pending'}, {'cn': '感应灯', 'vc': 'B', 'shop_label': '袁州2(9353)', 'kind': 'unknown'}, {'cn': '', 'vc': 'C', 'shop_label': '袁州1(9352)', 'kind': 'done'}, {'cn': '全是未完结', 'vc': 'D', 'shop_label': '袁州1(9352)', 'kind': 'pending'}]
-        agg = ostats.aggregate_by_cn(rows, {'感应灯': 'gyd'})
+        for item in rows[:4]:
+            item['stock_sku'] = 'gyd'
+        agg = ostats.aggregate_by_cn(rows)
         self.assertEqual([x['cn'] for x in agg], ['感应灯', '全是未完结', '(中文名未知)'])
         top = agg[0]
         self.assertEqual((top['orders'], top['returns'], top['pending'], top['unknown']), (4, 1, 1, 1))
@@ -233,7 +235,9 @@ class TestRegression(unittest.TestCase):
         self.assertIsNone(pending_only['rate_done'])
         from sellerops.features.reports import order_stats_vc as ovc
         vc_rows = [{'vc': 'B', 'nm_id': '1001', 'cn': '感应灯', 'shop_label': '袁州1(9352)', 'kind': 'return'}, {'vc': 'B', 'nm_id': '2002', 'cn': '感应灯', 'shop_label': '袁州2(9353)', 'kind': 'done'}, {'vc': 'B', 'nm_id': '2002', 'cn': '感应灯', 'shop_label': '袁州2(9353)', 'kind': 'pending'}, {'vc': 'A', 'nm_id': '9', 'cn': '感应灯', 'shop_label': '袁州1(9352)', 'kind': 'done'}, {'vc': '', 'nm_id': '7', 'cn': '', 'shop_label': '袁州1(9352)', 'kind': 'done'}, {'vc': 'D', 'nm_id': '8', 'cn': '全是未完结', 'shop_label': '袁州1(9352)', 'kind': 'pending'}]
-        agg_v = ovc.aggregate_by_vc(vc_rows, {'感应灯': 'gyd'})
+        for item in vc_rows[:4]:
+            item['stock_sku'] = 'gyd'
+        agg_v = ovc.aggregate_by_vc(vc_rows)
         self.assertEqual(ovc.NO_VC, '(无供应商代码)')
         self.assertEqual([x['vc'] for x in agg_v], ['B', 'A', 'D', ovc.NO_VC])
         v0 = agg_v[0]
@@ -342,7 +346,6 @@ class TestOrderReportCLI(unittest.TestCase):
         names = {'BCS-TEST-1': '测试甲', 'BCS-TEST-2': '测试甲', 'BCS-ALT-3': '测试乙'}
         self.lookup = stack.enter_context(patch.object(
             order_stats.MappingRepository, 'build_vc_resolver', return_value=(names.get, None)))
-        stack.enter_context(patch.object(order_stats, 'load_cn_stock_sku', return_value={}))
         stack.enter_context(patch.object(order_stats.time, 'sleep'))
         clock = stack.enter_context(patch.object(order_stats, 'datetime', wraps=datetime))
         clock.utcnow.return_value = datetime(2026, 10, 26, 16, 0)

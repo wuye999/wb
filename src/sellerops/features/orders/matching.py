@@ -27,18 +27,20 @@ TITLE_SKU_RE = re.compile(r"数量:(.*)$")
 STATUS_GROUP_SHIPPING = "GROUP_SHIPPING"
 STATUS_SKIP_SHIPPING = "SKIP_SHIPPING"
 
-def load_local_mapping() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+def load_local_mapping(*, include_history: bool = False) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     """按完整 VC 读取同一商品行的中文名、马帮库存 SKU 和发货方式。"""
     from sellerops.persistence import db
     from sellerops.persistence.mappings import MappingRepository
 
-    MappingRepository.load_price_book(require_price=False, fresh=True)
-    entries = db.vc_entries()
+    products = (MappingRepository.current_products() if include_history else
+                MappingRepository.load_price_book(require_price=False, fresh=True))
+    entries = MappingRepository.load_vc_entries(products)
     names, stocks, modes = {}, {}, {}
     for vc in entries:
-        row = db.resolve_vc(vc, entries)
-        if row['status'] == 'mapped':
+        row = db.resolve_vc(vc, entries, include_history=include_history)
+        if row['current_product'] or (include_history and row['status'] == 'mapped' and row['cn']):
             names[vc] = row['cn']
+        if row['current_product']:
             stocks[vc] = row['stock_sku']
             modes[vc] = row['shipping_mode']
     return names, stocks, modes

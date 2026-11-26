@@ -51,6 +51,10 @@ python run.py doctor --check-updates --json
 
 用户明确要求更新快照时才单独运行 `sync`。`sync` 与 `catalog fetch` 使用同一个拉取流程。完整店铺列表少了某个活跃店时，根据 `missing_shops` 提示运营核对。经确认才按店铺 ID 运行 `shop archive` 软归档，需要恢复时运行 `shop restore`。见 [商品映射与人工审核的命令示例](USAGE.md#商品映射与人工审核)。
 
+`sync` 和 `catalog fetch` 用现行价格表的唯一四位 ASCII 字母前缀，自动归属本次成功保存、在架且无禁上架限制的待认领 VC，归属来源为 `prefix`。按 `data.fetched[].prefix_mapped` 和 `data.prefix_mapping` 汇报新增与跳过原因。同步后用 `map check-mismatch` 看图复核。对前缀未命中、冲突或带禁上架限制的待认领 VC，以及需人工纠偏或排除的商品，核对完整 VC 后用 `map batch-set --file`、`catalog merge` 或 `catalog rename`。SQLite `vc_map` 由程序维护，严禁直接修改。
+
+从价格表移除的商品保留历史归属。订单、评价、销量、飞书登记和映射报表仍可按完整 VC 查到最后保存的中文名。按名或卖家 SKU 选品、马帮匹配、WB 发货资格、客服价格和价格表依赖的上架或改码都只用现行资料。明确使用完整 VC 操作时，继续核对目标店及本次动作所需的本店 `nmId`、`chrtId` 和默认业务仓。以同一卖家 SKU 补回价格表可恢复现行资料。
+
 首次 `sync` 成功保存快照后，主动引导运营生成并打开 `map workbench`。命令在 `exports/workbench/` 更新 HTML，返回 `data.artifacts.html` 和 `data.counts`。汇报前缀命中、倍数参考、待手动归属组数及完整 VC 数。建议运营按图片、店铺、完整 VC 核对归属，再导出 JSON 并连同页面里的交接话术交回。经运营确认后，用 `map batch-set --file` 或 `catalog merge` 保存结果。`map candidates` 可查询同一批分组及唯一前缀、最低售价倍数参考。
 
 归属完成后用 `map check-mismatch --json` 生成货不对板大图画廊。打开 `data.artifacts.html`，按中文名看图并核对前缀冲突和非最低价倍数。价格检查覆盖各活跃店铺有现价的在架快照，允许各店采用不同的合理正整数倍。`data.counts` 给出商品总条数、中文名组数及异常条数。运营勾选并导出 JSON 或复制完整 VC 后，按确认的店铺和 VC 用 `ops trash` 预览下架计划。
@@ -88,6 +92,8 @@ python run.py doctor --check-updates --json
 改价、设折扣和设库存需指定店铺与商品范围，默认走 WB。价格审核按所选店铺查询待审核商品。完整中文名选中归属明确的全部同名链接。点名 SKU 时用 `--sku`，无法确认归属的链接列入阻止。库存必须显式给数量，归零用 `--amount 0`。回收站清理需要归零时先通过 BCS 提交本店默认业务仓的规格清零，再通过 WB 删除已确认的卡。默认 BCS 上架将初始库存随建卡或推送提交。
 
 WB 折扣百分比越大，折后价越低，反之越高。`--price` 写入原价（吊牌价）。有 `--threshold` 或 `--below` 时，预览按本店当前折扣固定范围。全店折扣分页未完成的店铺不得提交。
+
+逐店核对当前原价、币种、价格表最低售价基准和原价倍率。原价和最低售价基准使用同一币种，各店可采用不同的合理正整数倍。分别写明折扣百分比与折后价，常规折后价按 `原价 × (1 − 折扣百分比 / 100)` 计算，平台额外优惠或实取折后价单列并注明来源。`SellerOps_Morning` 与 `SellerOps_Check11`、`SellerOps_Check15`、`SellerOps_Check19` 按本机时间运行。早间任务提交促销报名，四项任务的折扣步骤均生成待确认计划。临时店铺范围、倍率或折扣规则只用于本次预览与确认，运营明确要求变更计划任务时才运行 `task schedule`。
 
 用户要求为商品报告临时引入其他 BCS 账号时，使用 `report products --extra-bcs-stdin`，将完整 fetch 文本通过子进程标准输入管道以 UTF-8 传入并关闭输入流。多个 fetch 块依次传入。不要将秘密拼进命令行、环境变量或保存到临时脚本或抓包文件，不替换本机凭证。解析只提取认证，不执行原 fetch。`--shops` 仅筛本机目标。临时账号的店铺补充退货和近 7/14 天有效出单等指标，链接缺口仅针对本机目标店铺。查看报告中的账号来源及失败明细，凭证失效不启用浏览器续期。[报告说明](PRODUCT_REPORT.md#临时引入其他bcs账号)
 

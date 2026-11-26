@@ -36,7 +36,8 @@ def export_mapping(shop_id: int | None = None, output: str = '') -> Path:
     else:
         from sellerops.features.catalog.mapping_excel import build_xlsx
 
-        state, excluded = MappingRepository.load_mapping_state(require_price=True)
+        entries = MappingRepository.load_vc_entries(require_price=True)
+        excluded = {vc: row['note'] or '非货盘' for vc, row in entries.items() if row['status'] == 'excluded'}
         shops_data, shops = products.load_all_shops()
         main_id = mapping.main_shop(config.current)
         coverage = {}
@@ -52,11 +53,13 @@ def export_mapping(shop_id: int | None = None, output: str = '') -> Path:
                            'dimensionsWidth', 'dimensionsHeight', 'dimensionsWeightBrutto')},
                     }
         records = [{'sku': row['sku'], 'cn': row['cn'], 'minimum_price': row['minimum_price'], 'vendorCodes': [vc]}
-                   for vc, row in state.items() if vc in coverage]
+                   for vc, row in entries.items() if vc in coverage and row['current_product']]
+        historical = {vc: row for vc, row in entries.items()
+                      if vc in coverage and row['status'] == 'mapped' and not row['current_product']}
         path = _export_destination('价格映射表.xlsx', output)
         build_xlsx([], records, mapping.priced_rows(shops_data.get(main_id, [])),
                    excluded_vcs=excluded, shop_coverage=coverage, shops_meta=shops, main_sid=main_id,
-                   out_path=path)
+                   out_path=path, historical=historical)
     print(f'已导出：{path}')
     return path
 

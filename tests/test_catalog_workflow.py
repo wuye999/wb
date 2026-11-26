@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from openpyxl import Workbook, load_workbook
 
@@ -16,7 +17,7 @@ from sellerops.core.files import atomic_dump_json
 from sellerops.features.catalog import products
 from sellerops.features.catalog.mapping_excel import build_xlsx
 from sellerops.persistence import db, migrate_legacy, open_api_publish
-from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.mappings import MappingRepository, read_current_price_book, save_price_book
 from sellerops.persistence.price_book import inspect_price_book
 from sellerops.settings import paths
 
@@ -140,13 +141,17 @@ class TestCatalogWorkflow(unittest.TestCase):
 
         with db.connect() as connection:
             columns = [row['name'] for row in connection.execute('PRAGMA table_info(products)')]
-        self.assertEqual(columns.count('shipping_mode'), 1)
+        self.assertNotIn('shipping_mode', columns)
         owner = db.resolve_vc(LIVE)
         self.assertEqual((owner['stock_sku'], owner['shipping_mode']), ('OLD-STOCK', None))
         self.assertEqual(owner['minimum_price'], 10)
 
         [product] = MappingRepository.load_price_book()
         self.assertEqual((product['stock_sku'], product['shipping_mode']), ('STOCK-A', '马帮发货'))
+        self.assertEqual(db.resolve_vc(LIVE)['stock_sku'], 'OLD-STOCK')
+        book = read_current_price_book()
+        with db.connect(write=True) as connection:
+            save_price_book(connection, book)
         owner = db.resolve_vc(LIVE)
         self.assertEqual((owner['sku'], owner['stock_sku'], owner['shipping_mode']),
                          ('SKU-A', 'STOCK-A', '马帮发货'))
@@ -245,8 +250,160 @@ class TestCatalogWorkflow(unittest.TestCase):
         map_vcs({LIVE: 'SKU-A'})
         self.assertEqual(self.cli('catalog', 'rename', '--vc', LIVE, '--cn', '新名'), 0)
         write_book([('SKU-B', '运营改名', 25, 'OTHR', 'STOCK-B')])
+        database = Path(paths.current.database)
+        before = database.read_bytes()
         self.assertEqual(self.cli('report', 'mapping'), 0, self.stderr.getvalue())
-        self.assertEqual(db.resolve_vc(LIVE)['cn'], '运营改名')
+        self.assertEqual(MappingRepository.build_vc_resolver()[0](LIVE), '运营改名')
+        self.assertEqual(database.read_bytes(), before)
+
+    def test_old_database_byte_identical_for_readers_and_migrates_atomically_on_write(self):
+        snapshot(1, [row(), row(UNKNOWN, 103)])
+        map_vcs({LIVE: 'SKU-A', BACKUP: 'SKU-B'})
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, 'ORPHAN', 'mapped', sku='OLD-UNKNOWN', source='manual')
+            for col in db.SNAPSHOT_COLUMNS:
+                connection.execute(f'ALTER TABLE shops DROP COLUMN {col}')
+            connection.execute('ALTER TABLE products DROP COLUMN name_unique')
+            connection.execute('ALTER TABLE products DROP COLUMN shipping_mode')
+            connection.execute('ALTER TABLE vc_map DROP COLUMN last_cn')
+        database = Path(paths.current.database)
+        original = database.read_bytes()
+        self.assertEqual(db.resolve_vc(LIVE, include_history=True)['cn'], '原名')
+        self.assertIsNone(db.resolve_vc(LIVE)['shipping_mode'])
+        for refresh in (False, True):
+            if refresh:
+                write_book([('SKU-A', '只读看到的新名称', 10, 'TEST', 'STOCK-A', '马帮发货')])
+            for command in (('doctor',), ('shop', 'list'), ('catalog', 'product-summary'), ('map', 'candidates'),
+                            ('map', 'workbench'), ('map', 'check-mismatch'), ('report', 'mapping'),
+                            ('report', 'mapping', '--shop-id', '1'), ('catalog', 'export-products', '--all-shops')):
+                with self.subTest(command=command, refresh=refresh):
+                    json_flag = () if command[:2] == ('catalog', 'export-products') else ('--json',)
+                    self.assertEqual(self.cli(*command, *json_flag), 0, self.stderr.getvalue())
+                    self.assertEqual(database.read_bytes(), original)
+        self.assertEqual(MappingRepository.build_vc_resolver()[0](LIVE), '只读看到的新名称')
+        with self.assertRaisesRegex(RuntimeError, 'rollback'), db.connect(write=True) as connection:
+            self.assertTrue(db.has_column(connection, 'vc_map', 'last_cn'))
+            self.assertEqual(db.resolve_vc(LIVE, db.vc_entries(connection))['last_cn'], '原名')
+            raise RuntimeError('rollback')
+        self.assertEqual(database.read_bytes(), original)
+        with db.connect(write=True):
+            pass
+        self.assertEqual(db.resolve_vc(LIVE)['last_cn'], '原名')
+        self.assertEqual(db.resolve_vc(BACKUP)['last_cn'], '新名')
+        self.assertIsNone(db.resolve_vc('ORPHAN')['last_cn'])
+        self.assertEqual(db.resolve_vc('ORPHAN')['status'], 'mapped')
+        migrated = database.read_bytes()
+        with db.connect(write=True) as connection:
+            self.assertTrue(db.has_column(connection, 'products', 'shipping_mode'))
+        self.assertEqual(database.read_bytes(), migrated)
+
+    def test_history_lifecycle_keeps_display_and_isolates_current_operations(self):
+        from sellerops.domain.models import PublishItem
+        from sellerops.features.catalog import selection
+        from sellerops.features.orders import feishu_register, matching
+        from sellerops.features.publishing.publish_details import resolve_publish_details
+        from sellerops.features.publishing.publish_records import submit_once
+        from sellerops.features.reports import fbs_delivery, order_stats, order_stats_vc, ratings
+        from sellerops.features.support import product_context
+        from sellerops.persistence import vc_normalization
+        from sellerops.persistence.product_index import NmResolver
+        from sellerops.persistence.report_catalog import load_report_catalog
+
+        write_book([('SKU-A', '原名', 10, 'TEST', 'STOCK-A', '马帮发货')])
+        snapshot(1, [row(), row(OTHER, 102), row(UNKNOWN, 103)])
+        map_vcs({LIVE: 'SKU-A'})
+        write_book([('SKU-A', '改名后的旧品', 12, 'TEST', 'STOCK-A', '马帮发货')])
+        with patch.object(products.bcs, 'fetch_shop_products', return_value=[row(), row(OTHER, 102)]):
+            self.assertEqual(self.cli('sync', '--shop-id', '1', '--no-sync', '--json'), 0, self.stderr.getvalue())
+        self.assertEqual(db.resolve_vc(LIVE)['last_cn'], '改名后的旧品')
+        self.assertEqual(matching.load_local_mapping()[1][LIVE], 'STOCK-A')
+        publish_input = PublishItem(nm_id=101, price=30, vendor_code='BCS-TEST-3000', length=10, width=10,
+                                    height=10, weight=.5, cn='改名后的旧品', extra={'card_info': {'imt_name': '测试'}})
+        frozen, error = resolve_publish_details(publish_input)
+        self.assertIsNone(error)
+        self.assertEqual(frozen.extra['seller_sku'], 'SKU-A')
+
+        write_book([('NEW-SKU', '改名后的旧品', 35, 'TEST', 'NEW-STOCK', '马帮发货')])
+        with patch.object(products.bcs, 'fetch_shop_products', return_value=[row(), row(OTHER, 102)]):
+            self.assertEqual(self.cli('sync', '--shop-id', '1', '--no-sync', '--json'), 0, self.stderr.getvalue())
+        self.assertEqual(db.resolve_vc(LIVE)['status'], 'mapped')
+        self.assertEqual(db.resolve_vc(LIVE)['sku'], 'SKU-A')
+        self.assertEqual(db.resolve_vc(LIVE, include_history=True)['cn'], '改名后的旧品')
+        self.assertEqual(NmResolver(1).resolve(101)['cn'], '改名后的旧品')
+        self.assertIsNone(db.resolve_vc(LIVE)['minimum_price'])
+        self.assertEqual(load_report_catalog().historical_vcs, {LIVE})
+        self.assertEqual(self.cli('map', 'candidates', '--json'), 0)
+        self.assertNotIn(LIVE, self.stdout.getvalue())
+        self.assertEqual(self.cli('doctor', '--json'), 0)
+        self.assertEqual(json.loads(self.stdout.getvalue())['data']['pending_vcs'], 1)
+        self.assertEqual(self.cli('catalog', 'product-summary', '--json'), 0)
+        summary = json.loads(self.stdout.getvalue())['data']
+        self.assertEqual((summary['totals']['historical_items'], summary['totals']['unmapped_items']), (1, 1))
+        self.assertEqual(summary['groups'][0]['name'], '改名后的旧品')
+        for args, file, sheet in [((), '价格映射表.xlsx', '历史归属'),
+                                  (('--shop-id', '1'), 'shop_1.xlsx', '在架映射明细')]:
+            self.assertEqual(self.cli('report', 'mapping', *args), 0, self.stderr.getvalue())
+            workbook = load_workbook(paths.current.exports_dir / file, read_only=True)
+            try:
+                _, history = list(workbook[sheet].values)
+                self.assertIn(LIVE, history)
+                self.assertIn('改名后的旧品', history)
+                if args:
+                    self.assertEqual((history[2], history[-1]), (None, '历史归属'))
+            finally:
+                workbook.close()
+
+        state, _, book = selection.load_state([1], all_products=True)
+        self.assertIsNone(state[LIVE]['sku'])
+        self.assertEqual(selection.resolve_filters(SimpleNamespace(name='改名后的旧品'), state, book)[0], [])
+        self.assertEqual(selection.resolve_filters(SimpleNamespace(vc=LIVE), state, book)[0], [LIVE])
+        self.assertNotIn(LIVE, matching.load_local_mapping()[0])
+        order = {'id': 'm1', 'platformOrderId': 'p1', 'shopIdText': '1',
+                 'order_ellipsis_other_title': f'数量:{LIVE}*1', 'order_ellipsis_title': '数量:STOCK-A*1'}
+        names, stocks, modes = matching.load_local_mapping()
+        [classified] = matching.classify([order], names, stocks, modes, {'1': '本店(1)'})
+        self.assertEqual(classified['status'], 'NO_VC')
+        with (patch.object(feishu_register, 'get_mabang_cred', return_value={'shop_map': {'1': '本店(1)'}}),
+              patch.object(feishu_register, 'fetch_pending_orders', return_value=[order]),
+              patch('sellerops.integrations.wildberries.client.fetch_canceled_ids', return_value=set())):
+            [(fields, reasons)], _ = feishu_register.build_records(SimpleNamespace(scope='pending', days=0, page_size=10))
+        self.assertEqual((fields['商品中文名'], fields['库存SKU'], fields['wb编号'], reasons),
+                         ('改名后的旧品', None, '101', []))
+        context = product_context.load_context()
+        with patch.object(product_context, 'fetch_card_json', return_value=None):
+            self.assertEqual(context[LIVE]['cn'], '改名后的旧品')
+            self.assertEqual(product_context.fetch_product_info(101, LIVE, context)['price'], '')
+        result = ratings._match_price_table(LIVE, MappingRepository.load_vc_entries())
+        self.assertEqual((result['cn'], result['minimum_price'], result['prefix'], result['dim']),
+                         ('改名后的旧品', None, None, None))
+        history = {'cn': '改名后的旧品', 'vc': LIVE, 'stock_sku': None}
+        current = {'cn': '改名后的旧品', 'vc': OTHER, 'stock_sku': 'NEW-STOCK'}
+        self.assertEqual(fbs_delivery.aggregate_by_cn([current, history])[0]['stock_sku'], '')
+        self.assertEqual(order_stats.aggregate_by_cn([current, history])[0]['stock_sku'], '')
+        self.assertEqual({item['vc']: item['stock_sku'] for item in order_stats_vc.aggregate_by_vc([current, history])},
+                         {LIVE: '', OTHER: 'NEW-STOCK'})
+        self.assertEqual(vc_normalization.load_catalog().names(LIVE), set())
+        invalid, error = resolve_publish_details(publish_input)
+        self.assertIsNone(invalid)
+        self.assertIn('SKU-A', error)
+        send = Mock(return_value={'code': 200})
+        with self.assertRaisesRegex(ValueError, '重新预览'):
+            submit_once([frozen], [2], send)
+        send.assert_not_called()
+        with patch('sellerops.features.publishing.publish_records.read_current_price_book',
+                   side_effect=AssertionError('短路径无需读取价格表')):
+            self.assertEqual(submit_once([PublishItem(nm_id=404, vendor_code='BCS-FREE-3001')], [2], send)['code'], 200)
+        send.assert_called_once()
+
+        write_book([('SKU-A', '补回后的名称', 18, 'TEST', '', 'WB发货')])
+        with patch.object(products.bcs, 'fetch_shop_products', return_value=[row(), row(OTHER, 102)]):
+            self.assertEqual(self.cli('sync', '--shop-id', '1', '--no-sync', '--json'), 0, self.stderr.getvalue())
+        revived = db.resolve_vc(LIVE)
+        self.assertEqual((revived['sku'], revived['cn'], revived['last_cn'], revived['minimum_price'], revived['shipping_mode']),
+                         ('SKU-A', '补回后的名称', '补回后的名称', 18, 'WB发货'))
+        self.assertEqual(matching.load_local_mapping()[2][LIVE], 'WB发货')
+        self.assertEqual(matching.classify([order], *matching.load_local_mapping(), {'1': '本店(1)'})[0]['status'],
+                         matching.STATUS_GROUP_SHIPPING)
 
     def test_mapping_report_reconciles_only_current_mapped_vcs_and_keeps_real_issues(self):
         write_book([('SKU-A', '示例在架商品', 10), ('SKU-B', '示例历史商品', 20),
@@ -360,8 +517,7 @@ class TestCatalogWorkflow(unittest.TestCase):
         from sellerops.persistence.mappings import MappingRepository
 
         map_vcs({LIVE: 'SKU-A'})
-        with patch.object(Path, 'open', side_effect=PermissionError('Excel occupied')):
-            # Exercise the explicit access check with unchanged workbook metadata.
+        with patch('openpyxl.load_workbook', side_effect=PermissionError('Excel occupied')):
             with self.assertRaisesRegex(ValueError, '保存并关闭'):
                 MappingRepository.load_price_book(fresh=True)
             self.assertEqual(MappingRepository.load_price_book()[0]['minimum_price'], 10)

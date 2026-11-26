@@ -8,6 +8,10 @@
 6. 凭证、数据库和运行资料留在各自的 `data/`，其他临时工作放 `_scratch/`。修改 `credentials.json` 时仅在 `data/` 内备份或原子替换。密码只报「已填/未填」，不报字符位数。日常运营将项目源码和配置视为只读。授权开发先备份数据，再跑 `python scripts/check.py`。CLI 帮助或参数改动后重新生成参考并跑 `python scripts/check_docs.py`。
 7. 按本次回执的路径查找导出和日志。默认导出在 `exports/`，运行日志和回执在 `data/logs/YYYY-MM-DD/`。定期清理先用 `task clean --json` 预览，运营明确要求清理时加 `--apply`。默认保留最近 20 天，保护 `exports/workbench/` 和 `_scratch/README.md`。
 
+`sync` 和 `catalog fetch` 按当前价格表唯一四位 ASCII 字母前缀，自动归属本次成功保存、在架且无禁上架限制的待认领 VC，来源为 `prefix`。按 `data.fetched[].prefix_mapped` 和 `data.prefix_mapping` 汇报，并用 `map check-mismatch` 复核。前缀未命中、冲突或带禁上架限制的待认领 VC，以及人工纠偏和排除，按完整 VC 用 `map batch-set --file`、`catalog merge` 或 `catalog rename` 确认。严禁直接修改 SQLite `vc_map`。价格表删行后仍可按完整 VC 查历史中文名，选品、履约、报价及价格表依赖的上架和改码只用现行资料。
+
+逐店用同币种核对最低售价基准、原价倍率、折扣百分比及折后价。常规折后价按 `原价 × (1 − 折扣百分比 / 100)`，平台额外优惠和实取值注明来源。`SellerOps_Morning` 和 `SellerOps_Check11/15/19` 是本机计划任务，早间任务提交促销报名，折扣步骤均生成待确认计划。临时折扣规则只用于本次计划，运营明确要求调整计划任务时才走 `task schedule`。
+
 **上架选型规则。日常上架统一走 BCS 建卡通道。** CLI 用 `ops create-cards`、`ops replicate` 或 `listing import-publish`，不要主动选用 `ops publish` 或 `ops publish-openapi`。WorkBuddy 自定义脚本批量上架统一构造字典列表，一次传入 `sellerops.features.publishing.card_publish.publish_cards_simple`。先展示预览中的店铺、完整目标 VC、售价、包装规格与库存。运营明确确认后，`ops` 用 `apply --plan`，标准表导入用 `--apply`，自定义脚本用 `apply=True`。
 
 处理新增订单使用 `order process`，马帮发货进入匹配、预报和交运。WB 发货用 `order group-ship`。配送受理后，用 `order mabang-void-wb` 预览仍滞留在马帮的待处理订单，经确认再加 `--apply`。需要飞书登记时，先运行 `order register` 或 `order process` 完成登记。具体分流和用法见 [订单履约与飞书](docs/USAGE.md#订单履约与飞书)。

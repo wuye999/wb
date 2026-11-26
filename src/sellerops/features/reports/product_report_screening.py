@@ -23,6 +23,7 @@ def screen_products(report: ProductReport) -> ProductScreening:
     result = ProductScreening()
     if report.catalog is None:
         result.issues.append(ReportIssue('默认筛选', '缺少当前价格表与中文名归属，近期筛选不可用'))
+    historical = report.catalog.historical_vcs if report.catalog else set()
     targets = [shop for shop in report.shops if report.target_shop_ids is None or shop['id'] in report.target_shop_ids]
     groups: dict[str, dict[str, Any]] = {}
     invalid: set[str] = set()
@@ -55,7 +56,7 @@ def screen_products(report: ProductReport) -> ProductScreening:
                 continue
             item['local'][vc].add(name)
             item['present'].add(name)
-            if raw.get('cn'):
+            if vc not in historical and raw.get('cn'):
                 item['names'].add(str(raw['cn']).strip())
     target_names = {shop['id']: shop['name'] for shop in targets}
     for vc, submitted in report.publish_records.items():
@@ -68,16 +69,16 @@ def screen_products(report: ProductReport) -> ProductScreening:
             if not item:
                 continue
             item[kind].append(row)
-            if row.get('cn'):
+            if (row.get('vc') or '').strip() not in historical and row.get('cn'):
                 item['names'].add(str(row['cn']).strip())
     for vc, sale in recent_sales(report).items():
         item = group(vc)
-        if item:
+        if item and vc not in historical:
             item['names'].update(sale['names'])
             item['sales'][vc] = sale
     if report.catalog:
         for vc, name in report.catalog.mapped_names.items():
-            if item := groups.get(product_key(vc.strip())):
+            if vc not in historical and (item := groups.get(product_key(vc.strip()))):
                 item['mapped'].add(name)
     orders_complete = report.orders_complete
     incomplete = not orders_complete or any(
@@ -96,6 +97,8 @@ def screen_products(report: ProductReport) -> ProductScreening:
                   'combined_returns': metrics['combined_returns']}
         for vc, shops in item['local'].items():
             row = {**shared, 'vc': vc, 'present_shops': '、'.join(_sort(shops))}
+            if vc in historical:
+                row['cn'] = report.catalog.mapped_names.get(vc, '历史归属（名称未知）')
             if low:
                 result.low_rating.append(row)
             if high:

@@ -25,11 +25,11 @@ _BOOK_ISSUES = {
 
 
 def active_pending(connection) -> int:
-    entries = db.vc_entries(connection)
-    return sum(db.resolve_vc(row[0], entries)['status'] == 'pending' for row in connection.execute("""
-        SELECT DISTINCT i.vc FROM shop_items i JOIN shops s USING (shop_id)
-         WHERE s.status = 'active' AND i.is_trashed = 0 AND i.vc IS NOT NULL
-    """))
+    return connection.execute("""
+        SELECT count(DISTINCT i.vc) FROM shop_items i JOIN shops s USING (shop_id)
+          LEFT JOIN vc_map m ON m.vc = i.vc
+         WHERE s.status = 'active' AND i.is_trashed = 0 AND coalesce(m.status, 'pending') = 'pending'
+    """).fetchone()[0]
 
 
 def _print_summary(output: dict) -> None:

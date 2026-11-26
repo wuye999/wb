@@ -11,6 +11,7 @@ class NormalizationCatalog:
     owners: dict[str, set[str]] = field(default_factory=dict)
     overrides: dict[str, set[str]] = field(default_factory=dict)
     excluded: set[str] = field(default_factory=set)
+    skus: dict[str, str] = field(default_factory=dict)
 
     def names(self, vc: str) -> set[str]:
         key = vc.upper()

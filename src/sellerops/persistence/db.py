@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS vc_map (
     block_listing TEXT,
     note TEXT,
     updated_at TEXT NOT NULL,
+    last_cn TEXT,
     CHECK((status = 'mapped') = (sku IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS vc_map_sku ON vc_map(sku);
@@ -105,8 +106,16 @@ def legacy_exists() -> bool:
             or (Path(data.data_dir) / '上架排除清单/exclude_vcs.json').exists())
 
 
-_SHIPPING_MODE_COLUMN = "SELECT 1 FROM pragma_table_info('products') WHERE name = 'shipping_mode'"
 SNAPSHOT_COLUMNS = ('snapshot_status', 'last_fetched_at', 'last_confirmed_sync_at', 'last_confirmed_source')
+
+
+def has_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    return connection.execute('SELECT 1 FROM pragma_table_info(?) WHERE name = ?',
+                              (table, column)).fetchone() is not None
+
+
+def vc_last_cn_column(connection: sqlite3.Connection, alias: str = 'm') -> str:
+    return f'{alias}.last_cn' if has_column(connection, 'vc_map', 'last_cn') else 'NULL'
 
 
 def shop_snapshot_columns(connection: sqlite3.Connection, alias: str = 'shops') -> str:
@@ -129,31 +138,35 @@ def connect(*, write: bool = False, migration: bool = False, read_only: bool = F
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             connection = sqlite3.connect(path, timeout=15)
-    elif read_only:
-        connection = sqlite3.connect(f'{path.resolve().as_uri()}?mode=ro', uri=True, timeout=15)
-    else:
+    elif write:
         connection = sqlite3.connect(path, timeout=15)
+    else:
+        connection = sqlite3.connect(f'{path.resolve().as_uri()}?mode=ro', uri=True, timeout=15)
     connection.row_factory = sqlite3.Row
     try:
         connection.execute('PRAGMA foreign_keys = ON')
-        if write or not exists:
+        if not exists:
             connection.executescript(SCHEMA)
-        if exists and not read_only and not connection.execute(_SHIPPING_MODE_COLUMN).fetchone():
-            with connection:
-                connection.execute('BEGIN IMMEDIATE')
-                if not connection.execute(_SHIPPING_MODE_COLUMN).fetchone():
-                    connection.execute('ALTER TABLE products ADD COLUMN shipping_mode TEXT')
-        connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
-        if write and exists:
-            columns = {row[0] for row in connection.execute("SELECT name FROM pragma_table_info('shops')")}
-            for name in SNAPSHOT_COLUMNS:
-                if name not in columns:
-                    connection.execute(f'ALTER TABLE shops ADD COLUMN {name} TEXT')
-        if not migration and exists and not any(
-            connection.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone() for table in TABLES
-        ) and legacy_exists():
-            raise ValueError('\u68c0\u6d4b\u5230\u65e7\u4e1a\u52a1\u6570\u636e\uff0c\u8bf7\u5148\u8fd0\u884c sellerops migrate-legacy')
         with connection:
+            if write:
+                connection.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
+                if not has_column(connection, 'products', 'shipping_mode'):
+                    connection.execute('ALTER TABLE products ADD COLUMN shipping_mode TEXT')
+                if not has_column(connection, 'vc_map', 'last_cn'):
+                    connection.execute('ALTER TABLE vc_map ADD COLUMN last_cn TEXT')
+                    connection.execute("""
+                        UPDATE vc_map SET last_cn = (SELECT cn FROM products WHERE sku = vc_map.sku)
+                         WHERE status = 'mapped'
+                    """)
+                for name in SNAPSHOT_COLUMNS:
+                    if not has_column(connection, 'shops', name):
+                        connection.execute(f'ALTER TABLE shops ADD COLUMN {name} TEXT')
+            else:
+                connection.execute('BEGIN')
+            if not migration and exists and not any(
+                connection.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone() for table in TABLES
+            ) and legacy_exists():
+                raise ValueError('检测到旧业务数据，请先运行 sellerops migrate-legacy')
             yield connection
     finally:
         connection.close()
@@ -169,39 +182,49 @@ def set_vc(connection: sqlite3.Connection, vc: str, status: str, *, sku: str | N
     if not isinstance(vc, str) or not vc or vc != vc.strip():
         raise ValueError('归属记录缺少完整 VC')
     connection.execute("""
-        INSERT INTO vc_map VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO vc_map (vc, source_code, sku, status, source, block_listing, note, updated_at, last_cn)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT cn FROM products WHERE sku = ?))
         ON CONFLICT(vc) DO UPDATE SET sku=excluded.sku, status=excluded.status,
             source=excluded.source, block_listing=coalesce(excluded.block_listing, vc_map.block_listing),
-            note=excluded.note, updated_at=excluded.updated_at
-    """, (vc, source_code(vc), sku, status, source, block_listing, note, updated_at or now()))
+            note=excluded.note, updated_at=excluded.updated_at,
+            last_cn=coalesce(excluded.last_cn, CASE WHEN excluded.sku = vc_map.sku THEN vc_map.last_cn END)
+    """, (vc, source_code(vc), sku, status, source, block_listing, note, updated_at or now(), sku))
 
 
 _VC_QUERY = """
-    SELECT m.*, p.cn, p.minimum_price, p.image_url AS img,
-           p.dimensions, p.prefix, p.stock_sku, p.shipping_mode
+    SELECT m.vc, m.source_code, m.sku, m.status, m.source, m.block_listing, m.note, m.updated_at,
+           {last_cn} AS last_cn, p.cn, p.minimum_price, p.image_url AS img,
+           p.dimensions, p.prefix, p.stock_sku, {shipping_mode} AS shipping_mode,
+           (p.sku IS NOT NULL) AS current_product
       FROM vc_map m LEFT JOIN products p ON m.sku = p.sku
 """
+PRODUCT_FIELDS = ('cn', 'minimum_price', 'img', 'dimensions', 'prefix', 'stock_sku', 'shipping_mode')
+
+
+def _vc_query(connection: sqlite3.Connection) -> str:
+    return _VC_QUERY.format(last_cn=vc_last_cn_column(connection), shipping_mode=(
+        'p.shipping_mode' if has_column(connection, 'products', 'shipping_mode') else 'NULL'))
 
 
 def vc_entries(connection: sqlite3.Connection | None = None) -> dict[str, dict]:
     if connection is None:
         with connect() as local:
             return vc_entries(local)
-    query = _VC_QUERY if connection.execute(_SHIPPING_MODE_COLUMN).fetchone() else _VC_QUERY.replace(
-        'p.shipping_mode', 'NULL AS shipping_mode')
-    return {row['vc']: dict(row) for row in connection.execute(query)}
+    return {row['vc']: dict(row) for row in connection.execute(_vc_query(connection))}
 
 
-def resolve_vc(vc: str, entries: dict[str, dict] | None = None) -> dict:
+def resolve_vc(vc: str, entries: dict[str, dict] | None = None, *, include_history: bool = False) -> dict:
     """按完整 VC 返回归属；sku 列关联主表商品键（卖家 SKU 或唯一中文名）。"""
     if entries is None:
         with connect() as connection:
-            row = connection.execute(_VC_QUERY + ' WHERE m.vc = ?', (vc,)).fetchone()
+            row = connection.execute(_vc_query(connection) + ' WHERE m.vc = ?', (vc,)).fetchone()
         entry = dict(row) if row is not None else {}
     else:
         entry = entries.get(vc, {})
-    if not entry or (entry['status'] == 'mapped' and not entry.get('cn')):
-        return {**entry, 'vc': vc, 'status': 'pending', 'sku': None}
+    if not entry:
+        return {'vc': vc, 'status': 'pending', 'sku': None}
+    if include_history and entry['status'] == 'mapped' and not entry.get('cn'):
+        return {**entry, 'cn': entry.get('last_cn')}
     return entry
 
 

@@ -19,7 +19,7 @@ from sellerops.settings import credentials
 from sellerops.integrations.wildberries import chats as chat_api
 from sellerops.integrations.wildberries import client as wb_api
 from sellerops.features.support.questions_watch import product_info_str
-from sellerops.persistence.mappings import MappingRepository
+from sellerops.features.support import product_context
 from sellerops.persistence.product_index import NmResolver
 
 CSV_FIELDS = ["店铺", "店铺ID", "会话ID", "买家", "未读数", "最新消息时间", "最新消息",
@@ -60,7 +60,7 @@ def run(args) -> int:
 
     cn_map: Dict[str, Any] = {}
     try:
-        cn_map, _ = MappingRepository.load_mapping_state()
+        cn_map = product_context.load_context()
     except Exception:
         pass
 

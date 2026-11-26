@@ -44,7 +44,7 @@ from sellerops.integrations.wildberries import order_feed as feed
 from sellerops.persistence.mappings import MappingRepository
 
 from sellerops.features.reports.fbs_delivery import NO_CN
-from sellerops.features.reports.fbs_delivery import load_cn_stock_sku
+from sellerops.persistence.product_index import NmResolver
 from sellerops.features.reports.fbs_delivery import select_shops
 from sellerops.features.reports.order_stats_vc import aggregate_by_vc
 from sellerops.features.reports.order_stats_vc import print_table as print_vc_table
@@ -177,8 +177,7 @@ def parse_row(raw: Dict[str, Any], timezone: str = DEFAULT_TZ) -> Dict[str, Any]
 
 
 # ---------------- 聚合 ----------------
-def aggregate_by_cn(rows: Sequence[Dict[str, Any]],
-                    cn_stock_sku: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+def aggregate_by_cn(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """按「商品中文名」聚合（核心产出）。
 
     排序：`(是否以 "(" 开头, -订单数, 中文名)` —— `(中文名未知)` 等未归类桶恒置尾。
@@ -187,10 +186,11 @@ def aggregate_by_cn(rows: Sequence[Dict[str, Any]],
     stat: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         cn = r.get("cn") or NO_CN
-        d = stat.setdefault(cn, {"vcs": set(), "shops": set(), "orders": 0,
+        d = stat.setdefault(cn, {"vcs": set(), "shops": set(), "skus": set(), "orders": 0,
                                  "returns": 0, "pending": 0, "unknown": 0})
         if r.get("vc"):
             d["vcs"].add(r["vc"])
+        d["skus"].add(r.get("stock_sku") or "")
         if r.get("shop_label"):
             d["shops"].add(r["shop_label"])
         d["orders"] += 1
@@ -201,12 +201,11 @@ def aggregate_by_cn(rows: Sequence[Dict[str, Any]],
             d["pending"] += 1
         elif k == KIND_UNKNOWN:
             d["unknown"] += 1
-    sku_map = cn_stock_sku or {}
     out: List[Dict[str, Any]] = []
     for cn, d in stat.items():
         done = d["orders"] - d["pending"]
         out.append({
-            "cn": cn, "stock_sku": sku_map.get(cn, ""),
+            "cn": cn, "stock_sku": next(iter(d["skus"])) if len(d["skus"]) == 1 else "",
             "orders": d["orders"], "returns": d["returns"], "pending": d["pending"],
             "unknown": d["unknown"], "vc_count": len(d["vcs"]), "shops": sorted(d["shops"]),
             "rate": (d["returns"] / d["orders"]) if d["orders"] else None,
@@ -267,13 +266,13 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
     b, e = resolve_window(days=days, begin=begin, end=end, date=date, timezone=timezone)
     server_end = max(e, tz_today(timezone).strftime(DATE_FMT))   # 见 docstring ①
 
-    resolve_cn = None
+    resolve_cn, entries = None, {}
     if with_cn:
         try:
-            resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True)
+            entries = MappingRepository.load_vc_entries(MappingRepository.current_products())
+            resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True, entries=entries)
         except Exception as ex:
             print(f"  [警告] 中文名真源（映射表）加载失败（{type(ex).__name__}: {ex}）；中文名将留空")
-    cn_stock_sku = load_cn_stock_sku() if with_cn else {}
 
     rows: List[Dict[str, Any]] = []
     per_shop: List[Dict[str, Any]] = []
@@ -285,6 +284,7 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
         sid = common.to_int(shop.get("shopId"))
         name = str(shop.get("shopName") or sid)
         label = f"{name}({sid})"
+        nm = NmResolver(sid, with_cn=False) if with_cn else None
         cnt: Counter = Counter()
         try:
             session = wb_api.make_session(shop, cred.root_version)
@@ -295,8 +295,10 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
                 if local_filter and not in_window(r["created_day"], b, e):
                     out_of_window += 1
                     continue
+                if not r['vc'] and nm:
+                    r['vc'] = nm.resolve(r['nm_id'])['vc']
                 r["cn"] = resolve_cn(r["vc"], "") if resolve_cn else ""
-                r["stock_sku"] = cn_stock_sku.get(r["cn"], "") if r["cn"] else ""
+                r["stock_sku"] = entries.get(r["vc"], {}).get('stock_sku') or ""
                 r["shop_name"], r["shop_id"], r["shop_label"] = name, sid, label
                 if r["order_id"]:
                     if r["order_id"] in seen_ids:
@@ -325,10 +327,10 @@ def collect(days: int = DEFAULT_DAYS, begin: str = "", end: str = "", date: str 
     return {
         "begin": b, "end": e, "server_end": server_end, "timezone": timezone,
         "rows": rows, "per_shop": per_shop, "all_shops": pairs,
-        "by_cn": aggregate_by_cn(rows, cn_stock_sku),
-        "by_vc": aggregate_by_vc(rows, cn_stock_sku),
+        "by_cn": aggregate_by_cn(rows),
+        "by_vc": aggregate_by_vc(rows),
         "by_cn_by_shop": {p["label"]: aggregate_by_cn(
-            [x for x in rows if x["shop_label"] == p["label"]], cn_stock_sku)
+            [x for x in rows if x["shop_label"] == p["label"]])
             for p in per_shop},
         "by_shop": aggregate_by_shop(rows),
         "status_counter": Counter(r["status"] or "(空)" for r in rows),

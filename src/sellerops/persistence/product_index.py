@@ -18,7 +18,9 @@ class NmResolver:
             for vc, item in rows.items():
                 nm_id = positive_id(item.get('nmId') or item.get('nmID'))
                 if nm_id:
-                    self.nm2vc[nm_id] = vc
+                    existing = self.nm2vc.setdefault(nm_id, vc)
+                    if existing != vc:
+                        self.nm2vc[nm_id] = ''
             if with_cn:
                 resolve_cn, _ = MappingRepository.build_vc_resolver()
                 self._cn = resolve_cn

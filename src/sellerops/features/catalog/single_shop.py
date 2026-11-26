@@ -42,8 +42,7 @@ def build_single_shop_xlsx(sid: int, out_path):
     document = ProductSnapshotRepository.load_snapshot_document(sid)
     if document is None:
         raise ValueError(f'店铺 {sid} 缺少快照')
-    MappingRepository.load_price_book(require_price=False)
-    entries = db.vc_entries()
+    entries = MappingRepository.load_vc_entries()
     unique_rows = [row for row in document['rows'] if not row.get('trashedAt')]
     out_file = out_path
     os.makedirs(os.path.dirname(out_file) or '.', exist_ok=True)
@@ -75,11 +74,13 @@ def build_single_shop_xlsx(sid: int, out_path):
         create_at = r.get("createAt")
         update_at = r.get("updateAt")
 
-        item = db.resolve_vc(vc, entries)
+        item = db.resolve_vc(vc, entries, include_history=True)
         if item['status'] == 'excluded':
             continue
         cn, minimum_price = item.get('cn'), item.get('minimum_price')
         match_type = item.get('source') or ''
+        if item['status'] == 'mapped' and not item['current_product']:
+            cn, match_type = cn or '名称未知', '历史归属'
 
         if cn:
             ws1.append([

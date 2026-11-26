@@ -18,6 +18,7 @@ from sellerops.features.publishing.open_api_payloads import card_index, positive
 from sellerops.features.publishing.vc_normalization_payloads import batch_lengths, rename_payload
 from sellerops.integrations.wildberries.content_api import WBContentAPI
 from sellerops.persistence import db
+from sellerops.persistence.mappings import PRICE_BOOK_ERRORS
 from sellerops.persistence.vc_normalization import COMMAND, load_attempts, load_catalog, write_log
 from sellerops.settings import paths
 
@@ -85,6 +86,8 @@ def _candidate_rows(args: Any, catalog: NormalizationCatalog,
                 log.add(sid, vc, 'skipped', reason='商品已人工排除', **detail)
                 continue
             try:
+                if vc not in catalog.skus:
+                    raise ValueError('缺少明确的完整 VC 现行商品归属')
                 cn, prefix = catalog.resolve(vc, _prefix_owners=prefix_owners)
                 base = replacement_base(vc, prefix)
                 if extract_vc_prefix(vc) == prefix:
@@ -117,7 +120,7 @@ def _prepare(args: Any, catalog: NormalizationCatalog, attempts: list[RenameAtte
     prepared = []
     for sid, card, cn in candidates:
         old, nm = card['vendorCode'], positive_id(card['nmID'])
-        detail = dict(nmID=nm, cn=cn, newVC=assigned.get(old))
+        detail = dict(nmID=nm, cn=cn, newVC=assigned.get(old), sku=catalog.skus[old])
         reason = errors.get(old)
         if (sid, nm) in attempted_cards:
             reason = '该商品已有已受理/未知/提交中的改码记录，禁止自动重放，请人工处理'
@@ -137,8 +140,30 @@ def _prepare(args: Any, catalog: NormalizationCatalog, attempts: list[RenameAtte
 def _submit(clients: dict[int, WBContentAPI], prepared: list[PreparedRename], log: OperationLog) -> None:
     # 在首个写请求之前完成所有批次的大小校验。
     items_by_shop: dict[int, list[PreparedRename]] = {}
+    if not prepared:
+        return
+    try:
+        catalog = load_catalog()
+    except PRICE_BOOK_ERRORS:
+        for item in prepared:
+            item.record.update(status='blocked', reason='现行商品价格表不可用，请重新预览')
+        log.save()
+        return
+    prefix_owners = catalog.prefix_owners()
     for item in prepared:
+        row = item.record
+        try:
+            current_sku = catalog.skus.get(row['vc'])
+            cn, prefix = catalog.resolve(row['vc'], _prefix_owners=prefix_owners)
+            if (not current_sku or row.get('sku', current_sku) != current_sku or cn != row['cn']
+                    or prefix != extract_vc_prefix(row['newVC'])):
+                raise ValueError('改码商品归属或登记前缀已变化')
+        except ValueError as error:
+            row.update(status='blocked', reason=f'{error}，请重新预览')
+            continue
         items_by_shop.setdefault(item.shop_id, []).append(item)
+    if len(prepared) != sum(map(len, items_by_shop.values())):
+        log.save()
     batches: dict[int, list[list[PreparedRename]]] = {}
     for sid in sorted(clients):
         items = items_by_shop.get(sid, [])

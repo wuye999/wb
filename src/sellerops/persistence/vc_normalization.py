@@ -1,14 +1,10 @@
 """改码的明确归属、价格表前缀及提交历史。"""
 import json
 import sqlite3
-from pathlib import Path
 
 from sellerops.domain.vc_normalization import NormalizationCatalog, RenameAttempt
 from sellerops.persistence import db
-from sellerops.persistence.headers import read_headers, require_col
-from sellerops.persistence.mappings import MappingRepository
-from sellerops.persistence.price_book import BOSS_COLUMNS
-from sellerops.settings import paths
+from sellerops.persistence.mappings import MappingRepository, read_current_price_book
 
 
 COMMAND = 'normalize-vc-openapi'
@@ -17,27 +13,14 @@ ATTEMPT_STATUSES = {'submitting', 'accepted', 'unknown'}
 
 def load_catalog() -> NormalizationCatalog:
     """改码只取已确认归属，继续核对主表前缀表头。"""
-    import openpyxl
-
-    path = Path(paths.current.price_book_xlsx)
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    try:
-        ws = wb['Sheet1']
-        headers = read_headers(ws)
-        require_col(headers, BOSS_COLUMNS['prefix'], ws.title, str(path))
-        if headers.count(BOSS_COLUMNS['prefix']) != 1:
-            raise ValueError('价格表前缀表头重复')
-    finally:
-        wb.close()
-    products = MappingRepository.load_price_book(require_price=False, fresh=True)
+    products = read_current_price_book(require_prefix=True).rows
     result = NormalizationCatalog()
     for row in products:
         result.prefixes.setdefault(row['cn'], []).append(row['prefix'])
-    entries = db.vc_entries()
-    for vc in entries:
-        row = db.resolve_vc(vc, entries)
-        if row['status'] == 'mapped':
+    for vc, row in MappingRepository.load_vc_entries(products).items():
+        if row['current_product']:
             result.owners.setdefault(vc.upper(), set()).add(row['cn'])
+            result.skus[vc] = row['sku']
         elif row['status'] == 'excluded':
             result.excluded.add(vc.upper())
     return result

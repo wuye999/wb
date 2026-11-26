@@ -6,6 +6,7 @@ from sellerops.domain.models import PublishItem
 from sellerops.domain.vendor_codes import extract_vc_source_code
 from sellerops.integrations.bcs.client import client as bcs
 from sellerops.persistence import db, open_api_publish
+from sellerops.persistence.mappings import read_current_price_book, save_price_book
 
 
 def load_records(*, vc_only: bool = False) -> dict:
@@ -70,12 +71,16 @@ def submit_once(items: list[PublishItem], shops: list[int], send: Callable[[], d
     keys = vc_keys.union(*(publish_keys(item) for item in items))
     candidates = vc_keys | {item.vendor_code for item in items if item.vendor_code}
     affiliations = {}
+    required_owners = set()
     for item, vc in zip(items, actual_vcs or tuple(it.vendor_code for it in items), strict=True):
         sku = item.extra.get('seller_sku') if item.extra.get('vc_source') else None
         if sku:
             if vc in affiliations and affiliations[vc] != sku:
                 raise ValueError(f'完整 VC {vc} 对应多个卖家 SKU，未提交')
             affiliations[vc] = sku
+            required_owners.add((vc, sku))
+            if source_vc := item.extra.get('source_vc'):
+                required_owners.add((source_vc, sku))
     with open_api_publish.operation_lock():
         records = load_records()
         if any(str(sid) in records.get(key, {}) for key in keys for sid in shops):
@@ -88,16 +93,21 @@ def submit_once(items: list[PublishItem], shops: list[int], send: Callable[[], d
                     raise ValueError(f'店铺 {sid} 命中目标店已有同源商品 VC：{matched}')
         stamp = db.now()
         claims = {key: {str(sid): stamp for sid in shops} for key in keys}
+        book = read_current_price_book() if affiliations else None
         with db.connect(write=True) as connection:
             entries = db.vc_entries(connection)
             if any(db.listing_blocked(vc, sid, entries)
                    for vc in {item.vendor_code for item in items if item.vendor_code}.union(actual_vcs)
                    for sid in shops):
                 raise ValueError('本批含禁止上架的 VC，未提交')
-            conflicts = _affiliation_conflicts(connection, affiliations)
-            if conflicts:
-                raise ValueError(f'上架归属已变化，请核对后重新预览：{"、".join(conflicts)}')
+            if book is not None:
+                save_price_book(connection, book)
+                conflicts = _affiliation_conflicts(connection, required_owners)
+                if conflicts:
+                    raise ValueError(f'上架归属已变化，请核对后重新预览：{"、".join(conflicts)}')
             open_api_publish.write_shared(connection, claims, status='submitting', vc_keys=vc_keys)
+            if book is not None:
+                book.verify()
         try:
             response = send()
         except Exception:
@@ -109,7 +119,7 @@ def submit_once(items: list[PublishItem], shops: list[int], send: Callable[[], d
         with db.connect(write=True) as connection:
             open_api_publish.write_shared(connection, claims, status=state, vc_keys=vc_keys)
             if state == 'done' and affiliations:
-                conflicts = _affiliation_conflicts(connection, affiliations)
+                conflicts = _affiliation_conflicts(connection, affiliations.items())
                 for vc, sku in affiliations.items():
                     if vc in conflicts:
                         continue
@@ -122,14 +132,14 @@ def submit_once(items: list[PublishItem], shops: list[int], send: Callable[[], d
         return response
 
 
-def _affiliation_conflicts(connection, affiliations: dict[str, str]) -> list[str]:
-    conflicts = []
-    for vc, sku in affiliations.items():
+def _affiliation_conflicts(connection, affiliations: Iterable[tuple[str, str]]) -> list[str]:
+    conflicts = set()
+    for vc, sku in affiliations:
         current = connection.execute('SELECT sku, status FROM vc_map WHERE vc=?', (vc,)).fetchone()
         if (current and (current['status'] == 'excluded' or current['sku'] not in (None, sku))
                 or not connection.execute('SELECT 1 FROM products WHERE sku=?', (sku,)).fetchone()):
-            conflicts.append(vc)
-    return conflicts
+            conflicts.add(vc)
+    return sorted(conflicts)
 
 
 def vc_exists_in_shop(vc: str, sid: int, records: dict | None = None) -> bool:

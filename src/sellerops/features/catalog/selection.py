@@ -33,18 +33,18 @@ def selected_shops(args):
 
 def load_state(shops: list[int], *, all_products: bool = False) -> tuple[dict, dict, list]:
     """保留显式 VC 操作与全店范围，按名称或 SKU 操作用已确认归属。"""
-    book = MappingRepository.load_price_book(require_price=False)
+    book = MappingRepository.current_products()
     by_sku = {row['sku']: row for row in book}
-    entries = db.vc_entries()
+    entries = MappingRepository.load_vc_entries(book)
     shop_rows = {sid: load_shop_rows(sid) for sid in shops}
     observed = dict.fromkeys(vc for rows in shop_rows.values() if rows is not None for vc in rows)
     state = {}
     for vc in dict.fromkeys([*entries, *observed]):
         row = db.resolve_vc(vc, entries)
-        if row['status'] == 'mapped':
+        if row.get('current_product'):
             state[vc] = {**row, 'price_row': by_sku.get(row['sku'])}
         elif row['status'] == 'excluded' or (all_products and vc in observed):
-            state[vc] = {**row, 'cn': ''}
+            state[vc] = {**row, 'cn': '', 'sku': None}
     return state, shop_rows, book
 
 

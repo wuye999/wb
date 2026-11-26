@@ -16,6 +16,7 @@ class ReportIssue:
 class ReportCatalog:
     price_names: set[str] = field(default_factory=set)
     mapped_names: dict[str, str] = field(default_factory=dict)
+    historical_vcs: set[str] = field(default_factory=set)
 
 
 @dataclass

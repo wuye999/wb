@@ -24,7 +24,6 @@ from sellerops.settings import paths as config
 from sellerops.settings import credentials
 from sellerops.core.files import safe_load_json
 from sellerops.core.files import atomic_dump_json
-from sellerops.persistence.mappings import MappingRepository
 from sellerops.features.support import questions
 from sellerops.integrations.wildberries import client as wb_api
 
@@ -51,9 +50,6 @@ def save_shown(s):
 def product_info_str(vc, nm_id, cn_map):
     """构造商品信息字符串（供查看/后台 AI 参考）：中文名 + card.json 描述/特征/颜色 + 价格映射表店铺价(CNY)。"""
     cn = cn_map.get(vc, {}).get("cn", "") if vc else ""
-    if not cn and vc:
-        resolver, _ = MappingRepository.build_vc_resolver()
-        cn = resolver(vc)
     parts = [f"中文名：{cn}"] if cn else []
 
     if nm_id:
@@ -112,6 +108,8 @@ def poll_once(args, cn_map, reply_cfg, replied, shown, csv_writer, front_log):
         shops = [s for s in shops if s["shopId"] in want]
     if not shops:
         raise RuntimeError("没有匹配且凭证完整的 WB 店铺")
+    if cn_map is None:
+        cn_map = product_context.load_context()
     root_version = cred.root_version
     front = (args.mode != "back")
     replied_n = failures = 0
@@ -190,11 +188,6 @@ def run(args):
 
     if front:
         print(f"监听启动（前台AI/展示+手动）：间隔 {interval}s，检测新提问打印到控制台与日志，不自动提交")
-        cn_map = {}
-        try:
-            cn_map = MappingRepository.load_mapping_state()[0]
-        except Exception:
-            pass
         shown = load_shown()
         now = datetime.datetime.now()
         path = config.daily_log_dir(now) / f"questions_front_{now:%Y%m%d_%H%M%S}.log"
@@ -203,7 +196,7 @@ def run(args):
         print(f"  日志: {front_log.name}")
         if args.once:
             try:
-                poll_once(args, cn_map, None, set(), shown, None, front_log)
+                poll_once(args, None, None, set(), shown, None, front_log)
             finally:
                 front_log.close()
             print("（--once 单轮结束）")
@@ -211,7 +204,7 @@ def run(args):
         try:
             while True:
                 try:
-                    poll_once(args, cn_map, None, set(), shown, None, front_log)
+                    poll_once(args, None, None, set(), shown, None, front_log)
                 except Exception as e:
                     print(f"  [轮次异常] {e}")
                 time.sleep(interval)
@@ -227,11 +220,6 @@ def run(args):
     if args.apply and not cfg.api_key:
         print("[错误] 后台模式 --apply 需要配置 LLM API key（credentials.json 的 ai.api_key）")
         return 1
-    cn_map = {}
-    try:
-        cn_map = MappingRepository.load_mapping_state()[0]
-    except Exception:
-        pass
     replied = load_replied()
 
     now = datetime.datetime.now()
@@ -245,7 +233,7 @@ def run(args):
           f"模型 {cfg.model}，已回复 {len(replied)} 条")
     if args.once:
         try:
-            poll_once(args, cn_map, cfg, replied, set(), csv_writer, None)
+            poll_once(args, None, cfg, replied, set(), csv_writer, None)
         finally:
             csv_file.close()
         print("（--once 单轮结束）")
@@ -254,7 +242,7 @@ def run(args):
     try:
         while True:
             try:
-                poll_once(args, cn_map, cfg, replied, set(), csv_writer, None)
+                poll_once(args, None, cfg, replied, set(), csv_writer, None)
                 csv_file.flush()
             except Exception as e:
                 print(f"  [轮次异常] {e}")

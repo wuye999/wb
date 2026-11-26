@@ -66,6 +66,8 @@ python run.py catalog merge "_scratch/待认领审核.json"
 
 `report mapping` 的映射总表按本地在架快照列出归属。价格表有商品名但目前没有在架归属是正常情况。「待核查清单」列出已归属在架 VC 对应的最低售价缺失项。实际未归属在架商品仍见「未映射商品」或单店表的「未映射在架商品」。总表仍校验价格表的「产品中文名」和「最低售价」表头。
 
+商品从价格表删行后，映射总表的「历史归属」页和单店表的「匹配类型」仍显示历史归属，最低售价留空。`catalog product-summary` 按 SQLite 快照和已保存商品资料汇总，JSON 另列 `historical_item_count` 与 `historical_items`。历史 VC 退出待认领工作台。订单、评价、销量和飞书登记可读最后保存的中文名，依赖现行价格、包装、库存 SKU 和发货配置的流程只取当前商品行。同一卖家 SKU 加回后恢复现行资料。
+
 ```powershell
 python run.py map check-mismatch --cn "示例商品" --days 7 --json
 python run.py report mapping --shop-id 1001
@@ -87,6 +89,8 @@ python run.py sync --shop-id 1001
 ```
 
 `sync` 和 `catalog fetch` 共用快照流程和 `--json` 回执。默认先同步 WB → BCS，再读取该店 BASE 并保存。普通提交或轮询未确认时会尝试读取 BCS 缓存，`data.sync_warnings` 列出受影响店铺和阶段。`--no-sync` 直接读取缓存。两种情况下，成功保存的店铺均在 `data.fetched` 标注快照状态，摘要明确说明使用了缓存。缓存全部保存成功时退出 0。BASE 读取或保存的失败见 `data.errors`，失败店铺保留原快照。
+
+两条命令按当前价格表唯一四位 ASCII 字母前缀，自动归属本次成功保存且在架、无禁上架限制的 `pending` VC，来源为 `prefix`。查看 `data.fetched[].prefix_mapped` 和 `data.prefix_mapping` 的计数与跳过原因。价格表缺失、占用、无效或版本变化时仍保存合格快照。同步后用 `map check-mismatch` 复核。未命中唯一前缀、前缀冲突、带禁上架限制的待认领 VC，以及人工纠偏和排除，按完整 VC 用 `map batch-set --file`、`catalog merge` 或 `catalog rename` 处理。严禁直接修改 SQLite `vc_map`。
 
 默认处理全部店铺，也可用 `--shop-id` 指定单店。全店 BCS 后台同步默认并发 2，`--bcs-parallel` 可设为 1 至 4。BCS 远程阶段使用 30 分钟协作式预算，其中同步提交和轮询最多占用前 25 分钟，单店轮询最多 600 秒。达到同步阶段截止时间后，剩余预算可用于读取 BASE 缓存。最终鉴权失败会停止后续 BCS 同步和 BASE 请求，已经保存的店铺结果继续列在回执中。
 
@@ -135,6 +139,8 @@ python run.py apply --plan P018 --json
 ```
 
 `ops price`、`ops discount` 和 `ops stock` 默认使用 WB 卖家后台，需指定店铺与商品范围。`ops review-price` 用 `--shops` 或 `--all-shops` 指定要查询待审核商品的店铺。完整中文名匹配所有归属明确的同名链接，`--sku` 只匹配指定价格表 SKU。同名多行无法判定 SKU 的链接会被阻止，并列出候选 SKU。手动统一原价（吊牌价）使用正整数 `--price`。WB 折扣百分比越大，折后价越低，反之越高。手动库存必须填写 `--amount`，归零先用 `--amount 0` 生成计划，再确认并提交对应单号。
+
+逐店以同币种原价和最低售价基准核对倍率，并分别记录原价、币种、折扣百分比与折后价。常规折后价按 `原价 × (1 − 折扣百分比 / 100)` 计算。额外优惠及平台实取折后价单列并注明来源。
 
 `ops price` 必须选择正整数 `--price`，或使用 `--keep-price` 搭配折扣。BCS 可用 `--channel bcs --club-discount D` 搭配任一价格意图。
 
@@ -395,6 +401,8 @@ python run.py task schedule --remove --apply --yes
 ```
 
 `task schedule` 注册 SellerOps_Morning（09:00）及 SellerOps_Check11/15/19（11:00、15:00、19:00），按运行电脑本地时间执行。Windows 计划任务沿用 `task run --apply` 的行为，早间任务提交促销报名，四项任务的折扣步骤都只生成待确认计划。可用 `--shops` 指定店铺或用 `--all-shops` 覆盖各步骤的可用店铺。每日折扣沿用 WB，目标为 `--target 50`。
+
+临时店铺范围、倍率或折扣规则只用于本次确认的计划。运营明确要求变更内置计划任务时才使用 `task schedule`。
 
 注册时固定当前解释器、代码路径和数据路径；移动目录或换解释器后需重新注册，并清理不再使用的任务以免重复执行。`task run` 每步最多等待 1 小时，某步非零退出会停止后续步骤。日志在 `data/logs/YYYY-MM-DD/daily_YYYYMMDD.log`。
 

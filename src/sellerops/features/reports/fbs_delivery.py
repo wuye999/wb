@@ -27,7 +27,7 @@ import re
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Sequence, Set, Tuple
 
 from sellerops.core import utils as common
 from sellerops.settings import paths as config
@@ -35,6 +35,7 @@ from sellerops.settings import credentials
 from sellerops.integrations.wildberries import client as wb_api
 from sellerops.integrations.wildberries import supplies as wb_supply
 from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.product_index import NmResolver
 
 DATE_FMT = "%Y-%m-%d"
 NO_CN = "(中文名未知)"          # 中文名解析失败 → 单独成桶，不静默丢弃
@@ -80,7 +81,7 @@ def parse_order(o: Dict[str, Any], supply_id: str) -> Dict[str, Any]:
         "order_id": str(o.get("id") or ""),
         "supply_id": supply_id,
         "nm_id": str(o.get("nmId") or ""),
-        "vc": str(o.get("article") or ""),
+        "vc": str(o.get("article") or "").strip(),
         "title": str(o.get("title") or ""),
         "size": str(o.get("size") or ""),
         "price": str(o.get("price") or ""),
@@ -180,33 +181,17 @@ def select_shops(shops: Sequence[Dict[str, Any]], token: str) -> List[Dict[str, 
     return out
 
 
-def load_cn_stock_sku() -> Dict[str, str]:
-    """商品价格表 → {商品中文名: 马帮库存SKU}（按表头读取）。
-
-    供「按中文名统计」补「库存SKU」列；表缺失或读取异常时返回空 dict（不中断主流程）。
-    """
-    out: Dict[str, str] = {}
-    try:
-        for it in MappingRepository.load_price_book(require_price=False):
-            cn = (it.get("cn") or "").strip()
-            if cn and cn not in out:
-                out[cn] = (it.get("stock_sku") or "").strip()
-    except Exception as ex:
-        print(f"  [警告] 读取商品价格表「马帮库存SKU」失败（{type(ex).__name__}: {ex}）；库存SKU 列将留空")
-    return out
-
-
-def aggregate_by_cn(orders: Sequence[Dict[str, Any]],
-                    cn_stock_sku: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+def aggregate_by_cn(orders: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """按「商品中文名」聚合（核心产出）。
 
     排序：商品数降序 → 同数按中文名升序；`(中文名未知)` 等未归类桶恒排最后。
-    `cn_stock_sku` = {商品中文名: 马帮库存SKU}（读商品价格表），为每行补「库存SKU」列。
+    明细库存 SKU 全部一致时填写汇总库存 SKU。
     """
     stat: Dict[str, Dict[str, Any]] = {}
     for o in orders:
         cn = o.get("cn") or NO_CN
-        d = stat.setdefault(cn, {"cn": cn, "vcs": set(), "items": 0, "supplies": set(), "shops": set()})
+        d = stat.setdefault(cn, {"cn": cn, "vcs": set(), "skus": set(), "items": 0, "supplies": set(), "shops": set()})
+        d["skus"].add(o.get("stock_sku") or "")
         if o.get("vc"):
             d["vcs"].add(o["vc"])
         d["items"] += 1
@@ -214,9 +199,8 @@ def aggregate_by_cn(orders: Sequence[Dict[str, Any]],
             d["supplies"].add(o["supply_id"])
         if o.get("shop_name"):
             d["shops"].add(o["shop_name"])
-    sku_map = cn_stock_sku or {}
     out: List[Dict[str, Any]] = [
-        {"cn": cn, "stock_sku": sku_map.get(cn, ""), "vc_count": len(d["vcs"]),
+        {"cn": cn, "stock_sku": next(iter(d["skus"])) if len(d["skus"]) == 1 else "", "vc_count": len(d["vcs"]),
          "item_count": d["items"], "supply_count": len(d["supplies"]), "shops": sorted(d["shops"])}
         for cn, d in stat.items()
     ]
@@ -283,13 +267,13 @@ def collect(days: int = 0, begin: str = "", end: str = "", date: str = "", shops
     want_item = parse_states(item_states, include_canceled=include_canceled)
     want_supply = parse_states(supply_states) if str(supply_states or "").strip() else set()
 
-    resolve_cn = None
+    resolve_cn, entries = None, {}
     if with_cn:
         try:
-            resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True)
+            entries = MappingRepository.load_vc_entries(MappingRepository.current_products())
+            resolve_cn, _ = MappingRepository.build_vc_resolver(label_unmapped=True, entries=entries)
         except Exception as ex:
             print(f"  [警告] 中文名真源（映射表）加载失败（{type(ex).__name__}: {ex}）；中文名将留空")
-    cn_stock_sku = load_cn_stock_sku()
 
     rows: List[Dict[str, Any]] = []
     supp_rows: List[Dict[str, Any]] = []
@@ -299,6 +283,7 @@ def collect(days: int = 0, begin: str = "", end: str = "", date: str = "", shops
     for shop in pairs:
         sid = common.to_int(shop.get("shopId"))
         name = str(shop.get("shopName") or sid)
+        nm = NmResolver(sid, with_cn=False) if with_cn else None
         try:
             session = wb_api.make_session(shop, cred.root_version)
             supplies = wb_supply.iter_delivery_supplies(session, max_pages=max_pages,
@@ -330,8 +315,10 @@ def collect(days: int = 0, begin: str = "", end: str = "", date: str = "", shops
                 po = parse_order(o, ps["supply_id"])
                 if not match_state(po["state_code"], want_item):
                     continue
+                if not po['vc'] and nm:
+                    po['vc'] = nm.resolve(po['nm_id'])['vc']
                 po["cn"] = resolve_cn(po["vc"], "") if resolve_cn else ""
-                po["stock_sku"] = cn_stock_sku.get(po["cn"], "") if po["cn"] else ""
+                po["stock_sku"] = entries.get(po["vc"], {}).get('stock_sku') or ""
                 po["shop_name"] = name
                 po["shop_id"] = sid
                 po["supply_state_code"] = ps["state_code"]
@@ -349,7 +336,7 @@ def collect(days: int = 0, begin: str = "", end: str = "", date: str = "", shops
         "begin": b, "end": e,
         "item_states": sorted(want_item), "supply_states": sorted(want_supply),
         "rows": rows, "supplies": supp_rows, "errors": errors, "per_shop": per_shop,
-        "by_cn": aggregate_by_cn(rows, cn_stock_sku),
+        "by_cn": aggregate_by_cn(rows),
         "by_vc": aggregate_by_vc(rows),
         "by_shop": aggregate_by_shop(rows, supp_rows),
         "item_state": Counter(o["state_code"] for o in rows),

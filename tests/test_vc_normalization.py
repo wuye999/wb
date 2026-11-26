@@ -320,6 +320,23 @@ class TestNormalizationCommand(unittest.TestCase):
         self.assertEqual([(row['shopId'], row['status']) for row in receipt], [(1, 'accepted'), (2, 'accepted')])
         self.assertTrue(all('card' not in row for row in receipt))
 
+    def test_frozen_plan_rejects_deleted_sku_even_with_same_name_and_prefix(self):
+        from sellerops.cli.main import main
+
+        prefix = ['--data-dir', str(self.folder)]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main([*prefix, 'ops', 'normalize-vc', '--all-shops', '--all', '--json']), 0)
+        plan_id = json.loads(output.getvalue())['plan_id']
+        write_book([('REPLACEMENT', CN, None, 'TEST')])
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main([*prefix, 'apply', '--plan', plan_id, '--json']), 1)
+        for api in self.clients.values():
+            api.update_cards.assert_not_called()
+        blocked = [row for row in self.records() if row['status'] == 'blocked']
+        self.assertEqual(len(blocked), 2)
+        self.assertTrue(all('重新预览' in row['reason'] for row in blocked))
+
     def test_apply_reads_all_shops_first_and_preserves_each_shops_identifiers(self):
         before = {p: p.read_bytes() for p in self.folder.rglob('*') if p.is_file() and p != Path(paths.current.database)}
         self.assertEqual(self.cli('--all', '--apply'), 0)

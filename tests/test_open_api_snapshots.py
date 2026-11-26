@@ -1,6 +1,6 @@
 """官方商品快照的离线协议、数据契约和命令回归；仅使用合成数据。"""
 
-from catalog_fixture import document, snapshot as save_snapshot, shop_summary
+from catalog_fixture import document, snapshot as save_snapshot, shop_summary, write_book
 from contextlib import ExitStack, redirect_stdout, redirect_stderr
 from itertools import count
 import io
@@ -16,6 +16,7 @@ from sellerops.core.errors import AuthenticationError, NetworkError, PlatformApi
 from sellerops.features.catalog import products, snapshot_open_api as snapshot
 from sellerops.integrations.bcs.client import OpenAPIShop
 from sellerops.integrations.wildberries.open_api import WBOpenAPI
+from sellerops.persistence import db
 from sellerops.settings import paths
 
 
@@ -284,6 +285,18 @@ class TestOpenAPIFetchWorkflow(unittest.TestCase):
         self.sync_all.assert_not_called()
         self.legacy.assert_not_called()
         self.assertFalse(Path(paths.current.mapping_xlsx).exists())
+
+    def test_open_api_counts_shared_prefix_once_and_honors_trash(self):
+        write_book([('A', '商品', 10, 'TEST')])
+        trash = 'BCS-TEST-999'
+        with patch.object(products.snapshot_open_api, 'collect_shop', side_effect=lambda shop: (
+                [dict(self.row, shopId=shop.id), {'vendorCode': trash, 'trashedAt': '2026-01-01'}], {})):
+            status = products.fetch_all(source='wb-openapi', parallel=3)
+        self.assertEqual(status['errors'], [])
+        self.assertCountEqual([row['prefix_mapped'] for row in status['fetched']], [1, 0, 0])
+        self.assertEqual(status['prefix_mapping']['mapped'], 1)
+        self.assertEqual(db.resolve_vc(self.row['vendorCode'])['last_cn'], '商品')
+        self.assertEqual(db.resolve_vc(trash)['status'], 'pending')
 
     def test_default_and_explicit_parallel_bound_with_isolated_shop_sessions(self):
         accesses = [OpenAPIShop(i, f'店{i}', f'secret-{i}') for i in range(1, 7)]

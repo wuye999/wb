@@ -51,9 +51,9 @@ REPORT_HEADERS = [
 def _match_price_table(vc: str, entries: dict) -> dict:
     if not vc:
         return {}
-    row = db.resolve_vc(vc, entries)
+    row = db.resolve_vc(vc, entries, include_history=True)
     if row['status'] == 'mapped':
-        return {**row, 'dim': row['dimensions']}
+        return {**row, 'cn': row['cn'] or '历史归属（名称未知）', 'dim': row['dimensions']}
     return {'cn': '\u975e\u8d27\u76d8' if row['status'] == 'excluded' else '\u5f85\u8ba4\u9886',
             'prefix': extract_vc_prefix(vc) or ''}
 
@@ -368,8 +368,7 @@ def run(args: Any) -> int:
     print(f"目标店铺 ({len(shops)} 个): {shop_desc}")
     print(f"统计周期（UTC+8）: {period}")
 
-    MappingRepository.load_price_book(require_price=False)
-    entries = db.vc_entries()
+    entries = MappingRepository.load_vc_entries(MappingRepository.current_products())
     order_field = _product_order(args)
     date_from = int(start.timestamp()) - 1 if start is not None else None
     date_to = int(end.timestamp())

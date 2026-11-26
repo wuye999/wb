@@ -80,6 +80,7 @@ def _query(args) -> tuple[list[dict], list[dict]]:
     shops, groups = {}, defaultdict(lambda: defaultdict(list))
     with db.connect(read_only=True) as connection:
         columns = db.shop_snapshot_columns(connection)
+        last_cn = db.vc_last_cn_column(connection)
         rows = [dict(shop) for shop in connection.execute(f'''
             SELECT shop_id, shop_name, last_source, last_synced_at, last_sync_error, snapshot_json, {columns}
               FROM shops WHERE status = 'active'
@@ -93,22 +94,29 @@ def _query(args) -> tuple[list[dict], list[dict]]:
             shop['snapshot_present'] = document is not None
             shop.update(snapshot_metadata(shop))
             shop['unmapped_item_count'] = 0 if document is not None else None
+            shop['historical_item_count'] = 0 if document is not None else None
             shop['warehouse'] = _snapshot_warehouse(shop, json.loads(document) if document else {}, keyword)
             shops[shop['shop_id']] = shop
             if document is None:
                 continue
-            for item in connection.execute('''
-                SELECT i.row_json, i.warehouse_id, i.stock, p.cn
+            for item in connection.execute(f'''
+                SELECT i.row_json, i.warehouse_id, i.stock, m.status,
+                       (m.status = 'mapped' AND p.sku IS NULL) AS historical,
+                       coalesce(p.cn, {last_cn}) AS cn
                   FROM shop_items AS i
                   LEFT JOIN vc_map AS m ON m.vc = i.vc
                   LEFT JOIN products AS p ON m.sku = p.sku AND m.status = 'mapped'
                  WHERE i.shop_id = ? AND i.is_trashed = 0 AND m.status IS NOT 'excluded'
             ''', (shop['shop_id'],)):
                 name = item['cn']
-                if not name:
+                if item['status'] != 'mapped':
                     shop['unmapped_item_count'] += 1
-                elif ((not args.name or name == args.name)
-                      and (not args.name_contains or args.name_contains in name)):
+                    continue
+                if item['historical']:
+                    shop['historical_item_count'] += 1
+                name = name or '历史归属（名称未知）'
+                if ((not args.name or name == args.name)
+                        and (not args.name_contains or args.name_contains in name)):
                     groups[name][shop['shop_id']].append(_card_values(item, shop['warehouse']['id']))
     return list(shops.values()), [
         {'name': name, 'shop_count': len(stores), **_ranges([card for cards in stores.values() for card in cards]),
@@ -130,7 +138,7 @@ def _print(shops: list[dict], groups: list[dict], matched: int) -> None:
         label = (f"{warehouse['name']}（{warehouse['id']}，采集时核实）" if warehouse['id'] else
                  f"未知（{warehouse['reason']}）")
         print(f"店{shop['shop_id']} {shop['shop_name']} | 来源 {shop['last_source'] or '未知'} | "
-              f"{snapshot_label(shop)} | 默认业务仓 {label}")
+              f"{snapshot_label(shop)} | 默认业务仓 {label} | 历史归属 {shop['historical_item_count'] or 0} 条")
     print(f'中文名汇总：显示 {len(groups)} / {matched} 组')
     for group in groups:
         print(f"{group['name']} | {group['item_count']} 条 / {group['shop_count']} 店 | {_format_ranges(group)}")
@@ -157,6 +165,7 @@ def run(args) -> int:
                    'snapshot_freshness': freshness,
                    'totals': {'selected_shops': len(shops), 'snapshot_shops': sum(s['snapshot_present'] for s in shops),
                               'unmapped_items': sum(s['unmapped_item_count'] or 0 for s in shops),
+                              'historical_items': sum(s['historical_item_count'] or 0 for s in shops),
                               'matched_groups': len(groups), 'returned_groups': len(selected)}}
     _print(shops, selected, len(groups))
     print_snapshot_reminder(freshness)

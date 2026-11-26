@@ -162,7 +162,7 @@ def run(args):
     cn_map = {}
     resolver, _ = MappingRepository.build_vc_resolver()
     try:
-        cn_map = MappingRepository.load_mapping_state()[0]
+        cn_map = product_context.load_context()
     except Exception:
         pass
 

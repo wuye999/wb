@@ -8,7 +8,7 @@ from pathlib import Path
 from sellerops.domain.snapshot_values import first_price, positive_id
 from sellerops.domain.vendor_codes import extract_vc_prefix
 from sellerops.persistence import db
-from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.mappings import MappingRepository, read_current_price_book, save_price_book
 
 
 def multiplier_candidates(price: int | float | None, products: list[dict]) -> list[dict]:
@@ -126,10 +126,13 @@ def candidate(product: dict) -> dict:
 def update_mappings(rows: list[dict]) -> list[str]:
     if not isinstance(rows, list):
         raise ValueError('确认内容应为包含完整 VC 的列表')
-    MappingRepository.load_price_book(require_price=False, fresh=True)
+    book = read_current_price_book() if any(isinstance(row, dict) and row.get('action') in ('map', 'mapped', 'rebind')
+                                            for row in rows) else None
     with db.connect(write=True) as connection:
+        if book is not None:
+            save_price_book(connection, book)
         entries = db.vc_entries(connection)
-        products = list(connection.execute('SELECT sku, cn, prefix, name_unique FROM products'))
+        products = book.rows if book is not None else []
         shops = {row[0] for row in connection.execute('SELECT shop_id FROM shops')}
         seen = set()
         for row in rows:
@@ -174,6 +177,8 @@ def update_mappings(rows: list[dict]) -> list[str]:
                           block_listing=block, note=note or old['note'] or '')
             else:
                 raise ValueError(f'{vc} 确认动作无效')
+        if book is not None:
+            book.verify()
     return [row['vc'].strip() for row in rows]
 
 

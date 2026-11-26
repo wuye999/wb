@@ -157,7 +157,7 @@ def build_records(args, *, group_shipping_ids=()):
     if not orders:
         return [], {}
 
-    vc2cn, vc2sku, vc2mode = mabang_load_local_mapping()
+    vc2cn, vc2sku, vc2mode = mabang_load_local_mapping(include_history=True)
     resolve_cn = _cn_resolver(vc2cn)
 
     # 各店快照 vendorCode→nmId（wb编号=下单店铺自己的码）

@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from sellerops.domain.models import PublishItem
 
 
+from sellerops.persistence import db
 from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository
 
@@ -78,7 +79,7 @@ def resolve_publish_details(
     mapping_state: Optional[Dict[str, Any]] = None,
     price_book: Optional[List[dict]] = None,
     card_cache: Optional[Dict[int, Any]] = None,
-    *, generated: dict | None = None,
+    *, generated: dict | None = None, entries: dict | None = None,
 ) -> Tuple[Optional[PublishItem], Optional[str]]:
     """
     智能补全上架商品缺失字段：
@@ -95,22 +96,30 @@ def resolve_publish_details(
         return None, f"无效的 WB商品码: {nm_id}"
 
     card_cache = card_cache if card_cache is not None else {}
-    if mapping_state is None:
-        mapping_state, _ = MappingRepository.load_mapping_state()
     if price_book is None:
-        price_book = MappingRepository.load_price_book(require_price=False)
+        price_book = MappingRepository.load_price_book(require_price=False, fresh=True)
+    if mapping_state is None:
+        mapping_state, _ = MappingRepository.load_mapping_state(products=price_book)
+
+    def confirmed_sku(code):
+        if not code:
+            return None
+        row = db.resolve_vc(code, entries)
+        return row['sku'] or (mapping_state.get(code) or {}).get('sku')
 
     # 优先使用完整 VC 和源卡的已确认归属。
     vc = (item.vendor_code or '').strip()
     source_card = ProductSnapshotRepository.find_source(nm_id, item.extra.get('src_sid'))
-    source_vc = (source_card or {}).get('vendorCode') or ''
+    source_card = source_card or {}
+    source_vc = str(source_card.get('vendorCode') or source_card.get('goodsCode') or '').strip()
     matched_map_row = mapping_state.get(vc) or mapping_state.get(source_vc) or {}
-    confirmed = {value for value in (item.extra.get('seller_sku'),
-                 (mapping_state.get(vc) or {}).get('sku'),
-                 (mapping_state.get(source_vc) or {}).get('sku')) if value}
+    confirmed = {value for value in (item.extra.get('seller_sku'), confirmed_sku(vc),
+                                     confirmed_sku(source_vc)) if value}
     if len(confirmed) > 1:
         return None, '指定的卖家 SKU 与已有归属冲突，请先核对源商品与目标 VC'
     sku = next(iter(confirmed), None)
+    if sku and not any(row['sku'] == sku for row in price_book):
+        return None, f'卖家 SKU {sku} 已无现行价格表资料，请核对商品归属'
     matches = [row for row in price_book if (row['sku'] == sku if sku else
                row['cn'] == item.cn.strip() and row.get('name_unique', True))]
     if len(matches) != 1:
@@ -141,13 +150,13 @@ def resolve_publish_details(
             return None, f'商品 {cn} 没有唯一登记前缀，请指定 --prefix 或明确选择 --random-prefix'
     prefix = f'BCS-{prefix}'
     vc = vc or f'{prefix}-{item.extra.get("source_tail") or nm_id}'
-    if (mapping_state.get(vc) or {}).get('sku') not in (None, sku):
+    if confirmed_sku(vc) not in (None, sku):
         return None, f'完整 VC {vc} 已有其他卖家 SKU 归属，请先核对'
 
     # 3. 价格决策
     price = item.price
     if price is None or price <= 0:
-        price = first_price(source_card) if source_card is not None else None
+        price = first_price(source_card)
     if price is None or not math.isfinite(price) or price <= 0:
         return None, f"商品 {nm_id} 价格缺失且无法从映射表自动匹配，请通过 --price 指定"
 
@@ -195,6 +204,7 @@ def resolve_publish_details(
             "card_info": card_info,
             'seller_sku': sku,
             'vc_source': vc_source,
+            'source_vc': source_vc,
         }
     )
     return resolved, None
@@ -202,13 +212,15 @@ def resolve_publish_details(
 
 def resolve_publish_items(args, items, *, bulk=False):
     """准备两个普通上架入口共用的商品信息和受阻明细。"""
-    mapping_state, _ = MappingRepository.load_mapping_state()
-    book = MappingRepository.load_price_book(require_price=False, fresh=getattr(args, 'apply', False))
+    book = MappingRepository.load_price_book(require_price=False, fresh=True)
+    mapping_state, _ = MappingRepository.load_mapping_state(products=book)
+    entries = db.vc_entries()
     card_cache, generated = {}, {}
     owners = defaultdict(set)
     resolved_items, blocked = [], []
     for item in items:
-        resolved, error = resolve_publish_details(item, mapping_state, book, card_cache, generated=generated)
+        resolved, error = resolve_publish_details(item, mapping_state, book, card_cache, generated=generated,
+                                                  entries=entries)
         if resolved and bulk and resolved.vendor_code and resolved.vendor_code != f'{resolved.prefix}-{resolved.nm_id}':
             error = f'批量接口无法保留完整 VC {resolved.vendor_code}，请用 ops create-cards 预览'
         if error or not resolved:

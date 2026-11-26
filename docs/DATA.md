@@ -39,7 +39,7 @@
 | 产品图片 | 图片信息，部分工作台/报表使用 |
 | 尺寸 | `长*宽*高/毛重`，例如 `10*20*30/0.5`；尺寸 cm、重量 kg |
 | 最低售价 | 数值或公式，用于价格参考及明确选用该价格来源的跨店复制 |
-| vendorCode前缀码 | 4 位商品前缀，如 `TEST`，用于识别同一产品 |
+| vendorCode前缀码 | 4 位 ASCII 字母，如 `TEST`。全表唯一时可用于本次在架待认领 VC 的自动归属 |
 | 发货方式 | 填写「马帮发货」「WB发货」或「不处理」 |
 | 马帮库存SKU | 「马帮发货」须填写实际马帮库存编码，其他方式留空 |
 
@@ -57,7 +57,9 @@
 
 快照在库内保留原有 `shopId`、`total`、`rows` 等字段。每家店的最新成功快照与失败原因单独保存，缺快照和已确认的空店是两种情况。`shop list --json` 的 `data.shops` 中，`snapshot_present` 表示是否已有快照，`active_item_count` 和 `trashed_item_count` 分别统计在架与回收站条数。缺快照时计数为 `null`。
 
-默认 `sync` 和 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE，去重后整店写入 SQLite。单店和全店的 JSON 回执均含 `source`、`fetchedAt`、`shops`、`fetched`、`sync_warnings`、`errors`、`missing_shops`。回执顶层 `fetchedAt` 是回执初始化时间，`fetched[].fetchedAt` 是对应店铺成功保存的采集时间。普通同步未确认时可降级读取缓存，警告列入 `sync_warnings`。读取或保存失败列入 `errors`，失败店铺保留旧快照。全店取得完整远程清单后才计算 `missing_shops`。
+默认 `sync` 和 `catalog fetch` 走 BCS 快照接口，先同步再读取 BASE，去重后整店写入 SQLite。单店和全店的 JSON 回执均含 `source`、`fetchedAt`、`shops`、`fetched`、`sync_warnings`、`errors`、`missing_shops`、`prefix_mapping`。回执中的 `fetchedAt` 是回执初始化时间，`fetched[].fetchedAt` 是对应店铺成功保存的采集时间。普通同步未确认时可降级读取缓存，警告列入 `sync_warnings`。读取或保存失败列入 `errors`，失败店铺保留旧快照。全店取得完整远程清单后才计算 `missing_shops`。
+
+逐店事务以现行价格表的唯一四位 ASCII 字母前缀匹配本次快照的在架待认领 VC。命中且 `block_listing` 为 NULL 或空串时，写入商品键和 `last_cn`，将状态改为 `mapped`，来源设为 `prefix`。既有 `mapped`、`excluded`、禁上架范围、备注及源数字段保留。跨店出现同一完整 VC 时只计首次升级。BCS BASE 缓存及 WB Open API 使用同一规则。价格表缺失、独占、无效或版本变化时仅保存快照及待认领记录。`data.fetched[].prefix_mapped` 是逐店新增，`data.prefix_mapping` 的 `mapped` 是合计，`skipped_shops` 记录价格表降级原因，`skipped_vcs` 汇总本次在架待认领记录的前缀和禁上架跳过原因。
 
 SQLite 的 `shops` 表提供以下快照字段。整店商品行、快照信封、这些列和失败原因清除使用同一事务。
 
@@ -77,6 +79,8 @@ BCS 商品响应先按原始行数核对接口 total，确认完整后才按本�
 无完整规格、无有效库存记录或规格重复时，价格与库存里的占位值保持未知。总表优先展示主店资料，缺失值留空；主店没有此 VC 时使用最小店铺 ID 的同一条代表记录。
 
 归属使用完整 VC 关联价格表商品。商品键优先采用卖家 SKU，没有 SKU 时采用唯一的产品中文名。已明确排除的非货盘在统计中可单独标记，禁上架则只限制上架目标。报价或库存 SKU 若需要用于提交，请保存并关闭独占的价格表；普通查询可提示时间后使用上次缓存。
+
+`products` 缓存最近一次成功保存的有效价格表商品行。`vc_map.last_cn` 保存已归属 VC 最后已知的中文名，价格表删行后仍保留 `mapped` 和商品键。历史名称用于订单、评分、销量、飞书和映射报表。现行售价、前缀、包装、库存 SKU 和发货方式只取当前商品行。同卖家 SKU 加回后沿用原 VC 归属。旧库首次成功写事务补 `vc_map.last_cn`、按现有缓存回填可核对的名称，并补 `products.shipping_mode`。只读查询按旧列兼容读取，SQLite 文件字节保持不变。
 
 ## 关键状态文件
 

@@ -8,7 +8,7 @@ from openpyxl import Workbook
 
 from sellerops.features.system import repository_update
 from sellerops.persistence import db
-from sellerops.persistence.mappings import MappingRepository
+from sellerops.persistence.mappings import read_current_price_book, save_price_book
 from sellerops.persistence.snapshots import ProductSnapshotRepository, save_snapshot
 from sellerops.settings import paths
 
@@ -31,8 +31,9 @@ def write_book(rows, headers=('卖家SKU', '产品中文名', '最低售价', 'v
 
 
 def map_vcs(mapping, *, source='manual'):
-    MappingRepository.load_price_book(require_price=False)
+    book = read_current_price_book()
     with db.connect(write=True) as connection:
+        save_price_book(connection, book)
         for vc, sku in mapping.items():
             db.set_vc(connection, vc, 'mapped', sku=sku, source=source)
 

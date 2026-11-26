@@ -1,5 +1,13 @@
 from sellerops.core import utils as common
 from sellerops.integrations.wildberries.client import fetch_card_json, card_color_names
+from sellerops.persistence import db
+from sellerops.persistence.mappings import MappingRepository
+
+
+def load_context() -> dict:
+    entries = MappingRepository.load_vc_entries(MappingRepository.current_products())
+    return {vc: db.resolve_vc(vc, entries, include_history=True)
+            for vc, row in entries.items() if row['status'] == 'mapped'}
 
 def fetch_product_info(nm_id, vc="", own=None):
     """整合 WB 商品基础信息（标题、品牌、颜色、售价、选项参数等）。供客服与监控模块调用。"""
@@ -16,8 +24,7 @@ def fetch_product_info(nm_id, vc="", own=None):
         info["colors"] = card_color_names(card)
     if own is None:
         try:
-            from sellerops.persistence.mappings import MappingRepository
-            own = MappingRepository.load_mapping_state()[0]
+            own = load_context()
         except Exception:
             own = {}
     row = (own or {}).get(vc or "")

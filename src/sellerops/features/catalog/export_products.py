@@ -10,6 +10,7 @@ from sellerops.domain.snapshot_values import first_price, positive_id, stock_val
 from sellerops.domain.vendor_codes import extract_vc_source_code
 from sellerops.features.reports.product_report_data import product_url
 from sellerops.persistence import db
+from sellerops.persistence.mappings import MappingRepository
 from sellerops.persistence.snapshots import ProductSnapshotRepository
 from sellerops.settings import paths
 
@@ -48,11 +49,11 @@ def export_products(shop_ids: list[int] | None, out_path: str | Path) -> dict:
 
     representatives = {}
     scanned = filtered = 0
+    entries = MappingRepository.load_vc_entries(MappingRepository.current_products())
     with db.connect(read_only=True) as connection:
         active_shops = {int(row['shop_id']): row['shop_name'] for row in connection.execute(
             "SELECT shop_id, shop_name FROM shops WHERE status = 'active'")}
         selected = sorted(active_shops if shop_ids is None else shop_ids)
-        entries = db.vc_entries(connection)
         for shop_id in selected:
             document = ProductSnapshotRepository.load_snapshot_document(shop_id, connection=connection)
             if document is None:
@@ -61,7 +62,7 @@ def export_products(shop_ids: list[int] | None, out_path: str | Path) -> dict:
             scanned += len(document['rows'])
             for index, row in enumerate(document['rows']):
                 vc = str(row.get('vendorCode') or row.get('goodsCode') or '').strip()
-                entry = entries.get(vc, {})
+                entry = db.resolve_vc(vc, entries, include_history=True)
                 if row.get('trashedAt') or entry.get('status') == 'excluded':
                     filtered += 1
                     continue

@@ -58,7 +58,7 @@ def row_for(item, vc, c, match="", status="", stock_summary_fn=None):
     ]
 
 def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage=None, shops_meta=None,
-               main_sid=None, stock_summary_fn=None, out_path=None):
+               main_sid=None, stock_summary_fn=None, out_path=None, *, historical=None):
     """生成映射表 xlsx（8 Sheet）。"""
     if stock_summary_fn is None:
         stock_summary_fn = stock_summary
@@ -67,6 +67,7 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
         main_sid = mapping.main_shop(config.current)
 
     excluded_vcs = excluded_vcs or set()
+    historical = historical or {}
     shop_coverage = shop_coverage or {}
     shops_meta = shops_meta or [{"id": main_sid, "name": f"shop{main_sid}"}]
     bcs_by_vc = {c["vc"]: c for c in bcs}
@@ -84,9 +85,10 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
     for item in mapped_entries:
         for vc in item["vendorCodes"]:
             vc2boss[vc].append(item.get("cn") or "")
-    picked = set(vc2boss)
+    picked = set(vc2boss) | historical.keys()
     multi = {vc: bs for vc, bs in vc2boss.items() if len(bs) > 1}
     vc_cn = {vc: names[0] for vc, names in vc2boss.items()}
+    vc_cn.update({vc: row['last_cn'] or '名称未知' for vc, row in historical.items()})
 
     def rep(c, key, cov):
         v = c.get(key) if c is not None else None
@@ -174,6 +176,17 @@ def build_xlsx(result_list, extra_entries, bcs, excluded_vcs=None, shop_coverage
         ws3.cell(ws3.max_row, IMG_COL).hyperlink = c.get("repImg") or ""
     for i, w in enumerate(SIMPLE_WIDTHS + [40], 1):
         ws3.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+    if historical:
+        sheet = wb.create_sheet('历史归属')
+        sheet.append(['vendorCode', '产品中文名', '商品SKU', '归属来源', '店铺ID', '本店nmId', '本店原价', '本店库存'])
+        for vc, row in sorted(historical.items()):
+            for sid, card in sorted(shop_coverage.get(vc, {}).items()):
+                sheet.append([vc, vc_cn[vc], row['sku'], row['source'], sid,
+                              card.get('nmId'), card.get('price'), card.get('stock')])
+        sheet.freeze_panes = 'C2'
+        for col, width in zip('ABCDEFGH', (32, 28, 22, 14, 13, 15, 14, 14)):
+            sheet.column_dimensions[col].width = width
 
     # 已排除清单
     ws_ex = wb.create_sheet("已排除清单")

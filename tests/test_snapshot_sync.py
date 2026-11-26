@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import requests
 
-from catalog_fixture import document, mock_non_git_checkout, snapshot
+from catalog_fixture import document, map_vcs, mock_non_git_checkout, snapshot, write_book
 from sellerops.cli.main import main
 from sellerops.core.errors import AuthenticationError, NetworkError
 from sellerops.features.catalog import products, shops
@@ -25,7 +25,7 @@ from sellerops.settings import paths
 from test_bcs_auth import reply
 
 
-RECEIPT_KEYS = {'source', 'fetchedAt', 'shops', 'fetched', 'sync_warnings', 'errors', 'missing_shops'}
+RECEIPT_KEYS = {'source', 'fetchedAt', 'shops', 'fetched', 'sync_warnings', 'errors', 'missing_shops', 'prefix_mapping'}
 OLD_STAMP = '2026-01-01 10:00:00'
 STORES = [{'id': sid, 'name': f'Shop {sid}'} for sid in (1, 2, 3)]
 
@@ -50,6 +50,166 @@ class TestSnapshotSync(TestCase):
         with db.connect(read_only=True) as connection:
             row = connection.execute('SELECT * FROM shops WHERE shop_id = ?', (str(sid),)).fetchone()
             return dict(row) if row else None
+
+    def test_unique_prefix_uses_only_successful_active_snapshot_and_preserves_review(self):
+        write_book([('A', '前缀命中', None, 'tEsT'), ('B', '前缀冲突一', 10, 'DUPE'),
+                    ('C', '前缀冲突二', 20, 'DUPE'), ('D', '非 ASCII', 22, 'ſEST'),
+                    ('E', '人工归属', 30, 'OTHR'), ('', '无SKU唯一中文名', 40, 'NAME')])
+        matched = 'BCS-TEST-ozon-card-10000001-2'
+        named = 'BCS-naME-supplier/10000002'
+        blocked = 'BCS-TEST-10000003'
+        blocked_shop = 'BCS-TEST-10000004'
+        excluded = 'BCS-TEST-10000005'
+        trash = 'BCS-TEST-10000006'
+        unsynced = 'BCS-TEST-10000007'
+        archived = 'BCS-TEST-10000008'
+        old_failed = 'BCS-TEST-10000009'
+        protected = {f'BCS-TEST-1000001{i}': source for i, source in enumerate(('manual', 'ai', 'publish', 'prefix'))}
+        for vc, source in protected.items():
+            map_vcs({vc: 'E'}, source=source)
+        with db.connect(write=True) as connection:
+            db.set_vc(connection, blocked, 'pending', block_listing='ALL', note='旧禁上架')
+            db.set_vc(connection, blocked_shop, 'pending', block_listing='2', note='单店禁上架')
+            db.set_vc(connection, excluded, 'excluded', source='manual', note='非货盘')
+            db.set_vc(connection, matched, 'pending', block_listing='', note='审核备注')
+            connection.execute('UPDATE vc_map SET source_code=? WHERE vc=?', ('原源数字段', matched))
+        snapshot(3, [{'vendorCode': archived}])
+        self.assertEqual(self.cli('shop', 'archive', '--shop-id', '3')[0], 0)
+        snapshot(4, [{'vendorCode': old_failed}])
+        snapshot(5, [{'vendorCode': unsynced}])
+        preserve = {vc: db.resolve_vc(vc) for vc in (blocked, blocked_shop, excluded, *protected)}
+        rows = [{'vendorCode': vc} for vc in (
+            matched, blocked, blocked_shop, excluded, *protected, 'BCS-DUPE-1', 'BCS-SEST-1', 'BCS-TEST-')]
+        rows.append({'vendorCode': trash, 'trashedAt': '2026-01-01'})
+        with (patch.object(self.client, 'fetch_shop_list', return_value=[*STORES, {'id': 4, 'name': '失败'}]),
+              patch.object(self.client, 'fetch_shop_products', side_effect=[
+                  rows, [{'vendorCode': matched}, {'vendorCode': named}], NetworkError('fixture')]) as read,
+              patch.object(products, 'read_current_price_book', wraps=products.read_current_price_book) as book):
+            code, result, _ = self.cli('catalog', 'fetch', '--no-sync')
+        self.assertEqual(code, 1)
+        book.assert_called_once_with(strict_identity=True)
+        self.assertEqual([call.args[0] for call in read.call_args_list], [1, 2, 4])
+        receipt = result['data']
+        self.assertEqual([(row['id'], row['prefix_mapped']) for row in receipt['fetched']], [(1, 1), (2, 1)])
+        self.assertEqual(receipt['prefix_mapping'], {'mapped': 2, 'skipped_shops': [], 'skipped_vcs': {
+            'blocked': 2, 'ambiguous_prefix': 1, 'unmatched_prefix': 1, 'invalid_vc_prefix': 1}})
+        self.assertEqual([row['shop_id'] for row in receipt['missing_shops']], ['5'])
+        owner = db.resolve_vc(matched)
+        self.assertEqual(tuple(owner[key] for key in ('sku', 'last_cn', 'status', 'source', 'note',
+                                                       'source_code', 'block_listing')),
+                         ('A', '前缀命中', 'mapped', 'prefix', '审核备注', '原源数字段', ''))
+        self.assertEqual(db.resolve_vc(named)['sku'], '无SKU唯一中文名')
+        for vc, before in preserve.items():
+            self.assertEqual(db.resolve_vc(vc), before)
+        for vc in (trash, unsynced, archived, old_failed, 'BCS-DUPE-1', 'BCS-SEST-1', 'BCS-TEST-'):
+            self.assertEqual(db.resolve_vc(vc)['status'], 'pending')
+        with patch.object(self.client, 'fetch_shop_products', return_value=rows):
+            self.assertEqual(self.cli('sync', '--shop-id', '1', '--no-sync')[1]['data']['prefix_mapping']['mapped'], 0)
+
+    def test_unusable_price_books_leave_snapshot_pending_and_cache_unchanged(self):
+        vc = 'BCS-TEST-10000001'
+        mode = '马帮发货'
+        write_book([('OLD', '旧缓存', 10, 'TEST', 'STOCK', mode)])
+        map_vcs({'BCS-TEST-11111111': 'OLD'})
+        book_path = Path(paths.current.price_book_xlsx)
+        headers = ('卖家SKU', '产品中文名', '最低售价', 'vendorCode前缀码', 'vendorCode前缀码')
+        cases = [
+            ([], ('卖家SKU',), None, '缺少必需列'),
+            ([('A', '同SKU一', 10, 'TEST'), ('A', '同SKU二', 10, 'OTHR')], None, None, '重复卖家 SKU'),
+            ([('A', '', 10, 'TEST')], None, None, '无效商品键'),
+            ([('', '', 10, 'TEST')], None, None, '缺少卖家 SKU'),
+            ([('A', '有效', 10, 'TEST', 'OTHR')], headers, None, '重复列'),
+            (None, None, None, '缺失'),
+            ([('A', '有效', 10, 'TEST')], None, PermissionError(), '被占用'),
+            ([('A', '有效', 10, 'TEST')], None, b'not an xlsx', '无法解析'),
+        ]
+        for items, labels, failure, reason in cases:
+            with self.subTest(reason=reason):
+                if items is None:
+                    book_path.unlink()
+                else:
+                    write_book(items, **({'headers': labels} if labels else {}))
+                if isinstance(failure, bytes):
+                    book_path.write_bytes(failure)
+                with patch.object(self.client, 'fetch_shop_products', return_value=[{'vendorCode': vc}]):
+                    if isinstance(failure, Exception):
+                        with patch('openpyxl.load_workbook', side_effect=failure):
+                            code, result, _ = self.cli('sync', '--shop-id', '1', '--no-sync')
+                    else:
+                        code, result, _ = self.cli('sync', '--shop-id', '1', '--no-sync')
+                self.assertEqual(code, 0)
+                data = result['data']
+                self.assertEqual(data['fetched'][0]['prefix_mapped'], 0)
+                self.assertIn(reason, data['prefix_mapping']['skipped_shops'][0]['reason'])
+                self.assertEqual(document(1)['rows'][0]['vendorCode'], vc)
+                self.assertEqual(db.resolve_vc(vc)['status'], 'pending')
+                with db.connect() as connection:
+                    self.assertEqual([row[0] for row in connection.execute('SELECT sku FROM products')], ['OLD'])
+
+    def test_valid_empty_price_book_clears_current_cache_without_removing_history(self):
+        old, new = 'BCS-TEST-1', 'BCS-TEST-2'
+        write_book([('A', '已归属', 10, 'TEST')])
+        map_vcs({old: 'A'})
+        write_book([])
+        with patch.object(self.client, 'fetch_shop_products', return_value=[{'vendorCode': old}, {'vendorCode': new}]):
+            code, result, _ = self.cli('sync', '--shop-id', '1', '--no-sync')
+        self.assertEqual(code, 0)
+        self.assertEqual(result['data']['prefix_mapping']['skipped_shops'], [])
+        self.assertEqual(result['data']['prefix_mapping']['mapped'], 0)
+        self.assertEqual(db.resolve_vc(old, include_history=True)['cn'], '已归属')
+        self.assertFalse(db.resolve_vc(old)['current_product'])
+        self.assertEqual(db.resolve_vc(new)['status'], 'pending')
+
+    def test_book_changed_inside_shop_save_keeps_first_result_and_rolls_back_second_cache(self):
+        first, second = 'BCS-TEST-1', 'BCS-TEST-2'
+        write_book([('A', '本轮商品', 10, 'TEST')])
+        save = products.save_price_book
+        calls = 0
+
+        def save_then_change(connection, book):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                connection.execute('DELETE FROM products')
+            save(connection, book)
+            if calls == 2:
+                write_book([('B', '保存时已经另存新价格表', 80, 'TEST')])
+
+        with (patch.object(self.client, 'fetch_shop_list', return_value=STORES[:2]),
+              patch.object(self.client, 'fetch_shop_products', side_effect=[
+                  [{'vendorCode': first}], [{'vendorCode': second}]]),
+              patch.object(products, 'save_price_book', side_effect=save_then_change)):
+            code, result, _ = self.cli('sync', '--all', '--no-sync')
+        self.assertEqual(code, 0)
+        receipt = result['data']
+        self.assertEqual([item['prefix_mapped'] for item in receipt['fetched']], [1, 0])
+        self.assertEqual(receipt['prefix_mapping']['skipped_shops'], [{'id': 2, 'reason': '商品价格表版本已变化'}])
+        self.assertEqual(db.resolve_vc(first)['sku'], 'A')
+        self.assertEqual(db.resolve_vc(second)['status'], 'pending')
+        self.assertEqual(document(2)['total'], 1)
+        with db.connect() as connection:
+            self.assertEqual([row[0] for row in connection.execute('SELECT sku FROM products')], ['A'])
+
+    def test_sqlite_prefix_write_failure_rolls_back_snapshot_and_cache(self):
+        old, new = 'BCS-TEST-1', 'BCS-TEST-2'
+        snapshot(1, [{'vendorCode': old}])
+        write_book([('A', '旧名称', 10, 'TEST')])
+        map_vcs({old: 'A'})
+        write_book([('A', '新名称', 12, 'TEST')])
+        with db.connect(write=True) as connection:
+            connection.execute("""
+                CREATE TRIGGER prefix_write_failure BEFORE UPDATE OF status ON vc_map
+                WHEN new.source = 'prefix' BEGIN SELECT RAISE(ABORT, 'fixture DB failure'); END
+            """)
+        previous = document(1)
+        with patch.object(self.client, 'fetch_shop_products', return_value=[{'vendorCode': new}]):
+            code, result, _ = self.cli('sync', '--shop-id', '1', '--no-sync')
+        self.assertEqual(code, 1)
+        self.assertEqual(result['data']['prefix_mapping']['mapped'], 0)
+        self.assertEqual(result['data']['fetched'], [])
+        self.assertEqual(document(1), previous)
+        self.assertEqual(db.resolve_vc(old)['last_cn'], '旧名称')
+        self.assertNotIn(new, db.vc_entries())
 
     def test_old_db_reads_are_byte_identical_and_next_save_writes_columns_and_envelope(self):
         snapshot(1, [], source='bcs', fetchedAt=OLD_STAMP)
@@ -118,12 +278,14 @@ class TestSnapshotSync(TestCase):
             self.assertEqual(document(1)['lastConfirmedSyncAt'], known['fetchedAt'])
 
             Clock.instant += timedelta(hours=1)
-            send.side_effect = [reply(code=502), reply(code=200, rows=[], total=0)]
+            write_book([('SKU', '缓存归属', 10, 'TEST')])
+            send.side_effect = [reply(code=502), reply(code=200, rows=[{'vendorCode': 'BCS-TEST-1'}], total=1)]
             code, fallback, log = self.cli('catalog', 'fetch', '--shop-id', '1')
             self.assertEqual(code, 0)
             self.assertIn('同步未确认', fallback['summary'])
             self.assertEqual(fallback['data']['sync_warnings'][0]['stage'], 'submit')
             cached = fallback['data']['fetched'][0]
+            self.assertEqual(cached['prefix_mapped'], 1)
             self.assertEqual(cached['snapshot_status'], 'bcs_cache_fallback')
             self.assertNotEqual(cached['fetchedAt'], known['fetchedAt'])
             self.assertEqual(cached['last_confirmed_sync_at'], known['fetchedAt'])

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 
 from sellerops.domain.product_reports import ProductReport, ReportCatalog
+from sellerops.features.reports.product_report_analysis import analyze
 from sellerops.features.reports.product_report_data import order_row
 from sellerops.features.reports.product_report_screening import product_key, screen_products
 from sellerops.features.reports.product_report_xlsx import write_report
@@ -54,6 +55,21 @@ class TestProductScreening(unittest.TestCase):
         row = next(r for r in result.low_rating if r['vc'] == VC)
         self.assertEqual(row['present_shops'], '袁州1、袁州2')
         self.assertEqual(row['rating'], 3)
+
+    def test_historical_vc_keeps_sales_and_risk_name_but_cannot_qualify_for_gaps(self):
+        report = self.report()
+        report.catalog = ReportCatalog({'与老品同名'}, {VC: '与老品同名', OTHER: '与老品同名'}, {VC})
+        report.orders = [{**self.wb_order(code), 'cn': '与老品同名'} for code in (VC, OTHER)]
+        self.assertEqual([row['vc'] for row in screen_products(report).recent], [OTHER])
+        details = analyze(report)
+        self.assertEqual({row['vc'] for row in details['sales']}, {VC, OTHER})
+        self.assertEqual({row['vc'] for row in details['gaps']}, {OTHER})
+        report.catalog = ReportCatalog({'与老品同名'}, {VC: '与老品同名'}, {VC})
+        report.orders[1]['cn'] = ''
+        self.assertEqual(screen_products(report).recent, [])
+        report.feedbacks = [{'vc': VC, 'stars': 1}]
+        historical = next(row for row in screen_products(report).low_rating if row['vc'] == VC)
+        self.assertEqual(historical['cn'], '与老品同名')
 
     def test_return_denominator_and_risk_exclusion_use_all_accounts_and_prefixes(self):
         report = self.report()
